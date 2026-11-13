@@ -242,6 +242,38 @@ describe("resolveToolCwd (#2777)", () => {
 			).toBe(nested());
 		});
 
+		it("does not anchor at a config in the home directory", () => {
+			// The seam's $HOME ceiling is exclusive: a home-level config is the
+			// user's, not this project's, even though the config seam climbs to it.
+			// The file sits outside the dispatch root, so only the ceiling stops it.
+			const pkg = path.join(home, "work", "pkg");
+			fs.mkdirSync(pkg, { recursive: true });
+			fs.writeFileSync(path.join(home, ".oxlintrc.json"), "{}\n");
+			fs.writeFileSync(path.join(pkg, "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "oxlint", fileAt(pkg), {
+					cwd: path.join(home, "elsewhere"),
+					homeDir: home,
+				}).cwd,
+			).toBe(pkg);
+		});
+
+		it("does not anchor a formatter lookup on a runner's config", () => {
+			fs.mkdirSync(nested(), { recursive: true });
+			fs.writeFileSync(
+				path.join(workspace(), "eslint.config.mjs"),
+				"export default [];\n",
+			);
+			fs.writeFileSync(path.join(nested(), ".gitignore"), "dist\n");
+
+			expect(
+				toolCwd.resolveToolCwd("formatter", "eslint", fileAt(nested()), {
+					cwd: workspace(),
+				}).cwd,
+			).toBe(nested());
+		});
+
 		it("lets a caller-owned marker table override the config anchor", () => {
 			fs.mkdirSync(nested(), { recursive: true });
 			fs.writeFileSync(path.join(workspace(), ".oxlintrc.json"), "{}\n");

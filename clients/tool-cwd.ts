@@ -306,7 +306,9 @@ export function resolveToolCwd(
 		(insideDispatch ? isUnderDir(markerRoot, dispatchRoot) : true)
 	) {
 		// #5541: a caller-owned marker table still decides; a config outside the
-		// dispatch root is not the session's, so the climb stops at that root.
+		// dispatch root is not the session's, so the climb stops at that root. The
+		// config seam climbs through `$HOME`, but the ceiling here is exclusive: a
+		// home-level config is the user's, never this project's.
 		const anchor =
 			kind === "runner" && !ctx.rootMarkers
 				? configAnchorOf(tool, markerRoot, {
@@ -314,7 +316,11 @@ export function resolveToolCwd(
 						ceiling: insideDispatch ? dispatchRoot : undefined,
 					})
 				: undefined;
-		if (anchor && !pathsEqual(anchor.dir, markerRoot)) {
+		if (
+			anchor &&
+			!pathsEqual(anchor.dir, markerRoot) &&
+			!pathsEqual(anchor.dir, homeCeiling)
+		) {
 			const anchorMarker = path.basename(anchor.file);
 			if (!ctx.suppressTelemetry)
 				emitResolution(kind, tool, anchor.dir, `marker:${anchorMarker}`);
