@@ -26,6 +26,8 @@ export const REAL_HOME_READERS: Readonly<Record<string, string>> = {
 		"read-only path probe for the maintainer's managed pyright (`~/.pi-lens/tools/node_modules/.bin/pyright-langserver`); the pinned home has no managed tools tree, so without the real home this suite skips on the one host that has pyright",
 	"tests/clients/lsp/pyright-settings-effect-4758.integration.test.ts":
 		"read-only path probe for the maintainer's managed pyright (`~/.pi-lens/tools/node_modules/.bin/pyright-langserver`); the pinned home has no managed tools tree, so without the real home the effect case skips on the one host that has pyright",
+	"tests/clients/lsp/cascade-rust-references-position-5559.integration.test.ts":
+		"read-only RUSTUP_HOME probe (`~/.rustup`); the harness pins HOME per worker, and without the real toolchain home the rustup shim on PATH finds no toolchain, so the case skips on the one host that has rust-analyzer",
 	"tests/clients/lsp/opengrep-offline-findings-4765.integration.test.ts":
 		"read-only path probe for the maintainer's managed opengrep (`~/.pi-lens/bin/opengrep`); the pinned home has no managed tools tree, so without the real home the file skips on the one host that has opengrep",
 	"tests/clients/installer/markdownlint-verify-2045.test.ts":

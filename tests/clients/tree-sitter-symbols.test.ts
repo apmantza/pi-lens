@@ -9,6 +9,12 @@
  */
 
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { FactStore } from "../../clients/dispatch/fact-store.js";
+import {
+	buildOrUpdateGraph,
+	flushReviewGraphPersistsForTests,
+	waitForReviewGraphPersistsForTests,
+} from "../../clients/review-graph/builder.js";
 import {
 	grammarBlockReason,
 	LANGUAGE_TO_GRAMMAR,
@@ -475,6 +481,253 @@ describe("Python docstrings fill Symbol.doc (#4948)", () => {
 			expect(f).toBeDefined();
 			expect(f?.doc).toBeUndefined();
 		} finally {
+			env.cleanup();
+		}
+	});
+});
+
+// #5559: the neighbour cascade asks the language server at the symbol's
+// identifier, never at the declaration start. rust-analyzer 1.100.0 answers 0
+// references at the `pub` of `pub fn alpha` and 6 at `alpha`, so public Rust
+// symbols got no neighbours. `line`/`column` stay the declaration start (they
+// feed symbol ids and outline ranges); `nameLine`/`nameColumn` are the
+// identifier. Recurrence this prevents: a grammar's definition query that
+// captures the identifier at a different node than the one the position is
+// read from, or a new language whose modifier-prefixed declaration regresses.
+interface PositionCase {
+	/** The grammar when the row's key names a second shape of it (`java-interface`). */
+	lang?: string;
+	file: string;
+	/** Modifier-prefixed declarations: the declaration start is not the name. */
+	src: string;
+	names: string[];
+}
+const POSITION_CASES: Record<string, PositionCase> = {
+	rust: {
+		file: "a.rs",
+		src: "pub fn alpha() {}\npub(crate) async fn beta() {}\nimpl S {\n    pub fn area(&self) {}\n}\n",
+		names: ["alpha", "beta", "area"],
+	},
+	go: {
+		file: "a.go",
+		src: "package m\nfunc Alpha() {}\nfunc (s S) Area() int { return 1 }\n",
+		names: ["Alpha", "Area"],
+	},
+	python: {
+		file: "a.py",
+		src: "async def beta():\n    pass\nclass S:\n    def area(self):\n        pass\n",
+		names: ["beta", "S", "area"],
+	},
+	// The annotation puts the declaration start on the line above the name.
+	java: {
+		file: "A.java",
+		src: 'public class A {\n    @Override\n    public String toString() { return ""; }\n    private static int alpha() { return 1; }\n}\n',
+		names: ["A", "toString", "alpha"],
+	},
+	c: {
+		file: "a.c",
+		src: "static int alpha(void) { return 1; }\nint beta(int x) { return x; }\n",
+		names: ["alpha", "beta"],
+	},
+	cpp: {
+		file: "a.cpp",
+		src: "static inline int alpha() { return 1; }\nclass S { public: int area() { return 1; } };\n",
+		names: ["alpha", "S"],
+	},
+	typescript: {
+		file: "a.ts",
+		src: "export async function beta() {}\nexport class S {\n  public async area() {}\n}\n",
+		names: ["beta", "S", "area"],
+	},
+	ruby: {
+		file: "a.rb",
+		src: "def alpha\nend\nclass S\n  def area\n  end\nend\n",
+		names: ["alpha", "S", "area"],
+	},
+	kotlin: {
+		file: "A.kt",
+		src: "private fun beta() = 2\nclass S { public fun area() = 1 }\n",
+		names: ["beta", "S", "area"],
+	},
+	dart: {
+		file: "a.dart",
+		src: "int alpha() { return 1; }\nclass S { int area() { return 1; } }\n",
+		names: ["alpha", "S", "area"],
+	},
+	csharp: {
+		file: "A.cs",
+		src: "public class S {\n    public static int Alpha() { return 1; }\n}\n",
+		names: ["S", "Alpha"],
+	},
+	php: {
+		file: "a.php",
+		src: "<?php\nclass S {\n    public static function area() { return 1; }\n}\nfunction alpha() {}\n",
+		names: ["S", "area", "alpha"],
+	},
+	swift: {
+		file: "a.swift",
+		src: "public func beta() -> Int { 2 }\nstruct S { func area() -> Int { 1 } }\n",
+		names: ["beta", "S", "area"],
+	},
+	lua: {
+		file: "a.lua",
+		src: "local function beta() return 2 end\nfunction alpha() return 1 end\n",
+		names: ["beta", "alpha"],
+	},
+	ocaml: {
+		file: "a.ml",
+		src: "let rec beta x = x\nlet alpha x = x + 1\n",
+		names: ["beta", "alpha"],
+	},
+	zig: {
+		file: "a.zig",
+		src: "pub fn alpha() i32 { return 1; }\nfn beta() i32 { return 2; }\n",
+		names: ["alpha", "beta"],
+	},
+	bash: {
+		file: "a.sh",
+		src: "function beta {\n  echo 2\n}\nalpha() {\n  echo 1\n}\n",
+		names: ["beta", "alpha"],
+	},
+	elixir: {
+		file: "a.ex",
+		src: "defmodule Shape do\nend\n",
+		names: ["Shape"],
+	},
+	groovy: {
+		file: "A.groovy",
+		src: "class A {\n    public void foo() { }\n}\n",
+		names: ["A", "foo"],
+	},
+	cue: {
+		file: "a.cue",
+		src: "package a\n\n#Service: {\n\tname: string\n}\n\nlet helper = 1\n",
+		names: ["#Service", "name", "helper"],
+	},
+	// The three capture branches the rows above never reach. Recurrence: a branch
+	// that drops its `nameNode` line falls back to the declaration start, and no
+	// row would see it. `public interface` puts the name at column 18, behind the
+	// modifier.
+	"java-interface": {
+		lang: "java",
+		file: "Shape.java",
+		src: "public interface Shape {\n    void area();\n}\n",
+		names: ["Shape"],
+	},
+	// `struct S` as a type: the name sits at column 8, behind the keyword.
+	"c-struct": {
+		lang: "c",
+		file: "a.c",
+		src: "struct S { int a; };\n",
+		names: ["S"],
+	},
+	// The declarator starts at its name, so the position equals the declaration
+	// start here; the row pins that the arrow branch records the identifier.
+	"typescript-arrow": {
+		lang: "typescript",
+		file: "a.ts",
+		src: "export const alpha = () => 1;\n",
+		names: ["alpha"],
+	},
+};
+
+describe("symbol identifier position (#5559) — per supported grammar", () => {
+	for (const [label, c] of Object.entries(POSITION_CASES)) {
+		const lang = c.lang ?? label;
+		const blocked = Boolean(grammarBlockReason(LANGUAGE_TO_GRAMMAR[lang]));
+		it.skipIf(blocked)(
+			`nameLine/nameColumn land on the identifier for ${label}`,
+			async () => {
+				const env = setupTestEnvironment(`pi-lens-sympos-${lang}-`);
+				try {
+					const fp = createTempFile(env.tmpDir, c.file, c.src);
+					const tree = await client.parseFile(fp, lang);
+					const extractor = new TreeSitterSymbolExtractor(lang, client);
+					expect(await extractor.init()).toBe(true);
+					const symbols = extractor.extract(tree, fp, c.src).symbols;
+					const lines = c.src.split("\n");
+					for (const name of c.names) {
+						const sym = symbols.find((s) => s.name === name);
+						expect(sym, `${lang}: ${name} extracted`).toBeDefined();
+						expect(sym?.nameLine, `${lang}: ${name} nameLine`).toBeDefined();
+						expect(
+							lines[(sym?.nameLine ?? 0) - 1]?.startsWith(
+								name,
+								(sym?.nameColumn ?? 0) - 1,
+							),
+							`${lang}: ${name} at ${sym?.nameLine}:${sym?.nameColumn}`,
+						).toBe(true);
+					}
+				} finally {
+					env.cleanup();
+				}
+			},
+		);
+	}
+
+	it("keeps line/column at the declaration start beside the identifier (rust pub fn, java annotation)", async () => {
+		const env = setupTestEnvironment("pi-lens-sympos-decl-");
+		try {
+			const rust = createTempFile(env.tmpDir, "a.rs", "pub fn alpha() {}\n");
+			const rustTree = await client.parseFile(rust, "rust");
+			const rustX = new TreeSitterSymbolExtractor("rust", client);
+			await rustX.init();
+			const alpha = rustX
+				.extract(rustTree, rust, "pub fn alpha() {}\n")
+				.symbols.find((s) => s.name === "alpha");
+			expect([alpha?.line, alpha?.column]).toEqual([1, 1]);
+			expect([alpha?.nameLine, alpha?.nameColumn]).toEqual([1, 8]);
+
+			const javaSrc =
+				'class A {\n    @Override\n    public String toString() { return ""; }\n}\n';
+			const java = createTempFile(env.tmpDir, "A.java", javaSrc);
+			const javaTree = await client.parseFile(java, "java");
+			const javaX = new TreeSitterSymbolExtractor("java", client);
+			await javaX.init();
+			const toStr = javaX
+				.extract(javaTree, java, javaSrc)
+				.symbols.find((s) => s.name === "toString");
+			expect([toStr?.line, toStr?.column]).toEqual([2, 5]);
+			expect([toStr?.nameLine, toStr?.nameColumn]).toEqual([3, 19]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// The builder copies nameLine/nameColumn into the graph node, and the cascade
+	// reads them back from there. The rust-analyzer test that covers this end to
+	// end skips on CI (ci.yml has no Rust step), so this cell is the CI guard for
+	// the copy. Recurrence: the builder passthrough at
+	// clients/review-graph/builder.ts drops the two keys, and the cascade asks
+	// at `pub` again.
+	it("stores the identifier beside the declaration start in the graph node, no server (#5559)", async () => {
+		const env = setupTestEnvironment("pi-lens-sympos-graph-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"a.rs",
+				"pub fn alpha() {}\npub(crate) async fn beta() {}\n",
+			);
+			const graph = await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
+			const metaOf = (name: string) =>
+				[...graph.nodes.values()].find(
+					(n) => n.kind === "symbol" && n.symbolName === name,
+				)?.metadata;
+			expect(metaOf("alpha")).toMatchObject({
+				line: 1,
+				column: 1,
+				nameLine: 1,
+				nameColumn: 8,
+			});
+			expect(metaOf("beta")).toMatchObject({
+				line: 2,
+				column: 1,
+				nameLine: 2,
+				nameColumn: 21,
+			});
+		} finally {
+			flushReviewGraphPersistsForTests();
+			await waitForReviewGraphPersistsForTests();
 			env.cleanup();
 		}
 	});

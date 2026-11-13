@@ -432,6 +432,64 @@ describe("computeCascadeForFile", () => {
 		}
 	});
 
+	// #5559: a symbol whose declaration starts before its identifier (`pub fn`,
+	// an annotated Java method) records the identifier in nameLine/nameColumn.
+	// The references leg must ask there: rust-analyzer answers 0 at the `pub`
+	// keyword and 6 at the name. The case above is the fallback (a graph built
+	// before the extractor recorded the identifier keeps the declaration start).
+	it("asks the server at the identifier, not the declaration start (#5559)", async () => {
+		const env = setupTestEnvironment("cascade-lsp-refs-name-");
+		try {
+			const primary = path.join(env.tmpDir, "src", "A.java");
+			fs.mkdirSync(path.dirname(primary), { recursive: true });
+			fs.writeFileSync(
+				primary,
+				'class A {\n    @Override\n    public String alpha() { return ""; }\n}\n',
+			);
+
+			const graph = emptyGraph();
+			const normalizedPrimary = primary.split(path.sep).join("/");
+			const symbolId = `${normalizedPrimary}:alpha`;
+			graph.symbolNodesByFile.set(normalizedPrimary, [symbolId]);
+			graph.nodes.set(symbolId, {
+				id: symbolId,
+				kind: "symbol",
+				language: "java",
+				filePath: normalizedPrimary,
+				symbolName: "alpha",
+				symbolKind: "function",
+				// Declaration start 2:5 (the annotation); identifier 3:19 (`alpha`),
+				// one line below: a column-only fix would still ask the wrong line.
+				metadata: { line: 2, column: 5, nameLine: 3, nameColumn: 19 },
+			});
+			mocks.buildOrUpdateGraph.mockResolvedValue(graph);
+			mocks.computeImpactCascade.mockReturnValue({
+				...impact(primary, []),
+				changedSymbols: ["alpha"],
+			});
+			const references = vi.fn().mockResolvedValue([]);
+			installLspService({
+				...makeLspServiceDouble(),
+				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
+				touchFile: vi.fn(),
+				getDiagnostics: vi.fn(),
+				references,
+			});
+
+			const { computeCascadeForFile } =
+				await import("../../clients/dispatch/integration.js");
+			await computeCascadeForFile(primary, env.tmpDir, {
+				turnSeq: 1,
+				writeSeq: 1,
+			});
+
+			expect(references).toHaveBeenCalledTimes(1);
+			expect(references).toHaveBeenCalledWith(normalizedPrimary, 2, 18, false);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	// #1109: the LSP-references blast-radius upgrade races `references()`
 	// against a 750ms setTimeout. When `references()` wins (the common case —
 	// the mocked LSP resolves synchronously), the losing setTimeout must be

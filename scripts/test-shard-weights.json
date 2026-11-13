@@ -598,6 +598,7 @@
 		"tests/clients/lsp/call-hierarchy-capability-gate.test.ts": 0.01,
 		"tests/clients/lsp/capabilities.test.ts": 0.01,
 		"tests/clients/lsp/capability-snapshot-save.test.ts": 0,
+		"tests/clients/lsp/cascade-rust-references-position-5559.integration.test.ts": 0,
 		"tests/clients/lsp/cascade-tier-backlog.test.ts": 1.19,
 		"tests/clients/lsp/cascade-tier.test.ts": 1.65,
 		"tests/clients/lsp/clangd-lazy-indexing.test.ts": 0,

@@ -22,6 +22,14 @@ export interface Symbol {
 	 * read ranges and the read-guard's `enclosingSymbol` coverage. */
 	endLine?: number;
 	column: number;
+	/**
+	 * 1-based position of the symbol's identifier, when the extractor captured
+	 * it. `line`/`column` are the declaration start (`pub`, `async`, a leading
+	 * annotation), where an LSP `references` request can answer empty (#5559);
+	 * use `nameLine ?? line` / `nameColumn ?? column` for an LSP position.
+	 */
+	nameLine?: number;
+	nameColumn?: number;
 	signature?: string; // For functions: "(a: T, b: U) => R"
 	isExported: boolean;
 	/**
