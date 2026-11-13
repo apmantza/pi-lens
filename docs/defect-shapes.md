@@ -339,6 +339,16 @@ file-scoped worklist and receives no project-wide scanner output.
 
 ### a runner or tool outcome
 
+94. **Ignore-glob path spelling:** a runner hands a tool an absolute dispatched
+    path even though the tool matches its ignore globs against the argument
+    string, so an ignored ancestor can turn a real file into a silent clean.
+    Screen with `grep -rnE 'ctx\\.filePath|absPath|path\\.resolve\\(cwd,
+    ctx\\.filePath\\)' clients/dispatch/runners/*.ts`; probe each installed
+    tool with the same file and config under `<root>/.claude/worktrees/<lane>`
+    and a neutral ancestor, comparing relative and absolute argv. A fix uses
+    `relativeInside` at the runner's existing spawn cwd and preserves the
+    absolute dispatched path for attribution and files outside that cwd.
+
 3. **Wrong argv transform:** verify a command is the wrapper shape before
    dropping an argv element or launcher name.
 

@@ -22,6 +22,7 @@ import {
 	findNearestContaining,
 	normalizeEphemeralMapKey,
 	normalizeMapKey,
+	relativeInside,
 	realpathOrResolve,
 } from "./path-utils.js";
 import {
@@ -862,7 +863,8 @@ async function tryOxlintFix(
 	const cmd = await resolveToolCommandWithInstallFallback(cwd, "oxlint");
 	if (!cmd) return 0;
 	if (writeHold) await writeHold.acquire();
-	return detectFileChangedAfterCommand(filePath, cmd, ["--fix", filePath], cwd);
+	const target = relativeInside(cwd, filePath) ?? filePath;
+	return detectFileChangedAfterCommand(filePath, cmd, ["--fix", target], cwd);
 }
 
 /** What a whole-package fixer's restore could not put back, as display paths (#3598). */

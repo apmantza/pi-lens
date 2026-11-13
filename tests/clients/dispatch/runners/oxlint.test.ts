@@ -673,7 +673,10 @@ describe("oxlint runner", () => {
 			expect(ensureTool).toHaveBeenCalledWith("oxlint");
 			expect(safeSpawnAsync).toHaveBeenCalledWith(
 				"oxlint",
-				expect.arrayContaining(["--format", "json", filePath]),
+				// #5556: oxlint applies `.eslintignore` to the argument spelling;
+				// the project-relative target prevents an ignored ancestor from
+				// turning this dispatch into a silent no-files clean.
+				expect.arrayContaining(["--format", "json", "sample.ts"]),
 				// #2100: the cap is what makes `outputTruncated` reachable at all.
 				expect.objectContaining({
 					timeout: 30000,
@@ -720,7 +723,7 @@ describe("oxlint runner", () => {
 
 			expect(safeSpawnAsync).toHaveBeenCalledWith(
 				"oxlint",
-				expect.arrayContaining(["--format", "json", filePath]),
+				expect.arrayContaining(["--format", "json", "sample.ts"]),
 				expect.objectContaining({ cwd: env.tmpDir }),
 			);
 		} finally {
@@ -922,7 +925,7 @@ describe("oxlint runner", () => {
 			);
 			expect(safeSpawnAsync).toHaveBeenCalledWith(
 				"oxlint",
-				expect.arrayContaining(["--format", "json", filePath]),
+				expect.arrayContaining(["--format", "json", "sample.ts"]),
 				// #2100: the cap is what makes `outputTruncated` reachable at all.
 				expect.objectContaining({
 					timeout: 30000,

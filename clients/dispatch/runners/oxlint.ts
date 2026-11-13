@@ -12,7 +12,7 @@ import { skipped } from "../types.js";
 import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
 import { findLocalBinUpwards, localBinPath } from "../../package-manager.js";
-import { pathsEqual } from "../../path-utils.js";
+import { pathsEqual, relativeInside } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwdWithReason } from "../../tool-cwd.js";
 import { truncatedByOutputCap } from "../../spawn-output-cap.js";
@@ -128,13 +128,14 @@ const oxlintRunner: RunnerDefinition = {
 		if (hasToolConfig("vitePlus", packageDir)) {
 			cmd = await resolveVitePlusCommand(packageDir, cwd);
 		}
+		const target = relativeInside(cwd, ctx.filePath) ?? ctx.filePath;
 		if (cmd) {
-			args = ["lint", "--format", "json", ctx.filePath];
+			args = ["lint", "--format", "json", target];
 		} else {
 			// One resolver (#5410): project shim at the package, managed, then PATH,
 			// held in the shared latch, so a second PATH-only probe is not needed.
 			cmd = await resolveToolCommandWithInstallFallback(packageDir, "oxlint");
-			args = ["--format", "json", ctx.filePath];
+			args = ["--format", "json", target];
 		}
 		if (!cmd) {
 			return toolAbsentSkip(packageDir, { id: "oxlint" });
