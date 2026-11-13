@@ -54,10 +54,7 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: () => ({
-			isAvailableAsync: async () => true,
-			getCommand: () => "trivy",
-		}),
+		resolveToolCommandWithInstallFallback: async () => "trivy",
 	}),
 );
 

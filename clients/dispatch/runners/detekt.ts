@@ -1,4 +1,3 @@
-import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import { skipped } from "../types.js";
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -13,11 +12,12 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { createAvailabilityChecker } from "./utils/runner-helpers.js";
+import {
+	resolveToolCommandWithInstallFallback,
+	toolAbsentSkip,
+} from "./utils/runner-helpers.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-const detekt = createAvailabilityChecker("detekt", ".bat");
 
 // Rules that `detekt --auto-correct` rewrites deterministically. Detekt's
 // formatting ruleset wraps ktlint, whose rules are all autocorrectable; a
@@ -163,10 +163,8 @@ const detektRunner: RunnerDefinition = {
 			return skipped("not-configured");
 		}
 
-		const cmd = (await detekt.isAvailableAsync(cwd))
-			? detekt.getCommand(cwd)
-			: null;
-		if (!cmd) return toolAbsentSkip(cwd, { checker: detekt });
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "detekt");
+		if (!cmd) return toolAbsentSkip(cwd, { id: "detekt" });
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const result = await safeSpawnAsync(
