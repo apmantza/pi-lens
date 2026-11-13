@@ -474,6 +474,12 @@ describe("runFormatPhase feeds the deferred drain (#2413)", () => {
 						outcome: "skipped" as const,
 						error: "gofmt: formatter child is still running",
 					},
+					{
+						name: "prettier",
+						success: true,
+						changed: false,
+						outcome: "unchanged" as const,
+					},
 				],
 				anyChanged: false,
 				allSucceeded: true,
@@ -491,7 +497,7 @@ describe("runFormatPhase feeds the deferred drain (#2413)", () => {
 			path.dirname(filePath),
 		);
 
-		expect(result.formattersUsed).toEqual([]);
+		expect(result.formattersUsed).toEqual(["prettier"]);
 		expect(result.formatFailures).toEqual([]);
 	});
 });
