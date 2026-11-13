@@ -143,6 +143,7 @@ import {
 	hasKtfmtConfig,
 	hasKtlintConfig,
 	markdownlintConfigArgs,
+	markdownlintTargetArg,
 } from "./tool-policy.js";
 import type { PathSetLike } from "./runtime-coordinator.js";
 import { exceedsLspSyncLimits } from "./lsp/content-limits.js";
@@ -837,10 +838,18 @@ async function tryMarkdownlintFix(
 	// default all-rules-on config again (the whole-file CHANGELOG/AGENTS
 	// reformat + `#946` → `# 946` corruption).
 	// markdownlint-cli2 --fix exits non-zero when unfixable violations remain.
+	// #5544 round 2: the target comes from the same builder as the lint runner, so
+	// `--fix` names the file the way cli2's `ignores` can see it (an absolute
+	// target in a `.claude/` lane selected nothing: `Linting: 0 files`, and the
+	// fixable finding stayed fixable). Change detection keeps the absolute path.
 	return detectFileChangedAfterCommand(
 		filePath,
 		cmd,
-		[...markdownlintConfigArgs(cwd), "--fix", filePath],
+		[
+			...markdownlintConfigArgs(cwd),
+			"--fix",
+			markdownlintTargetArg(cwd, filePath),
+		],
 		cwd,
 	);
 }

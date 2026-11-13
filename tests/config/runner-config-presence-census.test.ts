@@ -192,7 +192,7 @@ describe("runner config-read detector: plants it was not designed around", () =>
 		expect(flagged("const r = process.mainModule?.require;")).toBe(true);
 	});
 
-	it("admits the three config-args builders and refuses the retired finders", () => {
+	it("admits the config-args and target builders and refuses the retired finders", () => {
 		// Recurrence: #5408 slice 2 moved every policy-owned finder onto the seam.
 		// The builders stay in tool-policy and only build argv; a finder name
 		// that no longer exists, or a namespace/default reach to the module, is
@@ -201,6 +201,9 @@ describe("runner config-read detector: plants it was not designed around", () =>
 			"ruffConfigArgs",
 			"biomeConfigArgs",
 			"markdownlintConfigArgs",
+			// #5544 round 2: the shared file-argument builder, so the lint runner and
+			// the autofix stage both reach it and neither re-derives the spelling.
+			"markdownlintTargetArg",
 		]) {
 			expect(
 				flagged(`import { ${name} } from "../../tool-policy.js";`),

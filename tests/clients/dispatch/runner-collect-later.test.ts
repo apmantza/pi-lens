@@ -1,3 +1,5 @@
+// flake-shape: raw-timer-wait — #5547's production dispatcher regression keeps a simulated child alive past its 400ms dispatcher budget and observes the one-child peak before its 4000ms spawn-shaped settlement.
+
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -48,6 +50,10 @@ import {
 	setupTestEnvironment,
 } from "../test-utils.js";
 
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 describe("observed runner collect-later tier (#2116)", () => {
 	const projectRoot = setupTestEnvironment("pi-lens-runner-tier-").tmpDir;
 	const filePath = join(projectRoot, "fixture.ts");
@@ -95,12 +101,9 @@ describe("observed runner collect-later tier (#2116)", () => {
 				[{ mode: "all", runnerIds: ["fixture-runner"] }],
 				registry,
 			),
-			new Promise<never>((_, reject) =>
-				setTimeout(
-					() => reject(new Error("edit waited for deferred runner")),
-					100,
-				),
-			),
+			delay(100).then(() => {
+				throw new Error("edit waited for deferred runner");
+			}),
 		]);
 		expect(edit.diagnostics).toEqual([]);
 
@@ -264,6 +267,306 @@ describe("observed runner collect-later tier (#2116)", () => {
 				[2, "run-2"],
 				[3, "run-2"],
 			]);
+		});
+
+		it.each(["sequential", "concurrent", "preset"])(
+			"keeps a %s timed-out budget flight occupied until settlement (#5547)",
+			async (mode) => {
+				vi.stubEnv("PI_LENS_TEST_MODE", "0");
+				await flushLatencyLog();
+				const logStart = existsSync(getLatencyLogPath())
+					? statSync(getLatencyLogPath()).size
+					: 0;
+				if (mode === "preset")
+					observeRunnerLatency({
+						projectRoot,
+						runnerId: "budget-flight-runner",
+						durationMs: COLLECT_LATER_THRESHOLD_MS + 1,
+					});
+				const state = { starts: 0, inFlight: 0, peak: 0 };
+				const gates: Array<() => void> = [];
+				const registry = new RunnerRegistry();
+				registry.register({
+					id: "budget-flight-runner",
+					appliesTo: ["jsts"],
+					priority: 1,
+					timeoutMs: 400,
+					run: async () => {
+						state.starts += 1;
+						state.inFlight += 1;
+						state.peak = Math.max(state.peak, state.inFlight);
+						await new Promise<void>((resolve) => gates.push(resolve));
+						state.inFlight -= 1;
+						return { status: "succeeded", diagnostics: [], semantic: "none" };
+					},
+				});
+				try {
+					if (mode === "sequential") {
+						for (let index = 1; index <= 3; index++)
+							await write(registry, "budget-flight-runner", filePath, index);
+					} else {
+						await Promise.all(
+							[1, 2, 3].map((index) =>
+								write(registry, "budget-flight-runner", filePath, index),
+							),
+						);
+					}
+					await delay(600);
+					// Recurrence: the budget raced the live child and released the flight,
+					// so each later write started another child (#5547).
+					expect(state.peak).toBe(1);
+					gates[0]?.();
+					await settleTicks();
+					expect(state.starts).toBe(2);
+					expect(state.peak).toBe(1);
+					gates[1]?.();
+					await settleTicks();
+					expect(state.inFlight).toBe(0);
+					await settlePendingRunnerFindingsForTests();
+					const late = await drainPendingRunnerFindings(0);
+					expect(
+						late.map((entry) => [
+							entry.writeIndex,
+							entry.result?.status,
+							entry.result?.failureKind,
+						]),
+					).toEqual(
+						mode === "preset"
+							? [
+									[1, "failed", "timeout"],
+									[2, "succeeded", undefined],
+									[3, "succeeded", undefined],
+								]
+							: [
+									[2, "succeeded", undefined],
+									[3, "succeeded", undefined],
+								],
+					);
+					await flushLatencyLog();
+					const rows = readNdjsonRows<{
+						runnerId?: string;
+						status?: string;
+						metadata?: { failureKind?: string };
+					}>(getLatencyLogPath(), logStart);
+					expect(rows.skipped).toBe(0);
+					expect(rows.rows).toContainEqual(
+						expect.objectContaining({
+							runnerId: "budget-flight-runner",
+							status: "failed",
+							metadata: expect.objectContaining({ failureKind: "timeout" }),
+						}),
+					);
+				} finally {
+					resetObservedRunnerLatency();
+					for (const release of gates) release();
+					await settleTicks();
+				}
+			},
+		);
+
+		/** One post-write dispatch of `file` over `groups` (each a runner id list). */
+		function dispatchGroups(
+			registry: RunnerRegistry,
+			groups: string[][],
+			file: string,
+			writeIndex: number,
+		) {
+			const ctx = createDispatchContext(
+				file,
+				projectRoot,
+				{ getFlag: () => false },
+				new FactStore(),
+			);
+			Object.defineProperty(ctx, "writeIndex", { value: writeIndex });
+			return dispatchForFile(
+				ctx,
+				groups.map((runnerIds) => ({ mode: "all" as const, runnerIds })),
+				registry,
+			);
+		}
+
+		it("runs a fast runner listed in two groups of one write inline in both (#5547 F7)", async () => {
+			let starts = 0;
+			const registry = new RunnerRegistry();
+			registry.register({
+				id: "twice-runner",
+				appliesTo: ["jsts"],
+				priority: 1,
+				run: async () => {
+					starts += 1;
+					return { status: "succeeded", diagnostics: [], semantic: "none" };
+				},
+			});
+			const result = await dispatchGroups(
+				registry,
+				[["twice-runner"], ["twice-runner"]],
+				filePath,
+				1,
+			);
+			// Recurrence: the second group saw the first group's claim on its own
+			// write and deferred the runner to turn end; ruby lists rubocop in two
+			// groups, so every .rb write lost rubocop's inline answer (#5547 F7).
+			expect(pendingRunnerFindingsSize()).toBe(0);
+			expect(result.inconclusiveSources?.collectLaterRunnerIds ?? []).toEqual(
+				[],
+			);
+			expect(starts).toBe(2);
+		});
+
+		it("a second group's run extends its write's claim, never replaces it (#5547 F7)", async () => {
+			const runGates: Array<() => void> = [];
+			let openOther!: () => void;
+			const otherGate = new Promise<void>((open) => (openOther = open));
+			const state = { writes: [] as Array<number | undefined> };
+			const registry = new RunnerRegistry();
+			registry.register({
+				id: "held-twice-runner",
+				appliesTo: ["jsts"],
+				priority: 1,
+				run: async (runCtx) => {
+					state.writes.push(runCtx.writeIndex);
+					await new Promise<void>((open) => runGates.push(open));
+					return { status: "succeeded", diagnostics: [], semantic: "none" };
+				},
+			});
+			registry.register({
+				id: "held-other-runner",
+				appliesTo: ["jsts"],
+				priority: 1,
+				run: async () => {
+					await otherGate;
+					return { status: "succeeded", diagnostics: [], semantic: "none" };
+				},
+			});
+			const fileB = join(projectRoot, "b.ts");
+			const fileC = join(projectRoot, "c.ts");
+			writeFileSync(fileB, "const b = 1;\n");
+			writeFileSync(fileC, "const c = 1;\n");
+			try {
+				// Write 1 runs the runner in group 1 now and in group 2 after another
+				// runner; write 2 queues behind write 1's claim in between.
+				const first = dispatchGroups(
+					registry,
+					[["held-twice-runner"], ["held-other-runner", "held-twice-runner"]],
+					filePath,
+					1,
+				);
+				await settleTicks();
+				const second = dispatchGroups(
+					registry,
+					[["held-twice-runner"]],
+					fileB,
+					2,
+				);
+				openOther();
+				await settleTicks();
+				expect(state.writes).toEqual([1, 1]);
+				// Recurrence: a replacing claim retired the flight write 2 queued on,
+				// so its rerun answered skipped as if a session reset dropped it.
+				runGates[0]?.();
+				await settleTicks();
+				expect(state.writes).toEqual([1, 1, 2]);
+				// Write 1's second run is still alive: the key stays held, so write 3
+				// queues instead of starting a second child beside it.
+				runGates[2]?.();
+				await settleTicks();
+				const third = dispatchGroups(
+					registry,
+					[["held-twice-runner"]],
+					fileC,
+					3,
+				);
+				await settleTicks();
+				expect(state.writes).toEqual([1, 1, 2]);
+				runGates[1]?.();
+				await settleTicks();
+				expect(state.writes).toEqual([1, 1, 2, 3]);
+				runGates[3]?.();
+				await Promise.all([first, second, third]);
+				await settlePendingRunnerFindingsForTests();
+				const late = await drainPendingRunnerFindings(0);
+				expect(
+					late.map((entry) => [entry.writeIndex, entry.result?.status]),
+				).toEqual([
+					[2, "succeeded"],
+					[3, "succeeded"],
+				]);
+			} finally {
+				openOther();
+				for (const open of runGates) open();
+				await settleTicks();
+			}
+		});
+
+		it("a second group's settlement keeps the flight its first group still holds (#5547 F8)", async () => {
+			const runGates: Array<() => void> = [];
+			const registry = new RunnerRegistry();
+			registry.register({
+				id: "tail-held-runner",
+				appliesTo: ["jsts"],
+				priority: 1,
+				run: async () => {
+					await new Promise<void>((open) => runGates.push(open));
+					return { status: "succeeded", diagnostics: [], semantic: "none" };
+				},
+			});
+			try {
+				// Group 1 claims the key inline; group 2 runs the same runner inline
+				// under the same dispatch and extends that claim, so gates[1] is the
+				// run that extends it.
+				const dispatch = dispatchGroups(
+					registry,
+					[["tail-held-runner"], ["tail-held-runner"]],
+					filePath,
+					1,
+				);
+				await settleTicks();
+				expect(runGates).toHaveLength(2);
+				// Group 2's run settles while group 1's child is still alive.
+				// Recurrence: the extend chained only group 2's run, so the flight
+				// released here and the next write saw no flight beside group 1's child.
+				runGates[1]?.();
+				await settleTicks();
+				expect(classifyObservedRunner(projectRoot, "tail-held-runner")).toBe(
+					"collect-later",
+				);
+				runGates[0]?.();
+				await settleTicks();
+				expect(classifyObservedRunner(projectRoot, "tail-held-runner")).toBe(
+					"inline",
+				);
+				await dispatch;
+			} finally {
+				for (const open of runGates) open();
+				await settleTicks();
+			}
+		});
+
+		it("a recovered runner's queued rerun still defers a caller with no dispatch (#5547 F7)", async () => {
+			const { gates, registry } = gatedRunner("recovered-runner");
+			const fileB = join(projectRoot, "b.ts");
+			writeFileSync(fileB, "const b = 1;\n");
+			try {
+				await write(registry, "recovered-runner", filePath, 1);
+				await write(registry, "recovered-runner", fileB, 2);
+				// Run 1 finishes fast: the runner recovers while write 2's rerun runs.
+				gates[0]?.();
+				await settleTicks();
+				// Recurrence: an owner-less flight read as the caller's own, so the
+				// pre-edit capture (integration.ts, no dispatch) seeded the runner
+				// beside the rerun still holding its child.
+				expect(classifyObservedRunner(projectRoot, "recovered-runner")).toBe(
+					"collect-later",
+				);
+				gates[1]?.();
+				await settleTicks();
+				expect(classifyObservedRunner(projectRoot, "recovered-runner")).toBe(
+					"inline",
+				);
+			} finally {
+				for (const open of gates) open();
+				await settleTicks();
+			}
 		});
 
 		it("queues each file once and runs the queue one at a time", async () => {

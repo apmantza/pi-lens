@@ -158,7 +158,7 @@ if (mode === "linger") {
 passThrough(args);
 `;
 
-/** Resolve once `file` exists; rejects after `timeoutMs` (fs.watchFile poll). */
+/** Resolve once `file` has content; rejects after `timeoutMs` (fs.watchFile poll). */
 function waitForFile(file: string, timeoutMs = 20_000): Promise<void> {
 	const deadline = AbortSignal.timeout(timeoutMs);
 	return new Promise<void>((resolve, reject) => {
@@ -174,7 +174,14 @@ function waitForFile(file: string, timeoutMs = 20_000): Promise<void> {
 		const onTimeout = (): void =>
 			finish(new Error(`waitForFile timed out: ${file}`));
 		const listener = (): void => {
-			if (fs.existsSync(file)) finish();
+			try {
+				if (fs.existsSync(file) && fs.readFileSync(file, "utf8").length > 0)
+					finish();
+			} catch (err) {
+				// A marker removed before the read is not ready yet.
+				if ((err as NodeJS.ErrnoException).code !== "ENOENT")
+					finish(err as Error);
+			}
 		};
 		deadline.addEventListener("abort", onTimeout);
 		fs.watchFile(file, { interval: 20, persistent: true }, listener);
@@ -336,6 +343,23 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 			const pid = Number(
 				fs.readFileSync(path.join(ctl, "outline.pid"), "utf8"),
 			);
+			expect(result.isError).toBe(true);
+			expect(result.content?.[0]?.text).toMatch(/^Error: Spawn aborted/);
+			expect(isAlive(pid)).toBe(false);
+		});
+
+		it("outline waits for pid marker content before aborting", async () => {
+			const root = setup("outline-empty-marker", { outline: "park" });
+			const marker = path.join(ctl, "outline.pid");
+			fs.writeFileSync(marker, "");
+			const result = await run(
+				"ast_grep_outline",
+				{ paths: ["src"] },
+				root,
+				"outline.pid",
+			);
+			const pid = Number(fs.readFileSync(marker, "utf8"));
+			expect(pid).toBeGreaterThan(0);
 			expect(result.isError).toBe(true);
 			expect(result.content?.[0]?.text).toMatch(/^Error: Spawn aborted/);
 			expect(isAlive(pid)).toBe(false);

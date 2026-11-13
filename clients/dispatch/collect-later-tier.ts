@@ -1,7 +1,7 @@
 /** Observed-latency classification shared by dispatch and LSP tier seams. */
 
 import { normalizeMapKey } from "../path-utils.js";
-import type { RunnerResult } from "./types.js";
+import type { DispatchContext, RunnerResult } from "./types.js";
 
 export type CollectLaterTier = "inline" | "collect-later";
 
@@ -15,16 +15,25 @@ interface ObservedRunner {
 
 const slowRunners = new Map<string, ObservedRunner>();
 
-function key(projectRoot: string, runnerId: string): string {
+export function runnerFlightKey(projectRoot: string, runnerId: string): string {
 	return `${normalizeMapKey(projectRoot)}\u0000${runnerId}`;
 }
 
-/** Read the current observed tier. Missing observations stay inline. */
+/**
+ * Read the observed tier. A run in flight also defers every dispatch but the
+ * one whose inline run claimed it: a runner listed in two of one write's groups
+ * (ruby's rubocop) runs inline in both (#5547 F7).
+ */
 export function classifyObservedRunner(
 	projectRoot: string,
 	runnerId: string,
+	dispatch?: DispatchContext,
 ): CollectLaterTier {
-	return slowRunners.has(key(projectRoot, runnerId))
+	const runnerKey = runnerFlightKey(projectRoot, runnerId);
+	const flight = flights.get(runnerKey);
+	return slowRunners.has(runnerKey) ||
+		(flight !== undefined &&
+			(flight.owner === undefined || flight.owner !== dispatch))
 		? "collect-later"
 		: "inline";
 }
@@ -37,7 +46,7 @@ export function observeRunnerLatency(options: {
 	timedOut?: boolean;
 }): CollectLaterTier {
 	const normalizedProjectRoot = normalizeMapKey(options.projectRoot);
-	const runnerKey = key(normalizedProjectRoot, options.runnerId);
+	const runnerKey = runnerFlightKey(normalizedProjectRoot, options.runnerId);
 	if (
 		options.timedOut === true ||
 		options.durationMs > COLLECT_LATER_THRESHOLD_MS
@@ -63,12 +72,14 @@ interface QueuedRun {
 
 /** The runs of one (project, runner): the last one chained, and the queue. */
 interface Flight {
-	tail: Promise<RunnerResult>;
+	tail: Promise<unknown>;
 	queued: Map<string, QueuedRun>;
+	/** The dispatch whose inline run claimed the key; none for collect-later. */
+	owner: DispatchContext | undefined;
 }
 
 /**
- * #5413: the collect-later run in flight per (project, runner). Before it, a
+ * #5413/#5547: the run in flight per key, including the first inline run. A
  * slow runner started a run on every write (three writes, three runs at once,
  * each holding a child). One entry per key: a key exists only while a run is
  * in flight or queued, its queue holds one slot per file written meanwhile,
@@ -97,7 +108,7 @@ export function runCollectLater(options: {
 	filePath: string;
 	start: () => Promise<RunnerResult>;
 }): { promise: Promise<RunnerResult>; coalesced: boolean } {
-	const flightKey = key(options.projectRoot, options.runnerId);
+	const flightKey = runnerFlightKey(options.projectRoot, options.runnerId);
 	const flight = flights.get(flightKey);
 	if (flight) {
 		const fileKey = normalizeMapKey(options.filePath);
@@ -119,10 +130,28 @@ export function runCollectLater(options: {
 		return { promise: slot.promise, coalesced: true };
 	}
 	const promise = options.start();
-	const started: Flight = { tail: promise, queued: new Map() };
+	holdFlight(flightKey, promise);
+	return { promise, coalesced: false };
+}
+
+/**
+ * Hold the key until `promise` settles, independently of caller budgets. A key
+ * already held (its claiming dispatch's second group) is held until both
+ * settle; replacing its flight would drop the reruns queued on it (#5547 F7).
+ */
+export function holdFlight(
+	flightKey: string,
+	promise: Promise<unknown>,
+	owner?: DispatchContext,
+): void {
+	const held = flights.get(flightKey);
+	if (held) {
+		chain(flightKey, held, Promise.allSettled([held.tail, promise]));
+		return;
+	}
+	const started: Flight = { tail: promise, queued: new Map(), owner };
 	flights.set(flightKey, started);
 	chain(flightKey, started, promise);
-	return { promise, coalesced: false };
 }
 
 /**
@@ -142,11 +171,7 @@ function startQueued(
 }
 
 /** Make `run` the flight's tail; release the key when the tail settles. */
-function chain(
-	flightKey: string,
-	flight: Flight,
-	run: Promise<RunnerResult>,
-): void {
+function chain(flightKey: string, flight: Flight, run: Promise<unknown>): void {
 	flight.tail = run;
 	void Promise.allSettled([run]).then(() => {
 		if (flight.tail === run && flights.get(flightKey) === flight)

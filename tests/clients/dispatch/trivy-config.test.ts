@@ -19,6 +19,8 @@ describe("trivy-config appliesTo", () => {
 		const trivyConfigRunner = (
 			await import("../../../clients/dispatch/runners/trivy-config.js")
 		).default;
+		// #5547: dispatcher budget must cover the runner-owned 60s spawn.
+		expect(trivyConfigRunner.timeoutMs).toBe(60_000);
 		expect(trivyConfigRunner.appliesTo).toEqual([
 			"docker",
 			"yaml",

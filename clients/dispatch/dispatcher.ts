@@ -56,6 +56,8 @@ import { getToolPlan } from "./plan.js";
 import { resolveRunnerPath } from "./runner-context.js";
 import {
 	classifyObservedRunner,
+	holdFlight,
+	runnerFlightKey,
 	COLLECT_LATER_THRESHOLD_MS,
 	observeRunnerLatency,
 	runCollectLater,
@@ -1323,7 +1325,7 @@ async function runGroup(
 		const observedTier =
 			ctx.writeIndex === undefined
 				? "inline"
-				: classifyObservedRunner(projectRoot, runner.id);
+				: classifyObservedRunner(projectRoot, runner.id, ctx);
 		if (observedTier === "collect-later") {
 			const markedAtMs = Date.now();
 			// #5413: at most one run of this runner in flight per project; a
@@ -1331,7 +1333,9 @@ async function runGroup(
 			// measured from its own start, never from a queued write's mark.
 			const run = async (): Promise<RunnerResult> => {
 				const startedAtMs = Date.now();
-				const result = await runRunner(runnerCtx, runner, semantic);
+				const result = await runRunner(runnerCtx, runner, semantic, {
+					holdFlightUntilSettled: true,
+				});
 				const durationMs = Date.now() - startedAtMs;
 				observeRunnerTier({
 					filePath: ctx.filePath,
@@ -1408,7 +1412,9 @@ async function runGroup(
 			continue;
 		}
 
-		const result = await runRunner(runnerCtx, runner, semantic);
+		const result = await runRunner(runnerCtx, runner, semantic, {
+			dispatch: ctx,
+		});
 		onRunnerResult?.(runnerId, result);
 		const runnerEnd = Date.now();
 		const duration = runnerEnd - runnerStart;
@@ -2276,6 +2282,11 @@ async function runRunner(
 	ctx: DispatchContext,
 	runner: RunnerDefinition,
 	defaultSemantic: OutputSemantic,
+	options: {
+		holdFlightUntilSettled?: boolean;
+		/** The dispatch an inline claim belongs to (#5547 F7). */
+		dispatch?: DispatchContext;
+	} = {},
 ): Promise<RunnerResult> {
 	// #5413: a runner whose own spawn timed out this session is not run again,
 	// not even for its availability probe: a wedged binary does not heal between
@@ -2307,15 +2318,29 @@ async function runRunner(
 		// runner's value tells that apart from a runner that resolved nothing.
 		// The message keeps the words `failureKind` is classified from below.
 		// #5413: every spawn the runner reaches arms ITS cooldown on a timeout.
-		const outcome = await withBudget(
-			spawnCooldownScope
-				.run({ tool: runner.id, subject: runner.id, phase: "lint" }, () =>
-					runner.run(ctx),
-				)
-				.then((value) => ({ value })),
-			timeoutMs,
-		);
+		const runnerPromise = spawnCooldownScope
+			.run({ tool: runner.id, subject: runner.id, phase: "lint" }, () =>
+				runner.run(ctx),
+			)
+			.then((value) => ({ value }));
+		// Claim before the first await: concurrent first writes must see this run,
+		// even before its budget observation promotes it to collect-later (#5547).
+		if (ctx.writeIndex !== undefined && !options.holdFlightUntilSettled) {
+			holdFlight(
+				runnerFlightKey(ctx.projectRoot ?? ctx.cwd, runner.id),
+				runnerPromise,
+				options.dispatch,
+			);
+		}
+		const outcome = await withBudget(runnerPromise, timeoutMs);
 		if (outcome === undefined) {
+			// A collect-later flight must remain occupied while its child is still
+			// alive. The budget still determines the timeout result, but releasing
+			// the flight at that point starts a second child on the next write
+			// (#5547). Runner-owned spawn timeouts bound this wait and settle the
+			// same cooldown transition as a successful runner.
+			if (options.holdFlightUntilSettled)
+				await Promise.allSettled([runnerPromise]);
 			throw new Error(`Runner ${runner.id} timed out after ${timeoutMs}ms`);
 		}
 		const result = outcome.value;
