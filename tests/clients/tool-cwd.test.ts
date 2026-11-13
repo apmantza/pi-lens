@@ -215,6 +215,26 @@ describe("resolveToolCwd (#2777)", () => {
 			).toEqual({ cwd: workspace(), marker: ".oxlintrc.json" });
 		});
 
+		it("logs the config directory and marker it anchored on, once", async () => {
+			fs.mkdirSync(nested(), { recursive: true });
+			fs.writeFileSync(path.join(workspace(), ".oxlintrc.json"), "{}\n");
+			fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+			const file = fileAt(nested());
+
+			toolCwd.resolveToolCwd("runner", "oxlint", file, { cwd: workspace() });
+			toolCwd.resolveToolCwd("runner", "oxlint", file, { cwd: workspace() });
+
+			await log.flushExtensionLog();
+			const lines = fs
+				.readFileSync(log.getExtensionLogPath(), "utf8")
+				.trim()
+				.split("\n")
+				.filter((line) => line.includes("cwd runner oxlint"));
+			expect(lines).toHaveLength(1);
+			expect(lines[0]).toContain(`cwd=${workspace()}`);
+			expect(lines[0]).toContain("reason=marker:.oxlintrc.json");
+		});
+
 		it("keeps a nested package's own config as the anchor", () => {
 			fs.mkdirSync(nested(), { recursive: true });
 			fs.writeFileSync(path.join(workspace(), ".oxlintrc.json"), "{}\n");
