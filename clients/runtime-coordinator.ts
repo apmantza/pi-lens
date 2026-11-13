@@ -3194,6 +3194,9 @@ export class RuntimeCoordinator {
 			existing.queuedTurnId = `${this._telemetrySessionId}:${this._turnIndex}`;
 			existing.ownerSessionId = ownerSessionId;
 			existing.originCwd = resolvedOriginCwd;
+			// #5549: the spent retry belongs to the earlier edit's failure; a
+			// fresh mutation starts with a new one-retry budget, as a new record does.
+			delete existing.formatRequeueAttempts;
 			return addedKind;
 		}
 		this._pendingDeferredMutations.set(key, {
