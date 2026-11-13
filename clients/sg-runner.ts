@@ -106,8 +106,8 @@ function sgHasGitRepository(dir: string): boolean {
 type SgScanAnchor = {
 	/** The directory the scan child runs in. */
 	cwd: string;
-	/** The scan path spelled relative to {@link SgScanAnchor.cwd}. */
-	path: string;
+	/** The scan argument spelled relative to {@link SgScanAnchor.cwd}. */
+	scanArg: string;
 	/** The `--globs` excludes, empty when this child cannot be anchored. */
 	excludeArgs: string[];
 };
@@ -1039,7 +1039,7 @@ export class SgRunner {
 					reason: `${displayProjectDataPath(absolute)}: the npx fallback runs outside the scanned tree, so no exclude glob can be rooted at the scan root and no ignore file applies`,
 				});
 			}
-			return { cwd: isolationCwd, path: absolute, excludeArgs: [] };
+			return { cwd: isolationCwd, scanArg: absolute, excludeArgs: [] };
 		}
 		// The scan path is spelled RELATIVE to that directory, because a CLI that
 		// matches a `--globs` pattern against the path as the caller wrote it
@@ -1051,11 +1051,11 @@ export class SgRunner {
 		try {
 			relative = path.relative(treeRoot, absolute) || ".";
 		} catch {
-			return { cwd: treeRoot, path: absolute, excludeArgs: [] };
+			return { cwd: treeRoot, scanArg: absolute, excludeArgs: [] };
 		}
 		return {
 			cwd: treeRoot,
-			path: relative,
+			scanArg: relative,
 			excludeArgs: sgExcludeArgsForProject(absolute),
 		};
 	}
@@ -1156,7 +1156,7 @@ export class SgRunner {
 					configFile,
 					"--json",
 					...anchor.excludeArgs,
-					anchor.path,
+					anchor.scanArg,
 				],
 				{
 					timeout,
@@ -1222,7 +1222,7 @@ export class SgRunner {
 				configFile,
 				"--json",
 				...anchor.excludeArgs,
-				anchor.path,
+				anchor.scanArg,
 			];
 			const spawnOptions = {
 				timeout,
@@ -1276,7 +1276,7 @@ export class SgRunner {
 					configFile,
 					"--update-all",
 					...anchor.excludeArgs,
-					anchor.path,
+					anchor.scanArg,
 				],
 				{ ...spawnOptions, signal: undefined, ignoreAmbientSignal: true },
 			);
