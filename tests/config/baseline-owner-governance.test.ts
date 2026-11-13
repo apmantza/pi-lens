@@ -219,10 +219,17 @@ describe("every tracked baseline has an owner test with a planted-stale-row cell
 	});
 
 	it("reds an exported baseline binding with no initializer it can read", () => {
+		// An imported name re-exported under a baseline name holds its rows in a
+		// module the census may never see as a candidate, so it reds here too.
 		expect(
-			problems({ "scripts/zz-late.mjs": "export let F_BASELINE;\n" }),
+			problems({
+				"scripts/zz-late.mjs": "export let F_BASELINE;\n",
+				"scripts/zz-relay.mjs":
+					'import { rows } from "./zz-rows.mjs";\nexport { rows as G_BASELINE };\n',
+			}).map((p) => p.split(" (")[0]),
 		).toEqual([
-			"scripts/zz-late.mjs#F_BASELINE: an exported binding with no initializer the census can read (F_BASELINE); add a class rule, or a NOT_A_BASELINE row with the reason",
+			"scripts/zz-late.mjs#F_BASELINE: an exported binding with no initializer the census can read",
+			"scripts/zz-relay.mjs#G_BASELINE: an exported binding with no initializer the census can read",
 		]);
 	});
 
@@ -299,8 +306,15 @@ describe("every tracked baseline has an owner test with a planted-stale-row cell
 				"tests/config/t.test.ts": `import { T_BASELINE } from "../support/t-baseline.js";\nvoid T_BASELINE;\n${cell}`,
 			}),
 		).toEqual([]);
-		// Importing the module without the name, or declaring the table in a test
-		// that never uses it, reads nothing.
+		// Importing the module without the name, using the name without importing
+		// the module, or declaring the table in a test that never uses it, reads
+		// nothing.
+		expect(
+			problems({
+				[table]: declared,
+				"tests/config/t.test.ts": `const T_BASELINE = ["other"];\nvoid T_BASELINE;\n${cell}`,
+			}).map((p) => p.split(" (")[0]),
+		).toEqual([`${table}#T_BASELINE: no test file reads it`]);
 		expect(
 			problems({
 				[table]: declared,

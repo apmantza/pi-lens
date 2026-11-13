@@ -278,13 +278,9 @@ function baselineBindings(
 			const local = parts[0]?.replace(/^type\s+/, "").trim();
 			const exported = (parts[1] ?? parts[0] ?? "").trim();
 			if (!local || !BASELINE_NAME.test(exported)) continue;
-			const form = bindingForm(blanked, local);
-			// A name this module imported and re-exports holds its rows in the
-			// module that declares it, where the census reads it.
-			const imported = new RegExp(
-				`(?<![\\w$.])import\\b[^;]*\\b${local}\\b[^;]*\\bfrom\\b`,
-			).test(blanked);
-			if (!(form === "none" && imported)) found.set(exported, form);
+			// An imported name re-exported here has no initializer in this module,
+			// so it lands as `none` and reds until a class rule or a row places it.
+			found.set(exported, bindingForm(blanked, local));
 		}
 	}
 	if (namedModule) {
