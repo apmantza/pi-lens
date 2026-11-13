@@ -4435,6 +4435,9 @@ function addTreeSitterFile(
 				line: symbol.line,
 				endLine: symbol.endLine,
 				column: symbol.column,
+				...(symbol.nameLine !== undefined && symbol.nameColumn !== undefined
+					? { nameLine: symbol.nameLine, nameColumn: symbol.nameColumn }
+					: {}),
 				signature: symbol.signature,
 				...featureHintMetadata(`${symbol.name} ${hintPath}`),
 			},

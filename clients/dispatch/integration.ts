@@ -1686,8 +1686,15 @@ export async function computeCascadeForFile(
 					});
 					if (!symbolNodeId) continue;
 					const node = graph.nodes.get(symbolNodeId);
-					const line = Number(node?.metadata?.line ?? 0);
-					const column = Number(node?.metadata?.column ?? 0);
+					// The identifier, not the declaration start: rust-analyzer answers
+					// empty at a `pub` keyword (#5559). Graphs built before the
+					// extractor recorded it fall back to the declaration start.
+					const line = Number(
+						node?.metadata?.nameLine ?? node?.metadata?.line ?? 0,
+					);
+					const column = Number(
+						node?.metadata?.nameColumn ?? node?.metadata?.column ?? 0,
+					);
 					if (line <= 0) continue;
 					// #1109: store the timer and clear it once the race settles. Without
 					// this, when `references()` wins (the common case), the losing
