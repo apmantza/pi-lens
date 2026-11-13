@@ -989,7 +989,7 @@ export interface GitRecoveryOptions {
 	 * answer, or the root took no dirty capture) leaves every named path on the
 	 * mtime rule.
 	 */
-	dirtyBefore?: readonly string[];
+	dirtyBefore?: readonly string[] | undefined;
 }
 
 interface GitStatusEntry {
