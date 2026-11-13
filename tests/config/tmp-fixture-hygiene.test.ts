@@ -56,6 +56,7 @@ import {
 	recordedTmpRootCreators,
 } from "../support/tmp-root-registry.js";
 import { getLatencyLogPath } from "../../clients/latency-logger.js";
+import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
 import {
 	buildProjectSnapshotFromRuntime,
 	getProjectSnapshotPath,
@@ -1411,10 +1412,19 @@ describe("tmp-fixture-hygiene", () => {
 			prefix: "pi-lens-5072-owner-population-stale-",
 			owner: "tests/index-integration.test.ts",
 		};
-		expect(tmpBaselineRowStaleness(planted)).toBe(
+		const stale = tmpBaselineRowStaleness(planted);
+		expect(stale).toBe(
 			"pi-lens-5072-owner-population-stale-: no live producer in " +
 				"tests/index-integration.test.ts; remove the admission",
 		);
+		// The registration this file's baseline needs (#5072): the plant above is
+		// a row the committed ledger does not carry, and the verdict above names it.
+		expectPlantedStaleRow({
+			baseline: "tests/config/tmp-fixture-hygiene-baseline.json",
+			rowKey: String(planted.prefix),
+			direction: "extra-row",
+			verdict: stale ?? "",
+		});
 		// The rule is not vacuously red: the owner of a checked-in row still
 		// answers for its family through the same call.
 		const baseline = JSON.parse(

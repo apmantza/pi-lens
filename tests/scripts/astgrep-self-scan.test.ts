@@ -823,6 +823,27 @@ d("governance suite: turn-count-wait (#4865)", () => {
 	});
 });
 
+// #5072: `scripts/governance-rules/baseline.json` is read by the CLI wrapper at
+// run time and by no test, so nothing checked it outside the self-scan job. It is
+// loaded here through the production validator, which throws on a row without a
+// signature and a reason (#4865) -- the one structural rule the ledger carries.
+d("governance baseline is a loadable row table (#5072)", () => {
+	it("loads every committed row through the validator that requires a reason", () => {
+		const governance = suiteByName("governance");
+		const rows = loadBaseline(repoRoot(), governance);
+		const committed = JSON.parse(
+			fs.readFileSync(
+				path.join(repoRoot(), "scripts/governance-rules/baseline.json"),
+				"utf-8",
+			),
+		) as { allowed: unknown[] };
+		expect(rows.size).toBe(committed.allowed.length);
+		// A baseline emptied by a bad regenerate would make the validator's throw
+		// and the equality above both pass on nothing.
+		expect(rows.size).toBeGreaterThan(0);
+	});
+});
+
 // #4983 r2: the self-scan baseline told people to run
 // `npm run astgrep:self-scan -- --update-baseline`, but that script chains two
 // commands and npm appends the extra args to the last one only, so it rewrote

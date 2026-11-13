@@ -7,6 +7,7 @@ import {
 	runCheck,
 	type StrictnessResult,
 } from "../../scripts/strictness-report.mjs";
+import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 const {
@@ -113,6 +114,29 @@ describe("TypeScript strictness spike ratchets", () => {
 			"unclassified spelling: ../outside/b.ts(3,4): error TS2322: Type 'string' is not assignable to type 'number'.",
 			"i18n.ts: regression (0 -> 1)",
 		]);
+	});
+
+	it("reds a planted baseline row the live counts no longer produce (#5072)", () => {
+		// The shrink-only direction on a bucket this cell invents: the live scan
+		// sees one `clients` diagnostic and nothing in the planted bucket, so the
+		// only way the row survives is a verdict that names it.
+		const planted = "clients/5072-ghost-bucket";
+		const stale = compare(
+			parseDiagnostics(
+				"clients/a.ts(1,2): error TS2532: Object is possibly 'undefined'.",
+				ROOT,
+			),
+			{ clients: 1, [planted]: 1 },
+		);
+		expect(stale).toEqual([
+			`${planted}: ratchet down — lower the baseline (1 -> 0)`,
+		]);
+		expectPlantedStaleRow({
+			baseline: "tests/config/strictness-baseline.json",
+			rowKey: planted,
+			direction: "extra-row",
+			verdict: stale,
+		});
 	});
 
 	it("gives every repo-root row and exclusion a reason in the baseline (#4429)", () => {

@@ -37,6 +37,7 @@ import {
 	type ViMockExportFinding,
 } from "../support/vi-mock-export-gate.js";
 import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
+import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const TESTS_ROOT = path.join(REPO_ROOT, "tests");
@@ -1545,6 +1546,20 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 		},
 		TREE_WALK_TIMEOUT_MS,
 	);
+
+	it("reds a planted baseline entry no live mock produces (#5072)", () => {
+		// The ledger's own row-without-producer direction, on a key this cell
+		// invents: no finding carries it, so the comparison has to report it.
+		const planted = "tests/config/5072-gone.test.ts:3:./5072-gone.js";
+		const stale = compareAgainstBaseline([], { [planted]: 1 }).problems;
+		expect(stale).toEqual([`${planted}: ratchet down; offender was fixed`]);
+		expectPlantedStaleRow({
+			baseline: "tests/support/vi-mock-export-baseline.json",
+			rowKey: planted,
+			direction: "extra-row",
+			verdict: stale,
+		});
+	});
 
 	it.skipIf(!!process.env.VI_MOCK_EXPORT_REGEN)(
 		"baseline entries remain live",

@@ -84,6 +84,7 @@ import {
 	readWalkedFiles,
 	relativePosix,
 } from "../support/sweep-kit.js";
+import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
 
 const TESTS_ROOT = path.join(repoRoot, "tests");
 const FIXTURES = path.join(TESTS_ROOT, "fixtures/lsp-double-gate");
@@ -424,6 +425,25 @@ describe("#2582 live-vs-pin ratchet — the four directions", () => {
 		expect(auditAgainstBaseline({}, { [F]: 1 }).map(describeProblem)).toEqual([
 			expect.stringContaining("the scan no longer flags it"),
 		]);
+	});
+
+	it("C21-plant: a pin for a file the scan never reaches reports itself (#5072)", () => {
+		// The ledger's row-without-producer direction, on a file this cell invents.
+		// The advice text is what makes the pin actionable, so the verdict is the
+		// rendered problem, not only the `{ kind }` record.
+		const planted = "tests/config/5072-gone-lsp-double.test.ts";
+		const stale = auditAgainstBaseline({}, { [planted]: 1 }).map(
+			describeProblem,
+		);
+		expect(stale).toEqual([
+			expect.stringContaining("the scan no longer flags it"),
+		]);
+		expectPlantedStaleRow({
+			baseline: "tests/support/lsp-double-baseline.json",
+			rowKey: planted,
+			direction: "extra-row",
+			verdict: stale,
+		});
 	});
 
 	it("C10/C11: a risen count and a fallen count both red", () => {

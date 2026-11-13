@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { McpHarness } from "../mcp/harness.js";
 import { startPiRunner } from "../support/pi-runner.js";
+import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
 
 type ListedTool = {
 	name: string;
@@ -156,6 +157,34 @@ describe("tool roster description budget", () => {
 		expect(descriptionTotal, detail).toBe(baseline.pi.descriptionTotal);
 		expect(schemaTotal, detail).toBe(baseline.pi.schemaTotal);
 		expect(measured, detail).toEqual(baseline.pi.tools);
+	});
+
+	it("reds a planted baseline row the live roster never listed (#5072)", () => {
+		// The ratchet pins the file with a two-sided equality, so its staleness
+		// direction is a row on one side that the other side lacks. The plant is a
+		// roster carrying a tool the committed ledger has never listed; the stale set
+		// is computed from the ledger, and the seam checks the row is really absent
+		// from the checked-in file rather than present in the live tool list.
+		const planted = "pilens_5072_ghost_tool";
+		const ledger = baseline.pi.tools as Record<
+			string,
+			{ description: number; schema: number }
+		>;
+		expect(ledger).not.toHaveProperty(planted);
+		const withGhost = { ...ledger, [planted]: { description: 1, schema: 1 } };
+		let verdict = "";
+		try {
+			expect(withGhost).toEqual(ledger);
+		} catch (error) {
+			verdict = (error as Error).message;
+		}
+		expect(verdict).not.toBe("");
+		expectPlantedStaleRow({
+			baseline: "tests/config/tool-roster-budget.baseline.json",
+			rowKey: planted,
+			direction: "extra-row",
+			verdict: Object.keys(withGhost).filter((name) => !(name in ledger)),
+		});
 	});
 
 	it("keeps the MCP tools/list roster within its two-sided baseline", () => {

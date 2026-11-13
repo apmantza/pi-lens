@@ -25,6 +25,7 @@ import {
 	updateWordIndexDocument,
 	updateWordIndexDocumentForEdit,
 } from "../../clients/word-index.js";
+import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
 
 const WORDS = [
 	"renderWidget",
@@ -146,6 +147,37 @@ describe("word-index ranking is unchanged by replacement and packing (#2067/#206
 			}),
 		).toBe(true);
 		expect(record(index)).toEqual(actual);
+	});
+
+	it("redds a planted baseline row the ranking run never produces (#5072)", () => {
+		// A characterization baseline is worthless if its rows can outlive the
+		// ranking that minted them. A row this cell invents -- a query the recorded
+		// set never ran -- has to break the real comparison, and the failure has to
+		// name the row it is complaining about.
+		const plantedQuery = "5072-ghost-query";
+		const index = buildWordIndex(makeCorpus());
+		const actual = record(index);
+		const withGhost: RecordedQuery[] = [
+			...readBaseline(),
+			[plantedQuery, [["src/module0/file0.ts", 1, 1, [0]]]],
+		];
+		let verdict = "";
+		try {
+			expect(actual).toEqual(withGhost);
+		} catch (e) {
+			verdict = (e as Error).message;
+		}
+		expect(verdict, "the planted row left the comparison green").not.toBe("");
+		expectPlantedStaleRow({
+			baseline: "tests/support/word-index-rank-baseline.json",
+			rowKey: plantedQuery,
+			direction: "extra-row",
+			// The rows the recorded run never produced, which is the planted query
+			// alone: the same set the diff above is complaining about.
+			verdict: withGhost
+				.map(([query]) => query)
+				.filter((query) => !actual.some(([recorded]) => recorded === query)),
+		});
 	});
 
 	it("reproduces it after every document goes through the per-edit seam (#2067 criterion 5)", async () => {

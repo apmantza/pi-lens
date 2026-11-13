@@ -107,6 +107,7 @@ import { testSourceFiles as allTestSourceFiles } from "../support/module-instanc
 import { localImportTargets } from "../support/hook-await-scan.js";
 import { assertSortedRegistry } from "../support/sweep-kit.js";
 import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
+import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
 
 // ── The baseline ─────────────────────────────────────────────────────────
 
@@ -2075,6 +2076,26 @@ interface RatchetProblem {
  * vanished" below); this function only walks `live`, so a file no longer
  * flagged at all is not iterated here.
  */
+/**
+ * The baseline rows the live scan no longer touches at all (#5072): the row's
+ * producer is gone, so the row is a free pass. Extracted from the whole-
+ * baseline cell below so the planted cell drives the same call, and the two
+ * cannot drift apart.
+ */
+function vanishedBaselineRows(
+	baseline: Readonly<Baseline>,
+	live: Partial<Record<DetectorName, Readonly<Record<string, number>>>>,
+): string[] {
+	const stale: string[] = [];
+	for (const detector of DETECTOR_NAMES) {
+		const counts = live[detector] ?? {};
+		for (const file of Object.keys(baseline[detector] ?? {})) {
+			if (!(file in counts)) stale.push(`${detector}:${file}`);
+		}
+	}
+	return stale;
+}
+
 function auditAgainstBaseline(
 	detector: DetectorName,
 	live: Readonly<Record<string, number>>,
@@ -2189,17 +2210,61 @@ describe("flake-shape ratchet (#2547)", () => {
 			// not a failure above, but a baseline entry for a file the scan no
 			// longer touches AT ALL is dead weight worth flagging here, same as
 			// `auditRegistry`'s stale-exemption check one layer up.
-			const stale: string[] = [];
-			for (const detector of DETECTOR_NAMES) {
-				const live = await countsByDetector(detector);
-				for (const file of Object.keys(FLAKE_SHAPE_BASELINE[detector] ?? {})) {
-					if (!(file in live)) stale.push(`${detector}:${file}`);
-				}
-			}
-			expect(stale).toEqual([]);
+			const live: Partial<
+				Record<DetectorName, Readonly<Record<string, number>>>
+			> = {};
+			for (const detector of DETECTOR_NAMES)
+				live[detector] = await countsByDetector(detector);
+			expect(vanishedBaselineRows(FLAKE_SHAPE_BASELINE, live)).toEqual([]);
 		},
 		TREE_WALK_TIMEOUT_MS,
 	);
+
+	it("reds a planted baseline row the live scan never touches (#5072)", () => {
+		// The dead-weight direction on a row this cell invents, over an empty live
+		// population: the scan touches nothing, so the row has to report itself.
+		const planted = "tests/clients/5072-gone-shape.test.ts";
+		const noLive: Partial<
+			Record<DetectorName, Readonly<Record<string, number>>>
+		> = {};
+		for (const detector of DETECTOR_NAMES) noLive[detector] = {};
+		const plantedBaseline = Object.fromEntries(
+			DETECTOR_NAMES.map((detector) => [
+				detector,
+				detector === "raw-timer-wait" ? { [planted]: 1 } : {},
+			]),
+		) as Baseline;
+		const stale = vanishedBaselineRows(plantedBaseline, noLive);
+		expect(stale).toEqual([`raw-timer-wait:${planted}`]);
+		expectPlantedStaleRow({
+			baseline: "tests/support/flake-shape-baseline.json",
+			rowKey: planted,
+			direction: "extra-row",
+			verdict: stale,
+		});
+	});
+
+	it("reds a frozen mint whose bytes are not the pinned ones (#5072)", () => {
+		// The mint is one pinned document: its staleness axis is that its content
+		// no longer matches what was written once. A planted extra row is the drift,
+		// and the digest verdict names the mint it is talking about.
+		const drifted = JSON.stringify({
+			...FROZEN_BASELINE,
+			"raw-timer-wait": {
+				...FROZEN_BASELINE["raw-timer-wait"],
+				"tests/clients/5072-drift-row.test.ts": 1,
+			},
+		});
+		const drift = frozenDigestProblems(drifted);
+		expect(drift).toHaveLength(1);
+		expect(drift[0]).toContain(FROZEN_BASELINE_PATH);
+		expectPlantedStaleRow({
+			baseline: "tests/support/flake-shape-baseline-frozen.json",
+			rowKey: FROZEN_BASELINE_PATH,
+			direction: "extra-row",
+			verdict: drift,
+		});
+	});
 
 	it("carries the three counts in this header (informational, kept in sync)", () => {
 		// Not asserted against a hardcoded number — this test's job is only to

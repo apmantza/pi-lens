@@ -109,9 +109,11 @@ import {
 } from "../support/sweep-kit.js";
 import { scaledTestTimeout } from "../support/test-timeout-scale.js";
 
+import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
+
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const TESTS_DIR = path.join(ROOT, "tests");
-/** #4967: the admitted members outside `tests/config`, one row per identity. */
+
 const BASELINE_PATH = path.join(
 	ROOT,
 	"tests",
@@ -2057,8 +2059,17 @@ describe("tree census timeout (#4828)", () => {
 		expect(admissionVerdict([KEY], [ROW]).unadmitted).toEqual([]);
 	});
 	it("plants: flags a baseline row whose member is gone", () => {
-		expect(admissionVerdict([], [ROW]).stale).toEqual([KEY]);
+		const gone = admissionVerdict([], [ROW]).stale;
+		expect(gone).toEqual([KEY]);
 		expect(admissionVerdict([KEY], [ROW]).stale).toEqual([]);
+		// The registration for this ratchet's ledger (#5072): the row above is in
+		// no committed ledger, and the verdict names it.
+		expectPlantedStaleRow({
+			baseline: "tests/config/tree-census-timeout.baseline.json",
+			rowKey: KEY,
+			direction: "extra-row",
+			verdict: gone,
+		});
 	});
 	it("plants: flags two refused members that share one identity", () => {
 		expect(admissionVerdict([KEY, KEY], [ROW]).duplicated).toEqual([KEY]);
