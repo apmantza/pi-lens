@@ -27,18 +27,11 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: (command: string) => ({
-			isAvailable: () => available,
-			isAvailableAsync: async () => available,
-			getVerdict: () => ({
-				outcome: "missing",
-				cause: "not-found",
-				elapsedMs: 0,
-				latched: true,
-				retryAtMs: 0,
-			}),
-			getCommand: () => command,
-		}),
+		// #5410: golangci-lint asks the registry resolver, not a checker of its own.
+		resolveToolCommandWithInstallFallback: async (
+			_cwd: string,
+			toolId: string,
+		) => (available ? toolId : null),
 		createCwdCachedProbe: () =>
 			Object.assign(async () => available, {
 				getVerdict: () => ({
@@ -50,8 +43,6 @@ vi.mock(
 				}),
 			}),
 		resolveToolCommand: () => "eslint",
-		resolveAvailableOrInstall: async (checker: { getCommand: () => string }) =>
-			available ? checker.getCommand() : null,
 	}),
 );
 

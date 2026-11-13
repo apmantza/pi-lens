@@ -25,7 +25,10 @@ import {
 } from "../../../../clients/dispatch/dispatcher.js";
 import { FactStore } from "../../../../clients/dispatch/fact-store.js";
 import type { RunnerDefinition } from "../../../../clients/dispatch/types.js";
-import { resetDispatchAvailabilityState } from "../../../../clients/dispatch/runners/utils/runner-helpers.js";
+import {
+	resetDispatchAvailabilityState,
+	resolveToolCommandWithInstallFallback,
+} from "../../../../clients/dispatch/runners/utils/runner-helpers.js";
 import { resetProjectLensConfigCache } from "../../../../clients/project-lens-config.js";
 import { runAutofix } from "../../../../clients/pipeline.js";
 import {
@@ -117,9 +120,16 @@ const WINDOWS_EXT: Record<string, string> = {
 	java: ".exe",
 };
 
-/** The project-local rung of a tool at exactly `root`: `.venv/bin/<tool>`. */
-function plantTool(root: string, tool: string): string {
-	const bin = path.join(root, ".venv", "bin");
+/**
+ * The project-local rung of a tool at exactly `root`: `.venv/bin/<tool>`, or
+ * the `binDir` (relative to `root`) a caller names.
+ */
+function plantTool(
+	root: string,
+	tool: string,
+	binDir: string = path.join(".venv", "bin"),
+): string {
+	const bin = path.join(root, binDir);
 	fs.mkdirSync(bin, { recursive: true });
 	const file = path.join(
 		bin,
@@ -519,6 +529,31 @@ describe("one availability ladder per binary (#5410)", () => {
 				projectRoot: root,
 			});
 			expect(result.skipReason).toBe(reason);
+		},
+	);
+
+	// #5539 review r1, F4: the node_modules/.bin rung is a listed behaviour change
+	// for the five folded tools, so each pins it per trust state through the real
+	// resolver. Recurrence: a ladder without NODE_MODULES_BIN_DIRS drops the
+	// project shim of an npm-installed tool, and no cell read that rung.
+	describe.each(Object.keys(WINDOWS_EXT))(
+		"%s node_modules/.bin rung",
+		(tool) => {
+			const nodeModulesBin = path.join("node_modules", ".bin");
+			it("resolves the project shim once pi trusts the project", async () => {
+				setProjectTrustState("trusted");
+				const shim = plantTool(workspace.tmpDir, tool, nodeModulesBin);
+				expect(
+					await resolveToolCommandWithInstallFallback(workspace.tmpDir, tool),
+				).toBe(shim);
+			});
+			it("refuses the same shim while the project is untrusted", async () => {
+				setProjectTrustState("untrusted");
+				plantTool(workspace.tmpDir, tool, nodeModulesBin);
+				expect(
+					await resolveToolCommandWithInstallFallback(workspace.tmpDir, tool),
+				).toBeNull();
+			});
 		},
 	);
 });
