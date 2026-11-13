@@ -126,7 +126,7 @@ describe("pi-session: the built extension in a real AgentSession (#4632)", () =>
 		const toolResult = second[3] as { content?: unknown; isError?: unknown };
 		const resultText = textBlocks(toolResult.content).join("\n");
 		// The diagnostics tool's own answer, not a value this test supplied.
-		expect(resultText).toContain("No issues in the current turn delta.");
+		expect(resultText).toContain("No new findings in the current turn delta.");
 		expect(toolResult.isError).toBeFalsy();
 	});
 

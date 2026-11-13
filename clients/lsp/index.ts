@@ -8310,7 +8310,9 @@ export class LSPService {
 			filePath,
 			NAV_CLIENT_WAIT_TIMEOUT_MS,
 		);
-		if (!spawned) return [];
+		// #5554 r2 F6: no client to ask (none for the file, or the service is
+		// destroyed) is no answer, never an empty list of actions.
+		if (!spawned) return undefined;
 		if (!spawned.client.getOperationSupport().codeAction) {
 			throw new Error(
 				"__UNSUPPORTED__ Active LSP server does not advertise support for codeAction",

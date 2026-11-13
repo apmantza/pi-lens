@@ -48,6 +48,7 @@ import {
 	type ActionableWarningsReport,
 } from "../../clients/actionable-warnings.js";
 import { CacheManager } from "../../clients/cache-manager.js";
+import { LSPService } from "../../clients/lsp/index.js";
 import { resetProjectLensConfigCache } from "../../clients/project-lens-config.js";
 
 const WARNING_MESSAGE = "'x' is declared but its value is never read.";
@@ -463,6 +464,58 @@ describe("persistent reverify (#3170)", () => {
 		} finally {
 			clock.mockRestore();
 		}
+	});
+
+	// #5554 r2 B8: the unanswered record is per warning. A file with more
+	// warnings than the code-action cap still retires a carried warning the
+	// touch no longer reports; before, one capped lookup anywhere in the file
+	// held every carried warning as unconfirmed forever.
+	it("C3g: a fixed warning in a file past the code-action cap is retired (#5554)", async () => {
+		const carried = makeCarriedReport(filePath);
+		const others = Array.from(
+			{ length: ACTIONABLE_WARNINGS_MAX_CODE_ACTIONS_PER_FILE + 1 },
+			(_, index) => ({
+				...makeDiag(),
+				code: 7000 + index,
+				message: `unrelated warning ${index}`,
+			}),
+		);
+		const result = await runPersistentReverify({
+			report: carried,
+			cwd,
+			lspService: makeService(
+				{ diags: others, confirmation: "confirmed" },
+				0,
+				[],
+			),
+		});
+		expect(result.outcomes[0]?.outcome).toBe("clean");
+		expect(result.outcomes[0]?.dropped).toBe(1);
+		expect(result.replacementFiles[0]?.warnings).toEqual([]);
+	});
+
+	// #5554 r2 F6: the real service answers a lookup it has no client for
+	// (here: destroyed) with no answer, so the carried warning stays.
+	it("C3h: a code-action lookup with no client to ask is unconfirmed, not clean (#5554)", async () => {
+		const carried = makeCarriedReport(filePath);
+		const real = new LSPService();
+		await real.shutdown();
+		const service = makeService({
+			diags: [makeDiag()],
+			confirmation: "confirmed",
+		});
+		(service as unknown as { codeAction: unknown }).codeAction = (
+			...args: Parameters<LSPService["codeAction"]>
+		) => real.codeAction(...args);
+		const result = await runPersistentReverify({
+			report: carried,
+			cwd,
+			lspService: service,
+		});
+		expect(result.outcomes[0]?.outcome).toBe("unconfirmed");
+		expect(result.replacementFiles[0]?.warnings).toEqual(
+			carried.files[0]?.warnings,
+		);
 	});
 
 	it("#3205: repeated incomplete re-verifies stay visible but do not grow observed history", async () => {

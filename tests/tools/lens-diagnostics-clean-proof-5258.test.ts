@@ -21,6 +21,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
 	clearWidgetState,
 	recordDiagnostics,
+	recordRunner,
 } from "../../clients/widget-state.js";
 import {
 	removeTempDirSync,
@@ -170,9 +171,59 @@ describe("lens_diagnostics claims clean only with proof (#5258)", () => {
 		expect(summary).toContain("lens_diagnostics full — clean (1 files)");
 	});
 
+	// #5554 r2 F3/B7: mode=all reads a session whose record an edit dropped as
+	// inconclusive; mode=full kept the ✓ for the files left beside it.
+	it("a cached file edited after its snapshot withholds the full-mode ✓", async () => {
+		const other = path.join(tmp, "b.ts");
+		fs.writeFileSync(other, "export const other = 2;\n");
+		recordDiagnostics(file, []);
+		recordDiagnostics(other, []);
+		const later = new Date(Date.now() + 60_000);
+		fs.utimesSync(other, later, later);
+		const { text, summary } = await run(
+			{ mode: "full", paths: [file, other] },
+			sweepOf([]),
+		);
+		expect(text).not.toContain("✓");
+		expect(summary).not.toContain("clean");
+	});
+
+	// #5554 r2 F3/B3: a snapshot still pending is not a completed check.
+	it("a cached file whose snapshot is pending withholds the full-mode ✓", async () => {
+		recordDiagnostics(file, []);
+		recordRunner(file, "eslint", "done", 0);
+		const { text, summary } = await run(
+			{ mode: "full", paths: [file] },
+			sweepOf([]),
+		);
+		expect(text).not.toContain("✓");
+		expect(summary).not.toContain("clean");
+	});
+
+	// #5554 r2 B4: a swept error past the end of the file is demoted stale,
+	// not gone; the summary read `clean (1 files)` beside it (CodeRabbit
+	// PRRT_kwDORt8rec63Bg2K, the review's probe pI2 I3).
+	it("a stale finding withholds the full-mode clean", async () => {
+		const pastEof = {
+			severity: 1,
+			message: "Type 'string' is not assignable to type 'number'.",
+			source: "ts",
+			code: 2322,
+			range: {
+				start: { line: 39, character: 0 },
+				end: { line: 39, character: 4 },
+			},
+		};
+		const { summary } = await run(
+			{ mode: "full", paths: [file] },
+			sweepOf([{ diagnostics: [pastEof], count: 1 }]),
+		);
+		expect(summary).not.toContain("clean");
+	});
+
 	it("the delta summary never says clean: a delta checks nothing", async () => {
 		const { text, summary } = await run({ mode: "delta" }, sweepOf([]));
-		expect(text).toContain("No issues in the current turn delta.");
+		expect(text).toContain("No new findings in the current turn delta.");
 		expect(summary).toContain("lens_diagnostics delta — no new findings");
 		expect(summary).not.toContain("clean");
 	});

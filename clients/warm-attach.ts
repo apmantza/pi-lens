@@ -148,15 +148,19 @@ async function serveRequest(
 					if (Date.now() > req.deadlineAt) {
 						throw new Error("deadline exceeded");
 					}
-					return (await loadLspService())
-						.getLSPService()
-						.codeAction(
-							req.file,
-							range.start.line,
-							range.start.character,
-							range.end.line,
-							range.end.character,
-						);
+					return (
+						(await (
+							await loadLspService()
+						)
+							.getLSPService()
+							.codeAction(
+								req.file,
+								range.start.line,
+								range.start.character,
+								range.end.line,
+								range.end.character,
+							)) ?? []
+					);
 				}),
 			);
 			const servedAt = Date.now();

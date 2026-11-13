@@ -606,13 +606,14 @@ const lspRunner: RunnerDefinition = {
 					try {
 						const start = d.range.start;
 						const end = d.range.end ?? d.range.start;
-						const actions = await lspService.codeAction(
-							ctx.filePath,
-							start.line,
-							start.character,
-							end.line,
-							end.character,
-						);
+						const actions =
+							(await lspService.codeAction(
+								ctx.filePath,
+								start.line,
+								start.character,
+								end.line,
+								end.character,
+							)) ?? [];
 						const suggestion = buildCodeActionSuggestion(actions);
 						if (suggestion) {
 							fixSuggestionByIndex.set(idx, suggestion);

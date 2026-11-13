@@ -471,7 +471,9 @@ describe("context injection appends to last user message (#3693)", () => {
 			// tool's own answer only.
 			const toolResultText = JSON.stringify(second[3]);
 			expect(toolResultText).not.toContain(MID_RUN);
-			expect(toolResultText).toContain("No issues in the current turn delta.");
+			expect(toolResultText).toContain(
+				"No new findings in the current turn delta.",
+			);
 
 			// The injection is the trailing message, prefixed with the delimiter.
 			expect(second[4].content).toBe(`${INJECTION_DELIMITER}\n\n${MID_RUN}`);
