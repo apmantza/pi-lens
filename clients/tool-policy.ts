@@ -2064,22 +2064,30 @@ export function markdownlintConfigArgs(cwd: string): string[] {
 }
 
 /**
- * Shared file-argument seam for the markdownlint lint AND autofix surfaces
- * (#5544). cli2 matches its `ignores` globs against the string it is handed, so
- * both surfaces name the file relative to the dispatch cwd (an absolute path in
- * a lane under `.claude/` matched a glob naming its own ancestor and answered a
- * clean file for lint, and `Linting: 0 files / 0 fixes` for `--fix`). A file
- * the project does not hold keeps the absolute path, because a `../` climb would
- * move config discovery too, and that path is never prefixed: `.//x/a.md` names
- * `x/a.md` under the cwd, a different file.
- * cli2 reads the FIRST character of each argument as syntax: `#` ignore, `!`
- * negation, `:` literal file (`:a.md` opened a sibling `a.md`), `\` escape, `-`
- * stdin or option. So the relative target stays bare only when it starts with a
- * known-safe character (letter, digit, `_`, `.`), and every other first
- * character gets a `./` prefix, which selects the same file through the same
- * ignores (#5544 round 3: the enumerated `#`/`!` list missed `:`).
+ * Shared file-argument seam for every per-file tool whose ignore globs or
+ * option parser read the argument string: the markdownlint and oxlint lint AND
+ * autofix surfaces (#5544, #5556). The tool matches its ignore globs against the
+ * string it is handed, so each surface names the file relative to the dispatch
+ * cwd (an absolute path in a lane under `.claude/` matched a glob naming its own
+ * ancestor: cli2 answered a clean file for lint and `Linting: 0 files / 0 fixes`
+ * for `--fix`; oxlint linted nothing and fixed nothing). A file the project does
+ * not hold keeps the absolute path, because a `../` climb would move config
+ * discovery too, and that path is never prefixed: `.//x/a.md` names `x/a.md`
+ * under the cwd, a different file.
+ * The relative name is then read as SYNTAX by the tool, not as a path. cli2
+ * reads the FIRST character of each argument: `#` ignore, `!` negation, `:`
+ * literal file (`:a.md` opened a sibling `a.md`), `\` escape, `-` stdin or
+ * option; oxlint reads a leading `-` as an option (`-D.ts` is `-D .ts`: the whole
+ * tree linted, and `--fix` rewrote a file nobody dispatched). So the relative
+ * target stays bare only when it starts with a known-safe character (letter,
+ * digit, `_`, `.`), and every other first character gets a `./` prefix, which
+ * selects the same file through the same ignores (#5544 round 3: the enumerated
+ * `#`/`!` list missed `:`). yamllint keeps its `--` terminator instead
+ * (`clients/dispatch/runners/yamllint.ts`): a probe showed `./-a.yml` is
+ * equally safe there, but the `--` form is shipped and pinned by the real
+ * harness, and `./` would change the path its parsable output echoes.
  */
-export function markdownlintTargetArg(cwd: string, filePath: string): string {
+export function optionSafeTargetArg(cwd: string, filePath: string): string {
 	const relative = relativeInside(cwd, filePath);
 	if (relative === undefined) return filePath;
 	return /^[A-Za-z0-9_.]/.test(relative) ? relative : `./${relative}`;

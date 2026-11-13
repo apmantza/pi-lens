@@ -1,5 +1,5 @@
-// flake-shape: real-process-spawn — the defect is yamllint's and
-// markdownlint-cli2's OWN ignore-glob matching against the path string they are
+// flake-shape: real-process-spawn — the defect is yamllint's, markdownlint-cli2's
+// and oxlint's OWN ignore-glob matching against the path string they are
 // handed, so a double has no matcher to model and a shim would not reproduce the
 // tool's ignore either.
 // lane: a case runs where its binary is on the PATH the runner's lookup walks —
@@ -44,8 +44,10 @@ import {
 } from "vitest";
 
 import markdownlintRunner from "../../../../clients/dispatch/runners/markdownlint.js";
+import oxlintRunner from "../../../../clients/dispatch/runners/oxlint.js";
 import yamllintRunner from "../../../../clients/dispatch/runners/yamllint.js";
 import type { RunnerResult } from "../../../../clients/dispatch/types.js";
+import { runAutofix } from "../../../../clients/pipeline.js";
 import { setProjectTrustState } from "../../../../clients/project-trust.js";
 import * as safeSpawnModule from "../../../../clients/safe-spawn.js";
 import { makeRunnerCtx } from "../../../support/runner-ctx.js";
@@ -53,6 +55,13 @@ import { removeTempDirSync, setupTestEnvironment } from "../../test-utils.js";
 
 const env = setupTestEnvironment("pi-lens-5544-ignore-argv-");
 const ROOT = env.tmpDir;
+
+/** The repo's own oxlint (a devDependency), linked into each planted project. */
+const OXLINT_BIN =
+	process.platform !== "win32" &&
+	fs.existsSync(path.join(process.cwd(), "node_modules/.bin/oxlint"))
+		? path.join(process.cwd(), "node_modules/.bin/oxlint")
+		: undefined;
 
 /** The layout pair: one project under an ignored ancestor, one under a neutral. */
 const LAYOUTS = {
@@ -84,10 +93,35 @@ function plant(project: string): void {
 		path.join(project, "src/a.md"),
 		"# Title\n\n\ntext\n\n\nmore\n",
 	);
+	// #5556: oxlint applies `.eslintignore` to the argument spelling too. The
+	// package.json and lockfile agree on oxlint so the autofix stage (which
+	// checks tool/lockfile agreement) reaches it.
+	fs.writeFileSync(
+		path.join(project, ".oxlintrc.json"),
+		`${JSON.stringify({ rules: { "no-debugger": "error", "no-var": "error" } })}\n`,
+	);
+	fs.writeFileSync(
+		path.join(project, ".eslintignore"),
+		"**/.claude/**\nnode_modules\n",
+	);
+	fs.writeFileSync(
+		path.join(project, "package.json"),
+		`${JSON.stringify({ name: "x", devDependencies: { oxlint: "^1.0.0" } })}\n`,
+	);
+	fs.writeFileSync(
+		path.join(project, "package-lock.json"),
+		`${JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/oxlint": { version: "1.0.0" } } })}\n`,
+	);
+	fs.writeFileSync(path.join(project, "src/bad.ts"), "debugger;\n");
+	if (OXLINT_BIN) {
+		fs.mkdirSync(path.join(project, "node_modules/.bin"), { recursive: true });
+		fs.symlinkSync(OXLINT_BIN, path.join(project, "node_modules/.bin/oxlint"));
+	}
 }
 
 /** Is the binary on the PATH the runner's lookup walks? */
 function toolAvailable(binary: string): boolean {
+	if (binary === "oxlint") return OXLINT_BIN !== undefined;
 	return (process.env.PATH ?? "")
 		.split(path.delimiter)
 		.filter(Boolean)
@@ -170,6 +204,17 @@ const RUNNERS = [
 		run: (filePath: string, project: string) =>
 			markdownlintRunner.run(
 				makeRunnerCtx(filePath, project, { kind: "markdown" }) as never,
+			),
+	},
+	{
+		// #5556: oxlint reads `.eslintignore` against the argument string too.
+		runnerId: "oxlint",
+		binary: "oxlint",
+		file: "src/bad.ts",
+		controlRules: ["no-debugger"],
+		run: (filePath: string, project: string) =>
+			oxlintRunner.run(
+				makeRunnerCtx(filePath, project, { kind: "jsts" }) as never,
 			),
 	},
 ];
@@ -276,6 +321,23 @@ const LEADING_NAME_CASES = [
 				makeRunnerCtx(filePath, project, { kind: "markdown" }) as never,
 			),
 	},
+	// #5556: oxlint reads `-c.ts` as `-c <config>` (`Failed to parse oxlint
+	// configuration file`), so a bare project-relative name turned a lintable
+	// file into a failed run; `./-c.ts` is a path.
+	{
+		runnerId: "oxlint",
+		binary: "oxlint",
+		name: "-c.ts",
+		sibling: "plain.ts",
+		content: "debugger;\n",
+		expectedRules: ["no-debugger"],
+		expectedTarget: "./-c.ts",
+		separator: undefined,
+		run: (filePath: string, project: string) =>
+			oxlintRunner.run(
+				makeRunnerCtx(filePath, project, { kind: "jsts" }) as never,
+			),
+	},
 	// `:` is not a legal Windows file-name character, so this cell is POSIX only.
 	...(process.platform === "win32"
 		? []
@@ -355,7 +417,11 @@ describe.each(RUNNERS)(
 				fs.mkdirSync(path.dirname(outside), { recursive: true });
 				fs.writeFileSync(
 					outside,
-					outside.endsWith(".md") ? "# Title\n\n\ntext\n" : "key: value   \n",
+					outside.endsWith(".md")
+						? "# Title\n\n\ntext\n"
+						: outside.endsWith(".ts")
+							? "debugger;\n"
+							: "key: value   \n",
 				);
 
 				await run(outside, project);
@@ -368,3 +434,86 @@ describe.each(RUNNERS)(
 		});
 	},
 );
+
+/**
+ * #5556: the autofix stage hands oxlint its own file argument
+ * (`oxlint --fix <target>`), so it carries the same two defects as the lint
+ * runner, and its harm is a write rather than a missed finding:
+ *
+ * - the ignore glob naming an ancestor selected nothing, so the fix never ran
+ *   (`fixedCount 0`, the file unchanged) in a `.claude/worktrees` lane;
+ * - a root-level `-D.ts` was read as `-D <rule>`: oxlint then walked the whole
+ *   tree and rewrote a file the agent never touched.
+ *
+ * The fixture `var a = 1;` is fixable under the planted `no-var` rule.
+ */
+const VAR_SRC = "var a = 1;\nconsole.log(a);\n";
+const FIXED_SRC = "const a = 1;\nconsole.log(a);\n";
+
+function autofix(filePath: string, project: string) {
+	return runAutofix(
+		filePath,
+		project,
+		() => undefined,
+		() => {},
+		{
+			biomeClient: { isSupportedFile: () => false } as never,
+			ruffClient: { isPythonFile: () => false } as never,
+			fixedThisTurn: new Set<string>(),
+		},
+	);
+}
+
+describe.skipIf(!toolAvailable("oxlint"))("oxlint --fix", () => {
+	it("fixes a file under an ignored ancestor like the control layout", async () => {
+		const fixed: Record<string, string> = {};
+		for (const [name, project] of Object.entries(LAYOUTS)) {
+			const file = path.join(project, "src/fixme.ts");
+			fs.writeFileSync(file, VAR_SRC);
+			try {
+				const result = await autofix(file, project);
+				expect(result.autofixTools, name).toEqual(["oxlint:1"]);
+				fixed[name] = fs.readFileSync(file, "utf8");
+			} finally {
+				fs.rmSync(file, { force: true });
+			}
+		}
+		expect(fixed.control).toBe(FIXED_SRC);
+		expect(fixed.ignoredAncestor).toBe(FIXED_SRC);
+	});
+
+	it("rewrites only the dispatched file when its name starts with `-`", async () => {
+		const project = LAYOUTS.control;
+		const dispatched = path.join(project, "-D.ts");
+		const sibling = path.join(project, "src/untouched.ts");
+		fs.writeFileSync(dispatched, VAR_SRC);
+		fs.writeFileSync(sibling, VAR_SRC);
+		try {
+			const result = await autofix(dispatched, project);
+			expect(result.changedFiles.map((f) => path.basename(f))).toEqual([
+				"-D.ts",
+			]);
+			expect(fs.readFileSync(dispatched, "utf8")).toBe(FIXED_SRC);
+			// `oxlint --fix -D.ts` read `-D .ts` and fixed the whole tree.
+			expect(fs.readFileSync(sibling, "utf8")).toBe(VAR_SRC);
+		} finally {
+			fs.rmSync(dispatched, { force: true });
+			fs.rmSync(sibling, { force: true });
+		}
+	});
+
+	it("fixes a file outside the project through its absolute path", async () => {
+		const project = LAYOUTS.control;
+		const outside = path.join(ROOT, "outside", "fixme.ts");
+		fs.mkdirSync(path.dirname(outside), { recursive: true });
+		fs.writeFileSync(outside, VAR_SRC);
+		try {
+			await autofix(outside, project);
+			// No project-relative spelling exists for it, and an empty argument would
+			// fix nothing (or the project's own tree), never this file.
+			expect(fs.readFileSync(outside, "utf8")).toBe(FIXED_SRC);
+		} finally {
+			fs.rmSync(outside, { force: true });
+		}
+	});
+});

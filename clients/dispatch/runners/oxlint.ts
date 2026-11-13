@@ -12,11 +12,14 @@ import { skipped } from "../types.js";
 import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
 import { findLocalBinUpwards, localBinPath } from "../../package-manager.js";
-import { pathsEqual, relativeInside } from "../../path-utils.js";
+import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwdWithReason } from "../../tool-cwd.js";
 import { truncatedByOutputCap } from "../../spawn-output-cap.js";
-import { getJstsLintPolicyForCwd } from "../../tool-policy.js";
+import {
+	getJstsLintPolicyForCwd,
+	optionSafeTargetArg,
+} from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -128,7 +131,9 @@ const oxlintRunner: RunnerDefinition = {
 		if (hasToolConfig("vitePlus", packageDir)) {
 			cmd = await resolveVitePlusCommand(packageDir, cwd);
 		}
-		const target = relativeInside(cwd, ctx.filePath) ?? ctx.filePath;
+		// One spelling for lint and autofix (#5556): project-relative so the ignore
+		// globs see the project's own path, `./`-prefixed so a `-D.ts` is a path.
+		const target = optionSafeTargetArg(cwd, ctx.filePath);
 		if (cmd) {
 			args = ["lint", "--format", "json", target];
 		} else {

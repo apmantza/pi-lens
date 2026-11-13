@@ -22,7 +22,6 @@ import {
 	findNearestContaining,
 	normalizeEphemeralMapKey,
 	normalizeMapKey,
-	relativeInside,
 	realpathOrResolve,
 } from "./path-utils.js";
 import {
@@ -144,7 +143,7 @@ import {
 	hasKtfmtConfig,
 	hasKtlintConfig,
 	markdownlintConfigArgs,
-	markdownlintTargetArg,
+	optionSafeTargetArg,
 } from "./tool-policy.js";
 import type { PathSetLike } from "./runtime-coordinator.js";
 import { exceedsLspSyncLimits } from "./lsp/content-limits.js";
@@ -849,7 +848,7 @@ async function tryMarkdownlintFix(
 		[
 			...markdownlintConfigArgs(cwd),
 			"--fix",
-			markdownlintTargetArg(cwd, filePath),
+			optionSafeTargetArg(cwd, filePath),
 		],
 		cwd,
 	);
@@ -863,8 +862,12 @@ async function tryOxlintFix(
 	const cmd = await resolveToolCommandWithInstallFallback(cwd, "oxlint");
 	if (!cmd) return 0;
 	if (writeHold) await writeHold.acquire();
-	const target = relativeInside(cwd, filePath) ?? filePath;
-	return detectFileChangedAfterCommand(filePath, cmd, ["--fix", target], cwd);
+	return detectFileChangedAfterCommand(
+		filePath,
+		cmd,
+		["--fix", optionSafeTargetArg(cwd, filePath)],
+		cwd,
+	);
 }
 
 /** What a whole-package fixer's restore could not put back, as display paths (#3598). */

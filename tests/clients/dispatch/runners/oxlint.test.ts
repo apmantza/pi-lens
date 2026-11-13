@@ -938,6 +938,48 @@ describe("oxlint runner", () => {
 		}
 	});
 
+	it("hands `vp lint` the project-relative target when vp is on the PATH (#5556)", async () => {
+		// The Vite+ branch builds its own argv (`vp lint --format json <target>`);
+		// without this case that branch could revert to the absolute path with every
+		// oxlint-launcher test still green (#5556 review F3).
+		const env = setupTestEnvironment("pi-lens-oxlint-vite-plus-target-");
+		try {
+			const filePath = path.join(env.tmpDir, "sample.ts");
+			fs.writeFileSync(filePath, "console.log('hi')\n");
+			fs.writeFileSync(
+				path.join(env.tmpDir, "package.json"),
+				JSON.stringify({ devDependencies: { "vite-plus": "^0.1.0" } }),
+			);
+			// vp --version succeeds, then the lint itself runs clean.
+			safeSpawnAsync
+				.mockResolvedValueOnce({
+					error: null,
+					status: 0,
+					stdout: "vp 0.1.0",
+					stderr: "",
+				})
+				.mockResolvedValueOnce({
+					error: null,
+					status: 0,
+					stdout: "",
+					stderr: "",
+				});
+
+			const runner = (
+				await import("../../../../clients/dispatch/runners/oxlint.js")
+			).default;
+			await runner.run(createCtx(filePath, env.tmpDir) as never);
+
+			expect(safeSpawnAsync).toHaveBeenCalledWith(
+				"vp",
+				["lint", "--format", "json", "sample.ts"],
+				expect.objectContaining({ timeout: 30000 }),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	/**
 	 * #2514 / #2544 review F1, through the real runner.
 	 *
