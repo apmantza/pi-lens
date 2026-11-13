@@ -15,7 +15,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { gitExecFileSync } from "../support/git-fixture-env.js";
+import { listTrackedFiles } from "../../scripts/ci-shuffle-census.mjs";
 import { assertNonEmptyScan } from "../support/sweep-kit.js";
 import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
 import {
@@ -41,14 +41,7 @@ let tree: Map<string, string> | undefined;
  */
 function trackedSources(): Map<string, string> {
 	if (tree) return tree;
-	const listed = String(
-		gitExecFileSync("git", ["ls-files", "-z"], {
-			cwd: REPO_ROOT,
-			encoding: "utf8",
-		}),
-	)
-		.split("\0")
-		.filter((entry) => entry.length > 0);
+	const listed = listTrackedFiles(REPO_ROOT);
 	tree = new Map();
 	for (const repoPath of listed) {
 		try {
