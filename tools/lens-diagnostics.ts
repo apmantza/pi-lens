@@ -913,9 +913,6 @@ export function createLensDiagnosticsTool(
 					onProgress,
 					onServerReady: repaintLspStatus,
 					pathsScope,
-					stalePaths: stalePaths.filter(
-						createScopedFileFilter(cwd, pathsScope),
-					),
 					nextWriteIndex,
 					runtime: getRuntime?.(),
 					analysisRoot:
@@ -2628,8 +2625,6 @@ async function formatFullMode(
 		onProgress?: (completed: number, total: number) => void;
 		onServerReady?: () => void;
 		pathsScope?: PathsScope;
-		/** Session files whose snapshot predates their bytes (#5554 r2). */
-		stalePaths?: readonly string[];
 		nextWriteIndex?: () => number;
 		/** Auxiliary servers the operator's configuration turns off (#4944). */
 		excludeServerIds?: ReadonlySet<string>;
@@ -3180,7 +3175,6 @@ async function formatFullMode(
 				...(extracted.abortedIds ?? []),
 				...(extracted.aborted ? ["aborted"] : []),
 			],
-			stalePaths: options.stalePaths ?? [],
 		},
 	);
 	// #4638 r3 (N2): every return below builds on `result`, so the disclosure of
@@ -3736,8 +3730,6 @@ async function formatAllMode(
 		stopped: boolean;
 		/** Analyzer lanes that failed, ran partially or were aborted. */
 		incompleteLanes: readonly string[];
-		/** Files whose snapshot predates their bytes on disk. */
-		stalePaths: readonly string[];
 	},
 ): Promise<{ content: [{ type: "text"; text: string }]; details: object }> {
 	// mode=full already actively scanned exactly the requested paths, so a zero
@@ -4025,12 +4017,10 @@ async function formatAllMode(
 		...sweptKeys,
 	]);
 	// mode=full (#5554 r2): a file the sweep reached is proven by its fully
-	// covered row; one it did not reach only by a final, current snapshot, the
-	// mode=all rule. A stale finding on either withholds it, and a lane that
-	// failed, ran partially or was aborted withholds the whole claim.
-	const staleKeys = new Set(
-		(fullModeSweep?.stalePaths ?? []).map(normalizeMapKey),
-	);
+	// covered row; one it did not reach only by a final snapshot, the mode=all
+	// rule (`reconcileStaleWidgetFiles` clears it for a file edited since). A
+	// stale finding on either withholds it, and a lane that failed, ran
+	// partially or was aborted withholds the whole claim.
 	const summaryByKey = new Map(
 		visibleSummaries.map((s) => [normalizeMapKey(s.filePath), s]),
 	);
@@ -4038,7 +4028,7 @@ async function formatAllMode(
 		const summary = summaryByKey.get(key);
 		if ((summary?.diagnostics ?? []).some((d) => d.stale)) return false;
 		if (sweptKeys.has(key)) return sweepProvenKeys.has(key);
-		return summary?.hasFinalSnapshot === true && !staleKeys.has(key);
+		return summary?.hasFinalSnapshot === true;
 	};
 	const provenCount = isFullMode
 		? fullModeSweep?.stopped ||
