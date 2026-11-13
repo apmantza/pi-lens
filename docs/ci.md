@@ -80,6 +80,10 @@ files unknown, with `node scripts/gen-test-shard-weights.mjs` from either the
 shards' uploaded `vitest-results.json` (`--run <dir>`) or the nightly journal
 (`--journal <file> [--days 5]`, no GitHub API: `git fetch <remote>
 data/test-history`, then `git show FETCH_HEAD:history/test-daily.ndjson`).
+Prefer `--run` over the newest 10 or more green master pushes: the journal's
+five-day median held a regressed file (`tool-state-matrix`, 302 s against 60 s
+once fixed) for days after its fix and left shard max-minus-mean at 62 s p50
+(#3801, 15 runs of 2026-11-13); the refresh models 16 s.
 
 ## Actions cache
 

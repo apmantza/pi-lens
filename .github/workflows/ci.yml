@@ -454,19 +454,30 @@ jobs:
   # per-shard floor, so #3756's five shards ran `Run tests` from 107 s to 252 s
   # (max/mean 1.4). vitest.config.ts now installs a sequencer that packs the
   # files by recorded per-file seconds (scripts/test-shard-weights.json,
-  # scripts/lib/test-shard-assignment.mjs). Measured on the same runner pool
-  # (scratch run 36776021055 of branch ci/3801-exp-shards, the `test` job
-  # copied at N = 3, 4, 5; slowest shard job / max over mean of `Run tests` /
-  # total runner-minutes):
+  # scripts/lib/test-shard-assignment.mjs).
   #
-  #   N=3  390 s  1.10  17.8 min
-  #   N=4  301 s  1.09  18.4 min
-  #   N=5  248 s  1.07  19.2 min   (hash-count N=5 before: 274-292 s, 1.4, 19.2 min)
+  # The count is chosen from data (#3801, 2026-11-14). Source: the per-file
+  # `vitest-results.json` of 15 green master pushes (2026-11-13), each file
+  # re-packed at N shards with the sequencer's own LPT pack and costed by the
+  # fit `Run tests` = 25 s + 1.21 x planned load (r = 0.94 over the 75 measured
+  # shard jobs), plus 41 s of per-job setup. The same model on the weights the
+  # runs used reproduces what ran (slowest shard job 690 s modelled against
+  # 694 s measured, 51.3 against 51.1 runner-min). Rows below pack each run
+  # with weights from the other 14 runs and judge it held out. Slowest shard
+  # job p50 / max-minus-mean p50 / runner-min p50:
   #
-  # The current target is a <=6-minute required-check median (#3801). Five is
-  # the measured choice: it buys 53 s over four for 0.8 more runner-minutes.
-  # The repo sits at the 20-concurrent-job cap, so this is the largest tested
-  # count retained only because its measured slowest shard is 53 s faster.
+  #   N=3  1014 s  20 s  49.1 min
+  #   N=4   782 s  24 s  50.2 min
+  #   N=5   646 s  16 s  51.3 min
+  #   N=6   559 s  32 s  52.4 min
+  #
+  # The target is the slowest shard job measured at N=5 on the previous
+  # weights (694 s p50). Four shards miss it by 88 s; five meet it, so five is
+  # the fewest that do. Each shard past it buys about 1.1 runner-min for
+  # 87 to 136 s, at a pool that sits near the 20-concurrent-job cap. The
+  # <=6-minute required-check target (#3753) is out of reach at any count the
+  # data supports (N=7 models 490 s): the lever is the cost of the serialized
+  # lanes (76% of the modelled load), not the matrix length.
   test:
     name: Unit tests (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
