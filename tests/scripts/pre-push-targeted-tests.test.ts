@@ -66,6 +66,14 @@ import {
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 
+// The gate's default temp root, when PI_LENS_HOME is unset (#5536).
+const DEFAULT_ROOT = path.join(
+	os.homedir(),
+	".local",
+	"share",
+	"pi-lens-prepush",
+);
+
 // What the local hook runs of a registry: its CI-only members run in CI (#4724).
 const local = (tests: string[]) =>
 	tests.filter((test) => !Object.hasOwn(CI_ONLY_PRE_PUSH_TESTS, test));
@@ -1016,7 +1024,7 @@ syncBuiltinESMExports();
 			const seen = runRoot(homeFor);
 			expect(relativeInside(seen.checkout, seen.base)).toBeUndefined();
 			expect(relativeInside(seen.checkout, seen.children)).toBeUndefined();
-			expect(seen.base).toBe(fs.realpathSync(defaultRoot()));
+			expect(seen.base).toBe(fs.realpathSync(DEFAULT_ROOT));
 			expect(seen.stderr.match(notice)).toHaveLength(1);
 		},
 	);
@@ -1030,34 +1038,6 @@ syncBuiltinESMExports();
 	});
 });
 
-// The default root, when PI_LENS_HOME is unset (#5536).
-const defaultRoot = () =>
-	path.join(os.homedir(), ".local", "share", "pi-lens-prepush");
-
-function expectRootNotInternal(root: string) {
-	const project = path.join(root, "run-x", "project");
-	const walked: string[] = [];
-	for (
-		let dir = root;
-		dir !== path.dirname(dir) && dir !== os.homedir();
-		dir = path.dirname(dir)
-	) {
-		walked.push(dir);
-		expect(isPiLensInternalPath(dir, project), dir).toBe(false);
-		expect(isPiLensInternalPath(path.join(dir, "a.ts"), project), dir).toBe(
-			false,
-		);
-	}
-	expect(walked.length).toBeGreaterThan(0);
-	const below = path.relative(os.homedir(), root).split(path.sep);
-	expect(below.filter((segment) => EXCLUDED_DIRS.includes(segment))).toEqual(
-		[],
-	);
-	expect(
-		isPiLensInternalPath(path.join(project, "src", "app.ts"), project),
-	).toBe(false);
-}
-
 describe("pre-push temp root pin (#5439)", () => {
 	// Recurrence: the gate inherited the caller's TMPDIR, so macOS's long,
 	// symlinked `/private/var/folders/...` root redded path-sensitive tests on
@@ -1070,7 +1050,7 @@ describe("pre-push temp root pin (#5439)", () => {
 			TEMP: caller,
 			TMP: caller,
 		});
-		expect(root).toBe(defaultRoot());
+		expect(root).toBe(DEFAULT_ROOT);
 	});
 
 	// Recurrence (#5536): the default root sat under `~/.pi-lens`, which
@@ -1087,7 +1067,28 @@ describe("pre-push temp root pin (#5439)", () => {
 		for (const key of ["PI_LENS_HOME", "TMPDIR", "TEMP", "TMP"])
 			vi.stubEnv(key, neutral);
 		try {
-			expectRootNotInternal(resolvePrePushTmpRoot({}));
+			const root = resolvePrePushTmpRoot({});
+			const project = path.join(root, "run-x", "project");
+			const walked: string[] = [];
+			for (
+				let dir = root;
+				dir !== path.dirname(dir) && dir !== os.homedir();
+				dir = path.dirname(dir)
+			) {
+				walked.push(dir);
+				expect(isPiLensInternalPath(dir, project), dir).toBe(false);
+				expect(isPiLensInternalPath(path.join(dir, "a.ts"), project), dir).toBe(
+					false,
+				);
+			}
+			expect(walked.length).toBeGreaterThan(0);
+			const below = path.relative(os.homedir(), root).split(path.sep);
+			expect(
+				below.filter((segment) => EXCLUDED_DIRS.includes(segment)),
+			).toEqual([]);
+			expect(
+				isPiLensInternalPath(path.join(project, "src", "app.ts"), project),
+			).toBe(false);
 		} finally {
 			vi.unstubAllEnvs();
 		}
