@@ -190,10 +190,11 @@ describe("resolveToolCwd (#2777)", () => {
 		},
 	);
 
-	// #5541: oxlint picks its config per file, but a path a config or plugin
-	// resolves from the process cwd (a plugin's `settings` entry) needs the cwd
-	// to be the config's own directory, not the nearest package manifest.
-	describe("oxlint config-anchored runner cwd (#5541)", () => {
+	// #5541: a path a config or plugin resolves from the process cwd (a
+	// plugin's `settings` entry) needs the cwd to be the config's own directory,
+	// not the nearest package manifest. oxlint and ESLint reproduce it; Biome
+	// resolves a config's paths from the config file, so it stays unlisted.
+	describe("config-anchored runner cwd (#5541)", () => {
 		const workspace = () => path.join(home, "repo");
 		const nested = () => path.join(workspace(), "apps", "web");
 		const fileAt = (dir: string) => {
@@ -250,6 +251,78 @@ describe("resolveToolCwd (#2777)", () => {
 				toolCwd.resolveToolCwd("runner", "oxlint", fileAt(nested()), {
 					cwd: workspace(),
 					rootMarkers: ["package.json"],
+				}).cwd,
+			).toBe(nested());
+		});
+
+		it.each([".oxlintrc.jsonc", "oxlint.json", "oxlint.config.ts"])(
+			"anchors at every oxlint config name the presence seam knows (%s)",
+			(configName) => {
+				fs.mkdirSync(nested(), { recursive: true });
+				fs.writeFileSync(path.join(workspace(), configName), "{}\n");
+				fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+				expect(
+					toolCwd.resolveToolCwd("runner", "oxlint", fileAt(nested()), {
+						cwd: workspace(),
+					}),
+				).toEqual({ cwd: workspace(), marker: configName });
+			},
+		);
+
+		it("anchors ESLint at a root flat config above the nearest package manifest", () => {
+			fs.mkdirSync(nested(), { recursive: true });
+			fs.writeFileSync(
+				path.join(workspace(), "eslint.config.mjs"),
+				"export default [];\n",
+			);
+			fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "eslint", fileAt(nested()), {
+					cwd: workspace(),
+				}),
+			).toEqual({ cwd: workspace(), marker: "eslint.config.mjs" });
+		});
+
+		it("keeps ESLint in the package when a flat config sits below its manifest", () => {
+			// ESLint 9 finds a flat config by climbing from the cwd, so a config in
+			// `src/` is not read from the package: the cwd must not move down.
+			fs.mkdirSync(path.join(nested(), "src"), { recursive: true });
+			fs.writeFileSync(
+				path.join(nested(), "src", "eslint.config.mjs"),
+				"export default [];\n",
+			);
+			fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "eslint", fileAt(nested()), {
+					cwd: workspace(),
+				}).cwd,
+			).toBe(nested());
+		});
+
+		it("keeps ESLint in the package for a legacy config that is the package's own", () => {
+			fs.mkdirSync(nested(), { recursive: true });
+			fs.writeFileSync(path.join(workspace(), "package.json"), "{}\n");
+			fs.writeFileSync(path.join(nested(), ".eslintrc.json"), "{}\n");
+			fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "eslint", fileAt(nested()), {
+					cwd: workspace(),
+				}).cwd,
+			).toBe(nested());
+		});
+
+		it("leaves Biome, which resolves config paths from the config file, in the package", () => {
+			fs.mkdirSync(nested(), { recursive: true });
+			fs.writeFileSync(path.join(workspace(), "biome.json"), "{}\n");
+			fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "biome", fileAt(nested()), {
+					cwd: workspace(),
 				}).cwd,
 			).toBe(nested());
 		});

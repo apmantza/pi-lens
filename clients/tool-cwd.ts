@@ -8,6 +8,7 @@ import {
 	isWindowsPath,
 	nameMatchesMarkerGlob,
 	normalizeEphemeralMapKey,
+	pathsEqual,
 	realpathOrResolve,
 	toPosix,
 	walkUpDirs,
@@ -20,10 +21,12 @@ import {
 	createGenerationMap,
 	createGenerationSource,
 } from "./generation-guard.js";
+import { rootMarkersForFile } from "./language-profile.js";
 import {
-	configAnchorMarkersFor,
-	rootMarkersForFile,
-} from "./language-profile.js";
+	findToolConfig,
+	type ToolConfigHit,
+	type ToolConfigId,
+} from "./tool-config-presence.js";
 
 export type ToolCwdKind = "runner" | "formatter" | "lsp";
 
@@ -243,6 +246,27 @@ export function logRunnerAdvisoryOnce(
 	ctx.log(message, "debug");
 }
 
+/**
+ * Runners whose config can sit above the nearest package manifest and holds a
+ * path the tool resolves from the process cwd (a plugin's `settings` entry), so
+ * the child runs in that config's directory (#5541). The tool-config seam owns
+ * where the config is, so the policy and this spawn cannot disagree (#5408).
+ * Biome is not listed: it resolves a config's paths from the config file.
+ */
+const CONFIG_ANCHORED_RUNNERS = [
+	"oxlint",
+	"eslint",
+] as const satisfies readonly ToolConfigId[];
+
+function configAnchorOf(
+	tool: string,
+	fromDir: string,
+	options: { homeDir: string; ceiling: string | undefined },
+): ToolConfigHit | undefined {
+	const anchored = CONFIG_ANCHORED_RUNNERS.find((id) => id === tool);
+	return anchored ? findToolConfig(anchored, fromDir, options) : undefined;
+}
+
 /** Resolve every child process cwd/root through one bounded, synchronous seam. */
 export function resolveToolCwd(
 	kind: ToolCwdKind,
@@ -269,31 +293,33 @@ export function resolveToolCwd(
 	const homeCeiling = realpathOrResolve(homeDir);
 	const insideDispatch = isUnderDir(absoluteFile, dispatchRoot);
 	const markers = markersFor(kind, tool, absoluteFile, ctx);
-	const markerCeiling = ctx.allowHomeMarker
-		? path.parse(homeCeiling).root
-		: homeCeiling;
-	// #5541: a config-anchored runner starts from its own config's directory, a
-	// level the nearest-directory walk below would pass for a nearer package
-	// manifest. A caller-owned marker table still wins, and a config outside the
-	// dispatch root is not the session's, so the walk below decides.
-	const configMarkers =
-		kind === "runner" && !ctx.rootMarkers ? configAnchorMarkersFor(tool) : [];
-	const configAnchor = configMarkers.length
-		? findMarkerRoot(fileDir, configMarkers, markerCeiling)
+	const markerResult = markers.length
+		? findMarkerRoot(
+				fileDir,
+				markers,
+				ctx.allowHomeMarker ? path.parse(homeCeiling).root : homeCeiling,
+			)
 		: { root: null };
-	const configAnchored =
-		configAnchor.root !== null &&
-		(insideDispatch ? isUnderDir(configAnchor.root, dispatchRoot) : true);
-	const markerResult = configAnchored
-		? configAnchor
-		: markers.length
-			? findMarkerRoot(fileDir, markers, markerCeiling)
-			: { root: null };
 	const markerRoot = markerResult.root;
 	if (
 		markerRoot &&
 		(insideDispatch ? isUnderDir(markerRoot, dispatchRoot) : true)
 	) {
+		// #5541: a caller-owned marker table still decides; a config outside the
+		// dispatch root is not the session's, so the climb stops at that root.
+		const anchor =
+			kind === "runner" && !ctx.rootMarkers
+				? configAnchorOf(tool, markerRoot, {
+						homeDir,
+						ceiling: insideDispatch ? dispatchRoot : undefined,
+					})
+				: undefined;
+		if (anchor && !pathsEqual(anchor.dir, markerRoot)) {
+			const anchorMarker = path.basename(anchor.file);
+			if (!ctx.suppressTelemetry)
+				emitResolution(kind, tool, anchor.dir, `marker:${anchorMarker}`);
+			return { cwd: anchor.dir, marker: anchorMarker };
+		}
 		const finalReason = `marker:${markerResult.marker ?? markers[0]}`;
 		if (!ctx.suppressTelemetry)
 			emitResolution(kind, tool, markerRoot, finalReason);
