@@ -273,12 +273,19 @@ describe("delivery-surface adoption ratchet (#2028/#2029)", () => {
 
 /**
  * #5258 clean-claim census. A clean verdict ("clean", "✓", "No diagnostics
- * found.") must come from proof, so every literal a delivery surface can emit
- * is classified, whatever its wording: `claim`, `finding` or `neutral`, in
+ * found.") must come from proof, so every literal a census file can emit is
+ * classified, whatever its wording: `claim`, `finding` or `neutral`, in
  * `tests/clients/clean-claim-census.json`, keyed by its source text
  * (whitespace collapsed) with its count. A new or reworded literal reds until
  * it is classified, so a claim cannot appear under a spelling nobody listed
  * (#5554 review F1), and a swapped line changes its identity (F4/B5/B6).
+ * Classifying a literal finding or neutral is a judgement the test cannot
+ * check: the census JSON diff is where review sees it.
+ *
+ * The file set fails closed (#5554 verify N1): every DELIVERY_SURFACES file
+ * is a census file or a CENSUS_EXEMPT row with its reason, and a registered
+ * surface with neither reds. A census file may also be outside the registry
+ * (`clients/runtime-tool-result.ts` queues the linked-worktree advisory).
  *
  * A claim names its producer. `cleanVerdict` and `checkedVerdict`
  * (`clients/dispatch/types.ts`) are the proof producers: the claim's own
@@ -289,8 +296,10 @@ describe("delivery-surface adoption ratchet (#2028/#2029)", () => {
  * one is a visible raise and a converted one lowers it.
  *
  * Accepted residuals: a claim assembled at runtime from literals each
- * classified neutral is read as neutral, and files outside CENSUS_FILES are
- * not in the census.
+ * classified neutral is read as neutral; a literal in a read-only position
+ * (a key, a comparison operand) is not a site even when a key is later
+ * rendered; an exempt surface that gains a clean claim passes until review
+ * moves it into the census.
  */
 const CENSUS_FILES = [
 	"tools/lens-diagnostics.ts",
@@ -299,8 +308,70 @@ const CENSUS_FILES = [
 	"clients/widget-state.ts",
 	"mcp/analyze-cli.ts",
 	"clients/pipeline.ts",
+	"clients/runtime-turn.ts",
+	"clients/runtime-tool-result.ts",
 ];
-const OWN_CLAIM_CEILING = 26;
+const OWN_CLAIM_CEILING = 39;
+
+/**
+ * Registered delivery surfaces outside the census, each with why it renders no
+ * clean verdict (the #5554 r3 state table). A ✓ or ✅ named here marks
+ * something other than a check result.
+ */
+const CENSUS_EXEMPT: Record<string, string> = {
+	"clients/agent-behavior-client.ts": "renders only the thrashing finding",
+	"clients/agent-nudge.ts": "a context nudge; renders no check verdict",
+	"clients/cascade-format.ts":
+		"cascade findings and gaps; its clean wording is negation only, and cascade results are reported clean by runtime-turn.ts",
+	"clients/dispatch/integration.ts":
+		"in-lane cascade findings; its `clean` is a CascadeSkipReason value for the cascade record",
+	"clients/git-guard.ts":
+		"blocks a commit with its reasons; an allowed commit is silent",
+	"clients/lens-engine.ts":
+		"project-scan findings and query misses (`No files matched`)",
+	"clients/mutating-tool.ts": "adapter preflight refusals only",
+	"clients/read-guard-tool-lines.ts":
+		"edit preflight lines; its ✅ marks an edit already applied, not a check",
+	"clients/runtime-context.ts": "frames the registered persisted findings",
+	"clients/runtime-tool-call.ts": "the duplicate-export blocker only",
+	"clients/shared-checkout-guard.ts":
+		"blocks a worktree mutation; its `clean` is git working-tree state",
+	"clients/test-runner-delivery.ts": "test-failure findings only",
+	"mcp/server.ts":
+		"its analyze summary prints counts and the not-checked gap (#5287), never a clean word; ✓ marks a connection, a selection or a build",
+	"tools/lsp-navigation.ts":
+		"navigation results and misses; ✓ marks a server capability",
+};
+
+/** Every registered surface file outside both lists, and every stale exemption. */
+function fileSetProblems(
+	surfaceFiles: readonly string[],
+	censusFiles: readonly string[] = CENSUS_FILES,
+	exempt: Record<string, string> = CENSUS_EXEMPT,
+): string[] {
+	const surfaces = new Set(surfaceFiles);
+	const problems: string[] = [];
+	for (const file of [...surfaces].sort()) {
+		const censused = censusFiles.includes(file);
+		const exempted = Object.hasOwn(exempt, file);
+		if (!censused && !exempted)
+			problems.push(
+				`${file}: a delivery surface outside the census and CENSUS_EXEMPT`,
+			);
+		if (censused && exempted)
+			problems.push(`${file}: censused and exempt; drop the exemption`);
+	}
+	for (const file of Object.keys(exempt))
+		if (!surfaces.has(file))
+			problems.push(`${file}: exempt but not a delivery surface (stale)`);
+	return problems;
+}
+
+function deliverySurfaceFiles(): string[] {
+	return Object.values(DELIVERY_SURFACES).map(
+		(entry) => (entry as { file: string }).file,
+	);
+}
 
 type Producer = "cleanVerdict" | "checkedVerdict" | "own";
 interface ClaimRow {
@@ -453,6 +524,40 @@ describe("clean-claim census (#5258)", () => {
 		TREE_WALK_TIMEOUT_MS,
 	);
 
+	it("every delivery surface file is censused or exempt with a reason", () => {
+		// Recurrence: #5554 verify N1, CENSUS_FILES was a hand list of 6 while
+		// DELIVERY_SURFACES named 21 files, so a clean claim in a new registered
+		// surface passed.
+		expect(fileSetProblems(deliverySurfaceFiles())).toEqual([]);
+		for (const [file, reason] of Object.entries(CENSUS_EXEMPT))
+			expect(reason.trim(), file).not.toBe("");
+	});
+
+	it("reds a new registered surface that is neither censused nor exempt", () => {
+		// The verify's plant: a registered clients/zz-new-surface.ts rendering
+		// "✅ All clear" passed every census test, since nothing read its file.
+		expect(
+			fileSetProblems([...deliverySurfaceFiles(), "clients/zz-new-surface.ts"]),
+		).toEqual([
+			"clients/zz-new-surface.ts: a delivery surface outside the census and CENSUS_EXEMPT",
+		]);
+		expect(
+			fileSetProblems(
+				deliverySurfaceFiles().filter(
+					(file) => file !== "clients/git-guard.ts",
+				),
+			),
+		).toEqual([
+			"clients/git-guard.ts: exempt but not a delivery surface (stale)",
+		]);
+		expect(
+			fileSetProblems(deliverySurfaceFiles(), CENSUS_FILES, {
+				...CENSUS_EXEMPT,
+				"index.ts": "planted",
+			}),
+		).toEqual(["index.ts: censused and exempt; drop the exemption"]);
+	});
+
 	it(
 		"a producer claim reads its guard and the guard comes from the producer",
 		() => {
@@ -543,8 +648,8 @@ describe("clean-claim census (#5258)", () => {
 		);
 		expect(source).not.toBe(original);
 		expect(producerProblems(file, source, loadCensus()[file]!)).toEqual([
-			expect.stringMatching(/:556: .*guard proven is not set by cleanVerdict/),
-			expect.stringMatching(/:4062: .*guard clean is not set by cleanVerdict/),
+			expect.stringMatching(/guard proven is not set by cleanVerdict/),
+			expect.stringMatching(/guard clean is not set by cleanVerdict/),
 		]);
 	});
 

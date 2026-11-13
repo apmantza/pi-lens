@@ -196,11 +196,14 @@ file-scoped worklist and receives no project-wide scanner output.
     findings, a non-empty scope, every file in it proven) or the dispatch
     verdict's `checkedVerdict`, both in `clients/dispatch/types.ts`. An empty
     answer, a stopped sweep, a lookup that never answered and a report that
-    was never read are not proof. In the delivery-surface files every
-    emitted literal, whatever its words, is a claim, finding or neutral row
-    of `tests/clients/clean-claim-census.json`, keyed by its source text; a
+    was never read are not proof. In the census files (8 files: the
+    clean-verdict surfaces of `DELIVERY_SURFACES` plus
+    `clients/runtime-tool-result.ts`) every emitted literal, whatever its
+    words, is a claim, finding or neutral row of
+    `tests/clients/clean-claim-census.json`, keyed by its source text; a
     claim row names its producer, and its statement must read a guard that
-    producer set. Claims still decided by local logic (`own`) are the
+    producer set. Every other `DELIVERY_SURFACES` file is exempt only with a
+    reason in the test, and a new surface with neither reds. Claims still decided by local logic (`own`) are the
     instance list: pinned by count, they may only fall. Screen: can this line
     say clean when no check completed on a file it speaks for?
     An out-of-session-root project edit records one bounded degradation and
@@ -248,7 +251,7 @@ file-scoped worklist and receives no project-wide scanner output.
     `tests/clients/delivery-surface-ratchet.test.ts` (the clean-claim
     census; partial: no detector for an agent-facing bound that omits its
     truncation line, for a claim assembled at runtime from neutral literals,
-    or for a claim in a file outside the census).
+    or for a clean claim added to an exempt surface).
 
 26. **Old-role filter on a substitute:** compare fallback output with the
     substituted surface's contract, including non-blocking findings.
