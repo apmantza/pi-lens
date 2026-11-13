@@ -104,12 +104,17 @@ describe("AstGrepClient.replace() — apply reports the pre-apply match count", 
 		const writeStopped = new Promise<void>((resolve) => {
 			abortWrite = resolve;
 		});
+		let markWriteBegun!: () => void;
+		const writeBegun = new Promise<void>((resolve) => {
+			markWriteBegun = resolve;
+		});
 		const exec = vi.fn(
 			async (args: string[], options?: { signal?: AbortSignal }) => {
 				if (args.includes("--update-all")) {
 					options?.signal?.addEventListener("abort", abortWrite, {
 						once: true,
 					});
+					markWriteBegun();
 					await writeStopped;
 					return {
 						matches: [],
@@ -136,7 +141,7 @@ describe("AstGrepClient.replace() — apply reports the pre-apply match count", 
 			{ sessionRoot: process.cwd(), signal: controller.signal },
 		);
 
-		await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(2));
+		await writeBegun;
 		controller.abort();
 		const result = await pending;
 
@@ -150,12 +155,17 @@ describe("AstGrepClient.replace() — apply reports the pre-apply match count", 
 		const writeStopped = new Promise<void>((resolve) => {
 			abortWrite = resolve;
 		});
+		let markWriteBegun!: () => void;
+		const writeBegun = new Promise<void>((resolve) => {
+			markWriteBegun = resolve;
+		});
 		const tempScanDetailedAsync = vi
 			.fn()
 			.mockResolvedValue({ matches: [SAMPLE_MATCH], status: 0 });
 		const tempScanWithFixAsync = vi.fn(async (...args: unknown[]) => {
 			const options = args.at(-1) as { signal?: AbortSignal };
 			options.signal?.addEventListener("abort", abortWrite, { once: true });
+			markWriteBegun();
 			await writeStopped;
 			return {
 				matches: [],
@@ -174,7 +184,7 @@ describe("AstGrepClient.replace() — apply reports the pre-apply match count", 
 			{ sessionRoot: process.cwd(), signal: controller.signal },
 		);
 
-		await vi.waitFor(() => expect(tempScanWithFixAsync).toHaveBeenCalledOnce());
+		await writeBegun;
 		controller.abort();
 		const result = await pending;
 
