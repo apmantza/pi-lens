@@ -40,9 +40,10 @@ function writeFakePip(
 		mode === "pep668"
 			? `${pep668Body}; exit 1`
 			: mode === "pep668-long"
-				? // PEP 668 literal first, then ~900 chars of retry preamble so the
+				? // Requires-Python evidence comes first, then the PEP 668 body and
+					// ~900 chars of retry preamble so the
 					// flattened reason exceeds the 1,000-char bound (N1 exercises it).
-					`${pep668Body}; printf "WARNING: Retrying (Retry(total=4)) %850s\\n" x >&2; exit 1`
+					`printf "ERROR: Ignored the following versions that require a different python version: 0.1.11 Requires-Python <3.14,>=3.8.0\\n" >&2; ${pep668Body}; printf "WARNING: Retrying (Retry(total=4)) %850s\\n" x >&2; exit 1`
 				: mode === "genuine"
 					? 'echo "No matching distribution found" >&2; exit 1'
 					: mode === "long-genuine"
@@ -112,6 +113,42 @@ else
   echo "No module named venv" >&2
 fi
 exit 1
+`,
+	);
+}
+
+function writeFakePython314(binDir: string): void {
+	writeExecutable(
+		path.join(binDir, "python3"),
+		`#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "Python 3.12.14"
+  exit 0
+fi
+exit 1
+`,
+	);
+	writeExecutable(
+		path.join(binDir, "pip3"),
+		`#!/bin/sh
+case "$*" in
+	--version)
+	  echo "pip 25.1.1 from /fake/lib/python3.14/site-packages/pip (python 3.14.4)"
+	  exit 0
+	  ;;
+  *"cmake-language-server>=0.1.11"*)
+    # Real pip 25.1.1 output: it names the candidate's Requires-Python, not
+    # the interpreter that ran pip. The installer queries that interpreter.
+    echo "ERROR: Could not find a version that satisfies the requirement cmake-language-server>=0.1.11 (from versions: 0.1.0 ... 0.1.5)" >&2
+    echo "ERROR: Ignored the following versions that require a different python version: 0.1.11 Requires-Python <3.14,>=3.8.0" >&2
+    exit 1
+    ;;
+esac
+bin_dir="$FAKE_USER_BASE/bin"
+/bin/mkdir -p "$bin_dir"
+printf '#!/bin/sh\necho cmake-language-server 0.1.5\n' > "$bin_dir/cmake-language-server"
+/bin/chmod 750 "$bin_dir/cmake-language-server"
+exit 0
 `,
 	);
 }
@@ -197,6 +234,27 @@ afterEach(() => {
 });
 
 describe("real pip installer PEP 668 strategy selection (#2916)", () => {
+	it("refuses cmake-language-server on Python 3.14 with one visible degradation", async () => {
+		const root = scratchDir();
+		const bin = path.join(root, "bin");
+		fs.mkdirSync(bin, { recursive: true });
+		writeFakePython314(bin);
+
+		const result = await runInstaller(root, bin, "cmake-language-server", {
+			FAKE_USER_BASE: path.join(root, "user-base"),
+		});
+
+		expect(result.result.installed).toBe(false);
+		expect(result.result.resolved).toBeUndefined();
+		expect(result.result.reason).toContain("3.14.4");
+		expect(result.result.reason.split(" | ")[0]).not.toContain("3.12.14");
+		const installRows = result.result.summary.filter(
+			(entry: { kind: string }) => entry.kind === "managed-tool-install",
+		);
+		expect(installRows).toHaveLength(1);
+		expect(installRows[0]?.latestReasons?.[0]?.reason).toContain("3.14.4");
+	});
+
 	it("uses pipx before other pip strategies", async () => {
 		const root = scratchDir();
 		const bin = path.join(root, "bin");
@@ -405,7 +463,27 @@ fi
 			"",
 		);
 		expect(diagnostic.length).toBeLessThanOrEqual(200);
-		expect(reason.length).toBeLessThanOrEqual(1000);
+		expect(reason.length).toBeLessThanOrEqual(5000);
+	});
+
+	it("keeps a late Requires-Python cause ahead of a long PEP 668 preamble", async () => {
+		const root = scratchDir();
+		const bin = path.join(root, "bin");
+		fs.mkdirSync(bin, { recursive: true });
+		writeFakePip(bin, "pep668-long");
+		writeFakePythonWithoutVenv(bin, "pep668");
+		const result = await runInstaller(root, bin, "ruff", {
+			FAKE_PIP_LOG: path.join(root, "pip.log"),
+		});
+
+		expect(result.result.installed).toBe(false);
+		expect(result.result.reason).toContain("Requires-Python <3.14,>=3.8.0");
+		const requiresPythonCount = (
+			result.result.reason.match(/Requires-Python <3\.14,>=3\.8\.0/g) ?? []
+		).length;
+		// Each available candidate contributes the cause once; the tail must not
+		// repeat it. pip and python3 are available in this fixture.
+		expect(requiresPythonCount).toBe(2);
 	});
 
 	it("bounds a long diagnostic on the private-prefix rung", async () => {

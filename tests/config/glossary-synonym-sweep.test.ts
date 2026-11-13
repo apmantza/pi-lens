@@ -453,7 +453,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 26 -> 28 (#4530), and the new launch.ts row:
 		// starts that moved onto the spawn seam read the spawn result's `error`
 		// field (SpawnResult.error), not a delivery tier.
-		"clients/installer/index.ts": 26,
+		// 28 -> 30 (#5561 r3): candidateFailure's tail reads the pip failure text, not a delivery tier.
+		"clients/installer/index.ts": 30,
 		"clients/installer/managed-tool-refresh.ts": 2,
 		"clients/instance-reaper.ts": 4,
 		"clients/instance-registry-lock.ts": 3,
@@ -1547,7 +1548,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/session-repository.ts": 9,
 		"clients/session-state-store.ts": 3,
 		"clients/sessionstart-logger.ts": 2,
-		"clients/sg-runner.ts": 11,
+		// 11 -> 16 (#5545): the scan anchor spells the scan argument and the
+		// exclude globs for the child's working directory, so it resolves and
+		// relativizes the scanned tree (`path.resolve`, `path.relative`,
+		// `path.dirname`, `path.join`) and names the field in its doc comments.
+		"clients/sg-runner.ts": 15,
 		// 26 -> 25 (#3930 r2): the shared user rule-root seam removes one
 		// duplicated path construction.
 		// 25 -> 26 (#3930 r4): the cycle-memo key is derived with
