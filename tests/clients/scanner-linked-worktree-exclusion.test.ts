@@ -74,10 +74,7 @@ import {
 } from "../../clients/gitleaks-client.js";
 import { JscpdClient } from "../../clients/jscpd-client.js";
 import { gitleaksFindingToProjectDiagnostic } from "../../clients/project-diagnostics/runner-adapters/gitleaks.js";
-import {
-	escapeFnmatchLiteral,
-	SECRETS_LANE_SCRATCH_DIR_NAMES,
-} from "../../clients/scratch-tree-policy.js";
+import { SECRETS_LANE_SCRATCH_DIR_NAMES } from "../../clients/scratch-tree-policy.js";
 import { OpengrepClient } from "../../clients/opengrep-client.js";
 import { listNestedLinkedWorktreeRoots } from "../../clients/review-graph/git-identity.js";
 import { TrivyClient, worktreeSkipDirs } from "../../clients/trivy-client.js";
@@ -807,7 +804,8 @@ describe("#5500 a scratch-named ancestor of the scanned root does not touch the 
 	it("vulture: every built-in exclusion starts at the real root", async () => {
 		await new PythonDeadCodeClient(false).analyze(root);
 		const exclude = (optionValue(scanArgs(), "--exclude") ?? "").split(",");
-		const anchor = escapeFnmatchLiteral(realPath(root));
+		// The fixture path holds no glob character, so it is its own fnmatch literal.
+		const anchor = realPath(root);
 
 		expect(exclude.length).toBeGreaterThan(0);
 		expect(exclude.every((pattern) => pattern.startsWith(`${anchor}/`))).toBe(
