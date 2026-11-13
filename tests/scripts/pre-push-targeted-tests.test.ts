@@ -1283,6 +1283,8 @@ describe("selectTargetedTests — path-mirror pass", () => {
 			// #4590: walks both trees, so both change kinds must arm it.
 			"tests/config/env-path-key-composition-sweep.test.ts",
 			"tests/config/git-fixture-governance.test.ts",
+			// #5072: takes every tracked path for baseline ledgers and their cells.
+			"tests/config/baseline-owner-governance.test.ts",
 			// #4946: walks the four production roots for flag reads.
 			"tests/config/flag-read-registry-sweep.test.ts",
 			// #5273 r1 F1: walks clients/, tools/ and mcp/ for `includeNamedFiles` callers.
@@ -1313,6 +1315,7 @@ describe("selectTargetedTests — path-mirror pass", () => {
 			"tests/config/path-containment-sweep.test.ts",
 			"tests/config/env-path-key-composition-sweep.test.ts",
 			"tests/config/git-fixture-governance.test.ts",
+			"tests/config/baseline-owner-governance.test.ts",
 			"tests/config/real-home-reader-registry.test.ts",
 			"tests/config/test-env-restore-sweep.test.ts",
 			"tests/config/test-server-teardown-sweep.test.ts",
