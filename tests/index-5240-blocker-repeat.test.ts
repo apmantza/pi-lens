@@ -26,19 +26,24 @@ import {
 import {
 	BLOCKING_FILE,
 	CLEAN_FILE,
+	GATE_BLOCK,
 	GUARDED_FLAGS,
 	MARKED_FILE,
+	RAN_MARKER,
 	activateMarkTool,
+	commitAttempt,
 	endTurn,
 	markFalsePositive,
 	openGuardedSession,
 	seed,
 	step,
 	textBlocks,
+	toolResults,
 	writeTarget,
 } from "./support/pi-session-commit-gate.js";
 import {
 	type PiFauxReply,
+	fauxToolCall,
 	type PiProviderRequest,
 	type PiSession,
 	piSessionFixture,
@@ -318,6 +323,177 @@ describe.each([
 					expect(text).toContain(bad);
 					expect(text).not.toContain(target);
 				}
+				expect(handle.errors).toEqual([]);
+			},
+			LONG_SESSION_TIMEOUT_MS,
+		);
+	},
+);
+
+/** What a capped set says in place of the repeat: the older-blocker pointer. */
+const POINTER = "older unresolved blocker";
+
+/** Two debuggers: the same file with other blocking content than `BLOCKING_FILE`. */
+const CHANGED_BLOCKING_FILE =
+	"const a = 1;\nexport function f() {\n\tdebugger;\n\tdebugger;\n\treturn a;\n}\n";
+
+/** Requests whose injections carry the capped pointer. */
+function pointers(handle: PiSession): PiProviderRequest[] {
+	return handle.requests.filter((request) =>
+		injections(request).some((text) => text.includes(POINTER)),
+	);
+}
+
+/**
+ * The `degradation_ledger` rows of one kind, as their metadata. The latency log
+ * is shared by every case of this file, so a case reads the rows it added:
+ * those after the `before` it took ahead of its first prompt.
+ */
+async function degradationRows(
+	handle: PiSession,
+	kind: string,
+	before = 0,
+): Promise<Array<Record<string, unknown>>> {
+	const read = await handle.latencyRows();
+	expect(read.skipped).toBe(0);
+	return read.rows
+		.filter((row) => row.phase === "degradation_ledger")
+		.map((row) => row.metadata as Record<string, unknown>)
+		.filter((metadata) => metadata.kind === kind)
+		.slice(before);
+}
+
+const CAPPED_KIND = "blocker-repeat-capped";
+
+describe.each([
+	{ tag: "guard", flags: undefined },
+	{ tag: "plain", flags: UNGUARDED_FLAGS },
+])(
+	"#5532: a blocker the session cannot clear repeats in full at most 3 times ($tag)",
+	({ tag, flags }) => {
+		it(
+			"turns the 4th and later repeats into a one-line pointer, keeping the blocker in lens_diagnostics and the commit gate",
+			async () => {
+				// RECURRENCE GUARDED: #5532. A blocker raised in a worktree the session
+				// cannot write to (pi-dev-flow) repeated in full at 8 of 9 later prompts.
+				// p6 pulls lens_diagnostics and attempts a commit AFTER the cap.
+				const { handle } = await openCell(`cap-${tag}`, flags, (root) => [
+					...write(root, "bad.ts", BLOCKING_FILE),
+					...Array.from({ length: 4 }, listen).flat(),
+					step(
+						fauxToolCall("lens_diagnostics", {
+							source: "session",
+							mode: "all",
+							severity: "error",
+						}),
+						"listing",
+					),
+					step(commitAttempt(), "committing"),
+					endTurn("p6 done"),
+					...Array.from({ length: 3 }, listen).flat(),
+				]);
+				const rowsBefore = (await degradationRows(handle, CAPPED_KIND)).length;
+				await run(handle, 9);
+				// p2, p3 and p4 repeat in full; every later prompt gets the pointer.
+				expect(repeats(handle).map(openedBy)).toEqual([
+					expect.stringContaining("p2"),
+					expect.stringContaining("p3"),
+					expect.stringContaining("p4"),
+				]);
+				const pointed = pointers(handle);
+				expect(pointed.map(openedBy)).toEqual(
+					["p5", "p6", "p7", "p8", "p9"].map((prompt) =>
+						expect.stringContaining(prompt),
+					),
+				);
+				for (const request of pointed) {
+					const texts = injections(request);
+					expect(texts).toHaveLength(1);
+					const pointer = texts[0] as string;
+					expect(pointer).toContain(POINTER);
+					expect(pointer).toContain("lens_diagnostics");
+					// One line, and none of the blocker's own text.
+					expect(pointer.trim().split("\n")).toHaveLength(1);
+					expect(pointer).not.toContain(BLOCKER_REPEAT_HEADING);
+					expect(pointer).not.toContain("Debugger statement");
+				}
+				// The blocker itself stands after the cap: the pull still lists it ...
+				const last = handle.requests.at(-1) ?? [];
+				const [listed] = toolResults(last, "lens_diagnostics");
+				expect(listed?.text).toContain("bad.ts");
+				expect(listed?.text).toContain("[debugger-statement]");
+				// ... and the commit gate still holds it (the plain cell never gates).
+				const [commit] = toolResults(last, "bash");
+				if (tag === "guard") {
+					expect(commit?.text).toContain(GATE_BLOCK);
+					expect(commit?.text).not.toContain(RAN_MARKER);
+				} else {
+					expect(commit?.text).toContain(RAN_MARKER);
+				}
+				// Retiring a full repeat leaves ONE counted row, not one per prompt.
+				const rows = await degradationRows(handle, CAPPED_KIND, rowsBefore);
+				expect(rows).toHaveLength(1);
+				expect(rows[0]?.count).toBe(1);
+				expect(String(rows[0]?.subject)).toContain(path.join("src", "bad.ts"));
+				expect(handle.errors).toEqual([]);
+			},
+			LONG_SESSION_TIMEOUT_MS,
+		);
+
+		it(
+			"restarts the count when the blocker is re-raised with changed content",
+			async () => {
+				// RECURRENCE GUARDED: #5532. A cap that outlived its blocker set would
+				// pointer a NEW blocker the model has never been told about twice.
+				const { handle } = await openCell(`restart-${tag}`, flags, (proj) => [
+					...write(proj, "bad.ts", BLOCKING_FILE),
+					...Array.from({ length: 5 }, listen).flat(),
+					...write(proj, "bad.ts", CHANGED_BLOCKING_FILE),
+					...Array.from({ length: 4 }, listen).flat(),
+				]);
+				const rowsBefore = (await degradationRows(handle, CAPPED_KIND)).length;
+				await run(handle, 11);
+				// p2-p4 repeat; p5, p6 and p7 (which re-raises) open on the pointer;
+				// the changed content repeats at p8-p10, then the pointer returns.
+				expect(repeats(handle).map(openedBy)).toEqual(
+					["p2", "p3", "p4", "p8", "p9", "p10"].map((prompt) =>
+						expect.stringContaining(prompt),
+					),
+				);
+				expect(pointers(handle).map(openedBy)).toEqual(
+					["p5", "p6", "p7", "p11"].map((prompt) =>
+						expect.stringContaining(prompt),
+					),
+				);
+				// Each set's cap is its own event: two rows, counted 1 then 2.
+				const rows = await degradationRows(handle, CAPPED_KIND, rowsBefore);
+				expect(rows.map((row) => row.count)).toEqual([1, 2]);
+				expect(handle.errors).toEqual([]);
+			},
+			LONG_SESSION_TIMEOUT_MS,
+		);
+
+		it(
+			"stops the pointer at once when the blocker is fixed after the cap",
+			async () => {
+				// RECURRENCE GUARDED: #5532. A pointer that outlived the fix would
+				// tell the model about a blocker it already cleared.
+				const { handle } = await openCell(`fixed-${tag}`, flags, (proj) => [
+					...write(proj, "bad.ts", BLOCKING_FILE),
+					...Array.from({ length: 4 }, listen).flat(),
+					...write(proj, "bad.ts", CLEAN_FILE),
+					...Array.from({ length: 2 }, listen).flat(),
+				]);
+				await run(handle, 8);
+				// p5 and p6 (which fixes it) open on the pointer; p7 and p8 say nothing.
+				expect(pointers(handle).map(openedBy)).toEqual([
+					expect.stringContaining("p5"),
+					expect.stringContaining("p6"),
+				]);
+				for (const request of handle.requests.filter((r) =>
+					/p7|p8/.test(openedBy(r)),
+				))
+					expect(injections(request)).toEqual([]);
 				expect(handle.errors).toEqual([]);
 			},
 			LONG_SESSION_TIMEOUT_MS,

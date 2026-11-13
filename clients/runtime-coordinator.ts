@@ -388,6 +388,16 @@ export interface InlineBlockerRecord {
 	 */
 	staleDeliveryCount?: number;
 	/**
+	 * #5532: how many prompts' repeats (full or pointer) this LIVE record has
+	 * been part of (`claimBlockerRepeat`). Not `staleDeliveryCount`: that is one
+	 * demotion episode's tally (#4990 F3), and a demotion spreads the record, so
+	 * a live count carried into it would retire a freshly demoted record on its
+	 * first stale delivery. A fresh dispatch replaces the record wholesale, so a
+	 * re-raised blocker restarts at zero; `recordDeferredInlineBlockers` zeroes it
+	 * when a late runner adds findings.
+	 */
+	repeatClaimCount?: number;
+	/**
 	 * #4484 round 4: what the verdict behind this record analysed (line
 	 * hashes, owed lines), set by `setAnalysisAnchor` right after the record
 	 * verb. It lives exactly as long as the record. At most 4 bytes per line
@@ -2053,6 +2063,8 @@ export class RuntimeCoordinator {
 			// The turn-end policy verdict was about the OLD set; the added findings
 			// passed the policy already and the next turn end re-derives the rest.
 			policySuppressed: false,
+			// #5532: new findings are changed content, so the repeat count restarts.
+			repeatClaimCount: 0,
 		});
 		return added.length;
 	}
@@ -2495,6 +2507,43 @@ export class RuntimeCoordinator {
 			staleDeliveryCount: next,
 		});
 		return next;
+	}
+
+	/**
+	 * #5532: a repeat of this session's live blockers is about to reach the
+	 * model (the first request of a prompt, `consumeTurnEndFindings`). Counts it
+	 * against every member of the set and says whether the set is past `cap`
+	 * full repeats, so the caller renders the one-line pointer instead. The set
+	 * is the session's records that are neither demoted nor policy-suppressed,
+	 * the ones a turn end stages; its count is the smallest member count, so a
+	 * member that joins (or is re-raised) restarts it and one that leaves does
+	 * not. The blocker itself stays in the store, the pull and the commit gate.
+	 * `capReached` is true on exactly the first pointer of a set, so the caller
+	 * records the cap once per set rather than once per prompt.
+	 */
+	claimBlockerRepeat(
+		of: { sessionId: string | undefined },
+		cap: number,
+	): { files: string[]; capped: boolean; capReached: boolean } {
+		const live = this.getInlineBlockersSnapshot(of).filter(
+			(entry) => !entry.stale && entry.policySuppressed !== true,
+		);
+		if (live.length === 0)
+			return { files: [], capped: false, capReached: false };
+		const claims = Math.min(
+			...live.map((entry) => entry.repeatClaimCount ?? 0),
+		);
+		for (const entry of live) {
+			this._pendingInlineBlockers.set(entry.filePath, {
+				...entry,
+				repeatClaimCount: (entry.repeatClaimCount ?? 0) + 1,
+			});
+		}
+		return {
+			files: live.map((entry) => entry.filePath),
+			capped: claims >= cap,
+			capReached: claims === cap,
+		};
 	}
 
 	/**

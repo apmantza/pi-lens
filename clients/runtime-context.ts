@@ -7,7 +7,11 @@ import {
 	type AdvisoryProvenance,
 } from "./advisory-provenance.js";
 import type { TestRunnerFindingsCache } from "./project-diagnostics/runner-adapters/runner-findings.js";
-import { recordDegradationOnce } from "./degradation-ledger.js";
+import {
+	incrementDegradationCount,
+	recordDegradationOnce,
+} from "./degradation-ledger.js";
+import { toRunnerDisplayPath } from "./dispatch/runner-context.js";
 import { logLatency } from "./latency-logger.js";
 import {
 	resolveLensToolName,
@@ -35,6 +39,20 @@ export const BLOCKER_REPEAT_HEADING =
 
 export function blockerRepeatContent(blockers: string): string {
 	return `${BLOCKER_REPEAT_HEADING}\n\n${blockers}`;
+}
+
+/**
+ * #5532: a blocker set the session cannot clear (a pi-dev-flow session cannot
+ * write another flow's worktree) repeats in full on at most this many prompts;
+ * later prompts get {@link blockerRepeatCappedLine}. The blocker stays in
+ * `lens_diagnostics` and the `--lens-guard` commit gate.
+ */
+export const BLOCKER_REPEAT_MAX_DELIVERIES = 3;
+
+/** #5532: the one line that replaces a capped set's repeat. */
+function blockerRepeatCappedLine(files: number): string {
+	const tool = resolveLensToolName("lens_diagnostics", "pi");
+	return `${files} older unresolved blocker ${files === 1 ? "file" : "files"} still open (already reported, not new). Every unresolved 🔴 blocker: ${tool} {source: "session", mode: "all", severity: "error"}`;
 }
 
 /**
@@ -221,6 +239,46 @@ export function consumeTurnEndFindings(
 	if (validation.allFilesDeleted) return;
 	// Marked, fixed or retired since it was staged: nothing is left to repeat.
 	if (findings.data.repeat === true && !repeat.blockersLive) return;
+	const repeatBody =
+		findings.data.repeat === true &&
+		findings.data.content.startsWith(BLOCKER_REPEAT_HEADING)
+			? {
+					repeatBody: findings.data.content.slice(
+						BLOCKER_REPEAT_HEADING.length + 2,
+					),
+				}
+			: {};
+	// #5532: this repeat is one more prompt told about the same set.
+	const claim =
+		findings.data.repeat === true
+			? runtime?.claimBlockerRepeat(
+					{ sessionId },
+					BLOCKER_REPEAT_MAX_DELIVERIES,
+				)
+			: undefined;
+	if (claim?.capped) {
+		if (claim.capReached) {
+			const subject = claim.files
+				.map((file) => toRunnerDisplayPath(cwd, file))
+				.sort()
+				.join(", ");
+			// Counted, once per set: the first capped prompt only (`capReached`).
+			incrementDegradationCount({
+				kind: "blocker-repeat-capped",
+				subject: `inline-blocker-repeat:${subject}`,
+				reason: `repeated in full on ${BLOCKER_REPEAT_MAX_DELIVERIES} prompts with no fix; later prompts get a one-line pointer, the blocker stays in lens_diagnostics and the commit gate`,
+			});
+		}
+		return {
+			messages: [
+				{
+					role: "user",
+					content: `${AUTOMATION_FRAMING}${blockerRepeatCappedLine(claim.files.length)}`,
+				},
+			],
+			...repeatBody,
+		};
+	}
 	return {
 		messages: [
 			turnEndMessage(
@@ -231,14 +289,7 @@ export function consumeTurnEndFindings(
 				findings.data.provenance,
 			),
 		],
-		...(findings.data.repeat === true &&
-		findings.data.content.startsWith(BLOCKER_REPEAT_HEADING)
-			? {
-					repeatBody: findings.data.content.slice(
-						BLOCKER_REPEAT_HEADING.length + 2,
-					),
-				}
-			: {}),
+		...repeatBody,
 	};
 }
 
