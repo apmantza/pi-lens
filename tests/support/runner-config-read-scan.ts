@@ -74,13 +74,13 @@ const PURE_PATH_HELPERS = [
  * The policy layer's own lookups: they answer from the policy table. The
  * `*ConfigArgs` builders and the markdownlint target builder keep the
  * arg-building and take the config presence from the seam (#5408 slice 2);
- * `markdownlintTargetArg` owns the file-argument spelling the lint and autofix
+ * `optionSafeTargetArg` owns the file-argument spelling the lint and autofix
  * surfaces share (#5544 round 2), so a runner importing either reads no config.
  */
 const POLICY_LOOKUPS = [
 	"biomeConfigArgs",
 	"markdownlintConfigArgs",
-	"markdownlintTargetArg",
+	"optionSafeTargetArg",
 	"ruffConfigArgs",
 	"getLinterPolicyForCwd",
 	"getAutofixCapability",

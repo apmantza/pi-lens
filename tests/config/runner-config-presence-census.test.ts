@@ -203,7 +203,7 @@ describe("runner config-read detector: plants it was not designed around", () =>
 			"markdownlintConfigArgs",
 			// #5544 round 2: the shared file-argument builder, so the lint runner and
 			// the autofix stage both reach it and neither re-derives the spelling.
-			"markdownlintTargetArg",
+			"optionSafeTargetArg",
 		]) {
 			expect(
 				flagged(`import { ${name} } from "../../tool-policy.js";`),
