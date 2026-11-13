@@ -317,13 +317,17 @@ describe("comment layout gate (#5558)", () => {
 	});
 
 	function run(body: string, ...extra: string[]) {
+		return runWith(body, ["--comment", ...extra]);
+	}
+
+	function runWith(body: string, flags: string[]) {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-comment-"));
 		dirs.push(dir);
 		const file = path.join(dir, "comment.md");
 		fs.writeFileSync(file, body);
 		const result = spawnSync(
 			process.execPath,
-			[CLI, "--comment", "--body-file", file, ...extra],
+			[CLI, ...flags, "--body-file", file],
 			{ encoding: "utf8" },
 		);
 		return { status: result.status, err: result.stderr };
@@ -613,16 +617,8 @@ describe("comment layout gate (#5558)", () => {
 	// Recurrence: a flag that does nothing without `--comment` would read as a
 	// waiver that was never applied.
 	it("refuses --long-ok without --comment", () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-comment-"));
-		dirs.push(dir);
-		const file = path.join(dir, "c.md");
-		fs.writeFileSync(file, "Short.\n");
-		const result = spawnSync(
-			process.execPath,
-			[CLI, "--body-file", file, "--long-ok", "some reason here"],
-			{ encoding: "utf8" },
-		);
-		expect(result.status).toBe(1);
-		expect(result.stderr).toContain("--long-ok applies to --comment only");
+		const r = runWith("Short.\n", ["--long-ok", "some reason here"]);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("--long-ok applies to --comment only");
 	});
 });
