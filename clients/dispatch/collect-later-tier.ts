@@ -154,9 +154,13 @@ export function holdFlight(
 	chain(flightKey, started, promise);
 }
 
-/** Whether a key is held by a live or queued run. */
-export function isFlightHeld(flightKey: string): boolean {
-	return flights.has(flightKey);
+/**
+ * The run a new claim of the key goes after (#5549): the formatter lane reads
+ * it and claims the key with `holdFlight` in one synchronous step, then waits
+ * for it. Undefined when the key is free.
+ */
+export function flightTail(flightKey: string): Promise<unknown> | undefined {
+	return flights.get(flightKey)?.tail;
 }
 
 /**

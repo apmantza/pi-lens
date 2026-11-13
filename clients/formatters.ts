@@ -55,7 +55,7 @@ import { resolveWriteResult } from "./file-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { isInSpawnTimeoutCooldown } from "./spawn-timeout-cooldown.js";
 import {
-	isFlightHeld,
+	flightTail,
 	holdFlight,
 	runnerFlightKey,
 } from "./dispatch/collect-later-tier.js";
@@ -2480,11 +2480,45 @@ export async function formatFile(
 				error: `${formatter.name}: project tool agreement could not be established`,
 			};
 		}
-		// A formatter that timed out its own spawn budget is negative evidence
-		// about this executable. Do not spend another formatter budget while its
-		// session cooldown is active; this is a typed skip, never clean success.
+		// #5549: one child of a formatter per project at a time. The call reads
+		// the key's tail and claims the key in one synchronous step, then waits
+		// its turn; a call that meets a live child queues, it never skips (a
+		// healthy drain formats every file). The turn ends when its child
+		// settles, whatever its caller's budget did.
 		const formatterCooldownSubject = `formatter:${formatter.name}`;
-		if (isInSpawnTimeoutCooldown(formatterCooldownSubject)) {
+		const formatterFlightKey = runnerFlightKey(
+			formatterCwd,
+			formatterCooldownSubject,
+		);
+		const prior = flightTail(formatterFlightKey);
+		const turn = (async () => {
+			if (prior) await Promise.allSettled([prior]);
+			// A child that used up its own spawn budget arms this cooldown before
+			// its turn ends, so every waiter behind it skips: a typed skip, never
+			// a clean result, and no second wedged child.
+			if (isInSpawnTimeoutCooldown(formatterCooldownSubject)) return undefined;
+			await enter?.();
+			const before = await fs.readFile(absolutePath, "utf-8");
+			// Run formatter without blocking the event loop. An unresolved npx/bunx
+			// fallback is the ONLY case that gets the neutral pi-lens-owned cwd
+			// (#4268 acceptance 3); a resolved binary keeps the project cwd.
+			const spawned = await safeSpawnAsync(cmd[0], cmd.slice(1), {
+				timeout: 15000,
+				cwd: formatterCwd,
+				cooldown: {
+					tool: formatter.name,
+					subject: formatterCooldownSubject,
+					phase: "format",
+				},
+				...(cmd[0] === "npx" || cmd[0] === "bunx"
+					? getIsolatedNpxSpawnOptions()
+					: {}),
+			});
+			return { before, spawned };
+		})();
+		holdFlight(formatterFlightKey, turn);
+		const ran = await turn;
+		if (ran === undefined) {
 			recordDegradationOnce({
 				kind: "formatter-skip",
 				subject: formatterCooldownSubject,
@@ -2497,42 +2531,7 @@ export async function formatFile(
 				error: `${formatter.name}: spawn timeout cooldown is active`,
 			};
 		}
-		const formatterFlightKey = runnerFlightKey(
-			formatterCwd,
-			formatterCooldownSubject,
-		);
-		if (isFlightHeld(formatterFlightKey)) {
-			recordDegradationOnce({
-				kind: "formatter-skip",
-				subject: formatterCooldownSubject,
-				reason: "formatter child is still running",
-			});
-			return {
-				success: true,
-				changed: false,
-				outcome: "skipped",
-				error: `${formatter.name}: formatter child is still running`,
-			};
-		}
-		await enter?.();
-		const contentBefore = await fs.readFile(absolutePath, "utf-8");
-		// Run formatter without blocking the event loop. An unresolved npx/bunx
-		// fallback is the ONLY case that gets the neutral pi-lens-owned cwd
-		// (#4268 acceptance 3); a resolved binary keeps the project cwd.
-		const spawn = safeSpawnAsync(cmd[0], cmd.slice(1), {
-			timeout: 15000,
-			cwd: formatterCwd,
-			cooldown: {
-				tool: formatter.name,
-				subject: formatterCooldownSubject,
-				phase: "format",
-			},
-			...(cmd[0] === "npx" || cmd[0] === "bunx"
-				? getIsolatedNpxSpawnOptions()
-				: {}),
-		});
-		holdFlight(formatterFlightKey, spawn);
-		const result = await spawn;
+		const { before: contentBefore, spawned: result } = ran;
 
 		// A resolver that could NOT prove absence (it never probed PATH — e.g.
 		// black/sqlfluff, which only look in a venv) legitimately falls back to the

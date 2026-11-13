@@ -4,4 +4,4 @@ audience: user
 area: tools
 ---
 
-- **Wedged formatters now stop retrying within a session.** A live formatter child is shared across concurrent writes, timeout cooldowns skip later writes, and only repeated deferred format failures are capped at one retry. (refs #5549)
+- **A wedged formatter no longer starts a new child on every write.** Writes that one formatter handles in one project now wait their turn, so a hung child is never joined by a second one. Once a child runs out its own time, later writes skip that formatter for the session with a recorded reason, and a repeated deferred format failure is retried once. (refs #5549)
