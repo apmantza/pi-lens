@@ -597,6 +597,11 @@ jobs:
           # in `git status` and is cleaned up with the rest of the job's scratch
           # space regardless of how the job ends.
           PI_LENS_MEM_WATCH_SAMPLE_FILE: ${{ runner.temp }}/pi-lens-mem-watch-samples.log
+          # #5528: shard 5 alone leaves dead-owner ast-grep processes behind.
+          # Each worker names its file here and prints `[dead-owner-census]`
+          # lines at teardown (tests/support/dead-owner-census.ts); empty on
+          # every other shard, which turns the census off.
+          PI_LENS_DEAD_OWNER_CENSUS_FILE: ${{ matrix.shard == 5 && format('{0}/dead-owner-census.log', runner.temp) || '' }}
         # #2042: the wrapper changes nothing about what runs and forwards the
         # child's exit code unchanged. It prints the host's memory low-water
         # mark and a verdict line, so the next `Killed npm test` / exit 137 —
@@ -616,7 +621,34 @@ jobs:
         env:
           PI_LENS_TEST_TIMEOUT_SCALE: '3'
           PI_LENS_TEST_NO_LOCK: '1'
+          # #5528: the last file of the shard, so its teardown scan sees what the
+          # final test files' workers left; same log as `Run tests`.
+          PI_LENS_DEAD_OWNER_CENSUS_FILE: ${{ matrix.shard == 5 && format('{0}/dead-owner-census.log', runner.temp) || '' }}
         run: npm test -- tests/config/tmp-fixture-hygiene.test.ts
+
+      # #5528: proof the census ran. A clean shard prints no `[dead-owner-census]`
+      # line, so this counts the workers that named themselves and the dead-owner
+      # pids the run saw. `Run tests` carries the per-pid lines.
+      - name: Dead-owner census summary
+        if: always()
+        env:
+          PI_LENS_DEAD_OWNER_CENSUS_FILE: ${{ matrix.shard == 5 && format('{0}/dead-owner-census.log', runner.temp) || '' }}
+        run: |
+          log="${PI_LENS_DEAD_OWNER_CENSUS_FILE}"
+          if [ -z "$log" ]; then
+            echo "dead-owner census: off on this shard"
+            exit 0
+          fi
+          files=$(grep -c '^owner ' "$log" 2>/dev/null || true)
+          leaks=$(grep -c '^leak ' "$log" 2>/dev/null || true)
+          echo "dead-owner census: ${files:-0} test files recorded, ${leaks:-0} dead-owner pids"
+          grep '^leak ' "$log" 2>/dev/null || true
+          # A scan that could not run (`ps` failed or timed out) logs one
+          # `scanfail` line per file; without this count a failing census reads
+          # as a clean one.
+          fails=$(grep -c '^scanfail ' "$log" 2>/dev/null || true)
+          echo "dead-owner census: ${fails:-0} scans did not run"
+          grep -m3 '^scanfail ' "$log" 2>/dev/null || true
 
       # Listener input for #3215. The default reporter remains explicit above,
       # so this adds a file reporter in the same invocation and preserves the
