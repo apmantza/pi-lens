@@ -404,14 +404,20 @@ describe("comment layout gate (#5558)", () => {
 		expect(r.err).toContain("visible part");
 	});
 
-	// Recurrence: #5394 (40 lines, no fold) and #5308 (hand-back posted whole).
-	it.each([
-		["the #5394 review", REVIEW_5394],
-		["the #5308 hand-back", HANDBACK_5308],
-	])("refuses %s as posted: no fold", (_name, body) => {
+	const refusesWithNoFold = (body: string) => {
 		const r = run(`${body}\n`);
 		expect(r.status).toBe(1);
 		expect(r.err).toContain("no <details> fold");
+	};
+
+	// Recurrence: #5394 (a 20-line review, no fold, posted before #5510).
+	it("refuses the #5394 review as posted", () => {
+		refusesWithNoFold(REVIEW_5394);
+	});
+
+	// Recurrence: #5308 (a worker hand-back of 117 and 143 lines posted whole).
+	it("refuses the #5308 hand-back as posted", () => {
+		refusesWithNoFold(HANDBACK_5308);
 	});
 
 	// Recurrence: a fold that is not a layout fold (no summary renders as
@@ -459,16 +465,25 @@ describe("comment layout gate (#5558)", () => {
 	// Recurrence: the #5543 reply folded under "Suggested shape and the probe
 	// matrix", which names no model. Fail closed on a summary that is not a
 	// recognised form, not only on a missing one.
-	it.each([
-		["no model", "Suggested shape and the probe matrix"],
-		["a label before the colon", "Full triage: the detail"],
-		["an unknown effort", "Claude Opus 5.5 (extreme): the detail"],
-		["nothing after the colon", "Claude Opus 5.5 (high):"],
-		["a word that only starts like a family", "Solution notes: the detail"],
-	])("refuses a summary with %s", (_name, summary) => {
+	const refusesSummary = (summary: string) => {
 		const r = run(`${lines(5).join("\n")}\n${fold(summary, lines(10))}\n`);
 		expect(r.status).toBe(1);
 		expect(r.err).toContain("summary");
+	};
+	it("refuses a summary that names no model", () => {
+		refusesSummary("Suggested shape and the probe matrix");
+	});
+	it("refuses a summary that opens with a label, not a model", () => {
+		refusesSummary("Full triage: the detail");
+	});
+	it("refuses a summary with an unknown effort", () => {
+		refusesSummary("Claude Opus 5.5 (extreme): the detail");
+	});
+	it("refuses a summary with nothing after the colon", () => {
+		refusesSummary("Claude Opus 5.5 (high):");
+	});
+	it("refuses a word that only starts like a model family", () => {
+		refusesSummary("Solution notes: the detail");
 	});
 
 	it.each([
