@@ -434,6 +434,21 @@ describe("every tracked baseline has an owner test with a planted-stale-row cell
 		});
 	});
 
+	it("reds a NOT_A_BASELINE reason under the floor, so a stub reason cannot launder a real ledger (#5546 N1)", () => {
+		// Recurrence (#5546 N1): the r1 reason floor was dropped, and a row reading
+		// "x" registered a real ledger the census then called clean. The floor is
+		// the 20-character minimum the lsp-spawn-heavy-coverage registry enforces.
+		const ledger = "tests/support/zz-real-baseline.json";
+		const files = { [ledger]: "{}" };
+		const under =
+			"NOT_A_BASELINE reason is under 20 characters; say why the file is not a baseline";
+		expect(problems(files, { [ledger]: "x" })).toEqual([`${ledger}: ${under}`]);
+		expect(problems(files, { [ledger]: "x".repeat(19) })).toEqual([
+			`${ledger}: ${under}`,
+		]);
+		expect(problems(files, { [ledger]: "x".repeat(20) })).toEqual([]);
+	});
+
 	// ── The tracked tree ─────────────────────────────────────────────────────
 
 	it(

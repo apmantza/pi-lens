@@ -78,6 +78,15 @@ export interface BaselineFinding {
 }
 
 /**
+ * The shortest reason a `NOT_A_BASELINE` row may carry: the floor that
+ * `auditRegistry` enforces on the path-keyed registry in
+ * `tests/config/lsp-spawn-heavy-coverage.test.ts` (`minReasonLength: 20`, the
+ * same floor as `sweep-floor-coverage` and `vacuous-skip-coverage`). A reason
+ * shorter than this would launder a real ledger (#5546 N1).
+ */
+const MIN_NOT_A_BASELINE_REASON = 20;
+
+/**
  * Candidates that are not baselines, each with the reason a reviewer can
  * check. A row names a candidate the class rules would otherwise send to
  * `ledger` or `unclassified`; a row that names anything else is dead and
@@ -532,7 +541,13 @@ export function baselineGovernanceReport(
 			.filter((c) => c.cls === "ledger" || c.cls === "unclassified")
 			.map((c) => c.id),
 	);
-	for (const id of Object.keys(notABaseline)) {
+	for (const [id, reason] of Object.entries(notABaseline)) {
+		if (reason.trim().length < MIN_NOT_A_BASELINE_REASON) {
+			findings.push({
+				id,
+				problem: `NOT_A_BASELINE reason is under ${MIN_NOT_A_BASELINE_REASON} characters; say why the file is not a baseline`,
+			});
+		}
 		if (!excusable.has(id)) {
 			findings.push({
 				id,
