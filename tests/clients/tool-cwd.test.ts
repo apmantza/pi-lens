@@ -228,6 +228,19 @@ describe("resolveToolCwd (#2777)", () => {
 			).toBe(nested());
 		});
 
+		it("keeps the first-listed marker when the config shares the package directory", () => {
+			// Nothing moves, so the resolution is exactly what it was before #5541.
+			fs.mkdirSync(nested(), { recursive: true });
+			fs.writeFileSync(path.join(nested(), ".oxlintrc.json"), "{}\n");
+			fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "oxlint", fileAt(nested()), {
+					cwd: workspace(),
+				}),
+			).toEqual({ cwd: nested(), marker: "package.json" });
+		});
+
 		it("ignores a config above the dispatch root", () => {
 			// A session started inside the package: the root config is outside the
 			// session, so the package manifest still anchors the child.
