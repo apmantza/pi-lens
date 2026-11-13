@@ -6107,6 +6107,7 @@ describe("lens_diagnostics mode=full keys one file once across link spellings (#
 		semantic: "blocking",
 		message: "stale mid-edit state",
 		line: 1,
+		col: 1,
 		rule: "ts:2393",
 		tool: "lsp",
 	};
