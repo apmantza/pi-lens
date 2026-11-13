@@ -7036,8 +7036,7 @@ describe("path attribution across tool_call/tool_result (#1642)", () => {
 					},
 					ctx: { cwd: worktreeDir },
 					lensEnabled: true,
-					getFlag: (name: string) =>
-						name === "no-lsp" || name === "no-complexity",
+					getFlag: (name: string) => name === "no-lsp",
 					dbg,
 					runtime,
 					cacheManager: new CacheManager(false),
@@ -7127,8 +7126,7 @@ describe("path attribution across tool_call/tool_result (#1642)", () => {
 					},
 					ctx: { cwd: parentRoot },
 					lensEnabled: true,
-					getFlag: (name: string) =>
-						name === "no-lsp" || name === "no-complexity",
+					getFlag: (name: string) => name === "no-lsp",
 					dbg: () => {},
 					runtime,
 					cacheManager: new CacheManager(false),
@@ -7434,13 +7432,15 @@ describe("path attribution across tool_call/tool_result (#1642)", () => {
 				resetLSPService: () => {},
 			});
 
-			// Call A, then call B (in order) — both fire before either result.
-			await runHandlerExpectingNoThrow(() =>
-				handleToolCall(callDeps("call-A", worktreeA) as any),
-			);
-			await runHandlerExpectingNoThrow(() =>
-				handleToolCall(callDeps("call-B", worktreeB) as any),
-			);
+			// Calls A and B start together, as pi's parallel execution does.
+			await Promise.all([
+				runHandlerExpectingNoThrow(() =>
+					handleToolCall(callDeps("call-A", worktreeA) as any),
+				),
+				runHandlerExpectingNoThrow(() =>
+					handleToolCall(callDeps("call-B", worktreeB) as any),
+				),
+			]);
 
 			const resultDeps = (toolCallId: string) => ({
 				event: {
@@ -7449,7 +7449,7 @@ describe("path attribution across tool_call/tool_result (#1642)", () => {
 					input: { path: "src/app.ts", content: "x\n" },
 					content: [],
 				},
-				getFlag: () => false,
+				getFlag: (name: string) => name === "no-complexity",
 				dbg: () => {},
 				runtime,
 				cacheManager: new CacheManager(false),
@@ -7464,10 +7464,14 @@ describe("path attribution across tool_call/tool_result (#1642)", () => {
 			await handleToolResult(resultDeps("call-B") as any);
 			await handleToolResult(resultDeps("call-A") as any);
 
-			// Each call's own attribution must have resolved against ITS OWN
-			// worktree, regardless of arrival order — no cross-contamination.
-			expect(fs.existsSync(fileA)).toBe(true);
-			expect(fs.existsSync(fileB)).toBe(true);
+			// Each result must queue ITS OWN file, whatever the arrival order. The
+			// queue is what observes attribution: a store keyed by one constant hands
+			// call B's file to call A's result.
+			const queued = runtime
+				.consumeDeferredFormatFiles()
+				.map((record) => path.resolve(record.filePath));
+			expect(queued).toContain(path.resolve(fileA));
+			expect(queued).toContain(path.resolve(fileB));
 			expect(runtime.takeToolCallAttribution("call-A")).toBeUndefined();
 			expect(runtime.takeToolCallAttribution("call-B")).toBeUndefined();
 		} finally {
@@ -7508,7 +7512,8 @@ describe("path attribution across tool_call/tool_result (#1642)", () => {
 				},
 				ctx: { cwd: env.tmpDir },
 				lensEnabled: true,
-				getFlag: (name: string) => name === "no-lsp",
+				getFlag: (name: string) =>
+					name === "no-lsp" || name === "no-complexity",
 				dbg,
 				runtime,
 				cacheManager: new CacheManager(false),
