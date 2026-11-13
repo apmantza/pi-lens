@@ -54,6 +54,11 @@ import {
 import { resolveWriteResult } from "./file-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { isInSpawnTimeoutCooldown } from "./spawn-timeout-cooldown.js";
+import {
+	isFlightHeld,
+	holdFlight,
+	runnerFlightKey,
+} from "./dispatch/collect-later-tier.js";
 import { admittedLookupAnswer } from "./session-repository.js";
 import { establishToolAgreement } from "./tool-agreement.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
@@ -2478,10 +2483,11 @@ export async function formatFile(
 		// A formatter that timed out its own spawn budget is negative evidence
 		// about this executable. Do not spend another formatter budget while its
 		// session cooldown is active; this is a typed skip, never clean success.
-		if (isInSpawnTimeoutCooldown(cmd[0])) {
+		const formatterCooldownSubject = `formatter:${formatter.name}`;
+		if (isInSpawnTimeoutCooldown(formatterCooldownSubject)) {
 			recordDegradationOnce({
 				kind: "formatter-skip",
-				subject: formatter.name,
+				subject: formatterCooldownSubject,
 				reason: "formatter spawn timeout cooldown is active",
 			});
 			return {
@@ -2491,23 +2497,42 @@ export async function formatFile(
 				error: `${formatter.name}: spawn timeout cooldown is active`,
 			};
 		}
+		const formatterFlightKey = runnerFlightKey(
+			formatterCwd,
+			formatterCooldownSubject,
+		);
+		if (isFlightHeld(formatterFlightKey)) {
+			recordDegradationOnce({
+				kind: "formatter-skip",
+				subject: formatterCooldownSubject,
+				reason: "formatter child is still running",
+			});
+			return {
+				success: true,
+				changed: false,
+				outcome: "skipped",
+				error: `${formatter.name}: formatter child is still running`,
+			};
+		}
 		await enter?.();
 		const contentBefore = await fs.readFile(absolutePath, "utf-8");
 		// Run formatter without blocking the event loop. An unresolved npx/bunx
 		// fallback is the ONLY case that gets the neutral pi-lens-owned cwd
 		// (#4268 acceptance 3); a resolved binary keeps the project cwd.
-		const result = await safeSpawnAsync(cmd[0], cmd.slice(1), {
+		const spawn = safeSpawnAsync(cmd[0], cmd.slice(1), {
 			timeout: 15000,
 			cwd: formatterCwd,
 			cooldown: {
 				tool: formatter.name,
-				subject: cmd[0],
+				subject: formatterCooldownSubject,
 				phase: "format",
 			},
 			...(cmd[0] === "npx" || cmd[0] === "bunx"
 				? getIsolatedNpxSpawnOptions()
 				: {}),
 		});
+		holdFlight(formatterFlightKey, spawn);
+		const result = await spawn;
 
 		// A resolver that could NOT prove absence (it never probed PATH — e.g.
 		// black/sqlfluff, which only look in a venv) legitimately falls back to the

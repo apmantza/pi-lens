@@ -154,6 +154,11 @@ export function holdFlight(
 	chain(flightKey, started, promise);
 }
 
+/** Whether a key is held by a live or queued run. */
+export function isFlightHeld(flightKey: string): boolean {
+	return flights.has(flightKey);
+}
+
 /**
  * A queued rerun's turn. A reset that dropped this flight answers it skipped
  * without starting it: its store entry was cleared at the same session_start,

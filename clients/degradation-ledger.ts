@@ -575,6 +575,8 @@ export type DegradationKind =
 	| "formatter-agreement-unavailable"
 	| "formatter-failure"
 	| "formatter-skip"
+	/** `formatter-requeue-dropped`: a deferred format failure reached its one-retry cap. */
+	| "formatter-requeue-dropped"
 	/**
 	 * `formatter-unavailable`: A selected formatter's executable was proven absent (#2413): its
 	 * `resolveCommand` probed every install location and PATH and found nothing,
