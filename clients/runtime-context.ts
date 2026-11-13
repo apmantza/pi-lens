@@ -7,10 +7,7 @@ import {
 	type AdvisoryProvenance,
 } from "./advisory-provenance.js";
 import type { TestRunnerFindingsCache } from "./project-diagnostics/runner-adapters/runner-findings.js";
-import {
-	incrementDegradationCount,
-	recordDegradationOnce,
-} from "./degradation-ledger.js";
+import { recordDegradationOnce } from "./degradation-ledger.js";
 import { toRunnerDisplayPath } from "./dispatch/runner-context.js";
 import { logLatency } from "./latency-logger.js";
 import {
@@ -25,8 +22,11 @@ export const AUTOMATION_FRAMING =
 
 type ContextResult = {
 	messages: Array<{ role: "user"; content: string }>;
-	/** #5240: the blocker text of a repeat message, for the retained-injection check. */
-	repeatBody?: string;
+	/**
+	 * #5240: each blocker section a repeat speaks for, in full, for the
+	 * retained-injection check (#5532: whatever the repeat renders for it).
+	 */
+	repeatBodies?: string[];
 };
 
 /**
@@ -37,28 +37,37 @@ type ContextResult = {
 export const BLOCKER_REPEAT_HEADING =
 	"Still unresolved (already reported on an earlier turn, not new):";
 
-export function blockerRepeatContent(blockers: string): string {
-	return `${BLOCKER_REPEAT_HEADING}\n\n${blockers}`;
+/**
+ * #5240: a repeat message, from the blocker sections it carries (`full`) and
+ * the lines of blockers the cap collapsed (`capped`, #5532). A repeat of
+ * collapsed lines alone is just those lines: nothing in it is a repeat of
+ * text, so the heading would lie.
+ */
+export function blockerRepeatContent(
+	full: readonly string[],
+	capped: readonly string[],
+): string {
+	return full.length === 0
+		? capped.join("\n")
+		: [`${BLOCKER_REPEAT_HEADING}\n`, ...full, ...capped].join("\n\n");
 }
 
-/**
- * #5532: a blocker set the session cannot clear (a pi-dev-flow session cannot
- * write another flow's worktree) repeats in full on at most this many prompts;
- * later prompts get {@link blockerRepeatCappedLine}. The blocker stays in
- * `lens_diagnostics` and the `--lens-guard` commit gate.
- */
-export const BLOCKER_REPEAT_MAX_DELIVERIES = 3;
+/** #5532: how a blocker past its delivery cap reads; `cappedBlockerLine` builds it. */
+export const BLOCKER_CAPPED_MARK = "older blocker still open";
 
-/** #5532: the one line that replaces a capped set's repeat. */
-function blockerRepeatCappedLine(files: number): string {
-	const tool = resolveLensToolName("lens_diagnostics", "pi");
-	return `${files} older unresolved blocker ${files === 1 ? "file" : "files"} still open (already reported, not new). Every unresolved 🔴 blocker: ${tool} {source: "session", mode: "all", severity: "error"}`;
+/**
+ * #5532: the one line that replaces a capped blocker's section. It names the
+ * file and the pull that lists every blocker; the full text stays in
+ * `lens_diagnostics` and the commit gate.
+ */
+export function cappedBlockerLine(displayPath: string): string {
+	return `${displayPath}: ${BLOCKER_CAPPED_MARK} (already reported, not new). ${blockerRepeatPointer()}`;
 }
 
 /**
  * #5240: the last line of a delivered repeat. The staged blocker text is
  * capped (`capTurnEndMessage`), so the repeat names the pull that lists every
- * blocker. Added when the repeat is rendered, never staged: `repeatBody` must
+ * blocker. Added when the repeat is rendered, never staged: `repeatBodies` must
  * stay exactly the blocker text for the retained-injection check.
  */
 function blockerRepeatPointer(): string {
@@ -239,57 +248,50 @@ export function consumeTurnEndFindings(
 	if (validation.allFilesDeleted) return;
 	// Marked, fixed or retired since it was staged: nothing is left to repeat.
 	if (findings.data.repeat === true && !repeat.blockersLive) return;
-	const repeatBody =
-		findings.data.repeat === true &&
-		findings.data.content.startsWith(BLOCKER_REPEAT_HEADING)
-			? {
-					repeatBody: findings.data.content.slice(
-						BLOCKER_REPEAT_HEADING.length + 2,
-					),
-				}
-			: {};
-	// #5532: this repeat is one more prompt told about the same set.
-	const claim =
-		findings.data.repeat === true
-			? runtime?.claimBlockerRepeat(
-					{ sessionId },
-					BLOCKER_REPEAT_MAX_DELIVERIES,
-				)
-			: undefined;
-	if (claim?.capped) {
-		if (claim.capReached) {
-			const subject = claim.files
-				.map((file) => toRunnerDisplayPath(cwd, file))
-				.sort()
-				.join(", ");
-			// Counted, once per set: the first capped prompt only (`capReached`).
-			incrementDegradationCount({
-				kind: "blocker-repeat-capped",
-				subject: `inline-blocker-repeat:${subject}`,
-				reason: `repeated in full on ${BLOCKER_REPEAT_MAX_DELIVERIES} prompts with no fix; later prompts get a one-line pointer, the blocker stays in lens_diagnostics and the commit gate`,
-			});
-		}
+	const staged = findings.data.content;
+	const current = validation.status === "current";
+	// #5532: a message of collapsed lines alone is just those lines.
+	const onlyCappedLines = staged
+		.split("\n\n")
+		.every((paragraph) => paragraph.includes(BLOCKER_CAPPED_MARK));
+	const lines = (content: string): ContextResult["messages"] => [
+		{ role: "user", content: `${AUTOMATION_FRAMING}${content}` },
+	];
+	if (findings.data.repeat !== true)
 		return {
-			messages: [
-				{
-					role: "user",
-					content: `${AUTOMATION_FRAMING}${blockerRepeatCappedLine(claim.files.length)}`,
-				},
-			],
-			...repeatBody,
+			messages: onlyCappedLines
+				? lines(staged)
+				: [turnEndMessage(staged, current, findings.data.provenance)],
 		};
+	// #5532: this repeat is one more delivery of every live blocker it renders in
+	// full, and the first of the capped ones it renders as a pointer (the same
+	// counts the turn end read when it staged the text, so it renders what it
+	// counted). Only a pi reader has a coordinator; the MCP host never stages a
+	// repeat.
+	for (const entry of runtime?.getInlineBlockersSnapshot({ sessionId }) ?? []) {
+		if (entry.stale === true || entry.policySuppressed === true) continue;
+		runtime?.recordBlockerDelivery(
+			entry.filePath,
+			runtime.blockerFullDeliveryCapped(entry.filePath) ? "collapsed" : "full",
+			toRunnerDisplayPath(cwd, entry.filePath),
+		);
 	}
+	const repeatBodies = Array.isArray(findings.data.repeatBodies)
+		? { repeatBodies: findings.data.repeatBodies }
+		: {};
 	return {
-		messages: [
-			turnEndMessage(
-				findings.data.repeat === true
-					? `${findings.data.content}\n\n${blockerRepeatPointer()}`
-					: findings.data.content,
-				validation.status === "current",
-				findings.data.provenance,
-			),
-		],
-		...repeatBody,
+		messages: onlyCappedLines
+			? lines(staged)
+			: [
+					turnEndMessage(
+						staged.includes(BLOCKER_CAPPED_MARK)
+							? staged
+							: `${staged}\n\n${blockerRepeatPointer()}`,
+						current,
+						findings.data.provenance,
+					),
+				],
+		...repeatBodies,
 	};
 }
 

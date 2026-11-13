@@ -388,15 +388,17 @@ export interface InlineBlockerRecord {
 	 */
 	staleDeliveryCount?: number;
 	/**
-	 * #5532: how many prompts' repeats (full or pointer) this LIVE record has
-	 * been part of (`claimBlockerRepeat`). Not `staleDeliveryCount`: that is one
-	 * demotion episode's tally (#4990 F3), and a demotion spreads the record, so
-	 * a live count carried into it would retire a freshly demoted record on its
-	 * first stale delivery. A fresh dispatch replaces the record wholesale, so a
-	 * re-raised blocker restarts at zero; `recordDeferredInlineBlockers` zeroes it
-	 * when a late runner adds findings.
+	 * #5532: how many times this LIVE record's full section has reached the model
+	 * (`recordBlockerDelivery`), the first delivery included. Not
+	 * `staleDeliveryCount`: that is one demotion episode's tally (#4990 F3), and a
+	 * demotion spreads the record, so a live count carried into it would retire a
+	 * freshly demoted record on its first stale delivery. A fresh dispatch
+	 * replaces the record wholesale, so a re-raised blocker restarts at zero;
+	 * `recordDeferredInlineBlockers` zeroes it when a late runner adds findings.
 	 */
-	repeatClaimCount?: number;
+	fullDeliveryCount?: number;
+	/** #5532: the `blocker-repeat-capped` row for this record was written. */
+	capRowWritten?: boolean;
 	/**
 	 * #4484 round 4: what the verdict behind this record analysed (line
 	 * hashes, owed lines), set by `setAnalysisAnchor` right after the record
@@ -567,6 +569,12 @@ const TOOL_CALL_ATTRIBUTION_CAPACITY = 256;
  * round-trip; only guards against genuine identity reuse, not slow tools.
  */
 const TOOL_CALL_ATTRIBUTION_TTL_MS = 5 * 60_000;
+
+/**
+ * #5532: a live blocker's full section is delivered at most this many times
+ * (the first delivery included); later deliveries render a one-line pointer.
+ */
+export const BLOCKER_FULL_DELIVERY_CAP = 3;
 
 /**
  * A record narrowed to the rows that survive a retirement. The derived fields
@@ -2063,8 +2071,9 @@ export class RuntimeCoordinator {
 			// The turn-end policy verdict was about the OLD set; the added findings
 			// passed the policy already and the next turn end re-derives the rest.
 			policySuppressed: false,
-			// #5532: new findings are changed content, so the repeat count restarts.
-			repeatClaimCount: 0,
+			// #5532: new findings are changed content, so the count restarts.
+			fullDeliveryCount: 0,
+			capRowWritten: false,
 		});
 		return added.length;
 	}
@@ -2510,40 +2519,52 @@ export class RuntimeCoordinator {
 	}
 
 	/**
-	 * #5532: a repeat of this session's live blockers is about to reach the
-	 * model (the first request of a prompt, `consumeTurnEndFindings`). Counts it
-	 * against every member of the set and says whether the set is past `cap`
-	 * full repeats, so the caller renders the one-line pointer instead. The set
-	 * is the session's records that are neither demoted nor policy-suppressed,
-	 * the ones a turn end stages; its count is the smallest member count, so a
-	 * member that joins (or is re-raised) restarts it and one that leaves does
-	 * not. The blocker itself stays in the store, the pull and the commit gate.
-	 * `capReached` is true on exactly the first pointer of a set, so the caller
-	 * records the cap once per set rather than once per prompt.
+	 * #5532: whether this live blocker has had its full section delivered
+	 * `BLOCKER_FULL_DELIVERY_CAP` times, so the next delivery renders the one-line
+	 * pointer instead. A peek: the delivery that renders it commits through
+	 * {@link recordBlockerDelivery} once the message is known to reach the model.
+	 * The count is this record's own, so another blocker joining, leaving or
+	 * being fixed never moves it.
 	 */
-	claimBlockerRepeat(
-		of: { sessionId: string | undefined },
-		cap: number,
-	): { files: string[]; capped: boolean; capReached: boolean } {
-		const live = this.getInlineBlockersSnapshot(of).flatMap((entry) =>
-			!entry.stale && entry.policySuppressed !== true ? [entry] : [],
+	blockerFullDeliveryCapped(filePath: string): boolean {
+		return (
+			(this._pendingInlineBlockers.get(filePath)?.fullDeliveryCount ?? 0) >=
+			BLOCKER_FULL_DELIVERY_CAP
 		);
-		if (live.length === 0)
-			return { files: [], capped: false, capReached: false };
-		const claims = Math.min(
-			...live.map((entry) => entry.repeatClaimCount ?? 0),
-		);
-		for (const entry of live) {
-			this._pendingInlineBlockers.set(entry.filePath, {
-				...entry,
-				repeatClaimCount: (entry.repeatClaimCount ?? 0) + 1,
+	}
+
+	/**
+	 * #5532: a delivery that reached the model rendered this blocker `shown`. A
+	 * full one counts toward the cap. The first collapsed one is the moment the
+	 * cap retires a full delivery, so it writes the blocker's one counted
+	 * `blocker-repeat-capped` row; later ones write nothing. The blocker stays in
+	 * the store, `lens_diagnostics` and the commit gate either way. A record that
+	 * is gone (fixed, marked, deleted) is a no-op.
+	 */
+	recordBlockerDelivery(
+		filePath: string,
+		shown: "full" | "collapsed",
+		displayPath: string,
+	): void {
+		const existing = this._pendingInlineBlockers.get(filePath);
+		if (!existing) return;
+		if (shown === "full") {
+			this._pendingInlineBlockers.set(filePath, {
+				...existing,
+				fullDeliveryCount: (existing.fullDeliveryCount ?? 0) + 1,
 			});
+			return;
 		}
-		return {
-			files: live.map((entry) => entry.filePath),
-			capped: claims >= cap,
-			capReached: claims === cap,
-		};
+		if (existing.capRowWritten === true) return;
+		this._pendingInlineBlockers.set(filePath, {
+			...existing,
+			capRowWritten: true,
+		});
+		incrementDegradationCount({
+			kind: "blocker-repeat-capped",
+			subject: `inline-blocker-repeat:${displayPath}`,
+			reason: `delivered in full ${BLOCKER_FULL_DELIVERY_CAP} times with no fix; later deliveries get a one-line pointer, the blocker stays in lens_diagnostics and the commit gate`,
+		});
 	}
 
 	/**

@@ -63,6 +63,12 @@ export interface TurnEndFindingsCache {
 	 * leaves it staged. Absent on every record released before #5240.
 	 */
 	repeat?: boolean | undefined;
+	/**
+	 * #5532: each blocker section behind a repeat, in full, for the retained-
+	 * injection check, whatever the repeat renders (a collapsed blocker is a
+	 * pointer line, not its text). Absent on every record released before #5532.
+	 */
+	repeatBodies?: string[] | undefined;
 	testFailures?: boolean;
 	testFailureContent?: string;
 	testFailureFiles?: string[];

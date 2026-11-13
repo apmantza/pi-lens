@@ -144,10 +144,13 @@ describe.each([
 				]);
 				await run(handle, 4);
 				const found = repeats(handle);
-				// p1 delivers the blocker itself; p2, p3 and p4 each repeat it once.
+				// p1 delivers the blocker itself (its 1st full delivery); p2 and p3
+				// repeat it (the 2nd and 3rd, #5532's cap); p4 gets only the pointer.
 				expect(found.map(openedBy)).toEqual([
 					expect.stringContaining("p2"),
 					expect.stringContaining("p3"),
+				]);
+				expect(pointers(handle).map(openedBy)).toEqual([
 					expect.stringContaining("p4"),
 				]);
 				for (const request of found) {
@@ -292,7 +295,7 @@ describe.each([
 		);
 
 		it(
-			"keeps repeating the unmarked blocker after the other one is marked",
+			"keeps telling the model about the unmarked blocker after the other one is marked",
 			async () => {
 				// RECURRENCE GUARDED: #5240. A mark changes the surviving set on a
 				// read-only turn; a turn end that stages nothing for a changed set
@@ -311,16 +314,17 @@ describe.each([
 					...listen(),
 				]);
 				await run(handle, 5);
-				const bad = `${SECTION}${path.join("src", "bad.ts")}`;
 				const target = `${SECTION}${path.join("src", "target.ts")}`;
-				const later = repeats(handle).filter((request) =>
+				const later = handle.requests.filter((request) =>
 					/p4|p5/.test(openedBy(request)),
 				);
-				// p4 and p5 follow the mark: bad.ts is still named, target.ts is not.
+				// The mark (in p3) changes the set, so bad.ts is delivered afresh in p3
+				// (its 3rd full delivery); p4 and p5 carry its pointer and never target.ts.
 				expect(later).toHaveLength(2);
 				for (const request of later) {
 					const text = injections(request).join("\n");
-					expect(text).toContain(bad);
+					expect(text).toContain(`${path.join("src", "bad.ts")}: ${POINTER}`);
+					expect(text).not.toContain(BLOCKER_REPEAT_HEADING);
 					expect(text).not.toContain(target);
 				}
 				expect(handle.errors).toEqual([]);
@@ -330,8 +334,8 @@ describe.each([
 	},
 );
 
-/** What a capped set says in place of the repeat: the older-blocker pointer. */
-const POINTER = "older unresolved blocker";
+/** What a capped blocker says in place of its full section. */
+const POINTER = "older blocker still open";
 
 /** Two debuggers: the same file with other blocking content than `BLOCKING_FILE`. */
 const CHANGED_BLOCKING_FILE =
@@ -341,6 +345,14 @@ const CHANGED_BLOCKING_FILE =
 function pointers(handle: PiSession): PiProviderRequest[] {
 	return handle.requests.filter((request) =>
 		injections(request).some((text) => text.includes(POINTER)),
+	);
+}
+
+/** Requests that deliver `src/<name>`'s blocker section in full (heading or not). */
+function fullDeliveries(handle: PiSession, name: string): PiProviderRequest[] {
+	const section = `${SECTION}${path.join("src", name)}`;
+	return handle.requests.filter((request) =>
+		injections(request).some((text) => text.includes(section)),
 	);
 }
 
@@ -362,14 +374,17 @@ async function cappedRows(
 		.slice(before);
 }
 
+const prompted = (...prompts: number[]) =>
+	prompts.map((prompt) => expect.stringContaining(`p${prompt}`));
+
 describe.each([
 	{ tag: "guard", flags: undefined },
 	{ tag: "plain", flags: UNGUARDED_FLAGS },
 ])(
-	"#5532: a blocker the session cannot clear repeats in full at most 3 times ($tag)",
+	"#5532: a blocker the session cannot clear is delivered in full at most 3 times ($tag)",
 	({ tag, flags }) => {
 		it(
-			"turns the 4th and later repeats into a one-line pointer, keeping the blocker in lens_diagnostics and the commit gate",
+			"turns the 4th and later deliveries into a one-line pointer, keeping the blocker in lens_diagnostics and the commit gate",
 			async () => {
 				// RECURRENCE GUARDED: #5532. A blocker raised in a worktree the session
 				// cannot write to (pi-dev-flow) repeated in full at 8 of 9 later prompts.
@@ -391,23 +406,18 @@ describe.each([
 				]);
 				const rowsBefore = (await cappedRows(handle)).length;
 				await run(handle, 9);
-				// p2, p3 and p4 repeat in full; every later prompt gets the pointer.
-				expect(repeats(handle).map(openedBy)).toEqual([
-					expect.stringContaining("p2"),
-					expect.stringContaining("p3"),
-					expect.stringContaining("p4"),
-				]);
+				// p1 delivers it (1st), p2 and p3 repeat it in full (2nd, 3rd); every
+				// later prompt gets the pointer.
+				expect(repeats(handle).map(openedBy)).toEqual(prompted(2, 3));
+				expect(fullDeliveries(handle, "bad.ts")).toHaveLength(3);
 				const pointed = pointers(handle);
-				expect(pointed.map(openedBy)).toEqual(
-					["p5", "p6", "p7", "p8", "p9"].map((prompt) =>
-						expect.stringContaining(prompt),
-					),
-				);
+				expect(pointed.map(openedBy)).toEqual(prompted(4, 5, 6, 7, 8, 9));
 				for (const request of pointed) {
 					const texts = injections(request);
 					expect(texts).toHaveLength(1);
 					const pointer = texts[0] as string;
 					expect(pointer).toContain(POINTER);
+					expect(pointer).toContain(path.join("src", "bad.ts"));
 					expect(pointer).toContain("lens_diagnostics");
 					// One line, and none of the blocker's own text.
 					expect(pointer.trim().split("\n")).toHaveLength(1);
@@ -427,7 +437,7 @@ describe.each([
 				} else {
 					expect(commit?.text).toContain(RAN_MARKER);
 				}
-				// Retiring a full repeat leaves ONE counted row, not one per prompt.
+				// Retiring a full delivery leaves ONE counted row, not one per prompt.
 				const rows = await cappedRows(handle, rowsBefore);
 				expect(rows).toHaveLength(1);
 				expect(rows[0]?.count).toBe(1);
@@ -438,10 +448,55 @@ describe.each([
 		);
 
 		it(
+			"keeps a stuck blocker collapsed while the session raises and fixes other blockers",
+			async () => {
+				// RECURRENCE GUARDED: #5532 review r1 F1. The cap sat on the repeat only,
+				// so every set change re-sent the stuck blocker in full: 28 full
+				// deliveries in 21 prompts (8 write-and-fix cycles of a transient one).
+				const { handle } = await openCell(`cycles-${tag}`, flags, (proj) => [
+					...write(proj, "bad.ts", BLOCKING_FILE),
+					...Array.from({ length: 8 }, () => [
+						...write(proj, "a.ts", BLOCKING_FILE),
+						...write(proj, "a.ts", CLEAN_FILE),
+					]).flat(),
+					...Array.from({ length: 4 }, listen).flat(),
+				]);
+				await run(handle, 21);
+				expect(fullDeliveries(handle, "bad.ts")).toHaveLength(3);
+				expect(pointers(handle).length).toBeGreaterThan(8);
+				// The transient blocker is its own count: in full on every raise.
+				expect(fullDeliveries(handle, "a.ts").length).toBeGreaterThanOrEqual(8);
+				expect(handle.errors).toEqual([]);
+			},
+			LONG_SESSION_TIMEOUT_MS,
+		);
+
+		it(
+			"shows an unrelated new blocker in full without restarting the capped one",
+			async () => {
+				// RECURRENCE GUARDED: #5532 review r1 Q1. A per-set count let a joiner
+				// lift the cap from the blocker the model had been told 3 times.
+				const { handle } = await openCell(`joiner-${tag}`, flags, (proj) => [
+					...write(proj, "bad.ts", BLOCKING_FILE),
+					...Array.from({ length: 4 }, listen).flat(),
+					...write(proj, "second.ts", BLOCKING_FILE),
+					...Array.from({ length: 4 }, listen).flat(),
+				]);
+				await run(handle, 10);
+				// bad.ts: 3 full in all. second.ts: its own 3 (raised p6, repeats p7, p8).
+				expect(fullDeliveries(handle, "bad.ts")).toHaveLength(3);
+				expect(fullDeliveries(handle, "second.ts")).toHaveLength(3);
+				expect(repeats(handle).map(openedBy)).toEqual(prompted(2, 3, 7, 8));
+				expect(handle.errors).toEqual([]);
+			},
+			LONG_SESSION_TIMEOUT_MS,
+		);
+
+		it(
 			"restarts the count when the blocker is re-raised with changed content",
 			async () => {
-				// RECURRENCE GUARDED: #5532. A cap that outlived its blocker set would
-				// pointer a NEW blocker the model has never been told about twice.
+				// RECURRENCE GUARDED: #5532. A cap that outlived its blocker's content
+				// would pointer a NEW blocker the model has never been told about.
 				const { handle } = await openCell(`restart-${tag}`, flags, (proj) => [
 					...write(proj, "bad.ts", BLOCKING_FILE),
 					...Array.from({ length: 5 }, listen).flat(),
@@ -450,19 +505,14 @@ describe.each([
 				]);
 				const rowsBefore = (await cappedRows(handle)).length;
 				await run(handle, 11);
-				// p2-p4 repeat; p5, p6 and p7 (which re-raises) open on the pointer;
-				// the changed content repeats at p8-p10, then the pointer returns.
-				expect(repeats(handle).map(openedBy)).toEqual(
-					["p2", "p3", "p4", "p8", "p9", "p10"].map((prompt) =>
-						expect.stringContaining(prompt),
-					),
-				);
+				// p2, p3 repeat; p4-p6 and p7 (which re-raises) open on the pointer; the
+				// changed content is delivered in-run at p7 and repeats at p8 and p9,
+				// then the pointer returns.
+				expect(repeats(handle).map(openedBy)).toEqual(prompted(2, 3, 8, 9));
 				expect(pointers(handle).map(openedBy)).toEqual(
-					["p5", "p6", "p7", "p11"].map((prompt) =>
-						expect.stringContaining(prompt),
-					),
+					prompted(4, 5, 6, 7, 10, 11),
 				);
-				// Each set's cap is its own event: two rows, counted 1 then 2.
+				// Each blocker's cap is its own event: two rows, counted 1 then 2.
 				const rows = await cappedRows(handle, rowsBefore);
 				expect(rows.map((row) => row.count)).toEqual([1, 2]);
 				expect(handle.errors).toEqual([]);
@@ -482,15 +532,77 @@ describe.each([
 					...Array.from({ length: 2 }, listen).flat(),
 				]);
 				await run(handle, 8);
-				// p5 and p6 (which fixes it) open on the pointer; p7 and p8 say nothing.
-				expect(pointers(handle).map(openedBy)).toEqual([
-					expect.stringContaining("p5"),
-					expect.stringContaining("p6"),
-				]);
+				// p4, p5 and p6 (which fixes it) open on the pointer; p7 and p8 say nothing.
+				expect(pointers(handle).map(openedBy)).toEqual(prompted(4, 5, 6));
 				for (const request of handle.requests.filter((r) =>
 					/p7|p8/.test(openedBy(r)),
 				))
 					expect(injections(request)).toEqual([]);
+				expect(handle.errors).toEqual([]);
+			},
+			LONG_SESSION_TIMEOUT_MS,
+		);
+
+		it(
+			"writes the cap row once per blocker, though another blocker leaves before its own cap",
+			async () => {
+				// RECURRENCE GUARDED: #5532 review r1 F2. The set-level row was skipped
+				// when the lowest-count member left; each blocker now writes its own.
+				const { handle } = await openCell(`rows-${tag}`, flags, (proj) => [
+					...write(proj, "bad.ts", BLOCKING_FILE),
+					...Array.from({ length: 2 }, listen).flat(),
+					...write(proj, "second.ts", BLOCKING_FILE),
+					...listen(),
+					...write(proj, "second.ts", CLEAN_FILE),
+					...Array.from({ length: 4 }, listen).flat(),
+				]);
+				const rowsBefore = (await cappedRows(handle)).length;
+				await run(handle, 10);
+				const rows = await cappedRows(handle, rowsBefore);
+				expect(rows).toHaveLength(1);
+				expect(String(rows[0]?.subject)).toContain(path.join("src", "bad.ts"));
+				expect(handle.errors).toEqual([]);
+			},
+			LONG_SESSION_TIMEOUT_MS,
+		);
+
+		it(
+			"names each capped blocker and drops one the model marks",
+			async () => {
+				// RECURRENCE GUARDED: #5532 review r1 F3 (survivors). A pointer that
+				// miscounted files, or kept naming a marked blocker, goes unnoticed.
+				const bad = path.join("src", "bad.ts");
+				const target = path.join("src", "target.ts");
+				const { handle } = await openCell(`capmark-${tag}`, flags, (proj) => [
+					...write(proj, "bad.ts", BLOCKING_FILE),
+					step(
+						writeTarget(path.join(proj, "src", "target.ts"), MARKED_FILE),
+						"writing",
+					),
+					endTurn("turn done"),
+					...Array.from({ length: 3 }, listen).flat(),
+					step(activateMarkTool()),
+					step(markFalsePositive(path.join(proj, "src", "target.ts"))),
+					endTurn("marked"),
+					...listen(),
+					...listen(),
+				]);
+				await run(handle, 8);
+				// p5 and p6 carry both capped blockers; p7 and p8 follow the mark.
+				for (const request of handle.requests.filter((r) =>
+					/p5|p6/.test(openedBy(r)),
+				)) {
+					const text = injections(request).join("\n");
+					expect(text).toContain(`${bad}: ${POINTER}`);
+					expect(text).toContain(`${target}: ${POINTER}`);
+				}
+				for (const request of handle.requests.filter((r) =>
+					/p7|p8/.test(openedBy(r)),
+				)) {
+					const text = injections(request).join("\n");
+					expect(text).toContain(`${bad}: ${POINTER}`);
+					expect(text).not.toContain(target);
+				}
 				expect(handle.errors).toEqual([]);
 			},
 			LONG_SESSION_TIMEOUT_MS,

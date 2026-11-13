@@ -5009,8 +5009,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 			// repeat's blockers keeps showing them, so the repeat adds nothing and
 			// spends none of the 64-entry cap.
 			const turnEndFindings =
-				consumedTurnEnd?.repeatBody !== undefined &&
-				rebuilt?.holds(consumedTurnEnd.repeatBody)
+				consumedTurnEnd?.repeatBodies !== undefined &&
+				rebuilt !== undefined &&
+				consumedTurnEnd.repeatBodies.every((body) => rebuilt.holds(body))
 					? undefined
 					: consumedTurnEnd;
 			const sessionGuidance = consumeSessionStartGuidance(cacheManager, cwd);

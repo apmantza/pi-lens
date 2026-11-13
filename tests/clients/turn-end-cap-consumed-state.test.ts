@@ -1143,6 +1143,10 @@ describe("M3d: late auxiliary coverage vs the cap (#3813)", () => {
 			while (pendingAuxiliaryCoverageSize() > 0 && turns < 20) {
 				turns += 1;
 				nextTurn(rig, turns);
+				// A blocker delivered in full 3 times collapses to a one-line pointer
+				// (#5532), which would free the pair; raising it afresh each turn keeps
+				// the premise, a filler that fills the message on every turn.
+				fillerBlocker(rig, 1000);
 				const message = await endTurn(rig);
 				if (message) messages.push(message);
 			}
