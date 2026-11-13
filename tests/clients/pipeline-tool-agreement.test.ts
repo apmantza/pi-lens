@@ -121,9 +121,17 @@ describe("runAutofix tool agreement seam (#3005)", () => {
 		expect(detectFileChangedAfterCommand).toHaveBeenCalledWith(
 			file,
 			"markdownlint-cli2",
-			expect.arrayContaining(["--fix", file]),
+			// #5544 round 2: the CLI argument is the project-relative target, so
+			// cli2's `ignores` can match it; the change-detection target (first
+			// argument) stays the absolute dispatched path.
+			expect.arrayContaining(["--fix", "README.md"]),
 			env.tmpDir,
 		);
+		expect(
+			(
+				vi.mocked(detectFileChangedAfterCommand).mock.calls[0]![2] as string[]
+			).includes(file),
+		).toBe(false);
 		expect(getDegradationSummary()).toEqual([]);
 	});
 

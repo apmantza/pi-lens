@@ -89,10 +89,21 @@ const yamllintRunner: RunnerDefinition = {
 		// project keeps today's absolute form, as it has no project-relative spelling.
 		const targetRel = relativeInside(cwd, ctx.filePath) ?? ctx.filePath;
 
-		const result = await safeSpawnAsync(cmd, ["-f", "parsable", targetRel], {
-			cwd,
-			timeout: 15000,
-		});
+		// #5544 round 2: the `--` is the price of a relative argument. A root-level
+		// file named `-a.yml` reached argparse as an unknown option, so yamllint
+		// answered `one of the arguments FILE_OR_DIR - is required` and exited 2 — a
+		// visible skipped run, never the file's findings. The option terminator makes
+		// argparse stop reading flags, and it is inert for every ordinary name.
+		// (Probed: `yamllint -f parsable -a.yml` exit 2, no lint; `-- -a.yml` reports
+		// document-start and trailing-spaces.)
+		const result = await safeSpawnAsync(
+			cmd,
+			["-f", "parsable", "--", targetRel],
+			{
+				cwd,
+				timeout: 15000,
+			},
+		);
 
 		// #1816: this runner read `result.status` zero times, so a yamllint
 		// that rejected its config reported a clean YAML file.

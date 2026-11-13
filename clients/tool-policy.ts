@@ -5,7 +5,7 @@ import { isJstsFactFile, TERRAGRUNT_FILENAMES } from "./file-kinds.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { logLatency } from "./latency-logger.js";
 import { resolvePackagePath } from "./package-root.js";
-import { walkUpDirs } from "./path-utils.js";
+import { relativeInside, walkUpDirs } from "./path-utils.js";
 import { hasToolConfig, toolConfigDirs } from "./tool-config-presence.js";
 import type { ProjectConventions } from "./project-conventions.js";
 import { loadProjectSnapshotWithoutWordIndex } from "./project-snapshot.js";
@@ -2061,6 +2061,24 @@ export function markdownlintConfigArgs(cwd: string): string[] {
 		["--config"],
 		"config/markdownlint/core.json",
 	);
+}
+
+/**
+ * Shared file-argument seam for the markdownlint lint AND autofix surfaces
+ * (#5544). cli2 matches its `ignores` globs against the string it is handed, so
+ * both surfaces name the file relative to the dispatch cwd (an absolute path in
+ * a lane under `.claude/` matched a glob naming its own ancestor and answered a
+ * clean file for lint, and `Linting: 0 files / 0 fixes` for `--fix`); a file the
+ * project does
+ * not hold keeps the absolute path, because a `../` climb would move config
+ * discovery too. A root-level name that cli2's glob parser reads as a modifier
+ * (`#` ignore, `!` negation) gets a `./` prefix: the bare name selected nothing
+ * and exited 0, so the run reported a silent clean; a nested path never reaches
+ * that parser state, so only the root-level name is prefixed.
+ */
+export function markdownlintTargetArg(cwd: string, filePath: string): string {
+	const target = relativeInside(cwd, filePath) ?? filePath;
+	return /^[#!]/.test(target) ? `./${target}` : target;
 }
 
 /**

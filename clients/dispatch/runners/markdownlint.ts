@@ -1,12 +1,13 @@
 import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import { skipped } from "../types.js";
 import * as path from "node:path";
-import { pathsEqual, relativeInside } from "../../path-utils.js";
+import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
 import {
 	getLinterPolicyForCwd,
 	markdownlintConfigArgs,
+	markdownlintTargetArg,
 } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -144,9 +145,10 @@ const markdownlintRunner: RunnerDefinition = {
 		// spawn cwd is the project, so the argument is the project-relative path,
 		// actionlint's form (clients/dispatch/runners/actionlint.ts); a dispatched
 		// file outside the project keeps today's absolute form, as it has no
-		// project-relative spelling.
-		const targetRel = relativeInside(cwd, ctx.filePath) ?? ctx.filePath;
-		const args = [...configArgs, targetRel];
+		// project-relative spelling. The builder also `./`-prefixes a root-level name
+		// cli2 reads as a glob modifier (#5544 round 2) and is shared with the autofix
+		// surface, so the two cannot drift.
+		const args = [...configArgs, markdownlintTargetArg(cwd, ctx.filePath)];
 		// #5119: cli2's own `fix` option cannot be turned off from the CLI, and a
 		// project `"fix": true` rewrote the file on a diagnostics pass. Lint
 		// through its exported `main` with `optionsOverride: { fix: false }` in a

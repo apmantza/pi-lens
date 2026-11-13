@@ -215,6 +215,113 @@ describe.each(RUNNERS)(
 	},
 );
 
+/**
+ * A root-level file whose NAME the CLI parses as a modifier rather than a path.
+ * The absolute argument never began with these characters, so both spellings are
+ * ones the project-relative argv introduced:
+ *
+ * - markdownlint-cli2 reads a leading `#`/`!` as an ignore/negation glob, so
+ *   `#a.md` selected nothing (`Linting: 0 files`), exited 0, and the runner
+ *   reported a silent clean; `./#a.md` lints it.
+ * - yamllint reads a leading `-` as an option: `yamllint -f parsable -a.yml`
+ *   answers `one of the arguments FILE_OR_DIR - is required` and exits 2, while
+ *   `yamllint -f parsable -- -a.yml` lints it. That one is visible (the runner
+ *   reports a skipped run with a fault), not a silent clean.
+ */
+const LEADING_NAME_CASES = [
+	{
+		runnerId: "yamllint",
+		binary: "yamllint",
+		name: "-a.yml",
+		sibling: "plain.yml",
+		content: "key: value   \nother: 2\n",
+		expectedRules: ["document-start", "trailing-spaces"],
+		// yamllint's own option terminator, so argparse stops reading flags.
+		expectedTarget: "-a.yml",
+		separator: "--" as string | undefined,
+		run: (filePath: string, project: string) =>
+			yamllintRunner.run(
+				makeRunnerCtx(filePath, project, { kind: "yaml" }) as never,
+			),
+	},
+	{
+		runnerId: "markdownlint",
+		binary: "markdownlint-cli2",
+		name: "#a.md",
+		sibling: "plain.md",
+		content: "# Title\n\n\ntext\n",
+		expectedRules: ["MD012"],
+		// The `./` prefix keeps cli2's glob parser off the leading `#`.
+		expectedTarget: "./#a.md",
+		separator: undefined,
+		run: (filePath: string, project: string) =>
+			markdownlintRunner.run(
+				makeRunnerCtx(filePath, project, { kind: "markdown" }) as never,
+			),
+	},
+	{
+		runnerId: "markdownlint",
+		binary: "markdownlint-cli2",
+		name: "!a.md",
+		sibling: "plain.md",
+		content: "# Title\n\n\ntext\n",
+		expectedRules: ["MD012"],
+		expectedTarget: "./!a.md",
+		separator: undefined,
+		run: (filePath: string, project: string) =>
+			markdownlintRunner.run(
+				makeRunnerCtx(filePath, project, { kind: "markdown" }) as never,
+			),
+	},
+];
+
+describe.each(LEADING_NAME_CASES)(
+	"$runnerId lints a root-level file named $name",
+	({
+		binary,
+		name,
+		sibling,
+		content,
+		expectedRules,
+		expectedTarget,
+		separator,
+		run,
+	}) => {
+		describe.skipIf(!toolAvailable(binary))(`${binary} available`, () => {
+			it("reports the findings instead of reading the name as a modifier", async () => {
+				// The control layout, so only the leading character can explain the run.
+				const project = LAYOUTS.control;
+				const filePath = path.join(project, name);
+				// A plain-named sibling with the SAME content is the control: whatever a
+				// linted file of this content earns (yamllint reports both rules as
+				// errors, so its findings make the run `failed`), the odd-named file must
+				// earn the same. Pre-fix the name itself was the obstruction: yamllint
+				// skipped, cli2 answered a clean file.
+				const plain = path.join(project, sibling);
+				fs.writeFileSync(filePath, content);
+				fs.writeFileSync(plain, content);
+				try {
+					const odd = summary(await run(filePath, project));
+					const control = summary(await run(plain, project));
+					expect(odd.rules).toEqual(expectedRules);
+					expect(odd.rules).toEqual(control.rules);
+					expect(odd.status).toEqual(control.status);
+
+					// The tail pins the guard itself: cli2's target carries the `./`
+					// prefix, and yamllint's carries its option terminator.
+					const argv = spawnArgv(name);
+					expect(argv.slice(separator ? -2 : -1)).toEqual(
+						separator ? [separator, expectedTarget] : [expectedTarget],
+					);
+				} finally {
+					fs.rmSync(filePath, { force: true });
+					fs.rmSync(plain, { force: true });
+				}
+			});
+		});
+	},
+);
+
 describe.each(RUNNERS)(
 	"$runnerId keeps the absolute argument for a file outside the project",
 	({ binary, file, run }) => {

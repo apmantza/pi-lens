@@ -175,6 +175,43 @@ describe("markdownlint runner — fixable metadata", () => {
 		}
 	});
 
+	// #5544 round 2: a root-level name that starts with `#` or `!` is cli2's own
+	// ignore/negation glob syntax, so the bare relative target selected nothing and
+	// the run answered a clean file. This argv pin runs on every host, where the
+	// real-spawn case in ignore-glob-relative-argv-real.test.ts needs the binary.
+	it.each(["#a.md", "!a.md"])(
+		"prefixes a root-level %s target so cli2 reads it as a path",
+		async (name) => {
+			const env = setupTestEnvironment("pi-lens-markdownlint-modifier-name-");
+			try {
+				const filePath = path.join(env.tmpDir, name);
+				fs.writeFileSync(filePath, "# Title\n");
+				safeSpawnAsync.mockResolvedValueOnce({
+					error: null,
+					status: 0,
+					stdout: "",
+					stderr: "",
+				});
+
+				const runner = (
+					await import("../../../../clients/dispatch/runners/markdownlint.js")
+				).default;
+				await runner.run(createCtx(filePath, env.tmpDir) as never);
+
+				const [, args] = safeSpawnAsync.mock.calls[0] as [
+					string,
+					string[],
+					unknown,
+				];
+				expect(args.at(-1)).toBe(`./${name}`);
+				expect(args).not.toContain(name);
+				expect(args).not.toContain(filePath);
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
+
 	// Regression for #212: markdownlint-cli2 emits a severity token (`error`/
 	// `warning`) between the col and the rule code, and some rules carry multiple
 	// slash-separated names — both of which the old parser missed, silently

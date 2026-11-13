@@ -190,7 +190,11 @@ describe("tool-smoke cwd-sensitive rows (#2697)", () => {
 			const shim = path.join(shimDir, "yamllint");
 			fs.writeFileSync(
 				shim,
-				"#!/bin/sh\nprintf '%s:1:1: [error] hermetic shim (%s)\\n' \"$3\" key-ordering\n",
+				// The shim answers with its LAST argument, the file target, so an argv
+				// change ahead of it (the `--` terminator of #5544 round 2) cannot
+				// desync the position it echoes.
+				'#!/bin/sh\nlast=""\nfor arg in "$@"; do last="$arg"; done\n' +
+					"printf '%s:1:1: [error] hermetic shim (%s)\\n' \"$last\" key-ordering\n",
 			);
 			fs.chmodSync(shim, 0o755);
 			process.env.PATH = `${shimDir}${path.delimiter}${previousPath ?? ""}`;
@@ -228,9 +232,12 @@ describe("tool-smoke cwd-sensitive rows (#2697)", () => {
 			// matches its config's `ignore` globs against the string it is handed, so
 			// an absolute one lets a glob that names an ancestor of the file exclude
 			// the file from its own lint. The cwd pin above stays this row's subject.
+			// #5544 round 2: `--` precedes the target, so a root-level file named
+			// `-a.yml` cannot reach argparse as an option.
 			expect(toolSpawn[1]).toEqual([
 				"-f",
 				"parsable",
+				"--",
 				path.relative(dispatchCwd, filePath),
 			]);
 			expect(toolSpawn[1]?.at(-1)).not.toBe(filePath);
