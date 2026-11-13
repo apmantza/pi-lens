@@ -72,7 +72,16 @@ const { safeSpawnAsync, spawnCalls, probeMode } = vi.hoisted(() => {
 				(args[0] === "version" && args[1] === "--short");
 			if (isProbe) {
 				const tool = path.basename(String(cmd)).replace(/\.(exe|bat)$/, "");
-				const mode = probeMode[tool] ?? "ok";
+				// helm 4 has no --version flag and an old JVM has no --version
+				// either: each answers only its own spelling, so a registry row
+				// with the wrong versionArgs reads as a rejected binary (#4453).
+				const spelling =
+					tool === "helm"
+						? args[0] === "version"
+						: tool === "java"
+							? args.includes("-version")
+							: true;
+				const mode = spelling ? (probeMode[tool] ?? "ok") : "reject";
 				if (mode === "timeout") {
 					return {
 						error: new Error("timed out"),
@@ -297,8 +306,13 @@ describe("one availability ladder per binary (#5410)", () => {
 			outputDir: root,
 			manifests: [],
 		});
+		// The pass scanned the rendered tree (its `outputDir` is the last argument),
+		// so a pass that never resolved trivy cannot satisfy this.
 		expect(
-			spawnCalls.some((c) => c.cmd === tool && c.args[0] === "config"),
+			spawnCalls.some(
+				(c) =>
+					c.cmd === tool && c.args[0] === "config" && c.args.at(-1) === root,
+			),
 		).toBe(true);
 		expect(probesOf(tool)).toHaveLength(1);
 	});
@@ -340,6 +354,131 @@ describe("one availability ladder per binary (#5410)", () => {
 			projectRoot: root,
 		});
 		expect(stalled.failureMessage).toBe("helm unavailable (transient)");
+	});
+
+	// Control (green before the fold): helm-render and its IaC pass word an
+	// unusable binary from the ladder's typed verdict too.
+	it("words a helm and a trivy whose probe timed out from the verdict", async () => {
+		const root = workspace.tmpDir;
+		plantTool(root, "helm");
+		plantTool(root, "trivy");
+		probeMode.helm = "timeout";
+		probeMode.trivy = "timeout";
+		fs.mkdirSync(path.join(root, "chart", "templates"), { recursive: true });
+		fs.writeFileSync(
+			path.join(root, "chart", "Chart.yaml"),
+			"apiVersion: v2\nname: test\nversion: 0.1.0\n",
+		);
+		const file = path.join(root, "chart", "templates", "deployment.yaml");
+		fs.writeFileSync(file, "kind: Deployment\n");
+		fs.writeFileSync(
+			path.join(root, ".pi-lens.json"),
+			JSON.stringify({ helm: { renderValidation: { enabled: true } } }),
+		);
+		resetProjectLensConfigCache();
+		const render = (
+			await import("../../../../clients/dispatch/runners/helm-render.js")
+		).default;
+		const rendered = await render.run({
+			...createDispatchContext(
+				file,
+				root,
+				{ getFlag: () => false },
+				new FactStore(),
+			),
+			projectRoot: root,
+		});
+		expect(rendered.failureMessage).toContain("availability probe timed out");
+		const { runIacPass } =
+			await import("../../../../clients/dispatch/runners/helm-render.js");
+		const gaps = await runIacPass({
+			chartRoot: root,
+			cwd: root,
+			outputDir: root,
+			manifests: [],
+		});
+		expect(gaps.map((gap) => gap.message).join("\n")).toContain(
+			"availability probe timed out",
+		);
+	});
+
+	// A tool the runner could not use is worded from the ladder's verdict for
+	// that tool id, never from a checker the runner kept for itself.
+	describe.each([
+		{
+			tool: "golangci-lint",
+			runner: "golangci-lint",
+			// An installable tool with the install switch off.
+			absent: "install-disabled",
+			file: "main.go",
+			setup: (root: string) => {
+				fs.writeFileSync(path.join(root, ".golangci.yml"), "version: '2'\n");
+				fs.writeFileSync(path.join(root, "go.mod"), "module x\n");
+			},
+		},
+		{
+			tool: "detekt",
+			runner: "detekt",
+			// No installer entry, so the install switch is not the cause.
+			absent: "not-installed",
+			file: "Main.kt",
+			setup: (root: string) =>
+				fs.writeFileSync(path.join(root, "detekt.yml"), "build:\n"),
+		},
+		{
+			tool: "trivy",
+			runner: "trivy-config",
+			absent: "install-disabled",
+			file: "main.tf",
+			setup: (root: string) => {
+				fs.writeFileSync(
+					path.join(root, ".pi-lens.json"),
+					JSON.stringify({ trivy: { enabled: true } }),
+				);
+				resetProjectLensConfigCache();
+			},
+		},
+	])("$runner skip reason", ({ tool, runner, absent, file, setup }) => {
+		it.each([
+			{ label: "absent", mode: undefined, reason: absent },
+			{ label: "timed out", mode: "timeout", reason: "probe-incomplete" },
+			{
+				label: "rejecting its version probe",
+				mode: "reject",
+				reason: "probe-rejected",
+			},
+		] as const)(
+			"words a tool that is $label as $reason",
+			async ({ mode, reason }) => {
+				const root = workspace.tmpDir;
+				setup(root);
+				if (mode) {
+					// On PATH, the last rung, so only its verdict is the answer.
+					const onPath = path.join(
+						pathEnv.tmpDir,
+						process.platform === "win32" ? `${tool}${WINDOWS_EXT[tool]}` : tool,
+					);
+					fs.writeFileSync(onPath, "#!/bin/sh\n");
+					fs.chmodSync(onPath, 0o755);
+					probeMode[tool] = mode;
+				}
+				const target = path.join(root, file);
+				fs.writeFileSync(target, "x\n");
+				const definition = (
+					await import(`../../../../clients/dispatch/runners/${runner}.js`)
+				).default as RunnerDefinition;
+				const result = await definition.run({
+					...createDispatchContext(
+						target,
+						root,
+						{ getFlag: () => false },
+						new FactStore(),
+					),
+					projectRoot: root,
+				});
+				expect(result.skipReason).toBe(reason);
+			},
+		);
 	});
 
 	// Control (green before the fold, moved from the mocked spotbugs-runner
