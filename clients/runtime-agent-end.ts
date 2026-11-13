@@ -54,11 +54,8 @@ import {
 } from "./session-scope.js";
 import {
 	getAutofixPolicyForFile,
-	hasDetektConfig,
 	hasKtfmtConfig,
 	hasKtlintConfig,
-	hasOxlintConfig,
-	hasRubocopConfig,
 } from "./tool-policy.js";
 
 /**
@@ -544,11 +541,11 @@ export async function handleAgentEnd({
 			hasEslintConfig: hasToolConfig("eslint", record.cwd),
 			hasStylelintConfig: hasToolConfig("stylelint", record.cwd),
 			hasSqlfluffConfig: hasToolConfig("sqlfluff", record.cwd),
-			hasRubocopConfig: hasRubocopConfig(record.cwd),
+			hasRubocopConfig: hasToolConfig("rubocop", record.cwd),
 			hasBiomeConfig: hasToolConfig("biome", record.cwd),
 			hasGolangciConfig: hasToolConfig("golangci-lint", record.cwd),
-			hasDetektConfig: hasDetektConfig(record.cwd),
-			hasOxlintConfig: hasOxlintConfig(record.cwd),
+			hasDetektConfig: hasToolConfig("detekt", record.cwd),
+			hasOxlintConfig: hasToolConfig("oxlint", record.cwd),
 			hasKtfmtConfig: hasKtfmtConfig(record.cwd),
 			hasKtlintConfig: hasKtlintConfig(record.cwd),
 		});

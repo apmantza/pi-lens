@@ -28,11 +28,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { envFor, gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
 import { copyFixtureGitHelper } from "../support/fixture-git-copy.js";
 import { readNdjsonRows } from "../support/ndjson-rows.js";
 import { relativeInside } from "../../clients/path-utils.js";
+import {
+	EXCLUDED_DIRS,
+	isPiLensInternalPath,
+} from "../../clients/file-utils.js";
 import { isProcessAlive } from "../support/process-tree.js";
 import { waitFor } from "../clients/interleaving-kit.js";
 import {
@@ -61,6 +65,14 @@ import {
 } from "../../scripts/pre-push-targeted-tests.mjs";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
+
+// The gate's default temp root, when PI_LENS_HOME is unset (#5536).
+const DEFAULT_ROOT = path.join(
+	os.homedir(),
+	".local",
+	"share",
+	"pi-lens-prepush",
+);
 
 // What the local hook runs of a registry: its CI-only members run in CI (#4724).
 const local = (tests: string[]) =>
@@ -278,7 +290,7 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 					? [
 							"--input-type=module",
 							"-e",
-							`import { main } from ${JSON.stringify(pathToFileURL(path.join(scriptDir, "pre-push-targeted-tests.mjs")).href)}; ${probeMain === "undrained" ? "process.kill = () => { throw Object.assign(new Error('denied'), {code: 'EPERM'}); }; const realTimer = globalThis.setTimeout; globalThis.setTimeout = (fn, ms, ...args) => realTimer(fn, ms === 5000 ? 50 : ms, ...args);" : ""} process.env.GATE_PID = String(process.pid); process.argv.push('--skip-build', ...${JSON.stringify(extra)}); process.exitCode = await main();`,
+							`const { main } = await import(process.env.PI_LENS_PROBE_MAIN_URL); ${probeMain === "undrained" ? "process.kill = () => { throw Object.assign(new Error('denied'), {code: 'EPERM'}); }; const realTimer = globalThis.setTimeout; globalThis.setTimeout = (fn, ms, ...args) => realTimer(fn, ms === 5000 ? 50 : ms, ...args);" : ""} process.env.GATE_PID = String(process.pid); process.argv.push('--skip-build', ...JSON.parse(process.env.PI_LENS_PROBE_MAIN_ARGS)); process.exitCode = await main();`,
 						]
 					: [
 							path.join(scriptDir, "pre-push-targeted-tests.mjs"),
@@ -289,7 +301,20 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 					cwd: fixtureDir,
 					encoding: "utf8",
 					input,
-					env: { ...process.env, ...env },
+					// Paths and argv reach the probe through the environment, never
+					// through its source text (CodeQL js/bad-code-sanitization).
+					env: {
+						...process.env,
+						...(probeMain
+							? {
+									PI_LENS_PROBE_MAIN_URL: pathToFileURL(
+										path.join(scriptDir, "pre-push-targeted-tests.mjs"),
+									).href,
+									PI_LENS_PROBE_MAIN_ARGS: JSON.stringify(extra),
+								}
+							: {}),
+						...env,
+					},
 				},
 			);
 		return { git, base, commit, hook };
@@ -775,11 +800,11 @@ let sweeps = 0;
 const sweepB = () => {
 	if (sweeps++ >= 3) return;
 	const b = spawnSync(process.execPath, process.argv.slice(1), {
-		input: ${JSON.stringify(input)},
+		input: process.env.PI_LENS_RACE_INPUT,
 		encoding: "utf8",
 		env: { ...process.env, RACE_ROLE: "B" },
 	});
-	realWrite(${JSON.stringify(bStatus)}, b.stderr);
+	realWrite(process.env.PI_LENS_RACE_B_STATUS, b.stderr);
 };
 const realTemp = fs.mkdtempSync;
 const realWrite = fs.writeFileSync;
@@ -806,6 +831,8 @@ syncBuiltinESMExports();
 			PI_LENS_HOME: home,
 			PI_LENS_PREPUSH_TMPDIR: "",
 			NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+			PI_LENS_RACE_INPUT: input,
+			PI_LENS_RACE_B_STATUS: bStatus,
 		});
 		// B swept before stopping, so the race window was really exercised.
 		expect(fs.readFileSync(bStatus, "utf8")).toContain("STOP_AFTER_SWEEP");
@@ -865,13 +892,15 @@ syncBuiltinESMExports();
 			const workerPidFile = path.join(fixtureDir as string, "worker.pid");
 			write(
 				"tests/clients/first.test.ts",
-				`import { it } from 'vitest'; import fs from 'node:fs'; it('interrupt', async () => { fs.writeFileSync(${JSON.stringify(workerPidFile)}, String(process.pid)); process.kill(Number(process.env.GATE_PID), '${signal}'); await new Promise(r => setTimeout(r, 300)); fs.mkdirSync(process.env.TMPDIR, { recursive: true }); fs.writeFileSync(${JSON.stringify(path.join(base, "late-writer"))}, 'wrote'); });\n`,
+				`import { it } from 'vitest'; import fs from 'node:fs'; it('interrupt', async () => { fs.writeFileSync(process.env.PI_LENS_WORKER_PID_FILE, String(process.pid)); process.kill(Number(process.env.GATE_PID), '${signal}'); await new Promise(r => setTimeout(r, 300)); fs.mkdirSync(process.env.TMPDIR, { recursive: true }); fs.writeFileSync(process.env.PI_LENS_LATE_WRITER_FILE, 'wrote'); });\n`,
 			);
 			const result = hook(
 				"",
 				["--include-worktree"],
 				{
 					PI_LENS_PREPUSH_TMPDIR: base,
+					PI_LENS_WORKER_PID_FILE: workerPidFile,
+					PI_LENS_LATE_WRITER_FILE: path.join(base, "late-writer"),
 				},
 				undrained ? "undrained" : true,
 			);
@@ -995,9 +1024,7 @@ syncBuiltinESMExports();
 			const seen = runRoot(homeFor);
 			expect(relativeInside(seen.checkout, seen.base)).toBeUndefined();
 			expect(relativeInside(seen.checkout, seen.children)).toBeUndefined();
-			expect(seen.base).toBe(
-				fs.realpathSync(path.join(os.homedir(), ".pi-lens", "prepush-tmp")),
-			);
+			expect(seen.base).toBe(fs.realpathSync(DEFAULT_ROOT));
 			expect(seen.stderr.match(notice)).toHaveLength(1);
 		},
 	);
@@ -1023,7 +1050,48 @@ describe("pre-push temp root pin (#5439)", () => {
 			TEMP: caller,
 			TMP: caller,
 		});
-		expect(root).toBe(path.join(os.homedir(), ".pi-lens", "prepush-tmp"));
+		expect(root).toBe(DEFAULT_ROOT);
+	});
+
+	// Recurrence (#5536): the default root sat under `~/.pi-lens`, which
+	// `isPiLensInternalPath` treats as pi-lens-owned, so every fixture built
+	// under `os.tmpdir()` (this root) was dropped and the turn-scenarios gitleaks
+	// cell reddened on every push that selected it. The internal set comes from
+	// the production predicate and its exported excluded-directory list; this
+	// test restates no list of its own.
+	it("defaults to a root no pi-lens-internal predicate claims (#5536)", () => {
+		// The vitest worker's HOME sits under its PI_LENS_HOME and its TMPDIR, both
+		// of which the predicate owns; point them elsewhere so only the root's own
+		// spelling is judged, as on a host whose HOME is under neither.
+		const neutral = path.join(path.parse(os.homedir()).root, "neutral-5536");
+		for (const key of ["PI_LENS_HOME", "TMPDIR", "TEMP", "TMP"])
+			vi.stubEnv(key, neutral);
+		try {
+			const root = resolvePrePushTmpRoot({});
+			const project = path.join(root, "run-x", "project");
+			const walked: string[] = [];
+			for (
+				let dir = root;
+				dir !== path.dirname(dir) && dir !== os.homedir();
+				dir = path.dirname(dir)
+			) {
+				walked.push(dir);
+				expect(isPiLensInternalPath(dir, project), dir).toBe(false);
+				expect(isPiLensInternalPath(path.join(dir, "a.ts"), project), dir).toBe(
+					false,
+				);
+			}
+			expect(walked.length).toBeGreaterThan(0);
+			const below = path.relative(os.homedir(), root).split(path.sep);
+			expect(
+				below.filter((segment) => EXCLUDED_DIRS.includes(segment)),
+			).toEqual([]);
+			expect(
+				isPiLensInternalPath(path.join(project, "src", "app.ts"), project),
+			).toBe(false);
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 
 	it("honours PI_LENS_HOME as the machine-state parent", () => {
@@ -1071,21 +1139,25 @@ describe("entry-point guard through the real CLIs (#4086)", () => {
 		repoRoot,
 		"scripts/pre-push-targeted-tests.mjs",
 	);
-	const importProbe = (script: string) =>
-		`import(${JSON.stringify(pathToFileURL(script).href)}).then(() => console.log("IMPORT-OK"));`;
-	const run = (args: string[], input?: string, cwd = repoRoot) =>
+	const importProbe = `import(process.env.PI_LENS_IMPORT_PROBE_URL).then(() => console.log("IMPORT-OK"));`;
+	const run = (
+		args: string[],
+		input?: string,
+		cwd = repoRoot,
+		env: NodeJS.ProcessEnv = {},
+	) =>
 		spawnSync(process.execPath, args, {
 			cwd,
 			encoding: "utf8",
 			input,
 			timeout: 30_000,
-			env: { ...process.env, PI_LENS_TEST_NO_LOCK: "1" },
+			env: { ...process.env, PI_LENS_TEST_NO_LOCK: "1", ...env },
 		});
 
 	// Outside any repo: a guard that wrongly runs the selector's main() on import
 	// then fails fast on git instead of running the real hook over this checkout.
-	const runAway = (args: string[], input?: string) =>
-		run(args, input, os.tmpdir());
+	const runAway = (args: string[], input?: string, env?: NodeJS.ProcessEnv) =>
+		run(args, input, os.tmpdir(), env);
 
 	it.each([
 		["with-test-lock", lockScript],
@@ -1098,26 +1170,29 @@ describe("entry-point guard through the real CLIs (#4086)", () => {
 			// `node -e foo` (argv[1] = "foo") or stdin (argv[1] = "-"). The negative
 			// direction too: a guard that is always true would run main() on import
 			// (with-test-lock prints its usage and exits 2).
-			const bare = runAway(["-e", importProbe(script)]);
+			const probeEnv = {
+				PI_LENS_IMPORT_PROBE_URL: pathToFileURL(script).href,
+			};
+			const bare = runAway(["-e", importProbe], undefined, probeEnv);
 			expect(bare.stderr).toBe("");
 			expect(bare.stdout).toBe("IMPORT-OK\n");
 			expect(bare.status).toBe(0);
 			// A real file that is not this script: the only shape that reaches the
 			// compare with a resolvable argv[1], so it is the one an always-true
 			// guard cannot hide behind a failed realpath.
-			const otherFile = runAway([
-				"-e",
-				importProbe(script),
-				path.join(repoRoot, "package.json"),
-			]);
+			const otherFile = runAway(
+				["-e", importProbe, path.join(repoRoot, "package.json")],
+				undefined,
+				probeEnv,
+			);
 			expect(otherFile.stderr).toBe("");
 			expect(otherFile.stdout).toBe("IMPORT-OK\n");
 			expect(otherFile.status).toBe(0);
-			const viaEval = runAway(["-e", importProbe(script), "foo"]);
+			const viaEval = runAway(["-e", importProbe, "foo"], undefined, probeEnv);
 			expect(viaEval.stderr).toBe("");
 			expect(viaEval.stdout).toBe("IMPORT-OK\n");
 			expect(viaEval.status).toBe(0);
-			const viaStdin = runAway(["-"], importProbe(script));
+			const viaStdin = runAway(["-"], importProbe, probeEnv);
 			expect(viaStdin.stderr).toBe("");
 			expect(viaStdin.stdout).toBe("IMPORT-OK\n");
 			expect(viaStdin.status).toBe(0);
@@ -1208,10 +1283,14 @@ describe("selectTargetedTests — path-mirror pass", () => {
 			// #4590: walks both trees, so both change kinds must arm it.
 			"tests/config/env-path-key-composition-sweep.test.ts",
 			"tests/config/git-fixture-governance.test.ts",
+			// #5072: takes every tracked path for baseline ledgers and their cells.
+			"tests/config/baseline-owner-governance.test.ts",
 			// #4946: walks the four production roots for flag reads.
 			"tests/config/flag-read-registry-sweep.test.ts",
 			// #5273 r1 F1: walks clients/, tools/ and mcp/ for `includeNamedFiles` callers.
 			"tests/clients/source-filter-named-files.test.ts",
+			// #5308: walks scripts/ and clients/lsp/ for child-process spawn sites.
+			"tests/clients/dispatch/runners/run-outcome-ratchet.test.ts",
 		];
 		const testScanners = [
 			"tests/clients/flake-shape-ratchet.test.ts",
@@ -1236,6 +1315,7 @@ describe("selectTargetedTests — path-mirror pass", () => {
 			"tests/config/path-containment-sweep.test.ts",
 			"tests/config/env-path-key-composition-sweep.test.ts",
 			"tests/config/git-fixture-governance.test.ts",
+			"tests/config/baseline-owner-governance.test.ts",
 			"tests/config/real-home-reader-registry.test.ts",
 			"tests/config/test-env-restore-sweep.test.ts",
 			"tests/config/test-server-teardown-sweep.test.ts",

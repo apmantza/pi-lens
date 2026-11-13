@@ -70,7 +70,7 @@ import {
 	PYTHON_DECLARATION_CONCURRENCY,
 } from "../clients/python-environment.js";
 import { mapWithConcurrency } from "../clients/map-with-concurrency.js";
-import { CONSTRAINED_JSON_SCHEMA_SAMPLING, readFilePath } from "./shared.js";
+import { readFilePath } from "./shared.js";
 const VALID_OPERATIONS = [
 	"definition",
 	"typeDefinition",
@@ -92,6 +92,16 @@ const VALID_OPERATIONS = [
 	"workspaceDiagnostics",
 	"capabilities",
 ] as const;
+
+// JSON-RPC command arguments are LSPAny: servers use primitives, arrays, and
+// objects with command-specific keys. A Type.Unknown item becomes `{}`, which
+// strict Responses schemas reject, and pi-ai strict conversion does not support
+// a structured `anyOf` union. The tool opts out of strict conversion because an
+// open LSPAny value cannot be closed (#5506). The JSON Schema type array keeps
+// the complete JSON value space for non-strict providers.
+const LSP_ANY_SCHEMA = Type.Unsafe<unknown>({
+	type: ["string", "number", "boolean", "object", "array", "null"],
+});
 
 const NAVIGABLE_SYMBOL_KINDS = new Set([
 	5, // Class
@@ -874,7 +884,6 @@ export function createLspNavigationTool(
 			}
 			return `lsp_navigation ${op} — ${n} result${n === 1 ? "" : "s"}`;
 		}),
-		constrainedSampling: CONSTRAINED_JSON_SCHEMA_SAMPLING,
 		parameters: Type.Object({
 			operation: Type.String({
 				enum: [...VALID_OPERATIONS],
@@ -935,7 +944,7 @@ export function createLspNavigationTool(
 				}),
 			),
 			commandArguments: Type.Optional(
-				Type.Array(Type.Unknown(), {
+				Type.Array(LSP_ANY_SCHEMA, {
 					description: "Arguments for the server command.",
 				}),
 			),

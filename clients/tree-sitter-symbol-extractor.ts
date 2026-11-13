@@ -1011,7 +1011,10 @@ export class TreeSitterSymbolExtractor {
 		filePath: string,
 		lineAt: (row: number) => string,
 	): Symbol | null {
-		const captures: Record<string, { text: string; node: unknown }> = {};
+		const captures: Record<
+			string,
+			{ text: string; node: { startPosition: { row: number; column: number } } }
+		> = {};
 
 		for (const capture of match.captures) {
 			captures[capture.name] = {
@@ -1025,6 +1028,11 @@ export class TreeSitterSymbolExtractor {
 		let name: string | undefined;
 		let kind: SymbolKind | undefined;
 		let params: string | undefined;
+		// The captured identifier: LSP position requests (references, rename)
+		// need it, while `line`/`column` stay the declaration start (#5559).
+		let nameNode:
+			| { startPosition: { row: number; column: number } }
+			| undefined;
 		let defNode:
 			| {
 					startPosition: { row: number; column: number };
@@ -1033,57 +1041,67 @@ export class TreeSitterSymbolExtractor {
 			| undefined;
 
 		if (captures.funcName) {
+			nameNode = captures.funcName.node;
 			name = captures.funcName.text;
 			kind = "function";
 			params = captures.funcParams?.text;
 			// biome-ignore lint/suspicious/noExplicitAny: Node type
 			defNode = captures.funcDef?.node as any;
 		} else if (captures.arrowName) {
+			nameNode = captures.arrowName.node;
 			name = captures.arrowName.text;
 			kind = "function";
 			params = captures.arrowParams?.text;
 			// biome-ignore lint/suspicious/noExplicitAny: Node type
 			defNode = captures.arrowDef?.node as any;
 		} else if (captures.className) {
+			nameNode = captures.className.node;
 			name = captures.className.text;
 			kind = "class";
 			// biome-ignore lint/suspicious/noExplicitAny: Node type
 			defNode = captures.classDef?.node as any;
 		} else if (captures.methodName) {
+			nameNode = captures.methodName.node;
 			name = captures.methodName.text;
 			kind = "method";
 			params = captures.methodParams?.text;
 			// biome-ignore lint/suspicious/noExplicitAny: Node type
 			defNode = captures.methodDef?.node as any;
 		} else if (captures.interfaceName) {
+			nameNode = captures.interfaceName.node;
 			name = captures.interfaceName.text;
 			kind = "interface";
 			// biome-ignore lint/suspicious/noExplicitAny: Node type
 			defNode = captures.interfaceDef?.node as any;
 		} else if (captures.typeName) {
+			nameNode = captures.typeName.node;
 			name = captures.typeName.text;
 			kind = "type";
 			// biome-ignore lint/suspicious/noExplicitAny: Node type
 			defNode = captures.typeDef?.node as any;
 		} else if (captures.moduleName) {
+			nameNode = captures.moduleName.node;
 			name = captures.moduleName.text;
 			kind = "class";
 			defNode = captures.moduleDef?.node as any;
 		} else if (captures.defName) {
 			// CUE `#Definition` — the closest existing SymbolKind to a reusable
 			// schema type.
+			nameNode = captures.defName.node;
 			name = captures.defName.text;
 			kind = "type";
 			// biome-ignore lint/suspicious/noExplicitAny: Node type
 			defNode = captures.defDef?.node as any;
 		} else if (captures.fieldName) {
 			// CUE plain struct field.
+			nameNode = captures.fieldName.node;
 			name = captures.fieldName.text;
 			kind = "property";
 			// biome-ignore lint/suspicious/noExplicitAny: Node type
 			defNode = captures.fieldDef?.node as any;
 		} else if (captures.letName) {
 			// CUE `let` binding — a computed local value.
+			nameNode = captures.letName.node;
 			name = captures.letName.text;
 			kind = "variable";
 			// biome-ignore lint/suspicious/noExplicitAny: Node type
@@ -1114,6 +1132,12 @@ export class TreeSitterSymbolExtractor {
 			line: defNode.startPosition.row + 1,
 			endLine: defNode.endPosition.row + 1,
 			column: defNode.startPosition.column + 1,
+			...(nameNode
+				? {
+						nameLine: nameNode.startPosition.row + 1,
+						nameColumn: nameNode.startPosition.column + 1,
+					}
+				: {}),
 			signature,
 			isExported,
 			...(local ? { local: true } : {}),

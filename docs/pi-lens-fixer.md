@@ -242,6 +242,10 @@ registry; other doubles only as `AGENTS.md` admits them.
 
 ## Before the report
 
+Before any `gh issue comment`, `gh pr comment` or thread reply over 12 lines,
+run `node scripts/check-prose.mjs --comment --body-file <f>`
+(`docs/prose-standard.md` "Comment layout").
+
 Re-climb the minimalism ladder on what you built. Challenge anything
 unnecessary or unverified with a probe, delete what can go, and simplify what
 remains: prefer deleting over simplifying, simplifying over optimizing, and

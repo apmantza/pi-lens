@@ -107,6 +107,10 @@ import { testSourceFiles as allTestSourceFiles } from "../support/module-instanc
 import { localImportTargets } from "../support/hook-await-scan.js";
 import { assertSortedRegistry } from "../support/sweep-kit.js";
 import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
+import {
+	expectPlantedStaleRow,
+	rowsWithoutLiveMember,
+} from "../support/baseline-staleness.js";
 
 // ── The baseline ─────────────────────────────────────────────────────────
 
@@ -595,6 +599,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			"the real export still answers each call; the wrapper exists to prove a file without jedi's row is never walked",
 	},
 
+	// #5258: the re-verify's code-action lookup never answers, so only the
+	// pass's own wall bound ends it; that unanswered lookup is the cell.
+	"never-settling-wait:clients/persistent-reverify.test.ts": {
+		detector: "never-settling-wait",
+		reason:
+			"the cell under test is a code-action lookup that never answers; a settled promise would be an answer and erase it",
+	},
 	"never-settling-wait:scripts/mutate-fixture.test.ts": {
 		detector: "never-settling-wait",
 		reason:
@@ -649,6 +660,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "raw-timer-wait",
 		reason:
 			"the census polls the real MCP child's background review-graph build before classifying the project_report JSON cell; a fake clock cannot advance that child's build",
+	},
+	// 2026-11-12 (#5267): the sweep's window is the loaded copy's real 30 s arm
+	// delay and real 60 s spawn grace; no fake clock can advance another
+	// process's timer.
+	"raw-timer-wait:index-3917-orphan-sweep-scope.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the witness times the extension copy's OWN setTimeout, which a fake clock in the harness graph cannot move; the observation window is the production arm delay plus the spawn grace",
 	},
 	// 2026-10-31 (#5108): the read-only bound is a live wall deadline.
 	"raw-timer-wait:index-5108-opaque-blocker-disclosure-witness.test.ts": {
@@ -911,6 +930,12 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
 	},
+	"real-process-spawn:clients/lsp/effect-tsgo-initialize-fallback-5504.test.ts":
+		{
+			detector: "real-process-spawn",
+			reason:
+				"#5504: only a real child that exits after the launcher's startup window and before initialize answers reaches the registry's initialize fallback; a launcher double never exits that way.",
+		},
 	["real-process-spawn:clients/lsp/fake-lsp-" +
 	"server-parent-watchdog.test.ts"]: {
 		detector: "real-process-spawn",
@@ -1178,6 +1203,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the claim is what a CHILD process sees of the worker's environment, the inheritance the #4780 opengrep writes into the real home depended on; an in-process read of process.env proves the worker, not the child, and the probe child only prints its environment",
 	},
+	// 2026-11-13 (#5072): the baseline census takes its population from git's
+	// tracked list, which only a real git answers.
+	"real-process-spawn:config/baseline-owner-governance.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the census population is git's own tracked list (dot-files and every extension included), which only a real git ls-files child answers; a hand-built list would restate the population the census is meant to find",
+	},
 	"real-process-spawn:config/gitignore-tracked-shadow.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -1212,6 +1244,17 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"the subject is what a real bash command does to a real linked worktree, detected by git's own status; a stubbed shell or git answers neither",
+	},
+	// 2026-11-12 (#5267): the candidate rule reads the real OS process table, so
+	// the population must be real processes with a real dead owner and a real OS
+	// start spelling; a fabricated table would only test the mock.
+	"real-process-spawn:index-3917-orphan-sweep-scope.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the backstop's candidate rule is " +
+			"managed-binary + dead-owner-tag + older-than-grace over the real " +
+			"process table, and the #2042 guard only records a violation at a pid " +
+			"it can prove unowned; a stubbed snapshot answers both with what it was told",
 	},
 	"real-process-spawn:index-4504-opaque-prescan-root-witness.test.ts": {
 		detector: "real-process-spawn",
@@ -1413,6 +1456,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"the exact local CLI, shallow checkout, `git check-ignore` (#2904) and the gh label read behind `--lint-local` (#4288, PATH stub) are the subjects; an in-process double cannot prove any of those command boundaries",
+	},
+	// 2026-11-13 (#5558): the `--comment` layout gate is the committed CLI; the
+	// exit status and stderr a posting role reads are the contract.
+	"real-process-spawn:scripts/check-prose.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the `--comment` CLI (argv parsing, exit status, stderr) is what a role runs before `gh issue comment`; an in-process call of the pure function would not prove either",
 	},
 	// 2026-10-14 (#4397): the changed-test shuffle job's exit code is the contract;
 	// only a real vitest start reorders the cases of a fixture that shares state.
@@ -2039,6 +2089,15 @@ interface RatchetProblem {
 	after: number;
 }
 
+/** One `detector:file` key per row of a per-detector table (#5072). */
+function detectorRows(
+	table: Partial<Record<DetectorName, Readonly<Record<string, number>>>>,
+): string[] {
+	return DETECTOR_NAMES.flatMap((detector) =>
+		Object.keys(table[detector] ?? {}).map((file) => `${detector}:${file}`),
+	);
+}
+
 /**
  * Compare today's live counts against the pinned baseline for one detector.
  * Three directions are problems: a file the baseline has never seen, an
@@ -2164,17 +2223,64 @@ describe("flake-shape ratchet (#2547)", () => {
 			// not a failure above, but a baseline entry for a file the scan no
 			// longer touches AT ALL is dead weight worth flagging here, same as
 			// `auditRegistry`'s stale-exemption check one layer up.
-			const stale: string[] = [];
-			for (const detector of DETECTOR_NAMES) {
-				const live = await countsByDetector(detector);
-				for (const file of Object.keys(FLAKE_SHAPE_BASELINE[detector] ?? {})) {
-					if (!(file in live)) stale.push(`${detector}:${file}`);
-				}
-			}
-			expect(stale).toEqual([]);
+			const live: Partial<
+				Record<DetectorName, Readonly<Record<string, number>>>
+			> = {};
+			for (const detector of DETECTOR_NAMES)
+				live[detector] = await countsByDetector(detector);
+			expect(
+				rowsWithoutLiveMember(
+					detectorRows(FLAKE_SHAPE_BASELINE),
+					new Set(detectorRows(live)),
+				),
+			).toEqual([]);
 		},
 		TREE_WALK_TIMEOUT_MS,
 	);
+
+	it("reds a planted baseline row the live scan never touches (#5072)", () => {
+		// The dead-weight direction on a row this cell invents, over an empty live
+		// population: the scan touches nothing, so the row has to report itself.
+		const planted = "tests/clients/5072-gone-shape.test.ts";
+		const noLive: Partial<
+			Record<DetectorName, Readonly<Record<string, number>>>
+		> = {};
+		for (const detector of DETECTOR_NAMES) noLive[detector] = {};
+		const plantedBaseline = Object.fromEntries(
+			DETECTOR_NAMES.map((detector) => [
+				detector,
+				detector === "raw-timer-wait" ? { [planted]: 1 } : {},
+			]),
+		) as Baseline;
+		const stale = rowsWithoutLiveMember(
+			detectorRows(plantedBaseline),
+			new Set(detectorRows(noLive)),
+		);
+		expect(stale).toEqual([`raw-timer-wait:${planted}`]);
+		expectPlantedStaleRow({
+			baseline: "tests/support/flake-shape-baseline.json",
+			rowKey: planted,
+			verdict: stale,
+		});
+	});
+
+	it("reds a frozen mint whose bytes are not the pinned ones (#5072)", () => {
+		// The mint is digest-pinned, so its row identity is its content hash: a
+		// planted row changes the hash, and the digest verdict has to name the
+		// hash of the planted content, not only the file.
+		const drifted = JSON.stringify({
+			...FROZEN_BASELINE,
+			"raw-timer-wait": {
+				...FROZEN_BASELINE["raw-timer-wait"],
+				"tests/clients/5072-drift-row.test.ts": 1,
+			},
+		});
+		expectPlantedStaleRow({
+			baseline: "tests/support/flake-shape-baseline-frozen.json",
+			rowKey: createHash("sha256").update(drifted).digest("hex"),
+			verdict: frozenDigestProblems(drifted),
+		});
+	});
 
 	it("carries the three counts in this header (informational, kept in sync)", () => {
 		// Not asserted against a hardcoded number — this test's job is only to
@@ -3777,6 +3883,13 @@ describe("flake-shape scan — in-process-mock (#4362)", () => {
 		// Shape 34: the call is read structurally, so an unlisted spelling
 		// of the same mock is the same entry.
 		expect(targetsIn(source)).toEqual(["clients/x"]);
+	});
+
+	it("does not count vi.doUnmock as an in-process mock (#5256 F3)", () => {
+		// Recurrence guard for #5256 F3: `doUnmock` restores the real module and
+		// replaces none. It reds if `doUnmock` joins the shared
+		// MOCK_REGISTRATION_NAMES list this scan reads (mutation M3).
+		expect(targetsIn('vi.doUnmock("../../clients/x.js");')).toEqual([]);
 	});
 
 	it("counts each mocked module once, however many times it is mocked", () => {

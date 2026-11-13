@@ -94,12 +94,25 @@ describe("purgeCompiledSiblings (#2698)", () => {
 	// #2698 review round 3, R2-F3, red-first: `timeout`/`killSignal` were the
 	// one guard added alongside `maxBuffer` with no test of their own —
 	// deleting both lines from the real runner left every prior test green.
-	// `deps.timeout: 1` forces a REAL `ETIMEDOUT`/`SIGKILL` against a real
-	// `git` process (fork+exec alone reliably exceeds 1ms; verified 5/5 runs
-	// against this repo before writing this test) — no mocked error.
-	it("F3/R2-F3: throws (real ETIMEDOUT/SIGKILL) when a git call exceeds timeout", () => {
+	// `deps.timeout: 1` forces a REAL `ETIMEDOUT` against a real `git` process
+	// (fork+exec alone reliably exceeds 1ms) — no mocked error.
+	//
+	// #5516 review round 1, F5: this case used to assert `signal: "SIGKILL"`
+	// too, and that member is FLAKY — a 1 ms timeout races the child's own
+	// exit, and Node then reports `code: "ETIMEDOUT"` with `signal: null` and
+	// `status: 0`. Measured: 27 of 200 `execFileSync` calls against a prompt
+	// `git --version` (13.5%), 86 of 800 calls through this export in the
+	// review probe, and 2 of 15 runs of this file. The file runs in the gating
+	// Unit shards (`wallClockBudgetInclude`), so the flake reds them. `code:
+	// "ETIMEDOUT"` held in every one of those calls, so this pins the code and
+	// `killSignal` is UNPINNED: pinning it needs a runner seam that still
+	// honours `timeout` (`deps.git` bypasses the timeout entirely), and that is
+	// new mechanism for a maintainer decision, not a test assertion.
+	it("F3/R2-F3: throws (real ETIMEDOUT) when a git call exceeds timeout", () => {
 		const root = fixtureRepo();
 
-		expect(() => purgeCompiledSiblings(root, { timeout: 1 })).toThrow();
+		expect(() => purgeCompiledSiblings(root, { timeout: 1 })).toThrow(
+			expect.objectContaining({ code: "ETIMEDOUT" }),
+		);
 	});
 });

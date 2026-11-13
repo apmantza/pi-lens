@@ -11,7 +11,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { Type } from "../../clients/deps/typebox.js";
-import { sweepUntrackedOrphans } from "../../clients/instance-reaper.js";
+import {
+	ORPHAN_BACKSTOP_SCHEDULING_ENV,
+	sweepUntrackedOrphans,
+} from "../../clients/instance-reaper.js";
 import { normalizeFilePath } from "../../clients/path-utils.js";
 import { scannerReportParentDir } from "../../clients/scanner-temp-root.js";
 import { ReadGuard } from "../../clients/read-guard.js";
@@ -123,7 +126,7 @@ describe("pi-session: the built extension in a real AgentSession (#4632)", () =>
 		const toolResult = second[3] as { content?: unknown; isError?: unknown };
 		const resultText = textBlocks(toolResult.content).join("\n");
 		// The diagnostics tool's own answer, not a value this test supplied.
-		expect(resultText).toContain("No issues in the current turn delta.");
+		expect(resultText).toContain("No new findings in the current turn delta.");
 		expect(toolResult.isError).toBeFalsy();
 	});
 
@@ -623,6 +626,62 @@ describe("pi-session: the built extension in a real AgentSession (#4632)", () =>
 		// Created with the pin, so `mkdtempSync` in the scan has a parent to
 		// write under even when the file's first scan starts immediately.
 		expect(fs.existsSync(parent)).toBe(true);
+	});
+
+	it("carries the orphan-backstop arming opt-out across a session's startup", async () => {
+		// #5267. The cooldown case below cannot be the only defense: the
+		// production cooldown is 30 minutes, so a host that lives past one reaches
+		// the sweep on its own, and the copy is then one stale owner tag away from
+		// SIGKILLing a process this run does not own (shape 50, the #2042
+		// kill-guard shape). The opt-out is read at ARM time, so what the harness
+		// owes is that the key is set before pi hands the copy its `session_start`
+		// and stays set while the copy's timer can still fire; like the sibling
+		// pins it is undone by the file's `afterAll`, which restores every entry of
+		// `PINNED_KEYS` from `savedEnv`. `pi-session.ts` spells the key as a
+		// literal (importing the reaper there reshapes every importer's graph), so
+		// the first assertion pins the two spellings equal: a rename on either
+		// side reddens here instead of silently un-arming the harness's opt-out.
+		expect(
+			ORPHAN_BACKSTOP_SCHEDULING_ENV,
+			"pi-session.ts spells this key as a literal (importing the reaper there reshapes every importer's graph); the two spellings are pinned equal here",
+		).toBe("PI_LENS_DISABLE_ORPHAN_BACKSTOP");
+		// The observation is taken inside pi's own extension lifecycle, not from
+		// this side: a second extension logs what `process.env` holds at the
+		// moment its `session_start` runs, which is the hook where `index.ts` reads
+		// the key. The name is interpolated from the production constant, so the
+		// extension reads the key the reaper reads.
+		const dir = path.join(fixture.root, "backstop-opt-out");
+		const seen = path.join(dir, "session-start.txt");
+		fs.mkdirSync(path.join(dir, "proj"), { recursive: true });
+		fs.writeFileSync(
+			path.join(dir, "probe.mjs"),
+			`import fs from "node:fs";\n` +
+				`export default function (pi) {\n` +
+				`\tpi.on("session_start", () => {\n` +
+				`\t\tfs.appendFileSync(${JSON.stringify(seen)}, ` +
+				`(process.env[${JSON.stringify(ORPHAN_BACKSTOP_SCHEDULING_ENV)}] ?? "<unset>") + "\\n");\n` +
+				`\t});\n` +
+				`}\n`,
+		);
+		const handle = await startPiSession({
+			root: fixture.root,
+			cwd: path.join(dir, "proj"),
+			responses: [fauxAssistantMessage(fauxText("ok"))],
+			extraExtensions: { after: [path.join(dir, "probe.mjs")] },
+		});
+		try {
+			await handle.prompt("hello");
+			expect(
+				fs.readFileSync(seen, "utf8").trim().split("\n"),
+				"the loaded copy's own session_start sees the opt-out",
+			).toEqual(["1"]);
+			expect(
+				process.env[ORPHAN_BACKSTOP_SCHEDULING_ENV],
+				"the pin outlives the start, so the copy's 30 s timer cannot sweep",
+			).toBe("1");
+		} finally {
+			await handle.dispose();
+		}
 	});
 
 	it("starts a session with the orphan backstop in cooldown, so its 30 s sweep cannot reach the host", async () => {

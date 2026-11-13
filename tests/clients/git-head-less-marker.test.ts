@@ -14,8 +14,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { realpathOrResolve } from "../../clients/path-utils.js";
 import {
-	canonicalDirectory,
 	resolveGitCheckout,
 	resolveGitIdentity,
 	resolveLinkedWorktreeOwner,
@@ -26,7 +26,7 @@ const SHA = "0123456789abcdef0123456789abcdef01234567";
 let base: string;
 
 beforeEach(() => {
-	base = canonicalDirectory(
+	base = realpathOrResolve(
 		fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-git-head-less-")),
 	);
 });

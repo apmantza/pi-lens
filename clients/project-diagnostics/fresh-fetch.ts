@@ -299,7 +299,7 @@ export async function fetchFreshProjectDiagnostics(
 			if (!fs.statSync(requestedRoot).isDirectory()) {
 				throw new Error("is not a directory");
 			}
-			analysisRoot = fs.realpathSync(requestedRoot);
+			analysisRoot = realpathOrResolve(requestedRoot);
 		} catch (error) {
 			const detail = error instanceof Error ? error.message : String(error);
 			const reason = `the explicit analysis root ${requestedRoot} is unavailable or ${detail}`;

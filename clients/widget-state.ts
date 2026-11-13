@@ -8,7 +8,11 @@ import {
 	type LineCountCache,
 } from "./diagnostic-line-freshness.js";
 import { visibleWidth } from "./deps/pi-tui.js";
-import { normalizeEphemeralMapKey, normalizeMapKey } from "./path-utils.js";
+import {
+	normalizeEphemeralMapKey,
+	normalizeMapKey,
+	splitPathSegments,
+} from "./path-utils.js";
 import { fitLine } from "./tui-fit.js";
 import { WriteOrderingGuard } from "./write-ordering-guard.js";
 import { collectForwardImportMtimes } from "./blocker-freshness.js";
@@ -2400,24 +2404,25 @@ export function renderWidget(
 
 	const lines: string[] = [];
 
-	// Header — counts from deduplicated files only
-	const deduped = dedupeByBasename([...files.values()]);
+	// #5460: `files` is one record per path key, and the counts read all of them.
+	// A display-name dedupe let a clean same-named file hide a blocking one.
+	const records = [...files.values()];
 	// The five row slots go to the highest tiers first (#4625 round 3): a retained
 	// record's `touchedAt` is its sweep time, so capping by recency alone let it
 	// take a slot from a blocking file and the header counted a row the frame
 	// never drew. The chosen rows are then drawn in the recency order both
 	// layouts showed before the cap.
-	const renderable = deduped.filter(shouldRenderFile);
+	const renderable = records.filter(shouldRenderFile);
 	const recencySorted = sortByTierThenRecency(renderable)
 		.slice(0, 5)
 		.sort((a, b) => b.touchedAt - a.touchedAt);
 	const langStr = sessionLanguages.slice(0, 6).join(" ");
-	const totalBlocking = countBlockingIn(deduped);
-	const totalErrors = countTotalIn("error", deduped);
-	const totalWarnings = countTotalIn("warning", deduped);
-	const totalSuppressed = countSuppressedIn(deduped);
-	const hasPendingAnalysis = deduped.some(isPendingAnalysis);
-	const uncheckedFiles = deduped.filter(isUncheckedClean);
+	const totalBlocking = countBlockingIn(records);
+	const totalErrors = countTotalIn("error", records);
+	const totalWarnings = countTotalIn("warning", records);
+	const totalSuppressed = countSuppressedIn(records);
+	const hasPendingAnalysis = records.some(isPendingAnalysis);
+	const uncheckedFiles = records.filter(isUncheckedClean);
 	const errorChunk =
 		totalErrors > 0
 			? (totalBlocking > 0 ? red : yellow)(`●${totalErrors}E`)
@@ -2468,14 +2473,16 @@ export function renderWidget(
 		lines.push(fitLine(` ${dim(`suppressed: ${totalSuppressed}`)}`, w));
 	}
 
+	const labelOf = (rec: FileRecord) => rowLabel(rec, records);
+
 	// File list — display order varies by mode
 	if (useHorizontal) {
 		const displayOrder = sortByTierThenRecency(recencySorted);
-		const rowLine = packHorizontalRow(displayOrder, w, theme);
+		const rowLine = packHorizontalRow(displayOrder, labelOf, w, theme);
 		if (rowLine.length > 0) lines.push(rowLine);
 	} else {
 		for (const rec of recencySorted) {
-			lines.push(fitLine(formatFileRowVertical(rec, theme), w));
+			lines.push(fitLine(formatFileRowVertical(rec, labelOf(rec), theme), w));
 		}
 	}
 
@@ -2487,7 +2494,7 @@ export function renderWidget(
 	if (lastUnchecked?.uncheckedReason !== undefined) {
 		lines.push(
 			fitLine(
-				` ${yellow("⚠")} ${dim(`${path.basename(lastUnchecked.filePath)}: ${lastUnchecked.uncheckedReason}`)}`,
+				` ${yellow("⚠")} ${dim(`${labelOf(lastUnchecked)}: ${lastUnchecked.uncheckedReason}`)}`,
 				w,
 			),
 		);
@@ -2517,7 +2524,7 @@ export function renderWidget(
 	if (withBlocking.length > 0) {
 		const rec = withBlocking[0];
 		// #1641: gate only the ONE record whose line numbers are about to be
-		// rendered, not the whole (potentially session-long) `deduped` list the
+		// rendered, not the whole (potentially session-long) `records` list the
 		// header counts read — one memoized stat per redraw, never a per-file
 		// scan of every file pi-lens has touched this session. A past-EOF
 		// citation demoted here can leave the header's aggregate blocking count
@@ -2527,7 +2534,7 @@ export function renderWidget(
 		applyPastEofGate(rec);
 		if (!useHorizontal) {
 			lines.push(fitLine(dim("─".repeat(Math.min(w, 60))), w));
-			lines.push(fitLine(` ${dim(path.basename(rec.filePath))}`, w));
+			lines.push(fitLine(` ${dim(labelOf(rec))}`, w));
 		}
 		const blockers = rec.diagnostics.filter(isBlockingOrDemoted).slice(0, 5);
 		// #2275 review F1: THIS is the point where a demoted row is delivered to
@@ -2602,6 +2609,7 @@ function sortByTierThenRecency(recs: FileRecord[]): FileRecord[] {
 
 function formatFileRowVertical(
 	rec: FileRecord,
+	label: string,
 	theme: { fg: (color: string, s: string) => string },
 ): string {
 	const dim = (s: string) => theme.fg("dim", s);
@@ -2609,7 +2617,6 @@ function formatFileRowVertical(
 	const yellow = (s: string) => theme.fg("warning", s);
 	const green = (s: string) => theme.fg("success", s);
 
-	const base = path.basename(rec.filePath);
 	const blocking = rec.diagnosticCounts.blocking;
 	const errors = rec.diagnosticCounts.errors;
 	const warnings = rec.diagnosticCounts.warnings;
@@ -2657,11 +2664,12 @@ function formatFileRowVertical(
 		(changedFormatters.length > 0
 			? dim(` fmt:${changedFormatters.join(",")}`)
 			: "");
-	return ` ${dot} ${base}  ${dim(runnerNames)}${formatMark}${counts}`;
+	return ` ${dot} ${label}  ${dim(runnerNames)}${formatMark}${counts}`;
 }
 
 function packHorizontalRow(
 	recs: FileRecord[],
+	labelOf: (rec: FileRecord) => string,
 	totalWidth: number,
 	theme: { fg: (color: string, s: string) => string },
 ): string {
@@ -2685,7 +2693,7 @@ function packHorizontalRow(
 			droppedAt = i;
 			break;
 		}
-		const token = formatFileTokenHorizontal(recs[i], remaining, theme);
+		const token = formatFileTokenHorizontal(recs[i], labelOf, remaining, theme);
 		const tokenWidth = visibleWidth(token);
 		if (token.length === 0 || used + sepWidth + tokenWidth > totalWidth) {
 			droppedAt = i;
@@ -2724,6 +2732,7 @@ function packHorizontalRow(
 
 function formatFileTokenHorizontal(
 	rec: FileRecord,
+	labelOf: (rec: FileRecord) => string,
 	remainingWidth: number,
 	theme: { fg: (color: string, s: string) => string },
 ): string {
@@ -2759,11 +2768,10 @@ function formatFileTokenHorizontal(
 		countsStyled = " " + yellow(`${warnings}W`);
 	}
 
-	const fullBasename = path.basename(rec.filePath);
 	const fixedWidth = visibleWidth(dotChar) + 1 + visibleWidth(countsStyled);
 	const basenameBudget = remainingWidth - fixedWidth;
 	if (basenameBudget < 3) return "";
-	const truncated = truncateBasename(fullBasename, basenameBudget);
+	const truncated = truncateBasename(labelOf(rec), basenameBudget);
 	const linked = osc8(pathToFileURL(rec.filePath).href, truncated);
 	return `${dotChar} ${linked}${countsStyled}`;
 }
@@ -2773,12 +2781,12 @@ function truncateBasename(name: string, maxWidth: number): string {
 	if (maxWidth < 2) return "…";
 	const ext = path.extname(name);
 	const stem = name.slice(0, name.length - ext.length);
-	const keep = maxWidth - ext.length - 1;
+	const keep = maxWidth - visibleWidth(ext) - 1;
 	if (keep < 1) {
 		// Extension alone wouldn't fit; truncate the whole name.
-		return name.slice(0, maxWidth - 1) + "…";
+		return fitLine(name, maxWidth - 1, "") + "…";
 	}
-	return stem.slice(0, keep) + "…" + ext;
+	return fitLine(stem, keep, "") + "…" + ext;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -2917,10 +2925,26 @@ function osc8(uri: string, label: string): string {
 // turn-summary message renderer, which learned the hard way that pi-tui crashes
 // the host on over-width lines — #513).
 
-function dedupeByBasename(recs: FileRecord[]): FileRecord[] {
-	const seen = new Map<string, FileRecord>();
-	for (const r of [...recs].sort((a, b) => a.touchedAt - b.touchedAt)) {
-		seen.set(path.basename(r.filePath), r);
+/**
+ * #5460: a drawn row's label. The basename, or, when another record shares it,
+ * the fewest trailing path segments that no same-named record also ends in.
+ * Only drawn rows are labelled, and each scans the store once for peers.
+ */
+function rowLabel(rec: FileRecord, records: readonly FileRecord[]): string {
+	const base = path.basename(rec.filePath);
+	const peers = records
+		.filter((r) => r !== rec && path.basename(r.filePath) === base)
+		.map((r) => splitPathSegments(r.filePath));
+	if (peers.length === 0) return base;
+	const segments = splitPathSegments(rec.filePath);
+	const tail = (parts: string[], depth: number) =>
+		parts.slice(-(depth + 1)).join("/");
+	let depth = 1;
+	while (
+		depth < segments.length - 1 &&
+		peers.some((peer) => tail(peer, depth) === tail(segments, depth))
+	) {
+		depth++;
 	}
-	return [...seen.values()].sort((a, b) => b.touchedAt - a.touchedAt);
+	return tail(segments, depth);
 }

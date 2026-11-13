@@ -22,7 +22,6 @@ import biomeRunner from "../../../../clients/dispatch/runners/biome-check.js";
 import {
 	getJstsLintPolicyForCwd,
 	getPreferredJstsLintRunners,
-	hasOxlintConfig,
 } from "../../../../clients/tool-policy.js";
 import { makeRunnerCtx } from "../../../support/runner-ctx.js";
 import { createTempFile, setupTestEnvironment } from "../../test-utils.js";
@@ -105,7 +104,7 @@ describe("monorepo flat-config discovery (#3017)", () => {
 		const { env, filePath, pkgDir } = makeMonorepo("file.ts");
 		try {
 			createTempFile(env.tmpDir, ".oxlintrc.json", "{}\n");
-			expect(hasOxlintConfig(pkgDir)).toBe(true);
+			expect(hasToolConfig("oxlint", pkgDir)).toBe(true);
 			const policy = getJstsLintPolicyForCwd(pkgDir);
 			expect(policy.hasExplicitNonBiomeLinter).toBe(true);
 			expect(policy.preferredRunners).toEqual(["oxlint"]);

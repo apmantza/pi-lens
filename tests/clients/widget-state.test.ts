@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	IN_FLIGHT_REASON,
@@ -43,6 +43,13 @@ const e = String.fromCharCode(27);
 const theme = {
 	fg: (_color: string, s: string) => `${e}[38;2;102;102;102m${s}${e}[39m`,
 };
+
+// Row labels travel inside styled text and OSC-8 hyperlinks; assertions on a
+// label's spelling read the stripped, visible frame (so a URI target can never
+// satisfy a label check).
+const visibleFrame = (lines: string[]): string =>
+	stripTerminalSequences(lines.join("\n"));
+const visibleLine = (line: string): string => stripTerminalSequences(line);
 
 afterEach(() => {
 	clearWidgetState();
@@ -522,29 +529,290 @@ describe("widget-state renderWidget", () => {
 		}
 	});
 
-	it("deduplicates files by basename — last write wins at most 5 entries", () => {
+	// #5460: rows key on the widget store's path identity, so a clean edit to one
+	// same-named file must never hide a second one that holds findings. The old
+	// basename dedupe was last-write-wins and let the header read ✓ clean while a
+	// blocker was still open.
+	it("never hides a blocking file behind a clean same-named file", () => {
 		const a = `${process.cwd()}/pi-lens/index.ts`;
 		const b = `${process.cwd()}/pi-webaio/index.ts`;
 		recordRunner(a, "type-safety", "failed", 1);
 		recordDiagnostics(a, [
-			{ severity: "error", message: "error in pi-lens", rule: "E1" },
+			{
+				severity: "error",
+				semantic: "blocking",
+				message: "error in pi-lens",
+				rule: "E1",
+			},
 		]);
 		recordRunner(b, "eslint", "succeeded", 3);
-		recordDiagnostics(b, [
-			{ severity: "error", message: "warning in pi-webaio", rule: "W1" },
+		recordDiagnostics(b, []);
+
+		const allLines = visibleFrame(renderWidget(120, theme));
+
+		// Both rows draw, distinguished by enough parent path.
+		expect(allLines).toContain("pi-lens/index.ts");
+		expect(allLines).toContain("pi-webaio/index.ts");
+		// The blocker's detail still renders.
+		expect(allLines).toContain("error in pi-lens");
+		// The header counts the full population: a blocking finding is open,
+		// so the frame never answers ✓ clean.
+		expect(allLines).toContain("●1E");
+		expect(allLines).not.toContain("✓ clean");
+	});
+
+	it("shows same-named rows on separate lines in the vertical layout", () => {
+		const a = `${process.cwd()}/pi-lens/widget.ts`;
+		const b = `${process.cwd()}/pi-webaio/widget.ts`;
+		recordRunner(a, "tsc", "succeeded", 1);
+		recordDiagnostics(a, [
+			{
+				severity: "error",
+				semantic: "blocking",
+				message: "blocker in pi-lens",
+				rule: "E1",
+			},
 		]);
+		recordRunner(b, "tsc", "succeeded", 2);
+		recordDiagnostics(b, []);
+
+		const lines = renderWidget(50, theme);
+
+		// The two FILE rows: the blocker's row and the clean sibling's row are
+		// distinct and parent-labelled, and the detail block's header line names
+		// the blocker's file the same way.
+		expect(lines.map(visibleLine)).toContain(" pi-lens/widget.ts");
+		const blockRow = lines.find(
+			(l) =>
+				visibleLine(l).includes("pi-lens/widget.ts") &&
+				visibleLine(l).includes("●"),
+		);
+		const cleanRow = lines.find(
+			(l) =>
+				visibleLine(l).includes("pi-webaio/widget.ts") &&
+				visibleLine(l).includes("✓"),
+		);
+		expect(blockRow).toBeDefined();
+		expect(cleanRow).toBeDefined();
+		for (const line of lines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(50);
+		}
+	});
+
+	it("the five-row cap keeps both renderable same-named files", () => {
+		const observed = Date.now() - 5_000;
+		const a = `${process.cwd()}/pi-lens/index.ts`;
+		const b = `${process.cwd()}/pi-webaio/index.ts`;
+		recordDiagnostics(
+			a,
+			[
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "blocker a",
+					rule: "E1",
+				},
+			],
+			undefined,
+			observed,
+		);
+		recordDiagnostics(
+			b,
+			[
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "blocker b",
+					rule: "E2",
+				},
+			],
+			undefined,
+			observed + 100,
+		);
+		for (let i = 0; i < 3; i++) {
+			recordDiagnostics(
+				`${process.cwd()}/unique-file-${i}.ts`,
+				[
+					{
+						severity: "error",
+						semantic: "blocking",
+						message: `blocker ${i}`,
+						rule: "E1",
+					},
+				],
+				undefined,
+				observed + 200 + i * 100,
+			);
+		}
+
+		const allLines = visibleFrame(renderWidget(120, theme));
+
+		// Five tier-0 (blocking) renderables: every slot is a blocker, including
+		// both same-named members — the cap governs slots, not file identity.
+		expect(allLines).toContain("pi-lens/index.ts");
+		expect(allLines).toContain("pi-webaio/index.ts");
+		for (let i = 0; i < 3; i++) {
+			expect(allLines).toContain(`unique-file-${i}.ts`);
+		}
+	});
+
+	it.each([40, 100] as const)(
+		"keeps long same-named labels inside %s columns and the blocking row on its own parent",
+		(width) => {
+			const long = (head: string) =>
+				`${process.cwd()}/${head}-${"parent-segment-".repeat(6)}/index.ts`;
+			recordDiagnostics(long("left"), [
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "blocker",
+					rule: "E1",
+				},
+			]);
+			recordDiagnostics(long("right"), []);
+
+			const lines = renderWidget(width, theme).map(visibleLine);
+			const row = lines.find(
+				(line) => line.includes("left-") && line.includes("●"),
+			);
+			expect(row).toBeDefined();
+			for (const line of lines) {
+				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			}
+		},
+	);
+
+	// #5460 review F2: `truncateBasename` cut the stem by UTF-16 units but
+	// measured the label in columns. A wide-character parent overran the row
+	// budget, so `packHorizontalRow` dropped the blocker's token and drew `+2`.
+	it.each([70, 100] as const)(
+		"draws a same-named wide-character row's file token inside %s columns",
+		(width) => {
+			// Each parent is 40 CJK characters (80 columns), so the depth-1 label
+			// overruns the horizontal budget at both widths.
+			const a = `${process.cwd()}/${"甲".repeat(40)}/index.ts`;
+			const b = `${process.cwd()}/${"乙".repeat(40)}/index.ts`;
+			recordRunner(a, "tsc", "succeeded", 1);
+			recordDiagnostics(a, [
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "blocker in cjk",
+					rule: "E1",
+				},
+			]);
+			recordRunner(b, "tsc", "succeeded", 2);
+			recordDiagnostics(b, []);
+
+			const lines = renderWidget(width, theme);
+			const frame = visibleFrame(lines);
+
+			// The blocker's token: its dot, a truncated label ending in its
+			// extension, and its error count.
+			expect(frame).toMatch(/● \S*\.ts 1E/);
+			for (const line of lines) {
+				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			}
+		},
+	);
+
+	it("terminates and stays inside the width when two records spell the same segments", () => {
+		recordDiagnostics("/p/dup//index.ts", [
+			{
+				severity: "error",
+				semantic: "blocking",
+				message: "blocker in dup",
+				rule: "E1",
+			},
+		]);
+		recordDiagnostics("/p/dup/index.ts", []);
 
 		const lines = renderWidget(120, theme);
+		const frame = lines.map(visibleLine).join("\n");
 
-		const fileRows = lines.filter((l) => l.includes("index.ts"));
-		// Dedup: only one index.ts entry in the file list
-		expect(fileRows.length).toBeGreaterThanOrEqual(1);
-		expect(fileRows.length).toBeLessThanOrEqual(4);
+		expect(frame).toContain("●1E");
+		expect(frame).toContain("p/dup/index.ts");
+		for (const line of lines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(120);
+		}
+	});
 
-		// Later file's diagnostics supersede earlier
-		const allLines = lines.join("");
-		expect(allLines).toContain("warning in pi-webaio");
-		expect(allLines).not.toContain("error in pi-lens");
+	it("grows the parent hint only as far as needed to separate same-named rows", () => {
+		const a = `${process.cwd()}/app/src/leaf.ts`;
+		const b = `${process.cwd()}/lib/src/leaf.ts`;
+		recordRunner(a, "tsc", "succeeded", 1);
+		recordDiagnostics(a, [
+			{
+				severity: "error",
+				semantic: "blocking",
+				message: "blocker in app",
+				rule: "E1",
+			},
+		]);
+		recordRunner(b, "tsc", "succeeded", 2);
+		recordDiagnostics(b, []);
+
+		const allLines = visibleFrame(renderWidget(120, theme));
+
+		// Shared `src` parent: one more segment is enough.
+		expect(allLines).toContain("app/src/leaf.ts");
+		expect(allLines).toContain("lib/src/leaf.ts");
+		// Minimal hint — never the whole absolute display path.
+		expect(allLines).not.toContain(`${process.cwd()}/app/src/leaf.ts`);
+		expect(allLines).not.toContain(`${process.cwd()}/lib/src/leaf.ts`);
+	});
+
+	it("disambiguates a drawn row against a same-named sibling the cap did not draw", () => {
+		const observed = Date.now() - 5_000;
+		const drawn = `${process.cwd()}/pi-lens/index.ts`;
+		recordDiagnostics(
+			drawn,
+			[
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "newest blocker",
+					rule: "E1",
+				},
+			],
+			undefined,
+			observed + 400,
+		);
+		for (let i = 0; i < 4; i++) {
+			recordDiagnostics(
+				`${process.cwd()}/filler-${i}.ts`,
+				[
+					{
+						severity: "error",
+						semantic: "blocking",
+						message: `filler ${i}`,
+						rule: "E1",
+					},
+				],
+				undefined,
+				observed + 300 - i * 100,
+			);
+		}
+		// Same basename as `drawn`, oldest blocker: tier ties go to recency, so
+		// the five-row cap keeps `drawn` plus the fillers and leaves this out.
+		recordDiagnostics(
+			`${process.cwd()}/pi-webaio/index.ts`,
+			[
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "oldest blocker",
+					rule: "E1",
+				},
+			],
+			undefined,
+			observed,
+		);
+
+		const allLines = visibleFrame(renderWidget(120, theme));
+
+		expect(allLines).toContain("pi-lens/index.ts");
+		expect(allLines).not.toContain("oldest blocker");
 	});
 
 	it("paints the file row red when any diagnostic carries semantic=blocking, even if severity is warning", () => {
@@ -2714,6 +2982,22 @@ describe("a file no check completed on is not clean in the footer (#5258)", () =
 
 		recordDiagnostics("/repo/open.ts", []);
 		expect(renderWidget(120, theme).join("\n")).toContain("✓ clean");
+	});
+
+	// #5460 review F1: the unchecked line named its file by basename, so two
+	// same-named unchecked files read `⚠ index.ts: …` above rows labelled
+	// `a/index.ts` and `b/index.ts`. The line names the row its reason belongs to.
+	it("names the unchecked file by its row label when a same-named file shares its basename", () => {
+		const observed = Date.now() - 5_000;
+		recordDiagnostics("/repo/a/index.ts", [], undefined, observed, { reason });
+		recordDiagnostics("/repo/b/index.ts", [], undefined, observed + 100, {
+			reason,
+		});
+
+		const frame = visibleFrame(renderWidget(120, theme));
+
+		expect(frame).toContain(`⚠ b/index.ts: ${reason}`);
+		expect(frame).not.toContain(`⚠ index.ts: ${reason}`);
 	});
 
 	it("keeps a file's findings ahead of its unchecked mark", () => {

@@ -84,6 +84,31 @@ export function mockSpecifier(arg: SgNode | undefined): string | undefined {
 const VITEST_UTILS: ReadonlySet<string> = new Set(["vi", "vitest"]);
 
 /**
+ * Vitest's hoisted module-double registration. Only this name may skip an
+ * importer: a hoisted `vi.mock` replaces the module for the whole file. A
+ * `vi.doMock` runs per test, after a static import has already loaded the real
+ * importer, so it skips nothing (#5256 F1). `doUnmock` is not a registration:
+ * it names no factory, so it replaces no export surface (#5256 F3).
+ */
+const HOISTED_MOCK_NAMES: readonly string[] = ["mock"];
+
+/**
+ * Every module-double registration the export gate reads: the hoisted `mock`
+ * and its un-hoisted `doMock` twin (`registerConsoleMockers` in
+ * `@vitest/mocker` exposes both on the utils object, with the same
+ * `(specifier, factory)` shape). A whole-module `doMock` double drops a
+ * production export exactly the way a `mock` double does. #5256: the gate read
+ * only `mock`, so the `vi.doMock` of `clients/env-utils.js` in
+ * `tests/clients/lsp/launch.test.ts` stayed green while the Windows unit lane
+ * threw on the export a static `clients/safe-spawn.ts` import needed. The
+ * sibling readers import this list, so the spelling set lives in one place.
+ */
+export const MOCK_REGISTRATION_NAMES: readonly string[] = [
+	...HOISTED_MOCK_NAMES,
+	"doMock",
+];
+
+/**
  * Semantic mock-call check: the callee is one of `names` on vitest's utils
  * object written directly, `vi` or `vitest` (through parentheses, `as`,
  * `satisfies` or `!`), with a dot, spaced or literal bracket key
@@ -93,13 +118,13 @@ const VITEST_UTILS: ReadonlySet<string> = new Set(["vi", "vitest"]);
  * helper's parameter): the fail-closed consumer, the project-trust seam
  * ratchet, keys on the mocked specifier instead (#4429 round 3). It reads
  * the callee alone, so a caller looping over every call pays no per-file
- * cost (#4457 review F8). `names` defaults to `["mock"]`, so the
- * whole-module export gate keeps its existing population; a caller that
- * also owns the non-hoisted `vi.doMock` passes both names.
+ * cost (#4457 review F8). `names` is required: each caller passes the
+ * registrations it reads (`MOCK_REGISTRATION_NAMES`, `HOISTED_MOCK_NAMES`,
+ * or `["importActual"]`), so no caller inherits a default it did not choose.
  */
 export function isViMockCall(
 	callee: SgNode | undefined | null,
-	names: readonly string[] = ["mock"],
+	names: readonly string[],
 ): boolean {
 	if (!callee) return false;
 	const node = unwrapExpression(callee);
@@ -658,28 +683,33 @@ function parsedSource(source: string): { root: SgNode; calls: SgNode[] } {
 	const cached = parsedSourceCache.get(source);
 	if (cached) return cached;
 	const root = parse(Lang.TypeScript, source).root();
-	// Only the `vi.mock` calls: `isViMockCall` is a pure function of the
+	// Only the mock registrations: `isViMockCall` is a pure function of the
 	// callee, so the `imported` and `all` passes (and `mockedSpecifiers`) share
-	// one answer per call instead of each re-walking every call expression.
+	// one answer per call instead of each re-walking every call expression. The
+	// names cover `vi.mock` and the un-hoisted `vi.doMock` twin (#5256).
 	const entry = {
 		root,
 		calls: root
 			.findAll({ rule: { kind: "call_expression" } })
-			.filter((call) => isViMockCall(call.field("function"))),
+			.filter((call) =>
+				isViMockCall(call.field("function"), MOCK_REGISTRATION_NAMES),
+			),
 	};
 	parsedSourceCache.set(source, entry);
 	return entry;
 }
 
 /**
- * Every specifier the test file mocks. A per-FILE fact, so it is computed
- * once from the call expressions `findViMockExportGaps` already materialised
- * and handed to `requiredValues`, which used to re-parse the whole test
- * source on every `vi.mock` occurrence (#3058).
+ * Every specifier the test file replaces for the whole file: hoisted `mock`
+ * calls only (#5256 F1). A per-FILE fact, so it is computed once from the call
+ * expressions `findViMockExportGaps` already materialised and handed to
+ * `requiredValues`, which used to re-parse the whole test source on every
+ * `vi.mock` occurrence (#3058).
  */
 function mockedSpecifiers(calls: readonly SgNode[]): Set<string> {
 	const specifiers = new Set<string>();
 	for (const call of calls) {
+		if (!isViMockCall(call.field("function"), HOISTED_MOCK_NAMES)) continue;
 		const mocked = call.field("arguments")?.namedChildren()[0];
 		const mockedSpecifier = mockSpecifier(mocked);
 		if (mockedSpecifier) specifiers.add(mockedSpecifier);

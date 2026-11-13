@@ -548,7 +548,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"mcp/analyze-cli.ts": 1,
 		// 32 -> 36 (#5138): the read_symbol handler renders `result.error` as the
 		// pi tool does (condition test, message, structured `error` field).
-		"mcp/server.ts": 36,
+		// 36 -> 37 (#4353): the warm side-channel's shared-name skip line.
+		"mcp/server.ts": 37,
 	},
 	filter: {
 		"clients/actionable-warnings.ts": 10,
@@ -772,7 +773,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// delivery filter.
 		"clients/out-of-band-changes.ts": 1,
 		"clients/path-utils.ts": 1,
-		"clients/persistent-reverify.ts": 4,
+		// 4 -> 6 (#5258): the re-verify splits a file's carried warnings into the
+		// unanswered and the retirable ones, two `Array.prototype.filter` calls,
+		// not delivery filters.
+		"clients/persistent-reverify.ts": 6,
 		// 4 -> 6 (#4484): `liveBlockers.filter` and `recordBlockers.filter` split the
 		// live blocking set into the delta's and the held-back ones, two
 		// `Array.prototype.filter` calls, not a delivery filter.
@@ -883,7 +887,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `Array.prototype.filter` calls, not delivery filters.
 		// 18 -> 19 (#5301): another intrinsic Array.prototype.filter selects the
 		// restored files eligible for the existing bus publisher's clean gate.
-		"clients/widget-state.ts": 19,
+		// 19 -> 20 (#5460): `rowLabel` selects the records that share a drawn row's
+		// basename, an intrinsic Array.prototype.filter.
+		"clients/widget-state.ts": 20,
 		"clients/word-index.ts": 14,
 		"clients/workspace-topology.ts": 1,
 		// #5417: `refuseOutOfRootWrites` keeps the paths whose class refuses a write.
@@ -902,7 +908,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// (`uncheckedFilesLine`, the unchecked tally, the coverable subset, the
 		// empty delta's unchecked set), four `Array.prototype.filter` calls, not
 		// delivery filters.
-		"tools/lens-diagnostics.ts": 47,
+		// 47 -> 49 (#5258): the clean claim's scope keeps the checked summaries,
+		// and its proof keeps the swept files the sweep proved; two
+		// `Array.prototype.filter` calls, not delivery filters.
+		"tools/lens-diagnostics.ts": 49,
 		// 12 -> 13 (#4346): the batch selects its finding-bearing files to resolve.
 		// 13 -> 14 (#4322): the batch counts its files with auxiliary findings
 		// only, one `Array.prototype.filter` use, not a delivery filter.
@@ -1159,7 +1168,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/suppress-writer.ts": 2,
 		"clients/disposition-logger.ts": 3,
 		"clients/durable-store.ts": 13,
-		"clients/effective-config.ts": 5,
+		// 5 -> 4 (#4907): the queried `path` resolves through `resolveHostToolPath`,
+		// so its `path.resolve(cwd, file)` leaves the module.
+		"clients/effective-config.ts": 4,
 		"clients/extension-log.ts": 2,
 		"clients/file-kinds.ts": 2,
 		"clients/file-time.ts": 6,
@@ -1198,7 +1209,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/git-guard.ts": 7,
 		"clients/git-tracked-ignore.ts": 3,
 		// 20 -> 19 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
-		"clients/gitleaks-client.ts": 19,
+		"clients/gitleaks-client.ts": 18,
 		"clients/go-client.ts": 2,
 		"clients/govulncheck-client.ts": 7,
 		// 5 -> 4 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
@@ -1312,7 +1323,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// before launching, one filesystem path use in the reviewed fix.
 		// 111 -> 112 (#5335): `TypeScriptRoot` takes the agent directory's real
 		// path for an explicit agent tsconfig, one `path.dirname` use.
-		"clients/lsp/server.ts": 111,
+		// 111 -> 114 (#5504): `findTypeScriptNativeAlias` joins the alias
+		// directory and its manifest and resolves its `bin.tsc` against it:
+		// three filesystem path uses on the same probe.
+		"clients/lsp/server.ts": 114,
 		"clients/lsp/session-roots.ts": 7,
 		// 13 -> 15 (#4346): a creation's path joins the entry's dependency
 		// scope test (Go package directory, created-file stem/directory names).
@@ -1325,11 +1339,14 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 5 -> 6 (#4583): the adopted warm entry keys its map lookup through
 		// `path.resolve(cwd)`, the same sense (a path operation) the entry's own
 		// creation site already uses.
-		"clients/mcp/analyze.ts": 6,
+		// 6 -> 4 (#4907): the file argument resolves through `resolveHostToolPath`,
+		// so the `path.isAbsolute` / `path.resolve` pair leaves the module.
+		"clients/mcp/analyze.ts": 4,
 		// 4 -> 7 (#4376): OS path namespace calls build the pid-first endpoint
 		// name and the stale-socket owner marker. No path-key owner changes.
-		"clients/mcp/ipc.ts": 7,
-		"clients/mcp/session.ts": 3,
+		// 7 -> 9 (#4353): the bound-name identity check anchors its token on the
+		// endpoint's own directory and file name.
+		"clients/mcp/ipc.ts": 9,
 		// 7 -> 6 (#4966): the two `path.dirname(filePath)` starts of the commit lookup become one inside `getCurrentCommit`.
 		"clients/metrics-history.ts": 6,
 		// 30 -> 31 (#5137): the text header prints the report's own `path`.
@@ -1568,7 +1585,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/tool-cwd.ts": 10,
 		// 64 -> 62 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
 		// 62 -> 50 (#5408): the seven bespoke config walks leave for the config-presence seam.
-		"clients/tool-policy.ts": 36,
+		// 36 -> 26 (#5408 slice 3): the formatter-family finders leave for the same seam.
+		// 26 -> 25 (#5408 slice 4): the ktfmt marker list leaves for the seam.
+		"clients/tool-policy.ts": 25,
 		// 19 -> 18 (#4689 batch 7): the grammar write probe climbs `walkUpDirs`, so
 		// its own `path.dirname` step is the seam's.
 		"clients/tree-sitter-client.ts": 18,
@@ -1581,12 +1600,15 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 4 -> 5 (#4617 review F1): a rendered trivy report cites its own rows'
 		// `target` resolved against the scan root, one more `path` operation, same
 		// sense as the four above (a filesystem path operation).
-		"clients/trivy-client.ts": 5,
+		"clients/trivy-client.ts": 4,
 		"clients/warm-attach.ts": 3,
 		// 7 -> 8 (#5258): the footer names the unchecked file by its basename, a
 		// filesystem path operation. 8 -> 9 (#5301): the restored state is
 		// published with each file's `path`, the bus payload's own field name.
-		"clients/widget-state.ts": 9,
+		// 9 -> 7 (#5460): `dedupeByBasename` and three per-row basename reads are
+		// gone; `rowLabel` adds two `path.basename` calls. 7 -> 6 (#5460 review
+		// F1): the unchecked line names its row's label, not its basename.
+		"clients/widget-state.ts": 6,
 		"clients/word-index-logger.ts": 2,
 		// 51 -> 52 (#5235): the `lang:` predicate also matches a named kind's
 		// basename (`path.basename`), so `lang:groovy` selects a Jenkinsfile.
@@ -1655,11 +1677,15 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// for the projected pi definitions, so their `path:` keys stop being spelled
 		// here.
 		"mcp/server.ts": 30,
-		"index.ts": 20,
+		// 20 -> 19 (#4907): `/lens-allow-edit` resolves through
+		// `resolveToolCallFilePath` instead of `path.isAbsolute` / `path.resolve`.
+		"index.ts": 19,
 		"clients/command-path.ts": 5,
 	},
 	record: {
-		"clients/actionable-warnings.ts": 14,
+		// 14 -> 16 (#5258): the code-action enrichment pushes the warning record it
+		// built onto `unanswered` when the lookup never answered or threw.
+		"clients/actionable-warnings.ts": 16,
 		// 8 -> 9 (#4617): the well-formed check reads the new `filelessParts`
 		// flag on the record it validates, so one more `record.` use exists.
 		"clients/advisory-provenance.ts": 9,
@@ -1703,7 +1729,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/observed-mutation.ts": 4,
 		"clients/opaque-mutation-scan.ts": 1,
 		"clients/partial-edit-apply.ts": 4,
-		"clients/persistent-reverify.ts": 3,
 		"clients/project-diagnostics/fresh-fetch.ts": 12,
 		"clients/project-lens-config.ts": 8,
 		"clients/project-snapshot.ts": 10,
@@ -2004,7 +2029,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// manifest's literal version field, not a pi-lens generation identity.
 		// 18 -> 20 (#4914): the same read of `@effect/tsgo`'s manifest field, and
 		// the session-start line that prints the TypeScript package version.
-		"clients/lsp/server.ts": 20,
+		// 20 -> 27 (#5504): the external `@typescript/native` manifest's version
+		// field (read, type-checked, major-parsed), the `NativeTypeScriptLsp` and
+		// alias result `version` members, and the native launch's session-start
+		// line; none is a pi-lens generation identity.
+		"clients/lsp/server.ts": 27,
 		"clients/lsp/workspace-diagnostics-cache.ts": 6,
 		"clients/mcp/ipc.ts": 15,
 		"clients/metrics-history.ts": 3,
@@ -2068,7 +2097,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/vale.ts": 1,
 		"clients/dispatch/utils/format-utils.ts": 2,
 		"clients/module-report.ts": 2,
-		"clients/persistent-reverify.ts": 3,
 		"clients/pipeline.ts": 6,
 		"clients/project-diagnostics/runner-adapters/call-graph-impact.ts": 1,
 		"clients/runtime-agent-end.ts": 6,

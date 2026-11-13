@@ -26,7 +26,10 @@ import { HardFailureStamps } from "./hard-failure-summary.js";
 import { findLocalBinsAt, VENV_BIN_DIRS } from "./package-manager.js";
 import { findNearestMarkerRoot } from "./path-utils.js";
 import { listNestedLinkedWorktreeRoots } from "./review-graph/git-identity.js";
-import { getScratchTreeFnmatchPatterns } from "./scratch-tree-policy.js";
+import {
+	escapeFnmatchLiteral,
+	getScratchTreeFnmatchPatterns,
+} from "./scratch-tree-policy.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { probeToolAsync } from "./tool-probe.js";
 import {
@@ -127,11 +130,7 @@ const ANALYSIS_TIMEOUT_MS = 30_000;
 // are Python-packaging-specific and have no `EXCLUDED_DIRS` counterpart (no
 // other scanner needs them), so they stay as a small local addition rather
 // than polluting the shared cross-tool list.
-const VULTURE_PYTHON_ONLY_EXCLUDES = ["*/site-packages/*", "*/.eggs/*"];
-const VULTURE_EXCLUDES = [
-	...getScratchTreeFnmatchPatterns(),
-	...VULTURE_PYTHON_ONLY_EXCLUDES,
-];
+const VULTURE_PYTHON_ONLY_DIRS = ["site-packages", ".eggs"];
 
 // Decorators whose target is called by a framework, never by name in the tree.
 // vulture cannot see those call sites, so every such symbol is a permanent
@@ -186,11 +185,6 @@ export function parseVultureOutput(
 		});
 	}
 	return issues;
-}
-
-/** fnmatch metacharacters made literal: `[*]`, `[?]`, `[[]`. */
-function escapeFnmatchLiteral(text: string): string {
-	return text.replace(/[*?[]/g, (ch) => `[${ch}]`);
 }
 
 /** A project's own `[tool.vulture]` table, as far as the exclusion merge reads it. */
@@ -546,7 +540,10 @@ export class PythonDeadCodeClient implements DeadCodeClient {
 		const worktrees = this.worktreeExcludes(root);
 		let exclude: string[] | undefined;
 		if (config === null) {
-			exclude = [...VULTURE_EXCLUDES, ...worktrees.patterns];
+			exclude = [
+				...getScratchTreeFnmatchPatterns(root, VULTURE_PYTHON_ONLY_DIRS),
+				...worktrees.patterns,
+			];
 		} else if (worktrees.patterns.length > 0) {
 			if (config.exclude === null) {
 				incrementDegradationCount({

@@ -138,11 +138,13 @@ const SHARP_HOST =
  * count and by the content identity of its admitted set. Shrink only.
  */
 const BASELINE: Readonly<Record<string, Admission>> = {
+	// #5258 re-pins the identity, count unchanged: the codeAction catch (:1363)
+	// now records the lookup as unanswered, which the persistent re-verify reads.
 	"clients/actionable-warnings.ts": {
 		silent: 6,
-		identities: "e926d3cd1c334a07",
+		identities: "cda88059e5e00d3d",
 		reason: PRE_RULE,
-	}, // :347, :360, :1169, :1340, :2061, :2272
+	}, // :352, :365, :1184, :1363, :2085, :2299
 	"clients/advisory-provenance.ts": {
 		silent: 4,
 		identities: "4be1802a08b42400",
@@ -974,11 +976,6 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		identities: "c6617487a0244394",
 		reason: PRE_RULE,
 	}, // :194, :216, :877, :1520, :1550, :1621, :1847, :2203, :2357, :2767
-	"clients/probe-home-state.ts": {
-		silent: 1,
-		identities: "0c038fd772637ccb",
-		reason: PRE_RULE,
-	}, // :281
 	"clients/process-snapshot.ts": {
 		silent: 1,
 		identities: "d86d2439be475af1",
@@ -1081,10 +1078,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :1254, :1303, :1399, :1989, :2019, :2025, :2040, :2046, :2138, :2503, :2601, :2727, :2769, :3200, :4676, :5529, :5608, :6031, :6363
 	"clients/review-graph/git-identity.ts": {
-		silent: 10,
-		identities: "719b257b5989f9db",
+		silent: 9,
+		identities: "b7a627187ea9629a",
 		reason: PRE_RULE,
-	}, // :67, :82, :107, :122, :137, :204, :217, :247, :261, :292
+	}, // :68, :88, :117, :132, :216, :229, :259, :273, :304
 	"clients/review-graph/import-resolvers.ts": {
 		silent: 5,
 		identities: "11acf9263a41f8fa",
@@ -1217,10 +1214,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :162
 	"clients/tool-policy.ts": {
-		silent: 14,
-		identities: "f2513b3890ca9567",
+		silent: 9,
+		identities: "d7643e90f6364361",
 		reason: PRE_RULE,
-	}, // :1886, :1902, :1924, :1976, :1988, :2004, :2019, :2532, :2588, :2614, :2634, :2670, :2705, :2722
+	}, // :1903, :1953, :1965, :2309, :2365, :2391, :2411, :2447, :2487
 	"clients/tool-render.ts": {
 		silent: 2,
 		identities: "bf1a83100ccaa695",
@@ -1417,7 +1414,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 // admits one of its own.
 // 1166 -> 1165 (#5440 r2): that crash guard records at its own top level now,
 // so the sweep reads it as recorded and `report-scan.ts` admits no row.
-const PINNED_TOTAL = 1165;
+// 1165 -> 1163 (refs #4907): the raw-realpath fold deleted `toRealPath`'s handler
+// in `probe-home-state.ts` and `canonicalDirectory`'s in `git-identity.ts`.
+const PINNED_TOTAL = 1163;
 
 interface Census {
 	byFile: Map<string, CatchSite[]>;

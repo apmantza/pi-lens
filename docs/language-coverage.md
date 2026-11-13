@@ -149,6 +149,45 @@ Consequences:
   callbacks as `generic`, and Groovy is not in the review graph's main kinds.
 - Lint and format (npm-groovy-lint) are not part of this slice (#5235).
 
+## What runs by default
+
+Each tool falls in one of three tiers. The gate comes from two layers in the code: the policy in `clients/tool-policy.ts` (`gate`, `defaultWhenUnconfigured`, and the per-tool `configEligibility`), and the skip inside each runner's `run` function. The table lists the tools the README names, plus the other runners that have no policy entry. Where the runner's skip is stricter than the policy, the table follows the runner and the notes below say so. `tests/config/gate-table-derived.test.ts` derives each tool's tier from `clients/tool-policy.ts` and fails when this table disagrees.
+
+A tool counts as available when the binary exists in the project (`node_modules/.bin`, `.venv/bin`, or `vendor/bin`), in pi-lens's managed install, or on `PATH`. The project rung runs only when pi trusts the project (`resolveToolCommandWithInstallFallback` in `clients/dispatch/runners/utils/runner-helpers.ts`, `refuseLocalBin` in `clients/package-manager.ts`). pi-lens installs a missing linter or formatter only when its `autoInstall` is true in `TOOL_EXECUTION_POLICY`; ESLint, phpstan, and vale are never auto-installed. Language servers have no policy row: `ensureTool` in `clients/lsp/server.ts` installs a missing server, such as the TypeScript language server. Every install also needs pi project trust (`assertInstallAllowed` in `clients/project-trust.ts`).
+
+| Tier | Tool | Gate | Source |
+|---|---|---|---|
+| No project config | Language servers | On by default; `--no-lsp` turns them off | `no-lsp` in `clients/lens-flag-registry.ts` |
+| No project config | ruff (Python lint), `.py` format | Policy `smart-default`; ruff is the Python default | `getLinterPolicyForFile`, `ruff.ts` |
+| No project config | shellcheck | Policy `smart-default`; `.shellcheckrc` is optional; skips zsh | `shellcheck.ts` |
+| No project config | hadolint, markdownlint, rubocop, ktlint (lint), taplo (lint) | Policy `smart-default`, no runner skip for config | `getLinterPolicyForFile`, one runner file each |
+| No project config | stylelint | Policy `smart-default`; with no config it runs default rules | `stylelint.ts` |
+| No project config | oxlint, Biome (JS and TS lint) | The default pair when the project has no ESLint, oxlint, or Biome config; one project config selects its tool | `getPreferredJstsLintRunners`, `biome-check.ts` |
+| No project config | swiftlint, go vet, ast-grep rules, tree-sitter rules | No linter-policy entry; the runner has no config skip. go vet needs the Go toolchain. | `swiftlint.ts`, `go-vet.ts`, `ast-grep-napi.ts`, `tree-sitter.ts` |
+| No project config | javac | No policy entry; skips files inside a Maven or Gradle project | `javac.ts` |
+| No project config | Formatters: Biome (`.js .jsx .mjs .cjs .ts .tsx .mts .cts .css .scss .sass`), shfmt (`.sh .bash`), gofmt, rustfmt, ruff (`.py .pyi`), typstyle (`.typ .typc`), prettier (`.less .graphql .gql` only), dart, zig (`.zig .zon`), cue | Formatter policy `defaultWhenUnconfigured: true`; explicit project config wins | `FORMATTER_POLICY_BY_EXTENSION`, `getFormattersForFile` |
+| Project config | ESLint | Needs an ESLint config; policy `config-first` | `eslint.ts` |
+| Project config | golangci-lint | Needs a golangci config; policy `config-first` | `golangci-lint.ts` |
+| Project config | mypy | Needs a mypy config; ruff covers Python without it | `mypy.ts` |
+| Project config | phpstan | Needs `phpstan.neon`, `phpstan.neon.dist`, or `phpstan.dist.neon` | `phpstan.ts` |
+| Project config | vale | Needs `.vale.ini` | `vale.ts` |
+| Project config | detekt | Needs a detekt config file | `detekt.ts` |
+| Project config | credo | Needs `mix.exs` in the project directory | `credo.ts` |
+| Project config | Formatters: taplo, clang-format, php-cs-fixer, stylua, gleam, and other `config-first` rows; ktfmt; ktlint (format) | Run only when the project has their config | `FORMATTER_POLICY_BY_EXTENSION`, `hasExplicitFormatterConfig` |
+| Opt-in | trivy (IaC scans and session scan) | `trivy.enabled: true` in `.pi-lens.json` | `isTrivyEnabled` in `clients/trivy-client.ts` |
+| Opt-in | SpotBugs | `--lens-spotbugs`, a Java build descriptor, and compiled `.class` files | `withSpotbugsGroup` in `clients/dispatch/integration.ts` |
+| Opt-in | Helm render validation | `helm.renderValidation.enabled: true`, plus pi project trust | `helm-render.ts` |
+| Opt-in | Commit guard | `--lens-guard` | `lens-guard` in `clients/lens-flag-registry.ts` |
+
+Notes on rows where the two layers differ:
+
+- taplo lints with no config but formats only with config. The same split holds for ktlint.
+- prettier is a smart default for the formatter policy only on `.less`, `.graphql`, and `.gql`. Other prettier rows wait for config.
+- credo's file policy is `smart-default` with `defaultWhenUnconfigured: true`, but its runner skips a project without `mix.exs`. The table follows the runner.
+- gleam's formatter `detect` needs `gleam.toml` in the project, so a bare `.gleam` file is not formatted. The table follows the detect, not the policy's `defaultWhenUnconfigured` flag.
+- mypy's per-tool row is `config-first`, while the Python file policy is `smart-default` because ruff is the default runner.
+- The background scans (gitleaks, govulncheck, trivy) have their own gates; see [features](features.md).
+
 ## Non-core grammars
 
 The `tree-sitter` runner and `symbol_search`/`module_report` structural

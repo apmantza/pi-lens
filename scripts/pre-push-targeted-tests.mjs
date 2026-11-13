@@ -247,6 +247,10 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	// identity writes (its own walkFiles helper), so it is registered in both
 	// lists, as the #4590 rule requires for a both-tree scanner.
 	"tests/config/git-fixture-governance.test.ts",
+	// #5072: takes every tracked path (`git ls-files`) for baseline ledgers in
+	// clients/, scripts/ AND tests/, and their owner tests and cells, so it is
+	// a both-tree scanner registered in both lists.
+	"tests/config/baseline-owner-governance.test.ts",
 	// #4946: walks clients/, tools/, mcp/ and index.ts for flag names the code
 	// reads, against the flag registry; a production change arms it.
 	"tests/config/flag-read-registry-sweep.test.ts",
@@ -254,6 +258,9 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	// callers, so a production change that passes the option to another walk
 	// consumer arms it.
 	"tests/clients/source-filter-named-files.test.ts",
+	// #5308: walks scripts/ and clients/lsp/ for child-process spawn sites, so a
+	// production change that adds or re-routes a spawn there arms it.
+	"tests/clients/dispatch/runners/run-outcome-ratchet.test.ts",
 ];
 
 // Suites that scan the TESTS tree for a test shape (a real spawn, a raw timer
@@ -301,6 +308,9 @@ export const TEST_TREE_GOVERNANCE_TESTS = [
 	// #4104 F4 fold: the both-tree scanner (tests/ and scripts/), armed by a
 	// tests/ change here as well as by a production change above.
 	"tests/config/git-fixture-governance.test.ts",
+	// #5072: the tests/ half of the baseline census; its production half is the
+	// same file, registered in TREE_SCANNING_GOVERNANCE_TESTS above.
+	"tests/config/baseline-owner-governance.test.ts",
 	// #4789: walks tests/ for files that read the real home outside the named
 	// opt-out registry.
 	"tests/config/real-home-reader-registry.test.ts",
@@ -461,20 +471,23 @@ export function resolveDiffRange(
 
 // The gate's own temp root (#5439). Inheriting the caller's TMPDIR is what reds
 // path-sensitive tests on a macOS default root, whose `/private/var/folders/...`
-// spelling is long and reaches fixtures through a `/var` symlink. The root sits
-// under the machine-state convention (`PI_LENS_HOME`, else `~/.pi-lens`) because
-// each run creates its own disposable directory beneath this base,
-// resolved so the symlinked spelling cannot recur.
+// spelling is long and reaches fixtures through a `/var` symlink. Each run
+// creates its own disposable directory beneath this base, resolved so the
+// symlinked spelling cannot recur. The default sits under the XDG data
+// convention (`~/.local/share/pi-lens-prepush`), NOT under `~/.pi-lens`: the
+// tests build fixtures under `os.tmpdir()`, which is this root, and
+// `isPiLensInternalPath` drops every file under `~/.pi-lens` and `~/.pi`, so
+// the turn-scenarios gitleaks cell read no finding on every push (#5536).
+// `PI_LENS_HOME` stays the machine-state parent for a probe that pins it.
 // `PI_LENS_PREPUSH_TMPDIR` is the operator escape hatch, and the lever a probe
 // uses to reproduce the unpinned behaviour.
 export function resolvePrePushTmpRoot(env = process.env) {
 	const explicit = env.PI_LENS_PREPUSH_TMPDIR?.trim();
 	if (explicit) return path.resolve(explicit);
 	const override = env.PI_LENS_HOME?.trim();
-	const base = override
-		? path.resolve(override)
-		: path.join(os.homedir(), ".pi-lens");
-	return path.join(base, "prepush-tmp");
+	return override
+		? path.join(path.resolve(override), "prepush-tmp")
+		: path.join(os.homedir(), ".local", "share", "pi-lens-prepush");
 }
 
 /** Create the temp root and answer its kernel-real path. */

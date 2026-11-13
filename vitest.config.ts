@@ -349,6 +349,11 @@ const lspSpawnHeavyInclude = [
 	// diagnostics publish, one didChange round trip). Real child + real wire,
 	// same #1022/#2332 contention class as its lane siblings.
 	"tests/clients/dispatch/runners/shuck-lsp-smoke.test.ts",
+	// #5559: a real rust-analyzer child (skipped, with a named reason, when none
+	// is runnable) loads a Cargo workspace, answers a control references call
+	// (up to 90 s) and then the graph-position call — the #1022/#2332 shape of
+	// its lane siblings.
+	"tests/clients/lsp/cascade-rust-references-position-5559.integration.test.ts",
 	// #4322: the production LSPService over two real stdio fake-server children
 	// (a JSON primary and a typos auxiliary); waits on real handshakes and a
 	// diagnostics round, the same #1022/#2332 shape as its lane siblings.
@@ -635,6 +640,8 @@ export const wallClockBudgetInclude = [
 	// asserting which notifications reached the server — the same #1022/#2332
 	// contention class as its lane siblings.
 	"tests/clients/lsp/did-save-notification.test.ts",
+	// #5504: real effect-tsgo stub + fake-LSP native child through ClientRegistry.spawnClient (real-process-spawn admission); waits on two initialize handshakes.
+	"tests/clients/lsp/effect-tsgo-initialize-fallback-5504.test.ts",
 	"tests/clients/lsp/fake-lsp-server-parent-watchdog.test.ts",
 	// #2507: a real headless child whose own exit decision is the subject — it
 	// must not drain mid `lsp_diagnostics`, and must still exit by itself
@@ -811,6 +818,9 @@ export const wallClockBudgetInclude = [
 	// the defect it pins is wall-clock (2^N regex backtracking on an interleaved
 	// `**` chain), so a fake clock measures nothing.
 	"tests/clients/workspace-glob-nonbacktracking-budget.test.ts",
+	// #5072: the baseline census reads its population from a real `git ls-files`
+	// child, so dot-files and every extension are in it (flake-shape admission).
+	"tests/config/baseline-owner-governance.test.ts",
 	"tests/config/gitignore-tracked-shadow.test.ts",
 	// #3926: the real `Record Windows Vitest outcome` bash block is executed at
 	// its true process boundary under GitHub's bash flags (a fixture Node
@@ -839,6 +849,11 @@ export const wallClockBudgetInclude = [
 	// shutdown is still exiting (flake-shape admission, lane proof for the
 	// helper through this importer).
 	"tests/index-3748-advisory-scope-witness.test.ts",
+	// #5267: the decoy witness holds the backstop's real 30 s arm delay and its
+	// real 60 s spawn grace against a population of real fixture processes, so
+	// the sweep's window is measured in wall clock and not in turn counts
+	// (flake-shape admission).
+	"tests/index-3917-orphan-sweep-scope.test.ts",
 	// #4316: the session-start LSP warm is fire-and-forget inside the loaded
 	// extension copy, so the witness joins its log record with vi.waitFor
 	// (flake-shape admission).
@@ -906,6 +921,9 @@ export const wallClockBudgetInclude = [
 	// child in a fixture repository (flake-shape admission).
 	"tests/scripts/check-lockfile-sync.test.ts",
 	"tests/scripts/check-pr-body.test.ts",
+	// #5558: the `--comment` CLI (argv wiring, exit code, stderr) is the boundary a
+	// posting role relies on (flake-shape admission).
+	"tests/scripts/check-prose.test.ts",
 	// #4397: the changed-test shuffle job's exit code is the contract; only a
 	// real vitest start reorders cases under `--sequence.shuffle`.
 	"tests/scripts/ci-shuffle-changed-tests-spawn.test.ts",

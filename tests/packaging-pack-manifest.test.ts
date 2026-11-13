@@ -48,6 +48,7 @@ const PACK_COPY_SKIP = new Set([
 	"dist",
 	".pack-backup",
 	".probe-home",
+	".vitest-cache",
 	".claude",
 	".tmp",
 	"reports",
@@ -57,11 +58,11 @@ const PACK_COPY_SKIP = new Set([
 	"release-qa-evidence",
 ]);
 
-function copyPackSource(dest: string): string {
-	fs.cpSync(root, dest, {
+function copyPackSource(dest: string, source = root): string {
+	fs.cpSync(source, dest, {
 		recursive: true,
 		filter: (src) => {
-			const rel = path.relative(root, src);
+			const rel = path.relative(source, src);
 			return rel === "" || !PACK_COPY_SKIP.has(rel.split(path.sep)[0] ?? "");
 		},
 	});
@@ -288,6 +289,21 @@ describe("published manifest carries no devDependencies", () => {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-pack-"));
 	afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
+	it("copies package source without the worktree's derived Vitest cache (#5488)", () => {
+		const source = path.join(tmp, "cache-source");
+		fs.mkdirSync(path.join(source, ".vitest-cache"), { recursive: true });
+		fs.writeFileSync(path.join(source, ".vitest-cache", "result"), "derived");
+		fs.writeFileSync(
+			path.join(source, "package.json"),
+			'{"name":"pack-fixture"}',
+		);
+		const copy = copyPackSource(path.join(tmp, "cache-copy"), source);
+		expect(fs.readFileSync(path.join(copy, "package.json"), "utf8")).toBe(
+			'{"name":"pack-fixture"}',
+		);
+		expect(fs.existsSync(path.join(copy, ".vitest-cache"))).toBe(false);
+	});
+
 	/**
 	 * #4561 (shuffle seed 424): both cases below observe the SAME tarball, and one
 	 * `npm pack` per run (it builds the copy's `dist/` through `prepare`) is what
@@ -332,14 +348,15 @@ describe("published manifest carries no devDependencies", () => {
 	 * (#4561 review r2).
 	 */
 	function createTarballMemo(
-		root: string,
+		destination: string,
 		pack: PackStep = realPack,
+		source = root,
 	): () => PackedTarball {
 		let packed: PackedTarball | undefined;
 		return () => {
 			if (packed !== undefined) return packed;
 			const liveBefore = liveCheckoutState();
-			const packRoot = path.join(root, "pack-src");
+			const packRoot = path.join(destination, "pack-src");
 			// #4561 review r1 LOW: `copyPackSource` is not idempotent, and the memo
 			// is set only after a successful pack, so a FAILED pack left `pack-src`
 			// half-built and every later attempt reported `EEXIST: symlink
@@ -348,7 +365,7 @@ describe("published manifest carries no devDependencies", () => {
 			// `rmSync` removes the copy's `node_modules` SYMLINK entry and never
 			// follows it into the live checkout's install.
 			fs.rmSync(packRoot, { recursive: true, force: true });
-			copyPackSource(packRoot);
+			copyPackSource(packRoot, source);
 			const manifestBefore = fs.readFileSync(
 				path.join(packRoot, "package.json"),
 				"utf8",
@@ -370,8 +387,10 @@ describe("published manifest carries no devDependencies", () => {
 			const realInstallLogBefore = fs.existsSync(realInstallLog)
 				? fs.readFileSync(realInstallLog)
 				: null;
-			pack(packRoot, root);
-			const filename = fs.readdirSync(root).find((f) => f.endsWith(".tgz"));
+			pack(packRoot, destination);
+			const filename = fs
+				.readdirSync(destination)
+				.find((f) => f.endsWith(".tgz"));
 			if (!filename) throw new Error("npm pack produced no tarball");
 			packed = {
 				filename,
@@ -395,26 +414,44 @@ describe("published manifest carries no devDependencies", () => {
 	// in `createTarballMemo` reds this case with `EEXIST: symlink node_modules`.
 	it("a failed pack's retry rebuilds its copy instead of reusing a half-built one (#4561 review r2)", () => {
 		const retryRoot = path.join(tmp, "retry");
-		fs.mkdirSync(retryRoot, { recursive: true });
+		const source = path.join(retryRoot, "source");
+		fs.mkdirSync(source, { recursive: true });
+		fs.writeFileSync(
+			path.join(source, "package.json"),
+			fs.readFileSync(path.join(root, "package.json")),
+		);
+		fs.writeFileSync(
+			path.join(source, "package-lock.json"),
+			fs.readFileSync(path.join(root, "package-lock.json")),
+		);
 		const halfBuilt = path.join(retryRoot, "pack-src", "half-built.marker");
 		let attempts = 0;
-		const packTarball = createTarballMemo(retryRoot, (copy, destination) => {
-			attempts += 1;
-			if (attempts === 1) {
-				// The shape a real failed pack leaves behind: the copy exists, the
-				// pack dies, and the memo is never set.
-				fs.writeFileSync(halfBuilt, "first attempt");
-				throw new Error("pack forced to fail (#4561 review r2)");
-			}
-			expect(
-				fs.existsSync(halfBuilt),
-				"the retry reused the half-built copy instead of rebuilding it",
-			).toBe(false);
-			expect(fs.readFileSync(path.join(copy, "package.json"), "utf8")).toBe(
-				fs.readFileSync(path.join(root, "package.json"), "utf8"),
-			);
-			fs.writeFileSync(path.join(destination, "retry-1.0.0.tgz"), "tarball");
-		});
+		const packTarball = createTarballMemo(
+			retryRoot,
+			(copy, destination) => {
+				expect(fs.readdirSync(copy).sort()).toEqual([
+					"node_modules",
+					"package-lock.json",
+					"package.json",
+				]);
+				attempts += 1;
+				if (attempts === 1) {
+					// The shape a real failed pack leaves behind: the copy exists, the
+					// pack dies, and the memo is never set.
+					fs.writeFileSync(halfBuilt, "first attempt");
+					throw new Error("pack forced to fail (#4561 review r2)");
+				}
+				expect(
+					fs.existsSync(halfBuilt),
+					"the retry reused the half-built copy instead of rebuilding it",
+				).toBe(false);
+				expect(fs.readFileSync(path.join(copy, "package.json"), "utf8")).toBe(
+					fs.readFileSync(path.join(root, "package.json"), "utf8"),
+				);
+				fs.writeFileSync(path.join(destination, "retry-1.0.0.tgz"), "tarball");
+			},
+			source,
+		);
 		expect(() => packTarball()).toThrow("pack forced to fail");
 		expect(fs.existsSync(halfBuilt), "the first attempt built the copy").toBe(
 			true,

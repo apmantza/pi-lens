@@ -21,11 +21,9 @@ import {
 	isUnderDir,
 	normalizeEphemeralMapKey,
 	normalizeFilePath,
+	realpathOrResolve,
 } from "./path-utils.js";
-import {
-	canonicalDirectory,
-	listNestedLinkedWorktreeRoots,
-} from "./review-graph/git-identity.js";
+import { listNestedLinkedWorktreeRoots } from "./review-graph/git-identity.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import {
 	createAvailabilityChecker,
@@ -302,7 +300,7 @@ function nestedWorktreeScope(targetDir: string): NestedWorktreeScope {
 		prefixes.push(`${normalizeEphemeralMapKey(normalizeFilePath(root))}/`);
 	}
 	if (prefixes.length === 0) return NO_NESTED_WORKTREES;
-	const base = normalizeFilePath(canonicalDirectory(targetDir));
+	const base = normalizeFilePath(realpathOrResolve(targetDir));
 	return {
 		count: prefixes.length,
 		contains: (file) => {
@@ -807,10 +805,12 @@ export class KnipClient {
 			// against a future knip release that changes this. Deliberately NOT
 			// `analyzed` (#2154): nothing was parsed, so this shape must not
 			// retire a retained knip finding — it is reported cold instead.
+			// #5258: and its summary, which the cold note prints, says nothing was
+			// read rather than claiming a clean result it has no report for.
 			return {
 				...EMPTY_RESULT,
 				success: true,
-				summary: "No issues found",
+				summary: "Knip exited 0 with no output, so no report was read",
 			};
 		}
 

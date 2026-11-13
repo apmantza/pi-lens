@@ -742,6 +742,16 @@ interface LspEnrichmentDeps {
 	 */
 	deadlineAt?: number;
 	/**
+	 * #5258: a caller that must tell "no fix action" from "no answer" passes a
+	 * list. Each warning this file got no code-action answer for is added, as
+	 * its record: a round trip that a bound cut, that threw, that had no live
+	 * client to ask, or that never started because the per-file cap or the
+	 * wall budget stopped the loop. Per warning, not per file (#5554 r2 B8), so
+	 * a busy file still answers for the warnings it did ask about. The in-band
+	 * and deferred loops pass none and behave as before.
+	 */
+	unanswered?: ActionableWarningRecord[];
+	/**
 	 * The loop's live abort signal — the SECOND bound every round trip races.
 	 *
 	 * Optional only because the in-band caller may have none; `bounded()` reads
@@ -1314,7 +1324,13 @@ export async function enrichFileFromLsp(
 		// and re-read HERE, between round trips: a file already opened still
 		// finishes its cheap work, but it cannot buy more LSP time.
 		if (deps.deadlineAt !== undefined && Date.now() >= deps.deadlineAt) {
-			budgetStopped = diagsWarning.length - diagsWarning.indexOf(diag);
+			const stoppedAt = diagsWarning.indexOf(diag);
+			budgetStopped = diagsWarning.length - stoppedAt;
+			deps.unanswered?.push(
+				...diagsWarning
+					.slice(stoppedAt)
+					.map((left) => recordFromLspDiagnostic(left, filePath, cwd)),
+			);
 			break;
 		}
 		const line = diag.range.start.line + 1;
@@ -1325,6 +1341,7 @@ export async function enrichFileFromLsp(
 		// #2504 review round 3 (S-2): bound the per-file codeAction fan-out.
 		if (actionPulls >= ACTIONABLE_WARNINGS_MAX_CODE_ACTIONS_PER_FILE) {
 			actionCapped++;
+			deps.unanswered?.push(recordFromLspDiagnostic(diag, filePath, cwd));
 			continue;
 		}
 		actionPulls++;
@@ -1341,8 +1358,10 @@ export async function enrichFileFromLsp(
 					),
 				deps,
 			);
+			if (actions === undefined) deps.unanswered?.push(record);
 			record.actions = (actions ?? []).map(serializeAction).slice(0, 5);
 		} catch (err) {
+			deps.unanswered?.push(record);
 			args.dbg?.(
 				`actionable_warnings: LSP codeAction failed for ${filePath}: ${err}`,
 			);
@@ -2194,13 +2213,14 @@ export async function applyConservativeActionableWarningFixes(args: {
 				if (content) await lspService.openFile(warning.filePath, content);
 				const line = warning.line - 1;
 				const character = warning.column - 1;
-				const actions = await lspService.codeAction(
-					warning.filePath,
-					line,
-					character,
-					line,
-					character,
-				);
+				const actions =
+					(await lspService.codeAction(
+						warning.filePath,
+						line,
+						character,
+						line,
+						character,
+					)) ?? [];
 				const title = eligibleActions[0]?.title;
 				const selected = actions.find((action) => action.title === title);
 				if (!selected) {

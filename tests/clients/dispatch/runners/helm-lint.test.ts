@@ -20,10 +20,12 @@ import {
 	capThenTimedOutSpawnResult,
 } from "../../../support/spawn-shapes.js";
 
-const { safeSpawnAsync, resolveAvailableOrInstall } = vi.hoisted(() => ({
-	safeSpawnAsync: vi.fn(),
-	resolveAvailableOrInstall: vi.fn(),
-}));
+const { safeSpawnAsync, resolveToolCommandWithInstallFallback } = vi.hoisted(
+	() => ({
+		safeSpawnAsync: vi.fn(),
+		resolveToolCommandWithInstallFallback: vi.fn(),
+	}),
+);
 
 // `importOriginal`, not a bare stub: the cap-kill test below builds the REAL
 // truncation result, and that needs safe-spawn's own `SpawnFailureError`.
@@ -39,8 +41,7 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: () => ({ getOutcome: () => "success" }),
-		resolveAvailableOrInstall,
+		resolveToolCommandWithInstallFallback,
 	}),
 );
 
@@ -80,8 +81,8 @@ describe("helm-lint runner", () => {
 
 	beforeEach(() => {
 		workspace = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-helm-lint-"));
-		resolveAvailableOrInstall.mockReset();
-		resolveAvailableOrInstall.mockResolvedValue("helm");
+		resolveToolCommandWithInstallFallback.mockReset();
+		resolveToolCommandWithInstallFallback.mockResolvedValue("helm");
 		safeSpawnAsync.mockReset();
 		safeSpawnAsync.mockResolvedValue({ status: 0, stdout: "", stderr: "" });
 	});
@@ -199,7 +200,7 @@ describe("helm-lint runner", () => {
 		settle({ status: 0, stdout: "", stderr: "" });
 		await Promise.all([firstRun, secondRun]);
 
-		expect(resolveAvailableOrInstall).toHaveBeenCalledTimes(1);
+		expect(resolveToolCommandWithInstallFallback).toHaveBeenCalledTimes(1);
 		expect(safeSpawnAsync).toHaveBeenCalledTimes(1);
 	});
 

@@ -1,4 +1,5 @@
 // flake-shape: raw-timer-wait — the budget test's contract is real elapsed time: bounded() races the touch against a live wall deadline, and fake timers would settle the bound instantly, making the budget semantics unmeasurable. The assertions are on outcomes and counts, never elapsed ms.
+// flake-shape: never-settling-wait — C3b's code-action lookup must never answer, so only the re-verify's own wall bound can end it; that unanswered lookup is the cell under test (#5258).
 /**
  * #3170 — the bounded persistent-reverify pass.
  *
@@ -40,12 +41,14 @@ import {
 import type { TouchFileResult } from "../../clients/lsp/diagnostic-binding.js";
 import type { LSPDiagnostic } from "../../clients/lsp/client.js";
 import {
+	ACTIONABLE_WARNINGS_MAX_CODE_ACTIONS_PER_FILE,
 	formatActionableWarningsAdvisory,
 	getActionableWarningsHistoryPath,
 	publishActionableWarningsReport,
 	type ActionableWarningsReport,
 } from "../../clients/actionable-warnings.js";
 import { CacheManager } from "../../clients/cache-manager.js";
+import { LSPService } from "../../clients/lsp/index.js";
 import { resetProjectLensConfigCache } from "../../clients/project-lens-config.js";
 
 const WARNING_MESSAGE = "'x' is declared but its value is never read.";
@@ -345,6 +348,244 @@ describe("persistent reverify (#3170)", () => {
 		const replacement = result.replacementFiles[0];
 		expect(replacement?.warnings).toHaveLength(1);
 		expect(replacement?.reVerifyIncomplete).toBe(true);
+	});
+
+	// Recurrence prevented: the #5258 clean-emitter matrix (probe P4). The touch
+	// re-confirmed the warning, but its code-action lookup never answered, so the
+	// enrichment returned no record; that silence read as "clean" and retired a
+	// finding the server had just reported again.
+	it("C3b: a code-action lookup that never answers is unconfirmed, not clean (#5258)", async () => {
+		const carried = makeCarriedReport(filePath);
+		const service = makeService({
+			diags: [makeDiag()],
+			confirmation: "confirmed",
+		});
+		(service as unknown as { codeAction: unknown }).codeAction = vi.fn(
+			() => new Promise(() => {}),
+		);
+		const result = await runPersistentReverify({
+			report: carried,
+			cwd,
+			lspService: service,
+			budgetMs: 300,
+		});
+		expect(result.outcomes[0]?.outcome).toBe("unconfirmed");
+		const replacement = result.replacementFiles[0];
+		expect(replacement?.warnings).toEqual(carried.files[0]?.warnings);
+		expect(replacement?.reVerifyIncomplete).toBe(true);
+	});
+
+	// The control for C3b: an answer with no fix action is an answer, so the
+	// warning leaves the actionable report exactly as before.
+	it("C3c: a code-action lookup that answers with no action still retires the warning (#5258)", async () => {
+		const carried = makeCarriedReport(filePath);
+		const result = await runPersistentReverify({
+			report: carried,
+			cwd,
+			lspService: makeService(
+				{ diags: [makeDiag()], confirmation: "confirmed" },
+				0,
+				[],
+			),
+		});
+		expect(result.outcomes[0]?.outcome).toBe("clean");
+		expect(result.replacementFiles[0]?.warnings).toEqual([]);
+	});
+
+	it("C3d: a code-action lookup that throws is unconfirmed, not clean (#5258)", async () => {
+		const carried = makeCarriedReport(filePath);
+		const service = makeService({
+			diags: [makeDiag()],
+			confirmation: "confirmed",
+		});
+		(service as unknown as { codeAction: unknown }).codeAction = vi.fn(
+			async () => {
+				throw new Error("server crashed mid-request");
+			},
+		);
+		const result = await runPersistentReverify({
+			report: carried,
+			cwd,
+			lspService: service,
+		});
+		expect(result.outcomes[0]?.outcome).toBe("unconfirmed");
+		expect(result.replacementFiles[0]?.warnings).toEqual(
+			carried.files[0]?.warnings,
+		);
+	});
+
+	// A warning past the per-file code-action cap was never asked about, so it
+	// is no answer either (#5258).
+	it("C3e: a warning past the code-action cap is unconfirmed, not clean (#5258)", async () => {
+		const carried = makeCarriedReport(filePath);
+		const diags = Array.from(
+			{ length: ACTIONABLE_WARNINGS_MAX_CODE_ACTIONS_PER_FILE + 1 },
+			() => makeDiag(),
+		);
+		const result = await runPersistentReverify({
+			report: carried,
+			cwd,
+			lspService: makeService({ diags, confirmation: "confirmed" }, 0, []),
+		});
+		expect(result.outcomes[0]?.outcome).toBe("unconfirmed");
+	});
+
+	// A warning the loop reached after its deadline was never asked about.
+	// The clock moves inside the first answer, so the deadline passes between
+	// two lookups and no lookup itself times out (#5258).
+	it("C3f: a warning left when the enrichment deadline passed is unconfirmed, not clean (#5258)", async () => {
+		const carried = makeCarriedReport(filePath);
+		const service = makeService(
+			{ diags: [makeDiag(), makeDiag()], confirmation: "confirmed" },
+			0,
+			[],
+		);
+		const realNow = Date.now.bind(Date);
+		let skew = 0;
+		const clock = vi
+			.spyOn(Date, "now")
+			.mockImplementation(() => realNow() + skew);
+		(service as unknown as { codeAction: unknown }).codeAction = vi.fn(
+			async () => {
+				// After a tick: the lookup's own bound has armed, so this answer
+				// lands in time and only the loop's next deadline check sees it.
+				await Promise.resolve();
+				skew = 600_000;
+				return [];
+			},
+		);
+		try {
+			const result = await runPersistentReverify({
+				report: carried,
+				cwd,
+				lspService: service,
+			});
+			expect(result.outcomes[0]?.outcome).toBe("unconfirmed");
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
+	// #5554 r2 B8: the unanswered record is per warning. A file with more
+	// warnings than the code-action cap still retires a carried warning the
+	// touch no longer reports; before, one capped lookup anywhere in the file
+	// held every carried warning as unconfirmed forever.
+	it("C3g: a fixed warning in a file past the code-action cap is retired (#5554)", async () => {
+		const carried = makeCarriedReport(filePath);
+		const others = Array.from(
+			{ length: ACTIONABLE_WARNINGS_MAX_CODE_ACTIONS_PER_FILE + 1 },
+			(_, index) => ({
+				...makeDiag(),
+				code: 7000 + index,
+				message: `unrelated warning ${index}`,
+			}),
+		);
+		const result = await runPersistentReverify({
+			report: carried,
+			cwd,
+			lspService: makeService(
+				{ diags: others, confirmation: "confirmed" },
+				0,
+				[],
+			),
+		});
+		expect(result.outcomes[0]?.outcome).toBe("clean");
+		expect(result.outcomes[0]?.dropped).toBe(1);
+		expect(result.replacementFiles[0]?.warnings).toEqual([]);
+	});
+
+	// #5554 verify r3 N4: a re-check that retires one carried warning and
+	// cannot judge another reads mixed, and the kept file still says its
+	// re-verify was incomplete; dropping that label would show the kept
+	// warning as freshly confirmed.
+	it("C3i: a mixed re-check keeps the unjudged warning labelled incomplete (#5554)", async () => {
+		const carried = makeCarriedReport(filePath);
+		const kept = carried.files[0]!.warnings[0]!;
+		const fixedMessage = "'y' is declared but its value is never read.";
+		carried.files[0]!.warnings.push({
+			...kept,
+			id: "w2",
+			message: fixedMessage,
+		});
+		const others = Array.from(
+			{ length: ACTIONABLE_WARNINGS_MAX_CODE_ACTIONS_PER_FILE },
+			(_, index) => ({
+				...makeDiag(),
+				code: 7000 + index,
+				message: `unrelated warning ${index}`,
+			}),
+		);
+		const result = await runPersistentReverify({
+			report: carried,
+			cwd,
+			lspService: makeService(
+				{ diags: [...others, makeDiag()], confirmation: "confirmed" },
+				0,
+				[],
+			),
+		});
+		expect(result.outcomes[0]?.outcome).toBe("mixed");
+		expect(result.outcomes[0]?.dropped).toBe(1);
+		const replacement = result.replacementFiles[0];
+		expect(replacement?.warnings.map((w) => w.message)).toEqual([
+			WARNING_MESSAGE,
+		]);
+		expect(replacement?.reVerifyIncomplete).toBe(true);
+	});
+
+	// #5554 verify r3 N4: a carried warning is the same warning only with the
+	// same rule AND message. An unanswered lookup for another variable under
+	// the same rule says nothing about the carried one, which the touch no
+	// longer reports, so it retires.
+	it("C3j: an unanswered lookup under the same rule does not hold another message (#5554)", async () => {
+		const carried = makeCarriedReport(filePath);
+		const others = Array.from(
+			{ length: ACTIONABLE_WARNINGS_MAX_CODE_ACTIONS_PER_FILE },
+			(_, index) => ({
+				...makeDiag(),
+				code: 7000 + index,
+				message: `unrelated warning ${index}`,
+			}),
+		);
+		const sameRuleOtherName = {
+			...makeDiag(),
+			message: "'y' is declared but its value is never read.",
+		};
+		const result = await runPersistentReverify({
+			report: carried,
+			cwd,
+			lspService: makeService(
+				{ diags: [...others, sameRuleOtherName], confirmation: "confirmed" },
+				0,
+				[],
+			),
+		});
+		expect(result.outcomes[0]?.outcome).toBe("clean");
+		expect(result.outcomes[0]?.dropped).toBe(1);
+	});
+
+	// #5554 r2 F6: the real service answers a lookup it has no client for
+	// (here: destroyed) with no answer, so the carried warning stays.
+	it("C3h: a code-action lookup with no client to ask is unconfirmed, not clean (#5554)", async () => {
+		const carried = makeCarriedReport(filePath);
+		const real = new LSPService();
+		await real.shutdown();
+		const service = makeService({
+			diags: [makeDiag()],
+			confirmation: "confirmed",
+		});
+		(service as unknown as { codeAction: unknown }).codeAction = (
+			...args: Parameters<LSPService["codeAction"]>
+		) => real.codeAction(...args);
+		const result = await runPersistentReverify({
+			report: carried,
+			cwd,
+			lspService: service,
+		});
+		expect(result.outcomes[0]?.outcome).toBe("unconfirmed");
+		expect(result.replacementFiles[0]?.warnings).toEqual(
+			carried.files[0]?.warnings,
+		);
 	});
 
 	it("#3205: repeated incomplete re-verifies stay visible but do not grow observed history", async () => {

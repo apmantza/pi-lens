@@ -27,12 +27,14 @@ import { removeTempDirSync } from "../test-utils.js";
 import { setPlatform } from "../../support/platform-stub.js";
 
 const launchLSPMock = vi.hoisted(() => vi.fn());
+const launchViaNodeMock = vi.hoisted(() => vi.fn());
 const ensureToolMock = vi.hoisted(() => vi.fn());
 const getToolEnvironmentMock = vi.hoisted(() => vi.fn(async () => ({})));
 
 vi.mock("../../../clients/lsp/launch.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../../clients/lsp/launch.js")>()),
 	launchLSP: launchLSPMock,
+	launchViaNode: launchViaNodeMock,
 }));
 vi.mock("../../../clients/installer/index.js", async (importOriginal) => ({
 	...(await importOriginal<
@@ -71,6 +73,33 @@ function addTypeScript(dir: string, version: string): string {
 	const tsc = path.join(bin, binName("tsc"));
 	fs.writeFileSync(tsc, "");
 	return tsc;
+}
+
+/** `<dir>/node_modules/@typescript/native`: TypeScript 7.0.2 under the alias. */
+function addNativeAlias(dir: string): string {
+	const pkg = path.join(dir, "node_modules", "@typescript", "native");
+	fs.mkdirSync(path.join(pkg, "bin"), { recursive: true });
+	fs.writeFileSync(
+		path.join(pkg, "package.json"),
+		JSON.stringify({
+			name: "typescript",
+			version: "7.0.2",
+			bin: { tsc: "./bin/tsc" },
+		}),
+	);
+	const bin = path.join(pkg, "bin", "tsc");
+	fs.writeFileSync(bin, "#!/usr/bin/env node\n");
+	return bin;
+}
+
+/** The ledger's `effect-tsgo-launch` rows. */
+async function effectTsgoLaunchRows() {
+	const ledger = await import("../../../clients/degradation-ledger.js");
+	return ledger
+		.getDegradationSummary()
+		.filter((group) => group.kind === "lsp-registry-decision")
+		.flatMap((group) => group.latestReasons)
+		.filter((row) => /^effect-tsgo-launch:g\d+:/.test(row.subject ?? ""));
 }
 
 /** `<dir>/node_modules/@effect/tsgo` with a manifest, and its `.bin` link. */
@@ -124,6 +153,8 @@ async function trustedSpawn(root: string) {
 beforeEach(() => {
 	launchLSPMock.mockReset();
 	launchLSPMock.mockResolvedValue(fakeProcess);
+	launchViaNodeMock.mockReset();
+	launchViaNodeMock.mockResolvedValue(fakeProcess);
 	ensureToolMock.mockReset();
 	ensureToolMock.mockResolvedValue(undefined);
 	getToolEnvironmentMock.mockClear();
@@ -153,6 +184,7 @@ describe("effect-tsgo selection (#4914)", () => {
 			process: fakeProcess,
 			source: "direct",
 			launchVariant: "effect-tsgo",
+			initializeFallback: expect.any(Function),
 		});
 	});
 
@@ -268,6 +300,111 @@ describe("effect-tsgo fallback (#4914)", () => {
 	});
 });
 
+// RECURRENCE GUARDED: #5522 review F1. The alias's `bin/tsc` is project code
+// that `launchNativeTypeScript` runs through `launchViaNode`, a path the
+// `process.execPath` launcher hides from `launchLSP`'s own gate. Skipping the
+// gate for the alias entry alone survived every other cell, because
+// `typescript-native-lsp.test.ts` doubles `admitProjectSuppliedTsserver` as a
+// pass-through. The real gate runs here; only the two launchers are doubled.
+describe("the @typescript/native alias entry's trust gate (#5504)", () => {
+	function aliasProject(label: string): { root: string; aliasBin: string } {
+		const root = makeRoot(label);
+		addTypeScript(root, "6.0.3");
+		return { root, aliasBin: addNativeAlias(root) };
+	}
+
+	it.for([
+		["unknown trust", "unknown", true],
+		["untrusted trust", "untrusted", true],
+		["trusted but project code denied", "trusted", false],
+	] as const)(
+		"launches nothing under %s",
+		async ([, trust, projectCodeAllowed]) => {
+			const { root } = aliasProject(`alias-trust-${trust}`);
+			const { setProjectTrustState } =
+				await import("../../../clients/project-trust.js");
+			setProjectTrustState(trust);
+			const { TypeScriptServer } =
+				await import("../../../clients/lsp/server.js");
+
+			const spawned = await TypeScriptServer.spawn(root, {
+				allowInstall: false,
+				projectCodeAllowed,
+			});
+
+			expect(spawned).toBeUndefined();
+			expect(launchViaNodeMock).not.toHaveBeenCalled();
+			expect(launchLSPMock).not.toHaveBeenCalled();
+		},
+	);
+
+	it("runs node on the alias's bin/tsc once the project is trusted and allowed", async () => {
+		const { root, aliasBin } = aliasProject("alias-trust-granted");
+
+		const spawned = await trustedSpawn(root);
+
+		expect(launchViaNodeMock).toHaveBeenCalledTimes(1);
+		expect(launchViaNodeMock).toHaveBeenCalledWith(
+			aliasBin,
+			["--lsp", "--stdio"],
+			{ cwd: root, env: {} },
+		);
+		expect(spawned?.launchVariant).toBe("native-ts7");
+	});
+});
+
+describe("effect-tsgo under the alias, and its initialize fallback (#5504)", () => {
+	it("launches effect-tsgo beside an aliased TypeScript 7", async () => {
+		const root = makeRoot("alias");
+		addTypeScript(root, "6.0.3");
+		addNativeAlias(root);
+		const effect = addEffectTsgo(root);
+
+		const spawned = await trustedSpawn(root);
+
+		expect(launchLSPMock).toHaveBeenCalledTimes(1);
+		expect(launchLSPMock).toHaveBeenCalledWith(
+			effect,
+			["tsc", "--lsp", "--stdio"],
+			{ cwd: root, env: {} },
+		);
+		expect(spawned?.launchVariant).toBe("effect-tsgo");
+	});
+
+	it("initializeFallback launches native and records one row", async () => {
+		const root = makeRoot("init-fallback");
+		const tsc = addTypeScript(root, "7.0.2");
+		addEffectTsgo(root);
+		const { withLspProjectCodePermission } =
+			await import("../../../clients/lsp/launch.js");
+		const ledger = await import("../../../clients/degradation-ledger.js");
+		const spawned = await trustedSpawn(root);
+		launchLSPMock.mockClear();
+		ledger.resetDegradationLedger();
+
+		const fallback = spawned?.initializeFallback;
+		if (!fallback) throw new Error("effect-tsgo spawn has no fallback");
+		const results = [
+			await withLspProjectCodePermission(true, () => fallback(new Error("x"))),
+			await withLspProjectCodePermission(true, () => fallback(new Error("x"))),
+		];
+
+		expect(results.map((result) => result?.launchVariant)).toEqual([
+			"native-ts7",
+			"native-ts7",
+		]);
+		expect(launchLSPMock.mock.calls).toEqual([
+			[tsc, ["--lsp", "--stdio"], { cwd: root, env: {} }],
+			[tsc, ["--lsp", "--stdio"], { cwd: root, env: {} }],
+		]);
+		const rows = await effectTsgoLaunchRows();
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.reason).toMatch(
+			/^effect-tsgo failed to initialize, using the native launch/,
+		);
+	});
+});
+
 describe("effect-tsgo trust gate (#4914)", () => {
 	it.for(["unknown", "untrusted"] as const)(
 		"refuses the project's effect-tsgo under %s trust and records the refusal",
@@ -374,11 +511,7 @@ describe("effect-tsgo launch failure (#4914)", () => {
 				effect,
 				tsc,
 			]);
-			const rows = ledger
-				.getDegradationSummary()
-				.filter((group) => group.kind === "lsp-registry-decision")
-				.flatMap((group) => group.latestReasons)
-				.filter((row) => /^effect-tsgo-launch:g\d+:/.test(row.subject ?? ""));
+			const rows = await effectTsgoLaunchRows();
 			expect(rows).toHaveLength(1);
 			expect(rows[0]?.subject).toContain(root);
 			expect(rows[0]?.reason).toMatch(/effect-tsgo launch failed/);

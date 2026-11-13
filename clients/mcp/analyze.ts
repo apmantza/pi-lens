@@ -32,7 +32,7 @@ import { detectFileKind } from "../file-kinds.js";
 import { getDiagnosticTracker } from "../diagnostic-tracker.js";
 import { getLSPService } from "../lsp/capabilities.js";
 import { PathKeyedMap } from "../path-keyed-map.js";
-import { normalizeMapKey } from "../path-utils.js";
+import { normalizeMapKey, resolveHostToolPath } from "../path-utils.js";
 import { loadProjectSnapshot } from "../project-snapshot.js";
 import { buildOrUpdateGraph } from "../review-graph/service.js";
 import { classifyDiagnosticTier, recordDiagnostics } from "../widget-state.js";
@@ -533,12 +533,18 @@ async function warmLspForFile(
  */
 export async function analyzeFile(
 	filePath: string,
-	cwd: string,
+	workspaceCwd: string,
 	options: AnalyzeFileOptions = {},
 ): Promise<McpAnalyzeResult> {
-	const absPath = path.isAbsolute(filePath)
-		? filePath
-		: path.resolve(cwd, filePath);
+	// `cwd` is a free string on the MCP tool (a `~` is legal), so the root is
+	// resolved once, here, and every seam below (host, root class, dispatch,
+	// turn state, graph, word index) gets that one absolute path.
+	// `.` against the base dir is the seam's own `~` / `file://` base expansion.
+	const cwd = resolveHostToolPath(".", workspaceCwd);
+	// Shape 74: `filePath` is a host tool argument, so a `~`, an `@` prefix or a
+	// `file://` URL resolves as it does for every sibling tool, never as a name
+	// under `cwd`.
+	const absPath = resolveHostToolPath(filePath, cwd);
 	// no-delta by default → a full snapshot every call (not delta-filtered);
 	// caller flags win over the default.
 	const host = createMcpHost({ "no-delta": true, ...options.flags }, cwd);

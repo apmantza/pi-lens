@@ -8,6 +8,7 @@ import * as path from "node:path";
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 import { installGitFixtureEnv } from "./git-fixture-env.js";
 import { installKillGuard, killGuardReport } from "./kill-guard.js";
+import { recordCensusWorker, runDeadOwnerCensus } from "./dead-owner-census.js";
 import { currentPeakRssMb, reportPeakRss } from "./worker-peak-rss.js";
 import {
 	fixtureHomeRoot,
@@ -96,6 +97,13 @@ process.env.PI_LENS_CONFIG_PATH = "/nonexistent-pi-lens-tests/config.json";
 // drives it (seen 2026-10-16: six golden witnesses gained the startup guidance
 // block). Tests that exercise a mode set it themselves.
 delete process.env.PI_LENS_STARTUP_MODE;
+
+// Same class (#5267): scheduleUntrackedOrphanSweep reads
+// PI_LENS_DISABLE_ORPHAN_BACKSTOP at arm time, so a shell exporting the key
+// turned every in-test arm into a no-op and reddened the backstop's own
+// scheduler tests on an undefined timer. Tests that exercise the opt-out set
+// it themselves (tests/support/pi-session.ts arms it per session start).
+delete process.env.PI_LENS_DISABLE_ORPHAN_BACKSTOP;
 
 // Hermeticity (#525, same class as #515 above): never let a test write into
 // the developer's REAL machine-global ~/.pi-lens (instances.json, logs,
@@ -192,6 +200,8 @@ const tmpHygieneOwnerMarkerBody = JSON.stringify({
 	file: tmpHygieneOwnFile,
 });
 fs.writeFileSync(tmpHygieneOwnerMarker, tmpHygieneOwnerMarkerBody);
+// #5528: name this worker for the dead-owner census (off unless its env is set).
+recordCensusWorker(tmpHygieneOwnFile);
 
 /**
  * #3314: the run-file manifest — every test file a worker of THIS run id
@@ -2025,7 +2035,12 @@ afterAll(async () => {
 		// window heartbeat's queued updateHeartbeat, so no live worker's lock
 		// generation is left behind for the next file to take over. Bounded,
 		// and it never throws, so the checks below always run.
-		await settleRegistryMutationsBeforeTeardown();
+		// #5528: the dead-owner census scans concurrently (one bounded `ps`), so
+		// it never lengthens the settle bound below.
+		await Promise.all([
+			settleRegistryMutationsBeforeTeardown(),
+			runDeadOwnerCensus(tmpHygieneOwnFile),
+		]);
 		// #2912: before the checks, so the leak notice below names what is left.
 		sweepOwnTmpRoots("afterAll");
 		runTeardownWithMemReport(

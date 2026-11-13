@@ -1094,7 +1094,7 @@ export async function terminateScannerChild(
 export const BACKSTOP_SCAN_TIMEOUT_MS = 5_000;
 
 /** The one command-line match rule, shared by both platforms' parsers. */
-function matchesManagedBinary(command: string): boolean {
+export function matchesManagedBinary(command: string): boolean {
 	const lower = command.toLowerCase();
 	return MANAGED_BINARY_NAMES.some((name) =>
 		lower.includes(name.toLowerCase()),
@@ -1467,16 +1467,54 @@ const BACKSTOP_GRACE_RETRY_MARGIN_MS = 30_000;
 const BACKSTOP_LOCK_STALE_MS = 120_000;
 
 /**
+ * Opt-out knob for ARMING the machine-wide orphan backstop. The literal `"1"`
+ * keeps the arming timer off and every other value — including `true`, `off`
+ * and blank — leaves the default, the boolean-knob literal rule of #5419,
+ * pinned for this key by `tests/clients/env-boolean-knob-literals.test.ts`.
+ * It is a test-harness knob, not a documented user setting. It is read when
+ * the backstop is armed, not at module load, so a harness can hold it for
+ * one start and restore it after.
+ *
+ * The reason a harness wants it: the backstop's one job is to reap processes
+ * whose owning pi-lens instance died, and it judges that from the machine's
+ * whole process table. A harness that loads the extension inside a live host
+ * process is exactly a short-lived owner that dies — its fixture processes
+ * carry owner tags pointing at pids the harness has already reaped, so the
+ * backstop reads them as foreign orphans and signals them. That is defect shape
+ * 50 (a pid reached production kill code from a context that does not own it):
+ * the #2042 kill guard records the signal and fails the test file at teardown,
+ * and the process it aimed at belongs to whoever runs the suite.
+ *
+ * Scope is the arming timer only. `sweepUntrackedOrphans` itself stays
+ * callable — the reaper's own tests drive it directly, and the one production
+ * caller that reaches a sweep by another route names `force`, which is an
+ * explicit request to run. #5267.
+ */
+export const ORPHAN_BACKSTOP_SCHEDULING_ENV = "PI_LENS_DISABLE_ORPHAN_BACKSTOP";
+
+/** True when this process opted out of arming the orphan backstop. */
+export function orphanBackstopSchedulingDisabled(
+	env: NodeJS.ProcessEnv = process.env,
+): boolean {
+	return env[ORPHAN_BACKSTOP_SCHEDULING_ENV] === "1";
+}
+
+/**
  * Schedule the backstop sweep OFF the session_start critical path. The timer
  * is `unref`'d, so a settled one-shot `pi --print` exits without waiting and
  * the sweep simply does not happen for that invocation — which is correct: a
  * process too short-lived to reach the delay is also too short-lived to be
  * the right place to spend seconds of CIM time.
+ *
+ * Returns the armed timer, or undefined when the process opted out of arming
+ * ({@link ORPHAN_BACKSTOP_SCHEDULING_ENV}). The grace follow-up runs through
+ * this function too, so the opt-out holds the whole chain off.
  */
 export function scheduleUntrackedOrphanSweep(
 	delayMs: number = BACKSTOP_START_DELAY_MS,
 	options: BackstopSweepOptions = {},
-): NodeJS.Timeout {
+): NodeJS.Timeout | undefined {
+	if (orphanBackstopSchedulingDisabled()) return undefined;
 	const timer = setTimeout(
 		() => {
 			void sweepUntrackedOrphans(options).catch(() => {

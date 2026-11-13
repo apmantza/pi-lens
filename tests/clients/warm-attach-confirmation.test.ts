@@ -30,13 +30,18 @@ import {
 	contentHash,
 	WARM_DIAGNOSTICS_SCHEMA_VERSION,
 } from "../../clients/mcp/ipc.js";
-import type { WarmDiagnosticsResponse } from "../../clients/mcp/ipc.js";
+import type {
+	WarmCodeActionsResponse,
+	WarmDiagnosticsResponse,
+} from "../../clients/mcp/ipc.js";
 import { installLspServiceDouble } from "../support/lsp-service-seam.js";
 import { ENVIRONMENT_GAP_MARKER } from "../../clients/lsp/environment-gap.js";
 import { removeTempDirSync } from "./test-utils.js";
+import { ambientSocketNameIsShared } from "../support/socket-identity.js";
 
 const touchFile = vi.fn();
 const projectInfo = vi.fn();
+const codeAction = vi.fn();
 
 const FILE = "C:/repo/notes.md";
 const CONTENT = "# hi\n";
@@ -74,6 +79,7 @@ describe("#1253 — warm-attach serves the touch confirmation", () => {
 		vi.resetModules();
 		touchFile.mockReset();
 		projectInfo.mockReset();
+		codeAction.mockReset();
 		projectInfo.mockResolvedValue({
 			executed: false,
 			reason: "no live client",
@@ -83,6 +89,7 @@ describe("#1253 — warm-attach serves the touch confirmation", () => {
 		await installLspServiceDouble({
 			touchFile,
 			executeReadOnlyCommandOnLiveClient: projectInfo,
+			codeAction,
 		});
 	});
 	afterEach(() => {
@@ -392,48 +399,55 @@ describe("#1253 — warm-attach serves the touch confirmation", () => {
 		// The probe never settles until the case ends. Before the reserve, every
 		// reply landed at the deadline and read `timeout` or `stale-answer`, which
 		// `tryWarmAttachedDiagnostics` answers with a permanent `promoteToLocal`.
-		it("answers a slow probe in time through the real socket and client timer", async () => {
-			const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-warm-e2e-"));
-			const cwd = path.join(home, "ws");
-			fs.mkdirSync(cwd);
-			vi.stubEnv("PI_LENS_HOME", home);
-			vi.stubEnv("PI_LENS_WARM_ATTACH", "1");
-			const pendingProbes: Array<(answer: typeof inferred) => void> = [];
-			projectInfo.mockImplementation(
-				() =>
-					new Promise((resolve) => {
-						pendingProbes.push(resolve);
-					}),
-			);
-			const warm = await import("../../clients/warm-attach.js");
-			const ipc = await import("../../clients/mcp/ipc.js");
-			try {
-				await warm.configureWarmAttach(cwd);
-				const replies = [];
-				for (let run = 0; run < 3; run++) {
-					replies.push(
-						await ipc.requestWarmDiagnostics(
-							cwd,
-							process.pid,
-							path.join(cwd, "orphan.ts"),
-							CONTENT,
-							300,
-						),
-					);
+		// lane: Unit tests (CI's short TMPDIR); the client never dials a shared
+		// pid-scoped name, so this case skips where the cut makes one.
+		it.skipIf(ambientSocketNameIsShared(process.pid))(
+			"answers a slow probe in time through the real socket and client timer",
+			async () => {
+				const home = fs.mkdtempSync(
+					path.join(os.tmpdir(), "pi-lens-warm-e2e-"),
+				);
+				const cwd = path.join(home, "ws");
+				fs.mkdirSync(cwd);
+				vi.stubEnv("PI_LENS_HOME", home);
+				vi.stubEnv("PI_LENS_WARM_ATTACH", "1");
+				const pendingProbes: Array<(answer: typeof inferred) => void> = [];
+				projectInfo.mockImplementation(
+					() =>
+						new Promise((resolve) => {
+							pendingProbes.push(resolve);
+						}),
+				);
+				const warm = await import("../../clients/warm-attach.js");
+				const ipc = await import("../../clients/mcp/ipc.js");
+				try {
+					await warm.configureWarmAttach(cwd);
+					const replies = [];
+					for (let run = 0; run < 3; run++) {
+						replies.push(
+							await ipc.requestWarmDiagnostics(
+								cwd,
+								process.pid,
+								path.join(cwd, "orphan.ts"),
+								CONTENT,
+								300,
+							),
+						);
+					}
+					for (const reply of replies) {
+						expect(reply.available).toBe(true);
+						if (!reply.available) continue;
+						expect(reply.response.diagnostics).toEqual([diagnostic]);
+						expect("projectIdentity" in reply.response).toBe(false);
+					}
+				} finally {
+					for (const release of pendingProbes) release(inferred);
+					warm._resetWarmAttachForTests();
+					vi.unstubAllEnvs();
+					removeTempDirSync(home);
 				}
-				for (const reply of replies) {
-					expect(reply.available).toBe(true);
-					if (!reply.available) continue;
-					expect(reply.response.diagnostics).toEqual([diagnostic]);
-					expect("projectIdentity" in reply.response).toBe(false);
-				}
-			} finally {
-				for (const release of pendingProbes) release(inferred);
-				warm._resetWarmAttachForTests();
-				vi.unstubAllEnvs();
-				removeTempDirSync(home);
-			}
-		});
+			},
+		);
 
 		it("sends no probe when the touch left no time before the send reserve", async () => {
 			await serve(file); // load the lazy service modules before the clock is faked
@@ -485,5 +499,36 @@ describe("#1253 — warm-attach serves the touch confirmation", () => {
 
 		expect(overTheWire.confirmation).toBe("confirmed");
 		expect(overTheWire.version).toBe(WARM_DIAGNOSTICS_SCHEMA_VERSION);
+	});
+
+	it("serves an empty action list for a range with no client to ask (#5554)", async () => {
+		// #5554 r2 F6: `LSPService.codeAction` answers undefined when no client
+		// can be asked. The warm reply's schema needs one array per range, so an
+		// unmapped undefined would make the reader drop every range's quick fix
+		// as a schema mismatch.
+		touchFile.mockResolvedValue({ diags: [], confirmation: "confirmed" });
+		await serve();
+		const action = { title: "Fix it", kind: "quickfix" };
+		codeAction.mockResolvedValueOnce(undefined).mockResolvedValueOnce([action]);
+		const range = {
+			start: { line: 0, character: 0 },
+			end: { line: 0, character: 1 },
+		};
+		const { _serveWarmRequestForTests } =
+			await import("../../clients/warm-attach.js");
+		const served = await _serveWarmRequestForTests({
+			route: "code-actions",
+			version: WARM_DIAGNOSTICS_SCHEMA_VERSION,
+			file: FILE,
+			cwd: "C:/repo",
+			contentHash: contentHash(CONTENT),
+			ranges: [range, range],
+			deadlineAt: Date.now() + 60_000,
+		});
+		expect(served.error).toBeUndefined();
+		expect((served.result as WarmCodeActionsResponse).actions).toEqual([
+			[],
+			[action],
+		]);
 	});
 });

@@ -20,29 +20,12 @@ import {
 	getSmartDefaultFormatterName,
 	getToolCommandSpec,
 	getToolExecutionPolicy,
-	hasBlackConfig,
-	hasClangFormatConfig,
-	hasCljfmtConfig,
-	hasCmakeFormatConfig,
 	findCompiledClassesDir,
-	hasDetektConfig,
 	hasKtfmtConfig,
 	hasKtlintConfig,
 	getSpotlessKotlinFormatter,
-	hasGoogleJavaFormatConfig,
 	hasNearestPackageJsonDependency,
-	hasNearestPackageJsonField,
-	hasOcamlformatConfig,
-	hasOxfmtConfig,
 	hasOxfmtSvelteConfig,
-	hasOxlintConfig,
-	hasPhpCsFixerConfig,
-	hasPrettierConfig,
-	hasRubocopConfig,
-	hasRuffConfig,
-	hasStandardrbConfig,
-	hasStyluaConfig,
-	hasTflintConfig,
 	shouldAutoInstallTool,
 	_getSpotlessGradleReadCountForTests,
 } from "../../clients/tool-policy.js";
@@ -468,7 +451,7 @@ describe("tool-policy", () => {
 
 			expect(hasToolConfig("stylelint", env.tmpDir)).toBe(true);
 			expect(hasToolConfig("sqlfluff", env.tmpDir)).toBe(true);
-			expect(hasRubocopConfig(env.tmpDir)).toBe(true);
+			expect(hasToolConfig("rubocop", env.tmpDir)).toBe(true);
 			expect(getRubocopCommand(env.tmpDir)).toEqual({
 				cmd: "bundle",
 				args: ["exec", "rubocop"],
@@ -510,16 +493,16 @@ describe("tool-policy", () => {
 			expect(hasToolConfig("mypy", env.tmpDir)).toBe(true);
 			expect(hasToolConfig("yamllint", env.tmpDir)).toBe(true);
 			expect(hasToolConfig("markdownlint", env.tmpDir)).toBe(true);
-			expect(hasPrettierConfig(env.tmpDir)).toBe(true);
-			expect(hasBlackConfig(env.tmpDir)).toBe(true);
+			expect(hasToolConfig("prettier", env.tmpDir)).toBe(true);
+			expect(hasToolConfig("black", env.tmpDir)).toBe(true);
 			expect(hasToolConfig("golangci-lint", env.tmpDir)).toBe(true);
 			expect(hasToolConfig("phpstan", env.tmpDir)).toBe(true);
-			expect(hasRuffConfig(env.tmpDir)).toBe(true);
-			expect(hasStandardrbConfig(env.tmpDir)).toBe(true);
-			expect(hasClangFormatConfig(env.tmpDir)).toBe(true);
-			expect(hasPhpCsFixerConfig(env.tmpDir)).toBe(true);
-			expect(hasStyluaConfig(env.tmpDir)).toBe(true);
-			expect(hasOcamlformatConfig(env.tmpDir)).toBe(true);
+			expect(hasToolConfig("ruff", env.tmpDir)).toBe(true);
+			expect(hasToolConfig("standardrb", env.tmpDir)).toBe(true);
+			expect(hasToolConfig("clang-format", env.tmpDir)).toBe(true);
+			expect(hasToolConfig("php-cs-fixer", env.tmpDir)).toBe(true);
+			expect(hasToolConfig("stylua", env.tmpDir)).toBe(true);
+			expect(hasToolConfig("ocamlformat", env.tmpDir)).toBe(true);
 			expect(findToolConfig("biome", env.tmpDir)?.file).toMatch(
 				/biome\.jsonc$/,
 			);
@@ -566,8 +549,18 @@ describe("tool-policy", () => {
 					"{}\n",
 					() => hasToolConfig("biome", nestedDir),
 				],
-				["oxfmt", ".oxfmtrc.json", "{}\n", () => hasOxfmtConfig(nestedDir)],
-				["prettier", ".prettierrc", "{}\n", () => hasPrettierConfig(nestedDir)],
+				[
+					"oxfmt",
+					".oxfmtrc.json",
+					"{}\n",
+					() => hasToolConfig("oxfmt", nestedDir),
+				],
+				[
+					"prettier",
+					".prettierrc",
+					"{}\n",
+					() => hasToolConfig("prettier", nestedDir),
+				],
 				[
 					"stylelint",
 					".stylelintrc",
@@ -578,13 +571,13 @@ describe("tool-policy", () => {
 					"black",
 					"pyproject.toml",
 					"[tool.black]\nline-length = 88\n",
-					() => hasBlackConfig(nestedDir),
+					() => hasToolConfig("black", nestedDir),
 				],
 				[
 					"ruff",
 					"ruff.toml",
 					"line-length = 100\n",
-					() => hasRuffConfig(nestedDir),
+					() => hasToolConfig("ruff", nestedDir),
 				],
 				[
 					"mypy",
@@ -614,13 +607,13 @@ describe("tool-policy", () => {
 					"rubocop",
 					".rubocop.yml",
 					"AllCops: {}\n",
-					() => hasRubocopConfig(nestedDir),
+					() => hasToolConfig("rubocop", nestedDir),
 				],
 				[
 					"standardrb",
 					"Gemfile",
 					"gem 'standard'\n",
-					() => hasStandardrbConfig(nestedDir),
+					() => hasToolConfig("standardrb", nestedDir),
 				],
 				[
 					"golangci",
@@ -638,50 +631,55 @@ describe("tool-policy", () => {
 					"detekt",
 					"detekt.yml",
 					"build:\n  maxIssues: 0\n",
-					() => hasDetektConfig(nestedDir),
+					() => hasToolConfig("detekt", nestedDir),
 				],
 				[
 					"clang-format",
 					".clang-format",
 					"BasedOnStyle: LLVM\n",
-					() => hasClangFormatConfig(nestedDir),
+					() => hasToolConfig("clang-format", nestedDir),
 				],
 				[
 					"php-cs-fixer",
 					".php-cs-fixer.dist.php",
 					"<?php return [];\n",
-					() => hasPhpCsFixerConfig(nestedDir),
+					() => hasToolConfig("php-cs-fixer", nestedDir),
 				],
 				[
 					"stylua",
 					"stylua.toml",
 					"column_width = 100\n",
-					() => hasStyluaConfig(nestedDir),
+					() => hasToolConfig("stylua", nestedDir),
 				],
 				[
 					"ocamlformat",
 					".ocamlformat",
 					"profile = conventional\n",
-					() => hasOcamlformatConfig(nestedDir),
+					() => hasToolConfig("ocamlformat", nestedDir),
 				],
 				[
 					"google-java-format",
 					".google-java-format",
 					"{}\n",
-					() => hasGoogleJavaFormatConfig(nestedDir),
+					() => hasToolConfig("google-java-format", nestedDir),
 				],
-				["cljfmt", ".cljfmt.edn", "{}\n", () => hasCljfmtConfig(nestedDir)],
+				[
+					"cljfmt",
+					".cljfmt.edn",
+					"{}\n",
+					() => hasToolConfig("cljfmt", nestedDir),
+				],
 				[
 					"cmake-format",
 					".cmake-format",
 					"# cmake-format config\n",
-					() => hasCmakeFormatConfig(nestedDir),
+					() => hasToolConfig("cmake-format", nestedDir),
 				],
 				[
 					"tflint",
 					".tflint.hcl",
 					'plugin "terraform" {\n  enabled = true\n}\n',
-					() => hasTflintConfig(nestedDir),
+					() => hasToolConfig("tflint", nestedDir),
 				],
 			];
 
@@ -753,25 +751,24 @@ describe("tool-policy", () => {
 			expect(hasNearestPackageJsonDependency(subPkgDir, "prettier")).toBe(
 				false,
 			);
-			expect(hasNearestPackageJsonField(subPkgDir, "prettier")).toBe(true);
 		} finally {
 			env.cleanup();
 		}
 	});
 
-	it("hasPrettierConfig detects config file in a parent directory", () => {
+	it("prettier: seam detects config file in a parent directory", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-prettier-walkup-");
 		try {
 			createTempFile(env.tmpDir, ".prettierrc", "{}");
 			const subDir = path.join(env.tmpDir, "src", "components");
 			fs.mkdirSync(subDir, { recursive: true });
-			expect(hasPrettierConfig(subDir)).toBe(true);
+			expect(hasToolConfig("prettier", subDir)).toBe(true);
 		} finally {
 			env.cleanup();
 		}
 	});
 
-	it("hasPrettierConfig returns true when package.json has prettier set to false (field exists)", () => {
+	it("prettier: seam returns true when package.json has prettier set to false (field exists)", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-prettier-false-");
 		try {
 			createTempFile(
@@ -781,13 +778,13 @@ describe("tool-policy", () => {
 			);
 			// The field exists — this is an explicit config (even if it opts out).
 			// Old code used `if (pkg.prettier)` which would wrongly return false here.
-			expect(hasPrettierConfig(env.tmpDir)).toBe(true);
+			expect(hasToolConfig("prettier", env.tmpDir)).toBe(true);
 		} finally {
 			env.cleanup();
 		}
 	});
 
-	it("hasPrettierConfig returns true when package.json has prettier set to null (field exists)", () => {
+	it("prettier: seam returns true when package.json has prettier set to null (field exists)", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-prettier-null-");
 		try {
 			createTempFile(
@@ -795,7 +792,7 @@ describe("tool-policy", () => {
 				"package.json",
 				JSON.stringify({ prettier: null }),
 			);
-			expect(hasPrettierConfig(env.tmpDir)).toBe(true);
+			expect(hasToolConfig("prettier", env.tmpDir)).toBe(true);
 		} finally {
 			env.cleanup();
 		}
@@ -859,19 +856,19 @@ describe("tool-policy", () => {
 		}
 	});
 
-	it("hasOxlintConfig detects .oxlintrc.json in a parent directory", () => {
+	it("oxlint: seam detects .oxlintrc.json in a parent directory", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-oxlint-walkup-");
 		try {
 			createTempFile(env.tmpDir, ".oxlintrc.json", "{}\n");
 			const subDir = path.join(env.tmpDir, "src");
 			fs.mkdirSync(subDir, { recursive: true });
-			expect(hasOxlintConfig(subDir)).toBe(true);
+			expect(hasToolConfig("oxlint", subDir)).toBe(true);
 		} finally {
 			env.cleanup();
 		}
 	});
 
-	it("hasOxlintConfig detects .oxlintrc.jsonc in a parent directory", () => {
+	it("oxlint: seam detects .oxlintrc.jsonc in a parent directory", () => {
 		const env = setupTestEnvironment(
 			"pi-lens-tool-policy-oxlint-jsonc-walkup-",
 		);
@@ -879,13 +876,13 @@ describe("tool-policy", () => {
 			createTempFile(env.tmpDir, ".oxlintrc.jsonc", "{\n// comment\n}\n");
 			const subDir = path.join(env.tmpDir, "src");
 			fs.mkdirSync(subDir, { recursive: true });
-			expect(hasOxlintConfig(subDir)).toBe(true);
+			expect(hasToolConfig("oxlint", subDir)).toBe(true);
 		} finally {
 			env.cleanup();
 		}
 	});
 
-	it("hasOxlintConfig detects oxlint.config.ts in a parent directory", () => {
+	it("oxlint: seam detects oxlint.config.ts in a parent directory", () => {
 		const env = setupTestEnvironment(
 			"pi-lens-tool-policy-oxlint-config-ts-walkup-",
 		);
@@ -897,13 +894,13 @@ describe("tool-policy", () => {
 			);
 			const subDir = path.join(env.tmpDir, "src");
 			fs.mkdirSync(subDir, { recursive: true });
-			expect(hasOxlintConfig(subDir)).toBe(true);
+			expect(hasToolConfig("oxlint", subDir)).toBe(true);
 		} finally {
 			env.cleanup();
 		}
 	});
 
-	it("hasOxlintConfig detects oxlint.config.mts in a parent directory", () => {
+	it("oxlint: seam detects oxlint.config.mts in a parent directory", () => {
 		const env = setupTestEnvironment(
 			"pi-lens-tool-policy-oxlint-config-mts-walkup-",
 		);
@@ -915,7 +912,7 @@ describe("tool-policy", () => {
 			);
 			const subDir = path.join(env.tmpDir, "src");
 			fs.mkdirSync(subDir, { recursive: true });
-			expect(hasOxlintConfig(subDir)).toBe(true);
+			expect(hasToolConfig("oxlint", subDir)).toBe(true);
 		} finally {
 			env.cleanup();
 		}
@@ -933,14 +930,14 @@ describe("tool-policy", () => {
 			fs.mkdirSync(subDir, { recursive: true });
 
 			expect(hasToolConfig("vitePlus", subDir)).toBe(true);
-			expect(hasOxfmtConfig(subDir)).toBe(true);
-			expect(hasOxlintConfig(subDir)).toBe(true);
+			expect(hasToolConfig("oxfmt", subDir)).toBe(true);
+			expect(hasToolConfig("oxlint", subDir)).toBe(true);
 		} finally {
 			env.cleanup();
 		}
 	});
 
-	// #5408 F6 (review of #5493): `hasOxfmtConfig` asked the Vite+ seam once per
+	// #5408 F6 (review of #5493): the oxfmt config check asked the Vite+ seam once per
 	// ancestor of an unbounded walk, so a vite-plus.json above $HOME made oxfmt
 	// configured while the Vite+ gate that `resolveCommand` consults (bounded at
 	// $HOME) said no. The home is pinned with vi.stubEnv: the fixture home root
@@ -958,7 +955,7 @@ describe("tool-policy", () => {
 			vi.stubEnv("HOME", home);
 
 			expect(hasToolConfig("vitePlus", proj)).toBe(false);
-			expect(hasOxfmtConfig(proj)).toBe(false);
+			expect(hasToolConfig("oxfmt", proj)).toBe(false);
 			expect(await oxfmtFormatter.detect(proj)).toBe(false);
 		} finally {
 			vi.unstubAllEnvs();
@@ -966,7 +963,7 @@ describe("tool-policy", () => {
 		}
 	});
 
-	// oxfmt's .svelte support is conditional beyond the generic hasOxfmtConfig
+	// oxfmt's .svelte support is conditional beyond the generic oxfmt config
 	// check — verified empirically against the real oxfmt npm binary (see
 	// PR #1134 body for the full four-cell matrix). Both the `svelte` package
 	// AND the config's `svelte` flag are required; either alone always fails.
@@ -1118,13 +1115,13 @@ describe("tool-policy", () => {
 		}
 	});
 
-	it("hasDetektConfig detects detekt.yml in a parent directory", () => {
+	it("detekt: seam detects detekt.yml in a parent directory", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-detekt-walkup-");
 		try {
 			createTempFile(env.tmpDir, "detekt.yml", "build:\n  maxIssues: 0\n");
 			const subDir = path.join(env.tmpDir, "src");
 			fs.mkdirSync(subDir, { recursive: true });
-			expect(hasDetektConfig(subDir)).toBe(true);
+			expect(hasToolConfig("detekt", subDir)).toBe(true);
 		} finally {
 			env.cleanup();
 		}
@@ -1337,7 +1334,7 @@ describe("tool-policy", () => {
 		}
 	});
 
-	it("hasBlackConfig detects [tool.black] in a parent directory pyproject.toml", () => {
+	it("black: seam detects [tool.black] in a parent directory pyproject.toml", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-black-walkup-");
 		try {
 			createTempFile(
@@ -1347,25 +1344,25 @@ describe("tool-policy", () => {
 			);
 			const subDir = path.join(env.tmpDir, "src");
 			fs.mkdirSync(subDir, { recursive: true });
-			expect(hasBlackConfig(subDir)).toBe(true);
+			expect(hasToolConfig("black", subDir)).toBe(true);
 		} finally {
 			env.cleanup();
 		}
 	});
 
-	it("hasRuffConfig detects ruff.toml in a parent directory", () => {
+	it("ruff: seam detects ruff.toml in a parent directory", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-ruff-walkup-toml-");
 		try {
 			createTempFile(env.tmpDir, "ruff.toml", "line-length = 100\n");
 			const subDir = path.join(env.tmpDir, "src");
 			fs.mkdirSync(subDir, { recursive: true });
-			expect(hasRuffConfig(subDir)).toBe(true);
+			expect(hasToolConfig("ruff", subDir)).toBe(true);
 		} finally {
 			env.cleanup();
 		}
 	});
 
-	it("hasRuffConfig detects [tool.ruff] in a parent directory pyproject.toml", () => {
+	it("ruff: seam detects [tool.ruff] in a parent directory pyproject.toml", () => {
 		const env = setupTestEnvironment(
 			"pi-lens-tool-policy-ruff-walkup-pyproject-",
 		);
@@ -1377,7 +1374,7 @@ describe("tool-policy", () => {
 			);
 			const subDir = path.join(env.tmpDir, "src");
 			fs.mkdirSync(subDir, { recursive: true });
-			expect(hasRuffConfig(subDir)).toBe(true);
+			expect(hasToolConfig("ruff", subDir)).toBe(true);
 		} finally {
 			env.cleanup();
 		}

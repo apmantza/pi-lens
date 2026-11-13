@@ -94,20 +94,6 @@ vi.mock(
 				await fixer.resolve();
 				return "fixer-cmd";
 			},
-			createAvailabilityChecker: (
-				...args: Parameters<typeof actual.createAvailabilityChecker>
-			) => {
-				const real = actual.createAvailabilityChecker(...args);
-				if (args[0] !== "detekt") return real;
-				return {
-					...real,
-					isAvailableAsync: async () => {
-						await fixer.resolve();
-						return true;
-					},
-					getCommand: () => "detekt",
-				};
-			},
 		};
 	},
 );
@@ -153,9 +139,9 @@ const clients = {
 	},
 	ruffClient: {
 		isPythonFile: () => true,
-		ensureAvailable: async () => {
+		resolveCommandForFile: async (_filePath: string, cwd: string) => {
 			await fixer.resolve();
-			return true;
+			return { cwd, command: "ruff" };
 		},
 		fixFileAsync: async () => {
 			await fixer.write();

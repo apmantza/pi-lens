@@ -8,34 +8,28 @@ const { safeSpawnAsync, runtime } = vi.hoisted(() => ({
 	safeSpawnAsync: vi.fn(),
 	runtime: {
 		javaPresent: true,
-		javaVerdict: { outcome: "missing", cause: "not-found" } as {
-			outcome: string;
-			cause: string;
-		},
 	},
 }));
 vi.mock("../../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
 
-// java present + spotbugs resolves to a stub command. createAvailabilityChecker
-// is called at module load for both java and spotbugs.
+// java present + spotbugs resolves to a stub command. The runtime ladder is the
+// registry resolver (`resolveToolCommandWithInstallFallback`, #5410); the typed
+// Java verdict wording is pinned through the real ladder in
+// `tests/clients/dispatch/runners/availability-fold-5410.test.ts`.
 vi.mock(
 	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
 	async (importOriginal) => ({
 		...(await importOriginal<
 			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: (command: string) => ({
-			isAvailableAsync: async () => command !== "java" || runtime.javaPresent,
+		createAvailabilityChecker: () => ({
+			isAvailableAsync: async () => true,
 			getCommand: () => null,
-			getVerdict: () => ({
-				...(command === "java"
-					? runtime.javaVerdict
-					: { outcome: "missing", cause: "not-found" }),
-				elapsedMs: 0,
-				latched: true,
-				retryAtMs: 0,
-			}),
 		}),
+		resolveToolCommandWithInstallFallback: async (
+			_cwd: string,
+			toolId: string,
+		) => (toolId === "java" && runtime.javaPresent ? "java" : null),
 		resolveAvailableOrInstall: async () => "spotbugs-stub",
 	}),
 );
@@ -73,7 +67,6 @@ describe("spotbugs runner — cache + skip (#133)", () => {
 	beforeEach(() => {
 		safeSpawnAsync.mockReset();
 		runtime.javaPresent = true;
-		runtime.javaVerdict = { outcome: "missing", cause: "not-found" };
 		// The runner reads SpotBugs' -output file; the real CLI writes it, so the
 		// mock writes the fixture XML to that path.
 		safeSpawnAsync.mockImplementation(async (_cmd: string, args: string[]) => {
@@ -122,27 +115,6 @@ describe("spotbugs runner — cache + skip (#133)", () => {
 			env.cleanup();
 		}
 	});
-
-	// Recurrence (#5258 r2 verify N3): every false Java probe read
-	// runtime-missing, so a Java whose `-version` hung or failed was worded as
-	// not installed.
-	it.each([
-		["transient", "probe-timeout", "probe-incomplete"],
-		["non-installable", "probe-rejected", "probe-rejected"],
-	])(
-		"reads a Java verdict %s / %s as %s, not as a missing runtime",
-		async (outcome, cause, reason) => {
-			try {
-				runtime.javaPresent = false;
-				runtime.javaVerdict = { outcome, cause };
-				const res = await run(env.tmpDir);
-				expect(res.skipReason).toBe(reason);
-				expect(safeSpawnAsync).not.toHaveBeenCalled();
-			} finally {
-				env.cleanup();
-			}
-		},
-	);
 
 	it("returns cached diagnostics without re-invoking SpotBugs when .class tree is unchanged", async () => {
 		try {

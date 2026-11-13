@@ -674,6 +674,7 @@ describe("targeted advisory workflow contract (#3215)", () => {
 					"tests/ change; only a scanner that walks both trees may be, and " +
 					"the list is pinned",
 			).toEqual([
+				"tests/config/baseline-owner-governance.test.ts",
 				"tests/config/env-path-key-composition-sweep.test.ts",
 				"tests/config/git-fixture-governance.test.ts",
 				"tests/config/path-containment-sweep.test.ts",

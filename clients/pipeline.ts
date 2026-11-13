@@ -140,11 +140,8 @@ import {
 	getAutofixPolicyForFile,
 	getPreferredAutofixTools,
 	getRubocopCommand,
-	hasDetektConfig,
 	hasKtfmtConfig,
 	hasKtlintConfig,
-	hasOxlintConfig,
-	hasRubocopConfig,
 	markdownlintConfigArgs,
 } from "./tool-policy.js";
 import type { PathSetLike } from "./runtime-coordinator.js";
@@ -764,13 +761,9 @@ async function tryKtlintFix(
 	return detectFileChangedAfterCommand(filePath, cmd, ["-F", filePath], cwd);
 }
 
-// golangci-lint/detekt/ktfmt have no TOOL_COMMAND_SPEC; resolve via availability
-// checkers like their runners do.
-const golangciAutofixChecker = createAvailabilityChecker(
-	"golangci-lint",
-	".exe",
-);
-const detektAutofixChecker = createAvailabilityChecker("detekt", ".bat");
+// ktfmt's autofix keeps its own managed-first checker: the registry row for
+// ktfmt is the formatter ladder (PATH before managed, #5492 r2) and carries no
+// `.bat` Windows extension, so folding this one is not behaviour-preserving.
 const ktfmtAutofixChecker = createAvailabilityChecker("ktfmt", ".bat");
 
 async function tryKtfmtFix(
@@ -798,14 +791,10 @@ async function tryGolangciLintFix(
 	writeHold?: FileMutationHold,
 ): Promise<number> {
 	// Config-first: the autofix policy only reaches here when a .golangci.* config
-	// exists. resolveAvailableOrInstall honors that gate (won't auto-install a
+	// exists. The registry resolver honors that gate (won't auto-install a
 	// config-first tool). golangci-lint exits non-zero when issues remain after
 	// --fix, so allow its issue-found codes.
-	const cmd = await resolveAvailableOrInstall(
-		golangciAutofixChecker,
-		"golangci-lint",
-		cwd,
-	);
+	const cmd = await resolveToolCommandWithInstallFallback(cwd, "golangci-lint");
 	if (!cmd) return 0;
 	if (writeHold) await writeHold.acquire();
 	return detectFileChangedAfterCommand(
@@ -823,8 +812,7 @@ async function tryDetektFix(
 ): Promise<number> {
 	const configPath = findToolConfig("detekt", cwd)?.file;
 	if (!configPath) return 0;
-	if (!(await detektAutofixChecker.isAvailableAsync(cwd))) return 0;
-	const cmd = detektAutofixChecker.getCommand(cwd);
+	const cmd = await resolveToolCommandWithInstallFallback(cwd, "detekt");
 	if (!cmd) return 0;
 	if (writeHold) await writeHold.acquire();
 	const absPath = path.resolve(cwd, filePath);
@@ -1080,13 +1068,13 @@ export async function runAutofix(
 		hasEslintConfig: hasToolConfig("eslint", cwd),
 		hasStylelintConfig: hasToolConfig("stylelint", cwd),
 		hasSqlfluffConfig: hasToolConfig("sqlfluff", cwd),
-		hasRubocopConfig: hasRubocopConfig(cwd),
+		hasRubocopConfig: hasToolConfig("rubocop", cwd),
 		hasBiomeConfig: hasToolConfig("biome", cwd),
 		hasGolangciConfig: hasToolConfig("golangci-lint", cwd),
-		hasDetektConfig: hasDetektConfig(cwd),
+		hasDetektConfig: hasToolConfig("detekt", cwd),
 		hasKtfmtConfig: hasKtfmtConfig(cwd),
 		hasKtlintConfig: hasKtlintConfig(cwd),
-		hasOxlintConfig: hasOxlintConfig(cwd),
+		hasOxlintConfig: hasToolConfig("oxlint", cwd),
 	};
 	const autofixPolicy = getAutofixPolicyForFile(filePath, autofixContext);
 	const preferredAutofixTools = autofixPolicy?.safe
@@ -1141,15 +1129,19 @@ export async function runAutofix(
 		}
 
 		if (toolName === "ruff") {
-			const ruffReady = ruffClient.isPythonFile(filePath)
-				? await ruffClient.ensureAvailable()
-				: false;
-			if (!ruffReady) {
+			const ruffResolution = ruffClient.isPythonFile(filePath)
+				? await ruffClient.resolveCommandForFile(filePath, cwd)
+				: undefined;
+			if (!ruffResolution || ruffResolution.command === null) {
 				dbg(`autofix: ruff unavailable for ${filePath}`);
 				continue;
 			}
 			if (writeHold) await writeHold.acquire();
-			const result = await ruffClient.fixFileAsync(filePath, cwd);
+			const result = await ruffClient.fixFileAsync(
+				filePath,
+				cwd,
+				ruffResolution.command,
+			);
 			if (result.success && result.fixed > 0) {
 				fixedCount += result.fixed;
 				autofixTools.push(`ruff:${result.fixed}`);

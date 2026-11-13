@@ -52,10 +52,9 @@
  * real spawned `node` children, including the VITEST-set-but-unpinned case.
  */
 
-import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isUnderDir, normalizeFilePath } from "./path-utils.js";
+import { isWithinIdentity, normalizeFilePath } from "./path-utils.js";
 
 /**
  * The memo lives in a process-wide `globalThis` slot rather than a plain
@@ -189,7 +188,7 @@ export function machineStateDir(): string {
  */
 export function isTestProcessTargetingRealHome(file: string): boolean {
 	if (!process.env.VITEST) return false;
-	return isUnderRealDir(
+	return isWithinIdentity(
 		path.dirname(path.resolve(file)),
 		path.join(os.homedir(), ".pi-lens"),
 	);
@@ -242,7 +241,10 @@ function computeProbeHomeDir(cwd: string): string | undefined {
 	}
 	const worktreeRoot = findAgentWorktreeRoot(cwd);
 	if (worktreeRoot) return path.join(worktreeRoot, ".pi-lens-probe-home");
-	if (isUnderRealDir(cwd, os.tmpdir())) {
+	// Identity axis (#2506 round 3, F7): macOS reports `os.tmpdir()` as
+	// `/var/folders/...` while a `cwd` made under it resolves to
+	// `/private/var/folders/...`, so a spelling compare would never match there.
+	if (isWithinIdentity(cwd, os.tmpdir())) {
 		return path.join(cwd, ".pi-lens-probe-home");
 	}
 	return undefined;
@@ -267,31 +269,4 @@ function findAgentWorktreeRoot(cwd: string): string | undefined {
 	const match = /(?:^|\/)\.claude\/worktrees\/[^/]+(?:\/|$)/.exec(normalized);
 	if (!match) return undefined;
 	return normalized.slice(0, match.index + match[0].length).replace(/\/$/, "");
-}
-
-/**
- * `isUnderDir`, but with both sides resolved through `realpath` first
- * (#2506 round 3, F7).
- *
- * On macOS `os.tmpdir()` reports `/var/folders/...` while a `cwd` created
- * under it resolves to `/private/var/folders/...` (`/var` is a symlink to
- * `/private/var`), so the two NEVER prefix-match unresolved and the tmpdir
- * branch would be dead on every Mac. Windows has the same shape with 8.3
- * short names and substituted drives. Both sides go through the same
- * function, so `realpathSync.native`'s canonical Windows casing applies
- * consistently; the result is used only for this containment test, never to
- * build the returned path, so no casing change can leak into a log path.
- * Best-effort by design: a path that does not exist yet (or an EPERM) falls
- * back to its literal form rather than throwing on the logging hot path.
- */
-function isUnderRealDir(child: string, parent: string): boolean {
-	return isUnderDir(toRealPath(child), toRealPath(parent));
-}
-
-function toRealPath(target: string): string {
-	try {
-		return fs.realpathSync.native(target);
-	} catch {
-		return target;
-	}
 }

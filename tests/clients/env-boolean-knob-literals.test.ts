@@ -1,6 +1,6 @@
 /**
- * #5419: the four boolean `PI_LENS_*` switches flip only on the literal `"0"`
- * or `"1"` (`docs/environment-variables.md` "Boolean-style variables").
+ * #5419: the boolean `PI_LENS_*` switches flip only on the literal `"0"` or
+ * `"1"` (`docs/environment-variables.md` "Boolean-style variables").
  *
  * Every other value, including `false`, `off`, `true` and blank, is the
  * switch's default. Before #5419 the four accepted `false` or `off` as a
@@ -9,9 +9,14 @@
  * Recurrence: #5419 (maintainer decision 2026-11-08): the four outliers
  * `PI_LENS_REVERSE_DEPS_REUSE`, `PI_LENS_GRAPH_SEQ_FASTPATH`,
  * `PI_LENS_SNAPSHOT_PERSIST_SYNC` and `PI_LENS_READ_GUARD_LOG_SNAPSHOTS`.
+ * Recurrence: #5267: `PI_LENS_DISABLE_ORPHAN_BACKSTOP`, the test-harness
+ * opt-out for arming the orphan backstop — a loosening of its `=== "1"`
+ * check to a presence check survived the round-1 suite until this row pinned
+ * the literal.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { reverseDepsReuseEnabled } from "../../clients/dispatch/integration.js";
+import { orphanBackstopSchedulingDisabled } from "../../clients/instance-reaper.js";
 import { seqFastpathEnabled } from "../../clients/review-graph/builder.js";
 import { snapshotWorkerEnabled } from "../../clients/project-snapshot.js";
 
@@ -78,6 +83,15 @@ const SWITCHES: readonly Switch[] = [
 		defaultOn: true,
 		flipLiteral: "1",
 		read: () => snapshotWorkerEnabled(),
+	},
+	// #5267: the harness opt-out for arming the orphan backstop. Arming is on
+	// by default and only the literal `"1"` skips the timer; a check loosened
+	// to presence (`!== undefined`) reddens every non-literal row here.
+	{
+		env: "PI_LENS_DISABLE_ORPHAN_BACKSTOP",
+		defaultOn: false,
+		flipLiteral: "1",
+		read: () => orphanBackstopSchedulingDisabled(),
 	},
 ];
 

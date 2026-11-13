@@ -108,6 +108,8 @@ migrate-*.js
 !docs/defect-shapes.md
 # #5026: scripts/check-pr-body.mjs reads the alignment family names from here.
 !docs/alignment-families.md
+# #5510: the prose standard every role contract points at.
+!docs/prose-standard.md
 !docs/invariants/*.md
 !docs/pi-lens-orchestration.md
 !docs/pi-lens-release.md
@@ -118,6 +120,7 @@ migrate-*.js
 !docs/real-harness.md
 !docs/audit1.md
 !docs/agent-guide.md
+!docs/architecture.md
 !docs/agent-tools.md
 !docs/ast-grep_rules_catalog.md
 !docs/tree-sitter_rules_catalog.md

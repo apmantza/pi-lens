@@ -69,15 +69,21 @@ TypeScript 7+ decides first: with `@effect/tsgo` installed beside it (the same
 `node_modules` level, with a readable manifest version and an existing
 `.bin/effect-tsgo` path) the launch is `effect-tsgo tsc --lsp --stdio`
 (`launchVariant: "effect-tsgo"`, #4914); otherwise the native `tsc --lsp --stdio`
-(`"native-ts7"`); with TypeScript 6 or older, or none, the classic
-`typescript-language-server` (`"classic"`). Installing `@effect/tsgo` is the
+(`"native-ts7"`). With TypeScript 6 or older and a TypeScript 7+
+`@typescript/native` alias at the same level, the alias's own `bin/tsc` runs
+with Node (`"native-ts7"`, #5504); an alias that exits at launch or fails
+`initialize` falls back once to the classic launch below and records one
+`lsp-registry-decision` row (`typescript-native-alias`) per root per generation.
+Otherwise, with TypeScript 6 or older, or
+none, the launch is the classic `typescript-language-server` (`"classic"`). Installing `@effect/tsgo` is the
 only opt-in. pi-lens never installs it, adds no setting for it, and runs the
 binary only when pi trusts the project, like the project's compiler. A
 malformed `@effect/tsgo` install keeps the native launch and never takes an
 ancestor's. So does an install the finder admits but the launcher cannot start
 (no exec bit, a directory at the bin path): the failure records one
 `lsp-registry-decision` row per root per generation and the native launch
-follows. A process that starts and then fails `initialize` is not covered.
+follows. A process that starts and then exits or fails `initialize` falls back
+to the native launch once, with the same `lsp-registry-decision` row (#5504).
 `effect-tsgo` wraps the same typescript-go server, so it uses the
 native variant's wait strategy and cascade tier (`isTsgoLaunchVariant`,
 `clients/lsp/server-traits.ts`) and is excluded from classic's marker the same
@@ -269,7 +275,7 @@ carries the named admission until then.
 | json | vscode-json-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | pi-lens-auto | — |
 | css | vscode-css-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | pi-lens-auto | — |
 | html | vscode-html-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | pi-lens-auto | — |
-| rust | rust-analyzer | pull | — | n/a (pull) | 1 | dev+ci | 0.3.3105-standalone | global-path | — |
+| rust | rust-analyzer | pull | — | n/a (pull) | 1 | dev+ci | 0.3.3113-standalone | global-path | — |
 | svelte | svelte-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | pi-lens-auto | — |
 | deno | deno (alt of typescript) | pull | — | n/a (pull) | 1 | dev+ci | 2.9.8 | global-path | — |
 | ruby | ruby-lsp | pull | — | n/a (pull) | 1 | ci | — | — | — |

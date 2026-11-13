@@ -46,7 +46,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { loadPiLensProjectConfig } from "./project-lens-config.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
-import { isUnderDir, normalizeMapKey, toPosix } from "./path-utils.js";
+import {
+	isUnderDir,
+	normalizeMapKey,
+	realpathOrResolve,
+	toPosix,
+} from "./path-utils.js";
 import {
 	getScratchTreeGlobPatterns,
 	nestedWorktreeOffsets,
@@ -358,7 +363,7 @@ export class TrivyClient extends SecurityScanClient<TrivyResult> {
 	 * same root share a single process.
 	 */
 	async scan(cwd: string): Promise<TrivyResult> {
-		const targetDir = path.resolve(cwd);
+		const targetDir = realpathOrResolve(cwd);
 		const scannedAt = new Date().toISOString();
 
 		if (!shouldScanTrivy(targetDir)) {
