@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { normalizeToml } from "./cargo-manifest.js";
 import { isJstsFactFile, TERRAGRUNT_FILENAMES } from "./file-kinds.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { logLatency } from "./latency-logger.js";
@@ -1976,17 +1977,21 @@ export function hasNearestPackageJsonDependency(
 // `which`, which favors the npm-installed binary, so that requirement is not
 // separately re-checked here.
 //
-// Known limits of this line-match heuristic (#1134 P3 tail 1): it tolerates a
-// trailing `#`-comment after the value (`svelte = true  # enable`), but it is
-// NOT a real TOML parser — a `svelte = true` occurrence nested under a
-// `[table]` section, or one embedded inside a multi-line/triple-quoted string
-// value, would still match and false-positive. Both are considered acceptable
-// risk: an oxfmt.toml sectioning `svelte` under a table is not a realistic
-// config shape for this single top-level boolean key, and a false positive
-// here only causes oxfmt to be OFFERED (still gated by oxfmt actually running
-// and the `svelte` package check above), never a silent formatter failure.
-const OXFMT_SVELTE_TOML_TRUE =
-	/(^|\n)\s*svelte\s*=\s*true\s*(\s*#.*)?(\r?\n|$)/;
+// The flag is a top-level TOML key: read from comment-stripped text before the
+// first table heading, so `svelte = true` under a `[table]`, in a comment or
+// after a `#` is not the flag (#5408; #1134 P3 tail 1 had accepted the first
+// as a false positive). A `svelte = true` line inside a multi-line string
+// value still matches; that can only OFFER oxfmt, which then runs or fails
+// visibly, never a silent formatter failure.
+const OXFMT_SVELTE_TOML_TRUE = /^[ \t]*svelte[ \t]*=[ \t]*true[ \t]*$/m;
+const TOML_TABLE_HEADING_LINE = /^[ \t]*\[{1,2}[^\]\n]+\]{1,2}[ \t]*$/m;
+
+/** The text of a TOML document before its first table heading, comments stripped. */
+function tomlTopLevel(content: string): string {
+	const normalized = normalizeToml(content);
+	const heading = TOML_TABLE_HEADING_LINE.exec(normalized);
+	return heading ? normalized.slice(0, heading.index) : normalized;
+}
 
 export function hasOxfmtSvelteConfig(cwd: string): boolean {
 	// Monorepo asymmetry (#1134 P3 tail 2): this dependency check stops at the
@@ -2012,15 +2017,14 @@ export function hasOxfmtSvelteConfig(cwd: string): boolean {
 			} catch {}
 		}
 		// oxfmt.toml is TOML; pi-lens has no TOML parser dependency, so this is
-		// a targeted line match for the single boolean key rather than a full
-		// parse (same pragmatic style as hasVitePlusConfig's content.includes
-		// check above) — presence of the file alone is NOT sufficient, since a
-		// TOML config can omit `svelte` or set it false.
+		// a top-level line match for the single boolean key rather than a full
+		// parse — presence of the file alone is NOT sufficient, since a TOML
+		// config can omit `svelte` or set it false.
 		const tomlPath = path.join(dir, "oxfmt.toml");
 		if (fs.existsSync(tomlPath)) {
 			try {
 				const content = fs.readFileSync(tomlPath, "utf-8");
-				if (OXFMT_SVELTE_TOML_TRUE.test(content)) return true;
+				if (OXFMT_SVELTE_TOML_TRUE.test(tomlTopLevel(content))) return true;
 			} catch {}
 		}
 	}
@@ -2140,7 +2144,8 @@ export function _getSpotlessGradleReadCountForTests(): number {
 
 /**
  * Blank comments and quoted strings while preserving braces and newlines in
- * executable Gradle source. This is deliberately a small lexical pre-pass,
+ * executable Gradle source (`keep: "strings"` blanks only the comments, for a
+ * reader that counts a mention in a string such as a plugin id). This is deliberately a small lexical pre-pass,
  * not a Groovy/Kotlin parser. In particular, statically disabled constructs
  * such as `if (false) { ktlint() }` remain a documented false-positive.
  *
@@ -2150,7 +2155,11 @@ export function _getSpotlessGradleReadCountForTests(): number {
  * single-source-of-truth reuse `clients/cargo-manifest.ts` did for TOML
  * parsing (#2466).
  */
-export function stripGradleCommentsAndStrings(source: string): string {
+export function stripGradleCommentsAndStrings(
+	source: string,
+	/** `"strings"` keeps string contents and blanks only comments. */
+	keep?: "strings",
+): string {
 	let result = "";
 	let state: "code" | "line-comment" | "block-comment" | "string" = "code";
 	let quote = "";
@@ -2167,7 +2176,7 @@ export function stripGradleCommentsAndStrings(source: string): string {
 				index += 1;
 				state = "block-comment";
 			} else if (char === '"' || char === "'") {
-				result += " ";
+				result += keep === "strings" ? char : " ";
 				quote = char;
 				state = "string";
 			} else {
@@ -2197,17 +2206,19 @@ export function stripGradleCommentsAndStrings(source: string): string {
 			continue;
 		}
 
+		const blank = (kept: string) => (keep === "strings" ? kept : " ");
 		if (char === "\\") {
-			result += " ";
+			result += blank(char);
 			if (index + 1 < source.length) {
-				result += source[index + 1] === "\n" ? "\n" : " ";
+				const escaped = source[index + 1];
+				result += escaped === "\n" ? "\n" : blank(escaped);
 				index += 1;
 			}
 		} else if (char === quote) {
-			result += " ";
+			result += blank(char);
 			state = "code";
 		} else {
-			result += char === "\n" || char === "\r" ? char : " ";
+			result += char === "\n" || char === "\r" ? char : blank(char);
 		}
 	}
 	return result;
@@ -2482,8 +2493,16 @@ export function hasKtfmtConfig(cwd: string): boolean {
 			const p = path.join(dir, gradle);
 			if (fs.existsSync(p)) {
 				try {
-					// Match the gradle plugin id / artifact, not a stray substring.
-					if (/ktfmt|com\.facebook\.ktfmt/i.test(fs.readFileSync(p, "utf-8")))
+					// A mention in code or in a string (the plugin id, the artifact, a
+					// version-catalog alias) counts; one in a comment does not.
+					if (
+						/ktfmt/i.test(
+							stripGradleCommentsAndStrings(
+								fs.readFileSync(p, "utf-8"),
+								"strings",
+							),
+						)
+					)
 						return true;
 				} catch {}
 			}

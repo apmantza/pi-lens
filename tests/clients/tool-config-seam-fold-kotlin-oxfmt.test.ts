@@ -122,6 +122,37 @@ describe("a Kotlin formatter election above $HOME is not project config (#5408 d
 	});
 });
 
+// Recurrence: hasKtfmtConfig read `/ktfmt/i` over the raw build file, so a
+// comment that merely names ktfmt elected it (the #5408 divergence 2 shape,
+// a substring read, applied to Gradle).
+describe("a ktfmt mention in a Gradle comment is not an election (#5408 divergence 2 shape)", () => {
+	it.each([
+		["a line comment", "// we could switch to ktfmt one day\n"],
+		["a block comment", "/* ktfmt()\n */\n"],
+	])("%s selects no Kotlin formatter", async (_label, body) => {
+		const { proj } = layout("5408-s4-gradle-comment");
+		write(path.join(proj, "build.gradle.kts"), body);
+		expect(await kotlinFormatters(proj)).toEqual([]);
+	});
+
+	// Control: code and strings still elect it, on master and now.
+	it.each([
+		["a version-catalog alias", "plugins { alias(libs.plugins.ktfmt) }\n"],
+		[
+			"a plugin id",
+			'plugins { id("com.ncorti.ktfmt.gradle") version "0.20.1" }\n',
+		],
+		[
+			"a quoted artifact",
+			"dependencies { classpath 'com.facebook:ktfmt:0.47' }\n",
+		],
+	])("%s elects ktfmt", async (_label, body) => {
+		const { proj } = layout("5408-s4-gradle-code");
+		write(path.join(proj, "build.gradle.kts"), body);
+		expect(await kotlinFormatters(proj)).toEqual(["ktfmt"]);
+	});
+});
+
 describe("Gradle ktlint ownership above $HOME is not this project's (#5408 divergence 3 shape)", () => {
 	const PLUGIN = 'plugins { id("org.jlleitschuh.gradle.ktlint") }\n';
 
@@ -159,6 +190,25 @@ describe("the oxfmt svelte flag above $HOME is not project config (#5408 diverge
 		const { proj, above } = layout("5408-s4-oxfmt-above");
 		plant(path.join(above, file), body);
 		expect(await svelteFormatters(proj)).not.toContain("oxfmt");
+	});
+
+	// Recurrence: the flag was a line match anywhere in the file (#1134 P3 tail
+	// 1), so `svelte = true` under a `[table]` offered oxfmt.
+	it("a svelte key nested under a [table] is not the top-level flag", async () => {
+		const { proj } = layout("5408-s4-oxfmt-nested");
+		write(path.join(proj, "oxfmt.toml"), "[overrides]\nsvelte = true\n");
+		expect(await svelteFormatters(proj)).not.toContain("oxfmt");
+	});
+
+	// Control: a top-level flag with a trailing comment, and below a comment
+	// line, still offers oxfmt.
+	it("a top-level svelte flag with a trailing comment offers oxfmt", async () => {
+		const { proj } = layout("5408-s4-oxfmt-comment");
+		write(
+			path.join(proj, "oxfmt.toml"),
+			"# oxfmt\nsvelte = true # enable\n\n[overrides]\nx = 1\n",
+		);
+		expect(await svelteFormatters(proj)).toContain("oxfmt");
 	});
 
 	// Control: the flag inside the project, and at $HOME, offers oxfmt.
