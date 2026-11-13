@@ -398,11 +398,18 @@ describe("SgRunner", () => {
 					fs.writeFileSync(path.join(tree, ".gitignore"), "node_modules/\n");
 					if (withMarker) fs.mkdirSync(path.join(tree, ".git"));
 					else {
+						// #5545 r2 N3: this used to `continue` past the marker-less half when
+						// a `.git` sat above the temp root, so the cell went green with the
+						// npx tier's project globs unchecked (mutation: marker-less branch
+						// forced to `[]`, green). The half needs a temp root with no repository
+						// above it. The real-binary cells use `setupTestEnvironment`, which
+						// plants a `.git`, so this mocked argv cell is the only one that
+						// reaches the marker-less branch.
 						const ancestor = markerAbove(tree);
-						// A shared checkout may place a marker at the OS temp root. In
-						// that harness shape this cell cannot create a marker-less tree;
-						// the real-binary end-to-end cell owns that population.
-						if (ancestor !== undefined) continue;
+						expect(
+							ancestor,
+							`TMPDIR ${os.tmpdir()} sits under the repository at ${ancestor}: point TMPDIR outside it so the marker-less half can run`,
+						).toBeUndefined();
 					}
 					scanArgs.length = 0;
 					resetDegradationLedger();
@@ -767,7 +774,17 @@ describe("SgRunner", () => {
 					if (cmd === managed && args.includes("--version"))
 						return { status: 0, stdout: "ast-grep 0.51.1", stderr: "" };
 					calls.push({ args, cwd: options?.cwd });
-					return { status: 1, stdout: "", stderr: "path not found" };
+					// The real CLI (ast-grep 0.51.1) answers a scan path that does not
+					// exist with exit 0 and `[]` on stdout; the reason goes to stderr and
+					// names the argument it was given. Captured from `ast-grep scan --json
+					// missing/nested/file.ts` run in the anchored cwd:
+					//   ERROR: missing/nested/file.ts: No such file or directory (os error 2)
+					//   []
+					return {
+						status: 0,
+						stdout: "[]",
+						stderr: `ERROR: ${args.at(-1)}: No such file or directory (os error 2)`,
+					};
 				},
 			);
 			try {
@@ -780,8 +797,11 @@ describe("SgRunner", () => {
 				expect(calls).toHaveLength(1);
 				expect(calls[0]?.cwd).toBe(env);
 				expect(calls[0]?.args.at(-1)).toBe(path.relative(env, scanPath));
-				expect(result.error).toContain("path not found");
-				expect(result.failure).toBe("cli-failure");
+				// The CLI's stderr line is not an error: the scan answers no matches, as
+				// master did for a missing path (#5545 N3).
+				expect(result.matches).toEqual([]);
+				expect(result.error).toBeUndefined();
+				expect(result.failure).toBeUndefined();
 			} finally {
 				removeTempDirSync(env);
 			}

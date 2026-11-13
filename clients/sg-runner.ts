@@ -78,12 +78,12 @@ function sgExcludeArgsForProject(rootDir: string): string[] {
  * runs from the pi-lens-owned npm-isolation directory so a hostile project
  * `.npmrc` never reaches it (#4233 V3-HIGH-02), and no glob spelling roots a
  * pattern at a scan tree outside that directory: an absolute prefix
- * (`!<scan-root>/node_modules/**`) matches nothing at all. So that tier carries
- * no exclude globs. ast-grep's own VCS ignore handling reads the SCANNED tree
- * (measured: a repository under an ancestor its own `.gitignore` names keeps
- * `node_modules` out with the child started elsewhere), which covers the same
- * patterns there. A tree with no `.git` marker keeps the pre-anchor argv so its
- * project globs still exclude the project's ignored paths.
+ * (`!<scan-root>/node_modules/**`) matches nothing at all. ast-grep's own VCS
+ * ignore handling reads the SCANNED tree (measured: a repository under an
+ * ancestor its own `.gitignore` names keeps `node_modules` out with the child
+ * started elsewhere), which covers the same patterns there. A tree with no
+ * `.git` marker keeps the pre-anchor argv so its project globs still exclude the
+ * project's ignored paths.
  */
 type SgScanAnchor = {
 	/** The directory the scan child runs in. */
@@ -1003,13 +1003,10 @@ export class SgRunner {
 	/** The scan anchor for one `dir` argument; see {@link SgScanAnchor}. */
 	private sgScanAnchor(dir: string): SgScanAnchor {
 		const absolute = path.resolve(dir);
-		let isDirectory = false;
-		try {
-			isDirectory = fs.statSync(absolute).isDirectory();
-		} catch {
-			// none: anchor at the nearest directory that exists so the child itself
-			// can start. The relative missing path still reaches the CLI.
-		}
+		// A missing path is not a directory: it anchors at its parent, and the walk
+		// below moves that up to the nearest directory that exists (#5545).
+		const isDirectory =
+			fs.existsSync(absolute) && fs.statSync(absolute).isDirectory();
 		let treeRoot = isDirectory ? absolute : path.dirname(absolute);
 		if (!fs.existsSync(treeRoot)) {
 			treeRoot =
@@ -1017,6 +1014,11 @@ export class SgRunner {
 		}
 		const isolationCwd = this.sgSpawnOptions?.cwd;
 		if (isolationCwd !== undefined) {
+			// This tier cannot be anchored, so a tree with no repository marker keeps
+			// its project globs, which then match from the isolation cwd. Under an
+			// ancestor named like one of the tree's ignored directories they exclude
+			// the whole tree and the answer is `[]`: the price of keeping the globs
+			// (#5545 N1). A worktree lane always has a `.git` file, so it never gets here.
 			return {
 				cwd: isolationCwd,
 				scanArg: absolute,
