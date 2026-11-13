@@ -773,7 +773,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// delivery filter.
 		"clients/out-of-band-changes.ts": 1,
 		"clients/path-utils.ts": 1,
-		"clients/persistent-reverify.ts": 4,
+		// 4 -> 6 (#5258): the re-verify splits a file's carried warnings into the
+		// unanswered and the retirable ones, two `Array.prototype.filter` calls,
+		// not delivery filters.
+		"clients/persistent-reverify.ts": 6,
 		// 4 -> 6 (#4484): `liveBlockers.filter` and `recordBlockers.filter` split the
 		// live blocking set into the delta's and the held-back ones, two
 		// `Array.prototype.filter` calls, not a delivery filter.
@@ -907,8 +910,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// delivery filters.
 		// 47 -> 49 (#5258): the clean claim's scope keeps the checked summaries,
 		// and its proof keeps the swept files the sweep proved; two
-		// `Array.prototype.filter` calls, not delivery filters.
-		"tools/lens-diagnostics.ts": 49,
+		// `Array.prototype.filter` calls, not delivery filters. 49 -> 50 (#5258):
+		// mode=full keeps the stale paths inside the requested scope, the same
+		// `Array.prototype.filter` shape.
+		"tools/lens-diagnostics.ts": 50,
 		// 12 -> 13 (#4346): the batch selects its finding-bearing files to resolve.
 		// 13 -> 14 (#4322): the batch counts its files with auxiliary findings
 		// only, one `Array.prototype.filter` use, not a delivery filter.
@@ -1680,7 +1685,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/command-path.ts": 5,
 	},
 	record: {
-		"clients/actionable-warnings.ts": 14,
+		// 14 -> 16 (#5258): the code-action enrichment pushes the warning record it
+		// built onto `unanswered` when the lookup never answered or threw.
+		"clients/actionable-warnings.ts": 16,
 		// 8 -> 9 (#4617): the well-formed check reads the new `filelessParts`
 		// flag on the record it validates, so one more `record.` use exists.
 		"clients/advisory-provenance.ts": 9,
@@ -1724,7 +1731,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/observed-mutation.ts": 4,
 		"clients/opaque-mutation-scan.ts": 1,
 		"clients/partial-edit-apply.ts": 4,
-		"clients/persistent-reverify.ts": 3,
 		"clients/project-diagnostics/fresh-fetch.ts": 12,
 		"clients/project-lens-config.ts": 8,
 		"clients/project-snapshot.ts": 10,
@@ -2093,7 +2099,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/vale.ts": 1,
 		"clients/dispatch/utils/format-utils.ts": 2,
 		"clients/module-report.ts": 2,
-		"clients/persistent-reverify.ts": 3,
 		"clients/pipeline.ts": 6,
 		"clients/project-diagnostics/runner-adapters/call-graph-impact.ts": 1,
 		"clients/runtime-agent-end.ts": 6,

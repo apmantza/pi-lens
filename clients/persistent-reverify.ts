@@ -314,17 +314,17 @@ export async function runPersistentReverify(args: {
 			enriched === undefined
 				? entry.warnings
 				: entry.warnings.filter(
-						(warning) =>
-							!enriched.some((record) => sameWarning(record, warning)) &&
-							unanswered.some((record) => sameWarning(record, warning)),
+						(carried) =>
+							!enriched.some((fresh) => sameWarning(fresh, carried)) &&
+							unanswered.some((open) => sameWarning(open, carried)),
 					);
 		const retirable =
 			enriched === undefined
 				? 0
 				: entry.warnings.filter(
-						(warning) =>
-							!enriched.some((record) => sameWarning(record, warning)) &&
-							!carriedUnanswered.includes(warning),
+						(carried) =>
+							!enriched.some((fresh) => sameWarning(fresh, carried)) &&
+							!carriedUnanswered.includes(carried),
 					).length;
 		if (
 			enriched === undefined ||

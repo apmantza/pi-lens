@@ -1845,15 +1845,9 @@ export function createLspNavigationTool(
 					case "workspaceSymbol":
 						return runWorkspaceSymbolOperation();
 					case "codeAction":
-						return (
-							(await lspService.codeAction(
-								filePath,
-								lspLine,
-								lspChar,
-								lspEndLine,
-								lspEndChar,
-							)) ?? []
-						);
+						return lspService
+							.codeAction(filePath, lspLine, lspChar, lspEndLine, lspEndChar)
+							.then((actions) => actions ?? []);
 					case "rename": {
 						if (!newName || newName.trim().length === 0) {
 							throw new Error(
