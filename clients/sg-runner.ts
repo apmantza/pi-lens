@@ -1047,12 +1047,9 @@ export class SgRunner {
 		// excludes the same way a child started above the tree does. Relative to
 		// the scan root both CLI generations see the same candidate path, and
 		// match paths come back relative to it, folded back below.
-		let relative: string;
-		try {
-			relative = path.relative(treeRoot, absolute) || ".";
-		} catch {
-			return { cwd: treeRoot, scanArg: absolute, excludeArgs: [] };
-		}
+		// Both sides are absolute and `treeRoot` derives from `absolute`, so
+		// `path.relative` cannot fail here; a guard would only hide a bad anchor.
+		const relative = path.relative(treeRoot, absolute) || ".";
 		return {
 			cwd: treeRoot,
 			scanArg: relative,
