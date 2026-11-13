@@ -2488,73 +2488,67 @@ describe("#5240: a duplicate turn end stages a repeat of its live blockers", () 
 		}
 	});
 
-	for (const [title, mcp] of [
-		[
-			"collapses a blocker delivered in full 3 times by a fresh turn end",
-			false,
-		],
-		["keeps a blocker whole on a fresh turn end under the MCP address", true],
-	] as const) {
-		it(title, async () => {
-			// RECURRENCE GUARDED: #5532 review r1 F1. A fresh turn end (the set
-			// changed) re-sent every live blocker in full, so the cap on the repeat
-			// alone left a stuck blocker at 28 full deliveries in 21 prompts. The MCP
-			// host (`deliveryAddress`) keeps its blockers whole, as for repeats.
-			const rig = makeRig("pi-lens-5532-fresh-");
-			try {
-				fillerBlocker(rig, 300);
-				const delivered: string[] = [];
-				for (let turn = 1; turn <= 5; turn++) {
-					// A different side blocker each turn changes the set, so the turn end
-					// is fresh, never a duplicate.
-					const side = touch(rig, `side-${turn}.ts`);
-					rig.runtime.recordInlineBlockers(
-						side,
-						`side blocker ${turn}`,
-						rig.runtime.nextWriteIndex(),
-						["eslint"],
-						[1],
-					);
-					rig.runtime.beginTurn();
-					await handleTurnEnd({
-						...makeDeps(
-							rig.runtime,
-							rig.cacheManager,
-							rig.cwd,
-							undefined,
-							rig.lensGuard,
-						),
-						...(mcp ? { deliveryAddress: "host-address" } : {}),
-					});
-					delivered.push(
-						consumeTurnEndFindings(rig.cacheManager, rig.cwd, rig.runtime)
-							?.messages?.[0]?.content ?? "",
-					);
-					rig.runtime.clearInlineBlockers(side, rig.runtime.nextWriteIndex());
-				}
-				// A turn end can stay silent (it dedupes against the last one); judge
-				// the deliveries that reached the agent.
-				const reached = delivered.flatMap((text) =>
-					text === "" ? [] : [text],
+	const freshTurnEnds = async (mcp: boolean): Promise<void> => {
+		// RECURRENCE GUARDED: #5532 review r1 F1. A fresh turn end (the set
+		// changed) re-sent every live blocker in full, so the cap on the repeat
+		// alone left a stuck blocker at 28 full deliveries in 21 prompts. The MCP
+		// host (`deliveryAddress`) keeps its blockers whole, as for repeats.
+		const rig = makeRig("pi-lens-5532-fresh-");
+		try {
+			fillerBlocker(rig, 300);
+			const delivered: string[] = [];
+			for (let turn = 1; turn <= 5; turn++) {
+				// A different side blocker each turn changes the set, so the turn end
+				// is fresh, never a duplicate.
+				const side = touch(rig, `side-${turn}.ts`);
+				rig.runtime.recordInlineBlockers(
+					side,
+					`side blocker ${turn}`,
+					rig.runtime.nextWriteIndex(),
+					["eslint"],
+					[1],
 				);
-				expect(reached.length).toBeGreaterThanOrEqual(4);
-				const full = reached.map((text) =>
-					text.includes("Unresolved from this turn — filler.ts"),
+				rig.runtime.beginTurn();
+				await handleTurnEnd({
+					...makeDeps(
+						rig.runtime,
+						rig.cacheManager,
+						rig.cwd,
+						undefined,
+						rig.lensGuard,
+					),
+					...(mcp ? { deliveryAddress: "host-address" } : {}),
+				});
+				delivered.push(
+					consumeTurnEndFindings(rig.cacheManager, rig.cwd, rig.runtime)
+						?.messages?.[0]?.content ?? "",
 				);
-				const collapsed = reached.map((text) =>
-					text.includes(BLOCKER_CAPPED_MARK),
-				);
-				expect(full.slice(0, 4)).toEqual(
-					mcp ? [true, true, true, true] : [true, true, true, false],
-				);
-				expect(collapsed.slice(0, 4)).toEqual(
-					mcp ? [false, false, false, false] : [false, false, false, true],
-				);
-			} finally {
-				rig.cleanup();
+				rig.runtime.clearInlineBlockers(side, rig.runtime.nextWriteIndex());
 			}
-		});
-	}
+			// A turn end can stay silent (it dedupes against the last one); judge
+			// the deliveries that reached the agent.
+			const reached = delivered.flatMap((text) => (text === "" ? [] : [text]));
+			expect(reached.length).toBeGreaterThanOrEqual(4);
+			const full = reached.map((text) =>
+				text.includes("Unresolved from this turn — filler.ts"),
+			);
+			const collapsed = reached.map((text) =>
+				text.includes(BLOCKER_CAPPED_MARK),
+			);
+			expect(full.slice(0, 4)).toEqual(
+				mcp ? [true, true, true, true] : [true, true, true, false],
+			);
+			expect(collapsed.slice(0, 4)).toEqual(
+				mcp ? [false, false, false, false] : [false, false, false, true],
+			);
+		} finally {
+			rig.cleanup();
+		}
+	};
+	it("collapses a blocker delivered in full 3 times by a fresh turn end", () =>
+		freshTurnEnds(false));
+	it("keeps a blocker whole on a fresh turn end under the MCP address", () =>
+		freshTurnEnds(true));
 
 	it("stages no repeat for a duplicate turn that holds no blocker", async () => {
 		// RECURRENCE GUARDED: #5240. A drift-demoted blocker is an advisory, not a
