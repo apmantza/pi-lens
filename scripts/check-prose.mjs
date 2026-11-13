@@ -193,6 +193,182 @@ export function proseSections(body = "") {
 
 export { FILLER_PATTERNS };
 
+// ---- Comment layout (docs/prose-standard.md "Comment layout", #5558) ----
+//
+// A posted triage, review, verify or status comment over COMMENT_FOLD_OVER
+// non-blank lines shows at most COMMENT_VISIBLE_MAX of them, and puts the rest
+// in `<details>` folds whose summary names a model. The gate admits a short
+// list of recognised forms and refuses everything else (principles §1, gates
+// fail closed): an unrecognised tag, a summary that is not "<Model> (<effort>):
+// <what>" or "<Model>: <what>", a nested fold. A `<details>` inside a code
+// fence is text, not a fold.
+const COMMENT_FOLD_OVER = 12;
+const COMMENT_VISIBLE_MAX = 8;
+const LONG_OK_MIN_REASON = 12;
+// A new model family is a one-line edit here, in the same PR that first uses it.
+const MODEL_FAMILIES = [
+	"claude",
+	"opus",
+	"sonnet",
+	"haiku",
+	"gpt",
+	"codex",
+	"sol",
+	"luna",
+	"deepseek",
+	"qwen",
+	"glm",
+	"gemini",
+	"muse",
+	"kimi",
+	"mistral",
+	"llama",
+	"grok",
+];
+const VENDOR_PREFIXES = ["claude", "anthropic", "openai", "codex"];
+const EFFORT_RE =
+	/^(?:thinking\s+)?(?:low|medium|high|xhigh|max|minimal|default)$/i;
+const SUMMARY_RE = /^<summary>(.+)<\/summary>$/i;
+const SUMMARY_FORM_RE =
+	/^(?<model>[^():]+?)(?:\s*\((?<effort>[^()]+)\))?\s*:\s*(?<what>\S.*)$/;
+
+function namesModel(model) {
+	const words = model.trim().split(/\s+/);
+	if (words.length > 6) return false;
+	while (words.length > 1 && VENDOR_PREFIXES.includes(words[0].toLowerCase()))
+		if (
+			MODEL_FAMILIES.includes(words[1].replace(/[-.\d].*$/, "").toLowerCase())
+		)
+			words.shift();
+		else break;
+	if (!words.every((word) => /^[\w.-]+$/.test(word))) return false;
+	const family = words[0].toLowerCase();
+	return MODEL_FAMILIES.some(
+		(name) => family === name || new RegExp(`^${name}[-.\\d]`).test(family),
+	);
+}
+
+function summaryErrors(inner, at) {
+	const form = SUMMARY_FORM_RE.exec(inner.trim());
+	if (!form || !namesModel(form.groups.model))
+		return [
+			`comment-layout (line ${at}): the summary must name a model, as "<Model name> (<effort>): <what is inside>" or "<Model name>: <what is inside>" (found "${inner.trim()}")`,
+		];
+	if (form.groups.effort && !EFFORT_RE.test(form.groups.effort.trim()))
+		return [
+			`comment-layout (line ${at}): the summary effort "${form.groups.effort.trim()}" is not low, medium, high, xhigh, max, minimal or default`,
+		];
+	return [];
+}
+
+export function checkCommentLayout(text = "", options = {}) {
+	const errors = [];
+	const warnings = [];
+	const lines = String(text ?? "").split(/\r?\n/);
+	const nonBlank = lines.filter((line) => line.trim()).length;
+	let fence = null;
+	let open = 0;
+	let visible = 0;
+	let folds = 0;
+	for (let index = 0; index < lines.length; index += 1) {
+		const at = index + 1;
+		const trimmed = lines[index].trim();
+		const fenceMark = /^(`{3,}|~{3,})/.exec(trimmed)?.[1];
+		if (fence) {
+			if (
+				fenceMark?.[0] === fence[0] &&
+				fenceMark.length >= fence.length &&
+				trimmed === fenceMark
+			)
+				fence = null;
+			if (!open && trimmed) visible += 1;
+			continue;
+		}
+		if (fenceMark) {
+			fence = fenceMark;
+			if (!open) visible += 1;
+			continue;
+		}
+		if (/^<\/details/i.test(trimmed)) {
+			if (!/^<\/details>$/i.test(trimmed))
+				errors.push(
+					`comment-layout (line ${at}): put </details> on a line of its own`,
+				);
+			else if (!open)
+				errors.push(
+					`comment-layout (line ${at}): </details> has no opening <details>`,
+				);
+			open = 0;
+			continue;
+		}
+		if (/^<details/i.test(trimmed)) {
+			const tag = /^<details(?:\s+open)?\s*>(.*)$/i.exec(trimmed);
+			if (!tag) {
+				errors.push(
+					`comment-layout (line ${at}): unrecognised <details> tag; write <details> or <details open>`,
+				);
+				continue;
+			}
+			if (open) {
+				errors.push(
+					`comment-layout (line ${at}): nested <details>; use one fold per level`,
+				);
+				continue;
+			}
+			open = at;
+			folds += 1;
+			let summaryAt = index;
+			let summaryText = tag[1].trim();
+			if (!summaryText) {
+				summaryAt = index + 1;
+				while (summaryAt < lines.length && !lines[summaryAt].trim())
+					summaryAt += 1;
+				summaryText = (lines[summaryAt] ?? "").trim();
+			}
+			const summary = SUMMARY_RE.exec(summaryText);
+			if (!summary) {
+				errors.push(
+					`comment-layout (line ${at}): each <details> needs a one-line <summary>...</summary> after it, with nothing following </summary>`,
+				);
+				continue;
+			}
+			errors.push(...summaryErrors(summary[1], summaryAt + 1));
+			if ((lines[summaryAt + 1] ?? "x").trim())
+				errors.push(
+					`comment-layout (line ${summaryAt + 1}): leave a blank line after </summary>, or the Markdown in the fold does not render`,
+				);
+			index = summaryAt;
+			continue;
+		}
+		if (!open && trimmed) visible += 1;
+	}
+	if (open)
+		errors.push(
+			`comment-layout (line ${open}): unclosed <details>; add </details>`,
+		);
+	const reason = options.longOk?.trim();
+	const waived = reason && reason.length >= LONG_OK_MIN_REASON;
+	if (options.longOk !== undefined && !waived)
+		errors.push(
+			`comment-layout: --long-ok needs a reason of ${LONG_OK_MIN_REASON} or more characters`,
+		);
+	if (nonBlank > COMMENT_FOLD_OVER) {
+		const over = [];
+		if (!folds) over.push(`no <details> fold`);
+		else if (visible > COMMENT_VISIBLE_MAX)
+			over.push(
+				`the visible part has ${visible} non-blank lines (max ${COMMENT_VISIBLE_MAX})`,
+			);
+		if (over.length && waived)
+			warnings.push(`layout-waived: ${reason} (${over.join("; ")})`);
+		else if (over.length)
+			errors.push(
+				`comment-layout: ${nonBlank} non-blank lines, over ${COMMENT_FOLD_OVER}, with ${over.join("; ")}; fold the detail under <details> (docs/prose-standard.md "Comment layout")`,
+			);
+	}
+	return { errors, warnings };
+}
+
 if (isMainModule(import.meta.url)) {
 	const fileIndex = process.argv.indexOf("--body-file");
 	const json = process.argv.includes("--json");
@@ -201,6 +377,19 @@ if (isMainModule(import.meta.url)) {
 			? readFileSync(0, "utf8")
 			: readFileSync(process.argv[fileIndex + 1], "utf8");
 	const result = checkProse(input);
+	const longOkIndex = process.argv.indexOf("--long-ok");
+	if (process.argv.includes("--comment")) {
+		const layout = checkCommentLayout(input, {
+			longOk:
+				longOkIndex === -1 ? undefined : (process.argv[longOkIndex + 1] ?? ""),
+		});
+		result.errors.push(...layout.errors);
+		result.warnings.push(...layout.warnings);
+		result.valid = result.errors.length === 0;
+	} else if (longOkIndex !== -1) {
+		result.errors.push("--long-ok applies to --comment only");
+		result.valid = false;
+	}
 	if (json) console.log(JSON.stringify(result));
 	else {
 		for (const error of result.errors) console.error(error);
