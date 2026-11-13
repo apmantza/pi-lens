@@ -489,18 +489,19 @@ describe("#5553 every path-naming writer is judged on its delta", () => {
 		expect(await capturedFiles(proj)).toEqual([normalizeMapKey(target)]);
 	});
 
-	// Recurrence prevented: the first call of an unclassified tool takes the
-	// observed-write route; every later call is classified by the name pi-lens
-	// learned (`provenance: "learned"`) and reaches the host-edit capture site,
-	// which seeded linters only, so the second call blocked where the first
-	// committed.
+	// Recurrence prevented: an unclassified tool takes the observed-write route
+	// for its first calls; once pi-lens learned its name (`provenance:
+	// "learned"`) its calls reach the host-edit capture site, which seeded
+	// linters only, so a later call blocked where the first committed.
 	it(
-		"commits the second call of a foreign tool pi-lens learned from the first",
+		"commits every call of a foreign tool pi-lens learned from the first",
 		{ timeout: 120_000 },
 		async () => {
 			const { proj, target } = seedRepo("foreign-learned");
 			const second = path.join(proj, "src", "second.ts");
+			const third = path.join(proj, "src", "third.ts");
 			fs.writeFileSync(second, COMMITTED);
+			fs.writeFileSync(third, COMMITTED);
 			execFileSync("git", ["add", "-A"], {
 				cwd: proj,
 				env: gitFixtureEnv(proj),
@@ -522,17 +523,51 @@ describe("#5553 every path-naming writer is judged on its delta", () => {
 					...foreign(target, UNRELATED),
 					step(readTarget(second), "reading"),
 					...foreign(second, UNRELATED),
+					step(readTarget(third), "reading"),
+					...foreign(third, UNRELATED),
 					step(commitAttempt(), "committing"),
 					endTurn("done"),
 				],
 			});
-			await handle.prompt("write twice and commit");
+			await handle.prompt("write three files and commit");
 			expect(fs.readFileSync(target, "utf8")).toBe(UNRELATED);
 			expect(fs.readFileSync(second, "utf8")).toBe(UNRELATED);
+			expect(fs.readFileSync(third, "utf8")).toBe(UNRELATED);
 			const commits = toolResults(handle.requests.at(-1) ?? [], "bash");
 			expect(commits).toHaveLength(1);
 			expect(commits[0]?.text).not.toContain(GATE_BLOCK);
 			expect(commits[0]?.text).toContain(RAN_MARKER);
+		},
+	);
+
+	// Recurrence prevented: the seed of the two edit-gated lanes describes the
+	// whole file, so it may only classify a dispatch that reads the whole file.
+	// A later host `edit` reads its touched lines alone; the `debugger;` it adds
+	// reads like the inherited one, and matched against the seed it would commit.
+	it(
+		"refuses the identical blocker a host edit adds after a writer seeded the file",
+		{ timeout: 120_000 },
+		async () => {
+			const { target, commit } = await commitAfter(
+				"seeded-then-edit",
+				{},
+				(t) => [
+					...sed(t, "s/return alpha;/return alpha + 1;/"),
+					step(readTarget(t), "reading again"),
+					step(
+						fauxToolCall("edit", {
+							path: t,
+							edits: [{ oldText: "placeholder;", newText: "debugger;" }],
+						}),
+						"editing",
+					),
+				],
+			);
+			expect(fs.readFileSync(target, "utf8")).toBe(
+				ADDED.replace("return alpha;", "return alpha + 1;"),
+			);
+			expect(commit?.text).toContain(GATE_BLOCK);
+			expect(commit?.text).not.toContain(RAN_MARKER);
 		},
 	);
 

@@ -671,7 +671,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 	// file it is about to change takes the pre-edit seed here, before the write
 	// and before the baselines below, so the files a capture may create (a
 	// rules cache) are not part of the diff those baselines are taken for.
-	const writerPaths = namedWriterPaths(deps, toolName, mutation !== undefined);
+	const writerPaths = namedWriterPaths(deps, toolName);
 	if (writerPaths.length > 0)
 		await captureWriterSeeds(
 			namedWriterTargets(writerPaths, runtime.projectRoot),
@@ -1989,9 +1989,23 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 export const PRE_EDIT_CAPTURE_BUDGET_MS = 500;
 
 /**
+ * #5553: the bound for a writer's capture that also seeds the tree-sitter and
+ * ast-grep lanes. The first one in a process loads both engines (about 550 ms
+ * measured, ~100 ms once warm), which a 500 ms bound abandoned on the first
+ * writer of a session, so that writer's own blocker blocked its commit.
+ */
+export const PRE_EDIT_SPANLESS_CAPTURE_BUDGET_MS = 1500;
+
+function captureBudgetMs(spanless: boolean): number {
+	return spanless
+		? PRE_EDIT_SPANLESS_CAPTURE_BUDGET_MS
+		: PRE_EDIT_CAPTURE_BUDGET_MS;
+}
+
+/**
  * #4483, #5553: the one entry for a writer that names the files it will
  * change: the capture's bound, abort, degradation record and latency row, one
- * file after another, each under its own `PRE_EDIT_CAPTURE_BUDGET_MS`.
+ * file after another, each under its own bound (`captureBudgetMs`).
  * `spanless` is a writer whose dispatch gets no edit span, so the edit-gated
  * lanes read the whole file and are seeded too
  * (`PRE_EDIT_SEED_SPANLESS_RUNNER_IDS`). Never rejects.
@@ -2010,7 +2024,7 @@ async function captureWriterSeeds(
 		const outcome = await bounded(
 			capturePreEditSeed(filePath, deps, signal, spanless),
 			{
-				ms: PRE_EDIT_CAPTURE_BUDGET_MS,
+				ms: captureBudgetMs(spanless),
 				signal: deps.ctx.signal,
 				hook: "tool_call",
 				label: "pre-edit-linter-capture",
@@ -2023,7 +2037,7 @@ async function captureWriterSeeds(
 				subject: "pre-edit",
 				reason: outcome?.outcome ?? "abandoned",
 			});
-		recordPreEditCapture(filePath, outcome, Date.now() - started);
+		recordPreEditCapture(filePath, outcome, Date.now() - started, spanless);
 	}
 }
 
@@ -2036,11 +2050,7 @@ async function captureWriterSeeds(
  * the observational net would arm for it (a tool not known to be read-only
  * and not yet seen clean: a `read` or `grep` names a path too).
  */
-function namedWriterPaths(
-	deps: ToolCallDeps,
-	toolName: string,
-	classified: boolean,
-): string[] {
+function namedWriterPaths(deps: ToolCallDeps, toolName: string): string[] {
 	const { event, ctx, runtime } = deps;
 	const input = ((event as { input?: unknown }).input ?? {}) as Record<
 		string,
@@ -2068,12 +2078,10 @@ function namedWriterPaths(
 		return input.operation === "rename" && input.apply === true
 			? resolve(getToolCallRawFilePath(toolName, event))
 			: [];
-	return !classified &&
-		shouldRunOpaqueRecovery(
-			toolName,
-			opaquePrescanRoot(ctx.cwd, runtime.projectRoot),
-		) &&
-		shouldArmObservationForTool(toolName)
+	return shouldRunOpaqueRecovery(
+		toolName,
+		opaquePrescanRoot(ctx.cwd, runtime.projectRoot),
+	) && shouldArmObservationForTool(toolName)
 		? resolve(readMutationPathField(event))
 		: [];
 }
@@ -2155,6 +2163,7 @@ function recordPreEditCapture(
 	filePath: string,
 	outcome: PreEditCaptureResult | undefined,
 	durationMs: number,
+	spanless: boolean,
 ): void {
 	if (
 		outcome?.outcome === "skipped" &&
@@ -2177,7 +2186,7 @@ function recordPreEditCapture(
 			...((outcome?.outcome === "skipped" ||
 				outcome?.outcome === "discarded") && { reason: outcome.reason }),
 			...(outcome?.outcome === "failed" && { failure: outcome.failure }),
-			budgetMs: PRE_EDIT_CAPTURE_BUDGET_MS,
+			budgetMs: captureBudgetMs(spanless),
 		},
 	});
 }

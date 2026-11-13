@@ -1244,7 +1244,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 		reason:
 			"On the `tool_call` path. #2523's contract table declares no wall budget " +
 			"for tool_call. `captureWriterSeeds` (#5553) bounds each file's capture " +
-			"itself, under PRE_EDIT_CAPTURE_BUDGET_MS and the call's signal, so the " +
+			"itself, under PRE_EDIT_SPANLESS_CAPTURE_BUDGET_MS and the call's signal, so the " +
 			"wait here is that many bounded captures in turn. This is the early " +
 			"site: a bash command, `ast_grep_replace`, an LSP rename or an " +
 			"unclassified tool, before the write starts and before the opaque " +
@@ -3022,8 +3022,9 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 	"call:clients/runtime-tool-call.ts#captureWriterSeeds:56b21c1a~eb0dde4d":
 		"The pre-edit linter capture (#4483, #5553) uses the tool_call's " +
 		"ctx.signal, absent only in a harness. #2523 gives tool_call no budget " +
-		"of its own, so each capture carries PRE_EDIT_CAPTURE_BUDGET_MS (500 ms, " +
-		"measured in the PR); that wall bound is always live, and a capture it " +
+		"of its own, so each capture carries PRE_EDIT_CAPTURE_BUDGET_MS (500 ms) " +
+		"or, for a writer that names no edit span, PRE_EDIT_SPANLESS_CAPTURE_BUDGET_MS " +
+		"(1500 ms), both measured in the PR; that wall bound is always live, and a capture it " +
 		"abandons installs nothing once the writer has written.",
 	"call:clients/runtime-tool-call.ts#handleToolCallImpl:2dc2d1e2~37e44a1d":
 		"The document-symbol enrichment uses the tool_call's ctx.signal, absent " +
