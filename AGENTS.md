@@ -297,6 +297,7 @@ entry's screen, or its first sentence when it has none.
 
 ### a runner or tool outcome
 
+94. **Ignore-glob path spelling:** Screen: does the runner hand the tool the absolute dispatched path while the tool matches its ignore globs against the argument string (probe the same file under `<root>/.claude/worktrees/<lane>` and a neutral ancestor, relative vs absolute argv)?
 3. **Wrong argv transform:** verify a command is the wrapper shape before dropping an argv element or launcher name.
 13. **Wrong failure classification:** derive availability and verdicts from raw evidence; preserve the classifier and evidence when a caller asserts a fact.
 16. **Unverified external-tool claim:** probe the real binary before encoding exit codes, output shapes, severity names, or fixtures.

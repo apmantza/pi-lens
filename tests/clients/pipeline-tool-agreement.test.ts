@@ -135,6 +135,41 @@ describe("runAutofix tool agreement seam (#3005)", () => {
 		expect(getDegradationSummary()).toEqual([]);
 	});
 
+	it("hands oxlint autofix the project-relative target (#5556)", async () => {
+		fs.writeFileSync(
+			path.join(env.tmpDir, ".oxlintrc.json"),
+			JSON.stringify({ rules: { "no-unused-vars": "warn" } }),
+		);
+		fs.writeFileSync(
+			path.join(env.tmpDir, "package.json"),
+			JSON.stringify({ devDependencies: { oxlint: "^1.0.0" } }),
+		);
+		fs.writeFileSync(
+			path.join(env.tmpDir, "package-lock.json"),
+			JSON.stringify({
+				lockfileVersion: 3,
+				packages: { "": {}, "node_modules/oxlint": { version: "1.0.0" } },
+			}),
+		);
+		const file = path.join(env.tmpDir, "sample.ts");
+		fs.writeFileSync(file, "const unused = 1;\n");
+		resolveToolCommandWithInstallFallback.mockResolvedValue("oxlint");
+
+		await runAutofix(
+			file,
+			env.tmpDir,
+			() => undefined,
+			() => {},
+			deps(),
+		);
+
+		const call = vi.mocked(detectFileChangedAfterCommand).mock.calls.at(-1);
+		expect(call).toBeDefined();
+		expect(call?.[0]).toBe(file);
+		expect(call?.[1]).toBe("oxlint");
+		expect(call?.[2]).toEqual(["--fix", "sample.ts"]);
+	});
+
 	it("declines once when the Node lockfile cannot establish agreement", async () => {
 		fs.writeFileSync(
 			path.join(env.tmpDir, "package.json"),
