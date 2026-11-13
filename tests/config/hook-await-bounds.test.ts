@@ -2439,7 +2439,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// `await which(...)` / `await findInVenv(...)` lines in `resolveCommand`
 	// bodies are gone; the ladder call that replaces them sits once in
 	// `resolveManagedSmartDefaultCommand` / `resolveFormatterToolCommand`.
-	"clients/formatters.ts": 113,
+	// 113 -> 115 (#5549): not a bound. `formatFile` waits for the formatter's
+	// previous turn (one child per project at a time) and awaits its own turn.
+	// The previous turn ends when its child settles, which its 15 s spawn
+	// timeout bounds, and the run is inside the format service's `bounded()`.
+	"clients/formatters.ts": 115,
 	// 4 -> 3 and 2 -> 1 (#4984): not a bound. The two `await safeSpawnAsync`
 	// calls moved into `SecurityScanClient.runReportScan`, which the one-hop set
 	// does not walk, so the hook path's unbounded awaits are unchanged.
