@@ -546,7 +546,7 @@ export function baselineGovernanceReport(
 		}
 	}
 	const candidates = classified.map((c) =>
-		excusable.has(c.id) && Object.hasOwn(notABaseline, c.id)
+		Object.hasOwn(notABaseline, c.id)
 			? { ...c, cls: "registered" as const, why: notABaseline[c.id]! }
 			: c,
 	);
