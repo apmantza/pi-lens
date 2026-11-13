@@ -125,6 +125,17 @@ export type DegradationKind =
 	/** `ast-grep-dump-compatibility`: A retired AST dump call was redirected to ast_grep_search dump mode. */
 	| "ast-grep-dump-compatibility"
 	/**
+	 * `ast-grep-excludes-unanchored`: An `ast-grep` rule scan ran over a tree outside
+	 * any git repository on the cache-only npx tier, which starts its child in the
+	 * pi-lens-owned npm-isolation directory (#4233) — the one place a `--globs`
+	 * exclude cannot be rooted at the scan root (#5545), so the project's
+	 * `.gitignore`-derived excludes were withheld and the scan walked directories the
+	 * project ignores. Slower and noisier, never wrong: every match is still
+	 * reported. Counted per scan root, because how often a session hits the tier is
+	 * the observability question.
+	 */
+	| "ast-grep-excludes-unanchored"
+	/**
 	 * `ast-grep-napi-html-js-grammar-missing`: The loaded addon exposed no `js` grammar while an HTML file's embedded
 	 * `language: JavaScript` evaluation asked for one (#2347). The embedded
 	 * coverage degrades to nothing for the whole file, silently prior to this
