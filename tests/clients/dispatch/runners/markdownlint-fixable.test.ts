@@ -112,9 +112,12 @@ describe("markdownlint runner — fixable metadata", () => {
 
 			// #5119 review r1 F1: the 15 s kill is what bounds a spinning rule now
 			// that cli2 runs in a child, so the runner's budget is pinned.
+			// #5544: the path cli2 is handed is the one relative to that cwd — its
+			// `ignores` globs match against that string, and an absolute one lets a
+			// glob naming an ancestor of the file exclude the file from its own lint.
 			expect(safeSpawnAsync).toHaveBeenCalledWith(
 				"markdownlint-cli2",
-				[filePath],
+				["README.md"],
 				expect.objectContaining({ cwd: env.tmpDir, timeout: 15000 }),
 			);
 			expect(result.diagnostics.length).toBeGreaterThanOrEqual(2);
@@ -155,7 +158,9 @@ describe("markdownlint runner — fixable metadata", () => {
 			expect(args[0]).toBe("--config");
 			expect(args).not.toContain("--disable");
 			expect(args).not.toContain("MD013");
-			expect(args.at(-1)).toBe(filePath);
+			// #5544: the target is the project-relative path, never the absolute one.
+			expect(args.at(-1)).toBe("README.md");
+			expect(args).not.toContain(filePath);
 			expect(args[1]).toMatch(/config[\\/]markdownlint[\\/]core\.json$/);
 			expect(fs.existsSync(args[1])).toBe(true);
 			expect(path.resolve(args[1])).not.toContain(path.basename(env.tmpDir));
@@ -169,6 +174,52 @@ describe("markdownlint runner — fixable metadata", () => {
 			env.cleanup();
 		}
 	});
+
+	// #5544 round 2: a root-level name that starts with `#` or `!` is cli2's own
+	// ignore/negation glob syntax, so the bare relative target selected nothing and
+	// the run answered a clean file. Round 3: `:` is cli2's literal-file modifier,
+	// so `:a.md` linted (and `--fix` rewrote) a sibling `a.md`. The prefix now
+	// fails closed: `-a.md` and `~a.md` stand for the spellings nobody listed, and
+	// get `./` because their first character is outside the known-safe class.
+	// This argv pin runs on every host, where the real-spawn case in
+	// ignore-glob-relative-argv-real.test.ts needs the binary. `:` is not a legal
+	// Windows file-name character, so that cell runs on POSIX only.
+	it.each(
+		["#a.md", "!a.md", ":a.md", "-a.md", "~a.md"].filter(
+			(name) => process.platform !== "win32" || !name.includes(":"),
+		),
+	)(
+		"prefixes a root-level %s target so cli2 reads it as a path",
+		async (name) => {
+			const env = setupTestEnvironment("pi-lens-markdownlint-modifier-name-");
+			try {
+				const filePath = path.join(env.tmpDir, name);
+				fs.writeFileSync(filePath, "# Title\n");
+				safeSpawnAsync.mockResolvedValueOnce({
+					error: null,
+					status: 0,
+					stdout: "",
+					stderr: "",
+				});
+
+				const runner = (
+					await import("../../../../clients/dispatch/runners/markdownlint.js")
+				).default;
+				await runner.run(createCtx(filePath, env.tmpDir) as never);
+
+				const [, args] = safeSpawnAsync.mock.calls[0] as [
+					string,
+					string[],
+					unknown,
+				];
+				expect(args.at(-1)).toBe(`./${name}`);
+				expect(args).not.toContain(name);
+				expect(args).not.toContain(filePath);
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
 
 	// Regression for #212: markdownlint-cli2 emits a severity token (`error`/
 	// `warning`) between the col and the rule code, and some rules carry multiple
