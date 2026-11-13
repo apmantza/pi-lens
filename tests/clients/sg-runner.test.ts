@@ -5,6 +5,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { capKilledSpawnResult } from "../support/spawn-shapes.js";
 import { removeTempDirSync } from "./test-utils.js";
 import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
+import {
 	resetProjectTrust,
 	setProjectTrustState,
 } from "../../clients/project-trust.js";
@@ -351,6 +355,76 @@ describe("SgRunner", () => {
 					expect(options.cwd).toBe(path.join(piLensHome, "tools"));
 					expect(options.cwd).not.toBe(project);
 					expect(options.stripNpmConfig).toBe(true);
+				}
+			} finally {
+				vi.unstubAllEnvs();
+				removeTempDirSync(env);
+			}
+		});
+
+		// #5545: the npx child runs in the pi-lens npm-isolation directory, so a
+		// `--globs` exclude built from the scanned tree is tested there against a
+		// path that never starts at that tree. That tier therefore carries none,
+		// and a scan tree that no ignore file governs — no `.git` at or above it,
+		// so ast-grep reads no ignore file for it — records the loss.
+		it("carries no exclude glob on the npx tier and records it over a tree no ignore file governs (#5545)", async () => {
+			const env = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-sg-unanchored-"),
+			);
+			const piLensHome = path.join(env, "pi-lens-home");
+			vi.stubEnv("PI_LENS_HOME", piLensHome);
+			const scanArgs: string[][] = [];
+			safeSpawnAsync.mockImplementation(async (cmd: string, args: string[]) => {
+				if (cmd !== "npx")
+					return { status: 1, error: undefined, stdout: "", stderr: "" };
+				if (args.includes("--version"))
+					return { status: 0, stdout: "ast-grep 0.45.3", stderr: "" };
+				scanArgs.push(args);
+				return { status: 1, error: undefined, stdout: "", stderr: "" };
+			});
+			// The walk `sgScanAnchor` takes has to be able to miss a marker, so the
+			// fixture asserts its own ancestors carry none: a stray `.git` above the
+			// pinned tmp root is a host fault this cell names instead of folding in.
+			const markerAbove = (dir: string): string | undefined => {
+				let current = path.resolve(dir);
+				for (;;) {
+					if (fs.existsSync(path.join(current, ".git"))) return current;
+					const parent = path.dirname(current);
+					if (parent === current) return undefined;
+					current = parent;
+				}
+			};
+			try {
+				const rule =
+					"id: r\nlanguage: TypeScript\nrule: { kind: function_declaration }\n";
+				for (const withMarker of [true, false]) {
+					const tree = path.join(env, withMarker ? "repo" : "plain");
+					fs.mkdirSync(path.join(tree, "node_modules"), { recursive: true });
+					fs.writeFileSync(path.join(tree, ".gitignore"), "node_modules/\n");
+					if (withMarker) fs.mkdirSync(path.join(tree, ".git"));
+					else {
+						const ancestor = markerAbove(tree);
+						expect(
+							ancestor,
+							`no .git may sit above the marker-less fixture (${ancestor})`,
+						).toBeUndefined();
+					}
+					scanArgs.length = 0;
+					resetDegradationLedger();
+					const { SgRunner } = await import("../../clients/sg-runner.js");
+					const runner = new SgRunner();
+					expect(await runner.ensureAvailable()).toBe(true);
+					await runner.tempScanDetailedAsync(tree, "r", rule);
+					expect(scanArgs.length).toBeGreaterThan(0);
+					for (const args of scanArgs) {
+						expect(args).not.toContain("--globs");
+						expect(args).toContain(path.resolve(tree));
+					}
+					const rows = getDegradationSummary().filter(
+						(group) => group.kind === "ast-grep-excludes-unanchored",
+					);
+					if (withMarker) expect(rows).toEqual([]);
+					else expect(rows.map((row) => row.count)).toEqual([1]);
 				}
 			} finally {
 				vi.unstubAllEnvs();
