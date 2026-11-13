@@ -42,6 +42,8 @@ const OXLINT_ENTRY = path.join(
 const shippedOxlint = vi.hoisted(() => ({
 	entry: "",
 	lintSpawns: [] as Array<{ command: string; args: string[]; cwd?: string }>,
+	// The exit status the double gives `--version`: 0 for an install that works.
+	versionStatus: 0,
 }));
 shippedOxlint.entry = OXLINT_ENTRY;
 
@@ -61,7 +63,7 @@ vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => {
 			if (args.includes("--version")) {
 				return Promise.resolve({
 					error: null,
-					status: 0,
+					status: shippedOxlint.versionStatus,
 					stdout: "1.91.0\n",
 					stderr: "",
 				});
@@ -147,12 +149,14 @@ async function runOxlint(filePath: string, dispatchRoot: string) {
 describe("oxlint runner cwd follows the config (#5541)", () => {
 	beforeEach(() => {
 		shippedOxlint.lintSpawns.length = 0;
+		shippedOxlint.versionStatus = 0;
 		setProjectTrustState("trusted");
 		resetDispatchAvailabilityState();
 		resetProjectLensConfigCache();
 		resetWorkspaceTopology();
 	});
 	afterEach(() => {
+		vi.unstubAllEnvs();
 		resetProjectTrust();
 		resetProjectLensConfigCache();
 		resetWorkspaceTopology();
@@ -302,6 +306,29 @@ describe("oxlint runner cwd follows the config (#5541)", () => {
 
 				expect(result.status).toBe("skipped");
 				expect(result.skipReason).toBe("not-preferred");
+				expect(shippedOxlint.lintSpawns).toEqual([]);
+			} finally {
+				env.cleanup();
+			}
+		}, 60_000);
+
+		it("words a rejected package install from the package's own verdict", async () => {
+			// Recurrence: #5543 r1 F1/F2 (`toolAbsentSkip`): the verdict is latched per
+			// lookup directory, so asking it at the config directory read "no
+			// verdict" and worded a package binary that failed its version probe
+			// as an install the user disabled. The managed install is off so the
+			// cell never reaches the network.
+			vi.stubEnv("PI_LENS_DISABLE_TOOL_INSTALL", "1");
+			const env = setupTestEnvironment("pi-lens-oxlint-pkg-rejected-");
+			try {
+				const filePath = rootConfigOverPackage(env, '{"name":"web"}');
+				plantOxlint(path.join(env.tmpDir, "apps", "web"));
+				shippedOxlint.versionStatus = 1;
+
+				const result = await runOxlintResult(filePath, env.tmpDir);
+
+				expect(result.status).toBe("skipped");
+				expect(result.skipReason).toBe("probe-rejected");
 				expect(shippedOxlint.lintSpawns).toEqual([]);
 			} finally {
 				env.cleanup();

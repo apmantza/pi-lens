@@ -139,11 +139,13 @@ const eslintRunner: RunnerDefinition = {
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		// `cwd` is where the child starts (the config's directory, #5541); the
-		// package the file lives in still answers the gate and the install lookup.
+		// package the file lives in still answers the install lookup. The gate
+		// stays at `cwd`: an anchor is an ESLint config, so it cannot disagree
+		// with the package's own answer, and `effective-config.ts` asks it there.
 		const { cwd, packageDir = cwd } = resolveRunnerCwdWithReason(ctx, "eslint");
 
 		// Only run if project has an ESLint config.
-		if (!eslintRunner.requiresConfig?.(packageDir)) {
+		if (!eslintRunner.requiresConfig?.(cwd)) {
 			return skipped("not-configured");
 		}
 

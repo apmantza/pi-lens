@@ -28,6 +28,8 @@ import { createTempFile, setupTestEnvironment } from "../../test-utils.js";
 const spawns = vi.hoisted(
 	() => [] as Array<{ command: string; args: string[]; cwd?: string }>,
 );
+// The exit status the double gives `--version`: 0 for an install that works.
+const versionProbe = vi.hoisted(() => ({ status: 0 }));
 
 vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
 	...(await importOriginal<
@@ -39,10 +41,11 @@ vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
 		options?: { cwd?: string },
 	) => {
 		spawns.push({ command, args, cwd: options?.cwd });
+		const isProbe = args.includes("--version");
 		return Promise.resolve({
 			error: null,
-			status: 0,
-			stdout: args.includes("--version") ? "v9.39.5\n" : "[]",
+			status: isProbe ? versionProbe.status : 0,
+			stdout: isProbe ? "v9.39.5\n" : "[]",
 			stderr: "",
 		});
 	},
@@ -81,6 +84,7 @@ const lintSpawns = () =>
 describe("eslint runner cwd follows the config, lookup follows the package (#5541)", () => {
 	beforeEach(() => {
 		spawns.length = 0;
+		versionProbe.status = 0;
 		setProjectTrustState("trusted");
 		resetDispatchAvailabilityState();
 		resetProjectLensConfigCache();
@@ -124,6 +128,27 @@ describe("eslint runner cwd follows the config, lookup follows the package (#554
 
 			expect(lintSpawns().map((spawn) => spawn.command)).toEqual([shim]);
 			expect(lintSpawns()[0]?.cwd).toBe(env.tmpDir);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("words a rejected package install from the package's own verdict", async () => {
+		// Recurrence: #5543 r1 F1/F2 (`toolAbsentSkip`): the verdict is latched per
+		// lookup directory, so asking it at the config directory read "no
+		// verdict" and worded a package binary that failed its version probe as
+		// not-installed.
+		const env = setupTestEnvironment("pi-lens-eslint-pkg-rejected-");
+		try {
+			const filePath = rootConfigOverPackage(env.tmpDir);
+			plantEslint(path.join(env.tmpDir, "apps", "web"));
+			versionProbe.status = 1;
+
+			const result = await runEslint(filePath, env.tmpDir);
+
+			expect(result.status).toBe("skipped");
+			expect(result.skipReason).toBe("probe-rejected");
+			expect(lintSpawns()).toEqual([]);
 		} finally {
 			env.cleanup();
 		}
