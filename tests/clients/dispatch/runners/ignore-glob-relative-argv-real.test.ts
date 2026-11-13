@@ -115,9 +115,20 @@ function relativeToProject(project: string, file: string): string {
 	return path.relative(project, file).split(path.sep).join("/");
 }
 
-/** The argv of the one `safeSpawnAsync` call the runner made. */
-function spawnArgv(): string[] {
-	const calls = vi.mocked(safeSpawnModule.safeSpawnAsync).mock.calls;
+/**
+ * The argv of the `safeSpawnAsync` call that names the dispatched file. The
+ * resolver's own availability probe (`yamllint --version`,
+ * `markdownlint-cli2 --no-globs -`) names none, so it is not the call whose path
+ * spelling is under test; exactly one call must name the file.
+ */
+function spawnArgv(fileName: string): string[] {
+	const calls = vi
+		.mocked(safeSpawnModule.safeSpawnAsync)
+		.mock.calls.filter(([, args]) =>
+			(args as string[] | undefined)?.some(
+				(arg) => path.basename(arg ?? "") === fileName,
+			),
+		);
 	expect(calls).toHaveLength(1);
 	return calls[0][1] as string[];
 }
@@ -137,7 +148,7 @@ beforeEach(() => {
 	vi.spyOn(safeSpawnModule, "safeSpawnAsync");
 });
 
-describe.each([
+const RUNNERS = [
 	{
 		runnerId: "yamllint",
 		binary: "yamllint",
@@ -146,11 +157,9 @@ describe.each([
 		// one is `ignores`. Either way the glob names the layout's own ancestor.
 		// Both enabled rules fire on the fixture, so the control cannot be silent.
 		controlRules: ["document-start", "trailing-spaces"],
-		run: (project: string) =>
+		run: (filePath: string, project: string) =>
 			yamllintRunner.run(
-				makeRunnerCtx(path.join(project, "src/bad.yml"), project, {
-					kind: "yaml",
-				}) as never,
+				makeRunnerCtx(filePath, project, { kind: "yaml" }) as never,
 			),
 	},
 	{
@@ -158,20 +167,25 @@ describe.each([
 		binary: "markdownlint-cli2",
 		file: "src/a.md",
 		controlRules: ["MD012", "MD012"],
-		run: (project: string) =>
+		run: (filePath: string, project: string) =>
 			markdownlintRunner.run(
-				makeRunnerCtx(path.join(project, "src/a.md"), project, {
-					kind: "markdown",
-				}) as never,
+				makeRunnerCtx(filePath, project, { kind: "markdown" }) as never,
 			),
 	},
-])(
+];
+
+describe.each(RUNNERS)(
 	"$runnerId lints a project whose ignore glob names its own ancestor",
 	({ binary, file, controlRules, run }) => {
 		describe.skipIf(!toolAvailable(binary))(`${binary} available`, () => {
 			it("reports the findings the control layout reports", async () => {
-				const control = summary(await run(LAYOUTS.control));
-				const scratch = summary(await run(LAYOUTS.ignoredAncestor));
+				const target = (project: string) => path.join(project, file);
+				const control = summary(
+					await run(target(LAYOUTS.control), LAYOUTS.control),
+				);
+				const scratch = summary(
+					await run(target(LAYOUTS.ignoredAncestor), LAYOUTS.ignoredAncestor),
+				);
 
 				expect(control.rules).toEqual(controlRules);
 				expect(scratch.rules).toEqual(control.rules);
@@ -179,24 +193,48 @@ describe.each([
 			});
 
 			it("names the findings with the absolute dispatched path", async () => {
-				const result = await run(LAYOUTS.ignoredAncestor);
+				const filePath = path.join(LAYOUTS.ignoredAncestor, file);
+				const result = await run(filePath, LAYOUTS.ignoredAncestor);
 
 				expect(result.diagnostics.length).toBeGreaterThan(0);
-				expect(summary(result).reportedPaths).toEqual([
-					path.join(LAYOUTS.ignoredAncestor, file),
-				]);
+				expect(summary(result).reportedPaths).toEqual([filePath]);
 			});
 
 			it(`hands the CLI the \`${file}\` relative to the spawn cwd, never the absolute path`, async () => {
 				const filePath = path.join(LAYOUTS.ignoredAncestor, file);
 
-				await run(LAYOUTS.ignoredAncestor);
+				await run(filePath, LAYOUTS.ignoredAncestor);
 
-				const argv = spawnArgv();
+				const argv = spawnArgv(path.basename(filePath));
 				expect(argv).toContain(
 					relativeToProject(LAYOUTS.ignoredAncestor, filePath),
 				);
 				expect(argv).not.toContain(filePath);
+			});
+		});
+	},
+);
+
+describe.each(RUNNERS)(
+	"$runnerId keeps the absolute argument for a file outside the project",
+	({ binary, file, run }) => {
+		describe.skipIf(!toolAvailable(binary))(`${binary} available`, () => {
+			it("spawns the absolute path it has no relative spelling for", async () => {
+				const project = LAYOUTS.control;
+				// A sibling of both layouts, so neither project holds it.
+				const outside = path.join(ROOT, "outside", path.basename(file));
+				fs.mkdirSync(path.dirname(outside), { recursive: true });
+				fs.writeFileSync(
+					outside,
+					outside.endsWith(".md") ? "# Title\n\n\ntext\n" : "key: value   \n",
+				);
+
+				await run(outside, project);
+
+				// The relativizing seam returns nothing for a file the project does not
+				// hold, and the runner then passes the path through unchanged rather than
+				// a `../` climb or an empty argument.
+				expect(spawnArgv(path.basename(outside))).toContain(outside);
 			});
 		});
 	},
