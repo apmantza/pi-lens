@@ -348,6 +348,10 @@ file-scoped worklist and receives no project-wide scanner output.
     and a neutral ancestor, comparing relative and absolute argv. A fix uses
     `relativeInside` at the runner's existing spawn cwd and preserves the
     absolute dispatched path for attribution and files outside that cwd.
+    Screen: does the runner hand the tool the absolute dispatched path while
+    the tool matches its ignore globs against the argument string (probe the
+    same file under `<root>/.claude/worktrees/<lane>` and a neutral ancestor,
+    relative vs absolute argv)?
 
 3. **Wrong argv transform:** verify a command is the wrapper shape before
    dropping an argv element or launcher name.
