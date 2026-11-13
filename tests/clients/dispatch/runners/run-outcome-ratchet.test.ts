@@ -697,8 +697,9 @@ interface SpawnBindings {
 
 /**
  * The static imports of a spawn module: named specifiers keep their local
- * spelling, a namespace import is recorded by its local, and a default import
- * is reported because the scan cannot see which spawn function it reaches.
+ * spelling, a namespace import and `{ default as x }` (the module object) are
+ * recorded by their local, and a default import is reported because the scan
+ * cannot see which spawn function it reaches.
  */
 function collectSpawnBindings(
 	root: SgNode,
@@ -736,6 +737,13 @@ function collectSpawnBindings(
 			for (const specifier of part.namedChildren()) {
 				if (specifier.kind() !== "import_specifier") continue;
 				const imported = specifier.field("name")?.text() ?? "";
+				// `{ default as cp }` binds the module object, as `* as cp` does, so
+				// its members are read as namespace members (#5530 verify r2 V1).
+				if (imported === "default") {
+					const local = specifier.field("alias")?.text();
+					if (local) namespaces.add(local);
+					continue;
+				}
 				if (!SPAWN_NAMES[family].has(imported)) continue;
 				spawnable.set(specifier.field("alias")?.text() ?? imported, imported);
 			}
@@ -931,7 +939,29 @@ function failureCaughtNotRethrown(call: SgNode): boolean {
 	}
 	const handler = tryStatement?.field("handler");
 	if (!handler) return false;
-	return !/\bthrow\b|\bprocess\.exit\b|\bexitProcess\b/.test(handler.text());
+	return !catchRethrows(handler);
+}
+
+const EXIT_CALL = /\bprocess\.exit\b|\bexitProcess\b/;
+
+/**
+ * Whether a `catch` hands the failure back to the caller (#5530 verify r2 V3).
+ *
+ * Code only: `codeMatches` blanks comments and strings, so "do not throw" in a
+ * comment is not a rethrow. The catch must also be unable to return a value: a
+ * throw or exit on its top level, and no `return` anywhere in it. A throw under
+ * an `if` leaves the other path returning, so it swallows the failure the same
+ * way `catch { return []; }` does.
+ */
+function catchRethrows(handler: SgNode): boolean {
+	if (codeMatches(handler.text(), /\breturn\b/).length > 0) return false;
+	const body = handler.field("body");
+	return (body?.namedChildren() ?? []).some(
+		(statement) =>
+			statement.kind() === "throw_statement" ||
+			(statement.kind() === "expression_statement" &&
+				codeMatches(statement.text(), EXIT_CALL).length > 0),
+	);
 }
 
 /**
@@ -1774,7 +1804,7 @@ export const OUT_OF_TREE_SPAWN_BASELINE: Record<string, string> = {
 	"scripts/ci-shuffle-changed-tests.mjs":
 		"spawnSync reads error,signal,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
 	"scripts/ci-test-diff.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:2]",
+		"execFileSync throws on a nonzero exit, a signal, or a spawn error; the first call's catch retries once and rethrows the retry's failure, so the caller gets the retry's output or an error, never an empty result; #1737 [open-sites:2] [swallowed]",
 	"scripts/ci-verdict.mjs":
 		"execFileSync throws on a nonzero exit, and at execFileSync@3065, execFileSync@3123 the throw lands in a catch that neither rethrows nor exits, so a failed child there becomes that catch's own value (an empty list is the usual one); #1737 [swallowed] [open-sites:7]",
 	"scripts/compat-contracts.mjs":
@@ -2017,6 +2047,43 @@ describe("spawn sites outside the dispatch runners (#5308)", () => {
 			expect(openSites(rethrowing).map((site) => site.swallowed)).toEqual([
 				false,
 			]);
+			// The verify's plants (#5530 r2 V3). A comment that says "throw" is not a
+			// rethrow, and a throw under an `if` leaves the other path returning a
+			// value, so both swallow. A return ahead of a top-level throw swallows
+			// too. Only a top-level throw or exit with no return rethrows.
+			const caught = (handler: string) =>
+				openSites(
+					scanCensusRow(
+						file,
+						head +
+							"function found() {\n" +
+							"  try { return execFileSync('probe', ['find']).toString(); }\n" +
+							`  ${handler}\n}\n`,
+					),
+				).map((site) => site.swallowed);
+			expect(
+				caught(
+					"catch {\n    // we deliberately do not throw here\n    return []; }",
+				),
+			).toEqual([true]);
+			expect(caught("catch (e) { if (e) { throw e; } return []; }")).toEqual([
+				true,
+			]);
+			expect(
+				caught("catch (e) { if (e.code === 'ENOENT') return []; throw e; }"),
+			).toEqual([true]);
+			expect(
+				caught("catch (e) { if (e) process.exit(1); return []; }"),
+			).toEqual([true]);
+			expect(
+				caught("catch (e) { console.error(e); process.exit(1); }"),
+			).toEqual([false]);
+			// Comment-blanking on the two checks that read text: an exit and a return
+			// that exist only inside a comment do not count (`codeMatches`).
+			expect(
+				caught("catch (e) { console.error(/* process.exit(1) */ e); }"),
+			).toEqual([true]);
+			expect(caught("catch (e) { /* return [] */ throw e; }")).toEqual([false]);
 			// A swallowing file cannot be excused by the abort wording, and its row
 			// with the marker is accepted; the reverse pair checks the other way.
 			expect(
@@ -2353,6 +2420,14 @@ describe("spawn sites outside the dispatch runners (#5308)", () => {
 				["execFileSync"],
 			],
 			[
+				// `{ default as cp }` binds the module object, as `* as cp` does
+				// (#5530 verify r2 V1). Read as a named import, the scan skipped it.
+				"import { default as cp } from " +
+					CHILD_MODULE +
+					';\ncp.execFileSync("probe", ["run"]);',
+				["execFileSync"],
+			],
+			[
 				"import { execFileSync as runSync } from " +
 					CHILD_MODULE +
 					';\nrunSync("probe", ["run"]);',
@@ -2380,6 +2455,26 @@ describe("spawn sites outside the dispatch runners (#5308)", () => {
 			// spelling: a spawn value the loop resolves is accounted for.
 			expect(scan.unclassified, source).toEqual([]);
 		}
+	});
+
+	it("resolves a primitive import against its own census directory (#5308)", () => {
+		// Recurrence: #5530 verify r2 V5. Mutating the directory `scanCensusRow`
+		// passes to `primitiveUse` left this suite green. A `scripts/lib` file
+		// reaches the classifier as `../../clients/...`: resolved against the
+		// runners directory that path leaves the repo, so only the file's own
+		// directory finds the classifier.
+		const row = scanCensusRow(
+			"scripts/lib/zzplant-resolve.mjs",
+			"import { spawnSync } from " +
+				CHILD_MODULE +
+				';\nimport { classifyRunOutcome } from "../../clients/dispatch/runners/utils/spawn-outcome.js";\nclassifyRunOutcome(spawnSync("probe"));',
+		);
+		expect(
+			row.usesPrimitive,
+			"the file's directory reaches the classifier",
+		).toBe(true);
+		expect(row.scan.unclassified).toEqual([]);
+		expect(openSites(row)).toEqual([]);
 	});
 
 	it("reports a spawn reference it cannot open (#5308 F2)", () => {
@@ -2435,6 +2530,14 @@ describe("spawn sites outside the dispatch runners (#5308)", () => {
 			],
 			[
 				"import * as cp from " + CHILD_MODULE + ';\ncp["spawnSync"]("probe");',
+				"computed subscript",
+			],
+			// The default-as spelling is the namespace, so the same report applies
+			// (#5530 verify r2 V1).
+			[
+				"import { default as cp } from " +
+					CHILD_MODULE +
+					';\ncp["spawnSync"]("probe");',
 				"computed subscript",
 			],
 			[
