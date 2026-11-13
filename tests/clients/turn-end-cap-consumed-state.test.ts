@@ -2488,8 +2488,14 @@ describe("#5240: a duplicate turn end stages a repeat of its live blockers", () 
 		}
 	});
 
-	for (const mcp of [false, true]) {
-		it(`collapses a blocker delivered in full 3 times by a fresh turn end only on the pi host (${mcp ? "MCP address" : "pi"})`, async () => {
+	for (const [title, mcp] of [
+		[
+			"collapses a blocker delivered in full 3 times by a fresh turn end",
+			false,
+		],
+		["keeps a blocker whole on a fresh turn end under the MCP address", true],
+	] as const) {
+		it(title, async () => {
 			// RECURRENCE GUARDED: #5532 review r1 F1. A fresh turn end (the set
 			// changed) re-sent every live blocker in full, so the cap on the repeat
 			// alone left a stuck blocker at 28 full deliveries in 21 prompts. The MCP
