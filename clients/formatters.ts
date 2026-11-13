@@ -53,6 +53,7 @@ import {
 } from "./dispatch/runners/utils/runner-helpers.js";
 import { resolveWriteResult } from "./file-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
+import { isInSpawnTimeoutCooldown } from "./spawn-timeout-cooldown.js";
 import { admittedLookupAnswer } from "./session-repository.js";
 import { establishToolAgreement } from "./tool-agreement.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
@@ -2474,6 +2475,22 @@ export async function formatFile(
 				error: `${formatter.name}: project tool agreement could not be established`,
 			};
 		}
+		// A formatter that timed out its own spawn budget is negative evidence
+		// about this executable. Do not spend another formatter budget while its
+		// session cooldown is active; this is a typed skip, never clean success.
+		if (isInSpawnTimeoutCooldown(cmd[0])) {
+			recordDegradationOnce({
+				kind: "formatter-skip",
+				subject: formatter.name,
+				reason: "formatter spawn timeout cooldown is active",
+			});
+			return {
+				success: true,
+				changed: false,
+				outcome: "skipped",
+				error: `${formatter.name}: spawn timeout cooldown is active`,
+			};
+		}
 		await enter?.();
 		const contentBefore = await fs.readFile(absolutePath, "utf-8");
 		// Run formatter without blocking the event loop. An unresolved npx/bunx
@@ -2482,6 +2499,11 @@ export async function formatFile(
 		const result = await safeSpawnAsync(cmd[0], cmd.slice(1), {
 			timeout: 15000,
 			cwd: formatterCwd,
+			cooldown: {
+				tool: formatter.name,
+				subject: cmd[0],
+				phase: "format",
+			},
 			...(cmd[0] === "npx" || cmd[0] === "bunx"
 				? getIsolatedNpxSpawnOptions()
 				: {}),

@@ -247,6 +247,8 @@ export interface DeferredMutationRecord {
 	 * branch's write to it.
 	 */
 	readGuardBranchEpoch: number;
+	/** #5549: bounded retries after a deferred formatter failure. */
+	formatRequeueAttempts?: number;
 }
 
 /** @deprecated Use DeferredMutationRecord. */
@@ -3367,6 +3369,8 @@ export class RuntimeCoordinator {
 	/** Return claimed records that were never started by an aborted drain. */
 	requeueDeferredFormatFiles(records: DeferredFormatRecord[]): void {
 		for (const record of records) {
+			const formatRequeueAttempts = record.formatRequeueAttempts ?? 0;
+			if (formatRequeueAttempts >= 1) continue;
 			const key = record.filePath;
 			const existing = this._pendingDeferredMutations.get(key);
 			if (existing) {
@@ -3377,10 +3381,15 @@ export class RuntimeCoordinator {
 					existing.readGuardBranchEpoch,
 					record.readGuardBranchEpoch,
 				);
+				existing.formatRequeueAttempts = Math.max(
+					existing.formatRequeueAttempts ?? 0,
+					formatRequeueAttempts + 1,
+				);
 				continue;
 			}
 			this._pendingDeferredMutations.set(key, {
 				...record,
+				formatRequeueAttempts: formatRequeueAttempts + 1,
 				kinds: new Set(record.kinds),
 				toolNames: new Set(record.toolNames),
 			});

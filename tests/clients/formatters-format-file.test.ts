@@ -178,6 +178,50 @@ describe("formatFile", () => {
 		}
 	});
 
+	it("arms the formatter spawn timeout cooldown and skips a cooled formatter", async () => {
+		const env = setupTestEnvironment("pi-lens-format-file-cooldown-");
+		try {
+			const filePath = path.join(env.tmpDir, "terragrunt.hcl");
+			fs.writeFileSync(filePath, "locals {}\n");
+			safeSpawnAsync.mockResolvedValue({
+				status: null,
+				error: new Error("Process timed out after 15000ms"),
+				failure: "timeout",
+				stdout: "",
+				stderr: "",
+			});
+
+			const mod = await loadFormatFile();
+			await mod.formatFile(filePath, mod.formatter);
+			expect(safeSpawnAsync).toHaveBeenCalledWith(
+				expect.any(String),
+				expect.any(Array),
+				expect.objectContaining({
+					cooldown: expect.objectContaining({ phase: "format" }),
+				}),
+			);
+
+			const { noteSpawnTimeout, resetSpawnTimeoutCooldowns } =
+				await import("../../clients/spawn-timeout-cooldown.js");
+			noteSpawnTimeout({
+				tool: "terragrunt",
+				command: "terragrunt",
+				phase: "format",
+			});
+			safeSpawnAsync.mockClear();
+			const result = await mod.formatFile(filePath, mod.formatter);
+			expect(result).toMatchObject({
+				success: true,
+				changed: false,
+				outcome: "skipped",
+			});
+			expect(safeSpawnAsync).not.toHaveBeenCalled();
+			resetSpawnTimeoutCooldowns();
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("reports success with changed=true when a clean run rewrites the file", async () => {
 		const env = setupTestEnvironment("pi-lens-format-file-");
 		try {

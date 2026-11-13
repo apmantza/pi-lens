@@ -437,6 +437,27 @@ describe("runtime-agent-end deferred formatting", () => {
 		}
 	});
 
+	it("caps repeated deferred formatter requeues at one retry (#5549)", () => {
+		const env = setupTestEnvironment("pi-lens-agent-end-format-cap-");
+		try {
+			const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x=1\n");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.deferFormat(filePath, env.tmpDir, "edit", env.tmpDir);
+			const record = runtime.consumeDeferredFormatFiles()[0];
+
+			// Recurrence (#5549): an abandoned/timed-out formatter was requeued on
+			// every agent_end, so a wedged formatter could be retried forever.
+			runtime.requeueDeferredFormatFiles([record]);
+			expect(runtime.pendingDeferredFormatCount).toBe(1);
+			const retry = runtime.consumeDeferredFormatFiles()[0];
+			runtime.requeueDeferredFormatFiles([retry]);
+			expect(runtime.pendingDeferredFormatCount).toBe(0);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("runs deferred autofix before format on the final edit state", async () => {
 		const env = setupTestEnvironment("pi-lens-agent-end-mutation-order-");
 		try {
