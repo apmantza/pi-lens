@@ -247,7 +247,7 @@ entry's screen, or its first sentence when it has none.
 32. **Mixed path comparison:** use one platform-aware containment expression; do not combine case-sensitive equality with case-folded relative paths.
 39. **Walk-up result used as eligibility:** return ownership and start-directory identity separately; enumerate root-position by ambient-input cells.
 74. **Split host-path resolution:** a path is resolved by its provenance, at one seam per provenance.
-64. **Named path vs written set:** a guard keyed on the path a tool NAMES must hold for every path the tool WRITES; enumerate the written set (a rename's importers, an `ast_grep_replace` folder or its project default, a server-initiated `workspace/applyEdit` with no call at all) and key the permission per call, never per path.
+64. **Named path vs written set:** a guard keyed on the path a tool NAMES must hold for every path the tool WRITES, and its permission is per call, never per path.
 65. **Unknown authorship range:** a producer that cannot recover a truthful range must carry UNKNOWN to `ReadGuard.creditAuthorship`; UNKNOWN creates no authorship.
 
 </important>
