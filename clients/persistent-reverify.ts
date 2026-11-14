@@ -218,12 +218,13 @@ export async function runPersistentReverify(args: {
 		let touchedResult: TouchFileResult | undefined;
 		try {
 			touchedResult = await bounded(
-				args.lspService.touchFile(entry.filePath, content, {
-					diagnostics: "document",
-					collectDiagnostics: true,
-					source: TOUCH_SOURCE,
-					clientScope: "primary",
-				}),
+				() =>
+					args.lspService.touchFile(entry.filePath, content, {
+						diagnostics: "document",
+						collectDiagnostics: true,
+						source: TOUCH_SOURCE,
+						clientScope: "primary",
+					}),
 				{
 					ms: Math.max(250, deadlineAt - Date.now()),
 					signal: args.signal,
@@ -280,19 +281,20 @@ export async function runPersistentReverify(args: {
 		// ceiling composes with enrichFileFromLsp's own internal deadline.
 		const unanswered: ActionableWarningRecord[] = [];
 		const enriched = await bounded(
-			enrichFileFromLsp(
-				args.cwd,
-				buildArgs,
-				{ filePath: entry.filePath, cached: touchedResult.diags },
-				{
-					lspService: args.lspService,
-					pullTimeoutMs: 2000,
-					deadlineAt,
-					...(args.signal !== undefined ? { signal: args.signal } : {}),
-					site: { hook: "turn_end", label: "persistent_reverify" },
-					unanswered,
-				},
-			),
+			(signal) =>
+				enrichFileFromLsp(
+					args.cwd,
+					buildArgs,
+					{ filePath: entry.filePath, cached: touchedResult.diags },
+					{
+						lspService: args.lspService,
+						pullTimeoutMs: 2000,
+						deadlineAt,
+						signal,
+						site: { hook: "turn_end", label: "persistent_reverify" },
+						unanswered,
+					},
+				),
 			{
 				ms: Math.max(250, deadlineAt - Date.now()),
 				signal: args.signal,

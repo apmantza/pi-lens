@@ -4878,23 +4878,24 @@ export async function handleToolResult(
 		isComplexitySupportedFile(filePath)
 	) {
 		const verdict = await bounded(
-			adviseOnEdit({
-				filePath,
-				store: runtime.complexityBaselines,
-				session: writeSession,
-				thresholds: complexityThresholdsFor(filePath, turnStateCwd),
-				signal: deps.signal,
-			}).catch((err: unknown) => {
-				// The delta is advice: its failure must never cost the edit's
-				// own output, so it is recorded and the result goes without it.
-				recordDegradationOnce({
-					kind: "complexity-delta-failed",
-					subject: filePath,
-					// The error name only: a parser message can quote file text (shape 27).
-					reason: `the complexity delta threw ${err instanceof Error ? err.name : typeof err}`,
-				});
-				return undefined;
-			}),
+			(signal) =>
+				adviseOnEdit({
+					filePath,
+					store: runtime.complexityBaselines,
+					session: writeSession,
+					thresholds: complexityThresholdsFor(filePath, turnStateCwd),
+					signal,
+				}).catch((err: unknown) => {
+					// The delta is advice: its failure must never cost the edit's
+					// own output, so it is recorded and the result goes without it.
+					recordDegradationOnce({
+						kind: "complexity-delta-failed",
+						subject: filePath,
+						// The error name only: a parser message can quote file text (shape 27).
+						reason: `the complexity delta threw ${err instanceof Error ? err.name : typeof err}`,
+					});
+					return undefined;
+				}),
 			{
 				ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
 				signal: deps.signal,

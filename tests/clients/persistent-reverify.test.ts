@@ -48,6 +48,7 @@ import {
 	type ActionableWarningsReport,
 } from "../../clients/actionable-warnings.js";
 import { CacheManager } from "../../clients/cache-manager.js";
+import { getAmbientAbortSignal } from "../../clients/safe-spawn.js";
 import { LSPService } from "../../clients/lsp/index.js";
 import { resetProjectLensConfigCache } from "../../clients/project-lens-config.js";
 
@@ -374,6 +375,43 @@ describe("persistent reverify (#3170)", () => {
 		expect(replacement?.warnings).toEqual(carried.files[0]?.warnings);
 		expect(replacement?.reVerifyIncomplete).toBe(true);
 	});
+
+	// Recurrence prevented (#5550, the deadline audit's `persistent-reverify.ts`
+	// rows): the re-verify's two bounds abandoned a wedged LSP request and left
+	// it pending with no signal (the touch and the code-action lookup each held
+	// the client busy). The requests now run under the bound's signal, which
+	// the fakes read the way `navRequest` does (`getAmbientAbortSignal()`).
+	// The touch is cut by the wall bound; the code-action lookup by Esc, because
+	// its wall cut races the loop's own `deadlineAt` race in `boundedLspCall`.
+	it.each([
+		["touch", "touchFile", "wall"],
+		["code-action lookup", "codeAction", "escape"],
+	] as const)(
+		"C3f: the abandoned %s is cancelled when the %s bound fires (#5550)",
+		async (_label, member, cut) => {
+			const carried = makeCarriedReport(filePath);
+			const service = makeService({
+				diags: [makeDiag()],
+				confirmation: "confirmed",
+			});
+			const escape = new AbortController();
+			let seen: AbortSignal | undefined;
+			(service as unknown as Record<string, unknown>)[member] = vi.fn(() => {
+				seen = getAmbientAbortSignal();
+				if (cut === "escape") setTimeout(() => escape.abort(), 20);
+				return new Promise(() => {});
+			});
+			const result = await runPersistentReverify({
+				report: carried,
+				cwd,
+				lspService: service,
+				budgetMs: 300,
+				...(cut === "escape" ? { signal: escape.signal } : {}),
+			});
+			expect(result.outcomes[0]?.outcome).toBe("unconfirmed");
+			expect(seen?.aborted).toBe(true);
+		},
+	);
 
 	// The control for C3b: an answer with no fix action is an answer, so the
 	// warning leaves the actionable report exactly as before.

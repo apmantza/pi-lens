@@ -5586,12 +5586,13 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				// budget and signal; the pass's internal deadline (3s) is the
 				// tighter of the two.
 				reverify = await bounded(
-					runPersistentReverify({
-						report: persistedReport,
-						cwd,
-						lspService: reverifyLspService,
-						signal: getAmbientAbortSignal(),
-					}),
+					(signal) =>
+						runPersistentReverify({
+							report: persistedReport,
+							cwd,
+							lspService: reverifyLspService,
+							signal,
+						}),
 					{
 						ms: HOOK_WALL_BUDGET_MS.turn_end,
 						signal: getAmbientAbortSignal(),

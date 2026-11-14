@@ -1169,7 +1169,8 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				let lspSymbolError: string | undefined;
 				try {
 					const result = await bounded(
-						getOpenDocumentSymbols(filePath).then((symbols) => ({ symbols })),
+						() =>
+							getOpenDocumentSymbols(filePath).then((symbols) => ({ symbols })),
 						{
 							ms: EXPANSION_BUDGET_MS,
 							signal: deps.ctx.signal,
@@ -1960,17 +1961,18 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 	// #4483: last, so only a call every pi-lens guard allowed pays for it.
 	if (isWriteOrEdit && !isExternalOrVendor) {
 		const started = Date.now();
-		const controller = new AbortController();
-		const signal = deps.ctx.signal
-			? AbortSignal.any([deps.ctx.signal, controller.signal])
-			: controller.signal;
-		const outcome = await bounded(capturePreEditSeed(filePath, deps, signal), {
-			ms: PRE_EDIT_CAPTURE_BUDGET_MS,
-			signal: deps.ctx.signal,
-			hook: "tool_call",
-			label: "pre-edit-linter-capture",
-		});
-		controller.abort();
+		// The thunk's signal is the capture's cancel: it aborts when the budget
+		// lapses or `ctx.signal` fires (#5550; this site hand-built the same
+		// controller, then aborted it after the await).
+		const outcome = await bounded(
+			(signal) => capturePreEditSeed(filePath, deps, signal),
+			{
+				ms: PRE_EDIT_CAPTURE_BUDGET_MS,
+				signal: deps.ctx.signal,
+				hook: "tool_call",
+				label: "pre-edit-linter-capture",
+			},
+		);
 		if (!outcome || outcome.outcome === "failed")
 			recordDegradationOnce({
 				kind: "pre-edit-capture-incomplete",
