@@ -393,6 +393,13 @@ describe("#5553 the staged set is read from the commit's argv", () => {
 			command: 'git add src/b.ts && git commit -m "wip"',
 			refused: true,
 		},
+		// Recurrence prevented: a push segment read as a commit would parse its
+		// own words (`--force`) as the commit's form and judge the superset.
+		{
+			form: "a push after the commit",
+			command: 'git commit -m "wip" && git push --force origin',
+			refused: false,
+		},
 		{
 			form: "an indirect launcher",
 			command: `sh -c 'git commit -m wip'`,
