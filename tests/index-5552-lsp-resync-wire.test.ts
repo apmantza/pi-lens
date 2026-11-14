@@ -32,7 +32,10 @@ const wireHashes = [BLOCKING, BLOCKING_2].map((content) =>
 );
 
 function layout(name: string) {
-	const root = path.join(fixture.root, name);
+	const root = path.join(
+		fixture.root,
+		`${name}-${process.pid}-${Math.random().toString(36).slice(2)}`,
+	);
 	const proj = path.join(root, "proj");
 	const stage = path.join(root, "stage");
 	const target = path.join(proj, "src", "a.ts");
