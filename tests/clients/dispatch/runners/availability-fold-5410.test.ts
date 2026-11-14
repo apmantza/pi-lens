@@ -389,6 +389,25 @@ describe("one availability ladder per binary (#5410)", () => {
 			).toHaveLength(1);
 		});
 
+		it("runs rubocop itself when the Gemfile does not name it", async () => {
+			putOnPath("bundle");
+			putOnPath("rubocop");
+			const { root, file } = setup();
+			fs.writeFileSync(path.join(root, "Gemfile"), "gem 'rails'\n");
+			await dispatch(
+				file,
+				root,
+				(await import("../../../../clients/dispatch/runners/rubocop.js"))
+					.default,
+			);
+			expect(
+				spawnCalls.some(
+					(c) => c.cmd === "rubocop" && c.args.includes("--format"),
+				),
+			).toBe(true);
+			expect(spawnCalls.some((c) => c.args.includes("exec"))).toBe(false);
+		});
+
 		it("runs the rubocop on PATH when the Gemfile names it and bundler is absent", async () => {
 			putOnPath("rubocop");
 			const { root, file } = setup();
