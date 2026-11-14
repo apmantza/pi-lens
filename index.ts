@@ -1067,19 +1067,15 @@ function activateExtension(hostPi: ExtensionAPI) {
 		lastIssuesStatus = undefined;
 	}
 	function updateIssuesStatus(): void {
-		try {
-			const enabled = getLensFlag("lens-issues-status") === true;
-			const next = enabled ? formatIssuesStatus(getWidgetSummary()) : undefined;
-			if (issuesStatusPublished && next === lastIssuesStatus) return;
-			// Flag off from the start: publish nothing, so the footer is
-			// byte-identical to a pi-lens without the feature.
-			if (!enabled && !issuesStatusPublished) return;
-			issuesStatusPublished = true;
-			lastIssuesStatus = next;
-			hostPorts.status.set("pi-lens-issues", next);
-		} catch (err) {
-			dbg(`issues status update skipped: ${err}`);
-		}
+		const enabled = getLensFlag("lens-issues-status") === true;
+		const next = enabled ? formatIssuesStatus(getWidgetSummary()) : undefined;
+		if (issuesStatusPublished && next === lastIssuesStatus) return;
+		// Flag off from the start: publish nothing, so the footer is
+		// byte-identical to a pi-lens without the feature.
+		if (!enabled && !issuesStatusPublished) return;
+		issuesStatusPublished = true;
+		lastIssuesStatus = next;
+		hostPorts.status.set("pi-lens-issues", next);
 	}
 	const refreshCtxDerivedPlumbing = (): void => {
 		// These targets are module singletons, while hostPorts is scoped to this
