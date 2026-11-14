@@ -15,10 +15,6 @@
 import { getEventListeners } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bounded } from "../../clients/deadline-utils.js";
-import {
-	getAmbientAbortSignal,
-	setAmbientAbortSignal,
-} from "../../clients/safe-spawn.js";
 import { spawnAbortScope } from "../../clients/spawn-abort-scope.js";
 import {
 	getDegradationSummary,
@@ -544,7 +540,6 @@ describe("#5550 bounded() thunk form cancels the work it abandons", () => {
 		resetDegradationLedger();
 	});
 	afterEach(() => {
-		setAmbientAbortSignal(undefined);
 		resetDegradationLedger();
 	});
 
@@ -681,10 +676,6 @@ describe("#5550 bounded() thunk form cancels the work it abandons", () => {
 	// Row 4. A throw before the first await is a rejection at the await, where
 	// the promise form's caller-side throw surfaced too, never an escape.
 	it("turns a synchronous throw from the thunk into a rejection, and propagates a rejection inside the bounds", async () => {
-		// The throw happens after the bounds are armed: the wrapper is what
-		// still reaches `finally`, so the ambient listener must be gone after.
-		const ambient = new AbortController();
-		setAmbientAbortSignal(ambient.signal);
 		await expect(
 			bounded(
 				() => {
@@ -698,7 +689,6 @@ describe("#5550 bounded() thunk form cancels the work it abandons", () => {
 				},
 			),
 		).rejects.toThrow("thunk threw");
-		expect(getEventListeners(ambient.signal, "abort")).toHaveLength(0);
 		await expect(
 			bounded(async () => Promise.reject(new Error("work rejected")), {
 				ms: 60_000,
@@ -747,84 +737,34 @@ describe("#5550 bounded() thunk form cancels the work it abandons", () => {
 		}
 	});
 
-	// Row 5. Recurrence prevented: inside `spawnAbortScope` the scope's signal
-	// answers `getAmbientAbortSignal()` instead of the turn's, so Esc on an
-	// ambient signal that is NOT `options.signal` would stop reaching the LSP
-	// requests the thunk starts.
-	it("keeps the turn's ambient signal reaching the work through the scope", async () => {
-		const ambient = new AbortController();
-		setAmbientAbortSignal(ambient.signal);
-		let inScope: AbortSignal | undefined;
-		const pending = bounded(
-			(signal) => {
-				inScope = getAmbientAbortSignal();
-				expect(inScope).toBe(signal);
-				return wedged<void>();
-			},
-			{
-				ms: 60_000,
-				signal: new AbortController().signal,
-				hook: "turn_end",
-				label: "thunk-ambient",
-			},
-		);
-		expect(inScope?.aborted).toBe(false);
-		ambient.abort();
-		expect(inScope?.aborted).toBe(true);
-		// The ambient abort cancels the WORK; the bound itself still waits on
-		// its own signals, exactly as before.
-		setAmbientAbortSignal(undefined);
-		const settled = await Promise.race([
-			pending.then(() => "settled"),
-			new Promise((resolve) => setTimeout(() => resolve("waiting"), 30)),
-		]);
-		expect(settled).toBe("waiting");
-	});
-
-	// Row 5, entry half. Recurrence prevented: a turn already cancelled when
-	// the bound is entered would start the thunk's spawns live, because only a
-	// LATER abort was forwarded.
-	it("starts the thunk aborted when the ambient signal was already aborted at entry", async () => {
-		const ambient = new AbortController();
-		ambient.abort();
-		setAmbientAbortSignal(ambient.signal);
-		const startedAborted: boolean[] = [];
-		await bounded(
-			async (signal) => {
-				startedAborted.push(signal.aborted);
-			},
-			{
-				ms: 60_000,
-				signal: undefined,
-				hook: "turn_end",
-				label: "thunk-ambient-pre-aborted",
-			},
-		);
-		expect(startedAborted).toEqual([true]);
-	});
-
-	// Invariant I2/I3 for the thunk form: the ambient listener is released on
-	// every settle path, and no composite is registered on a signal that
-	// outlives the call (#2530's dependant-list leak).
-	it("releases the ambient listener on a settle, and registers no composite on it", async () => {
-		const ambient = new AbortController();
-		setAmbientAbortSignal(ambient.signal);
-		const before = dependantCount(ambient.signal) ?? 0;
-		for (let i = 0; i < 25; i += 1) {
-			await bounded(async () => i, {
-				ms: 60_000,
-				signal: undefined,
-				hook: "turn_end",
-				label: "thunk-listeners",
-			});
-		}
-		await bounded(() => wedged<void>(), {
-			ms: 5,
-			signal: undefined,
+	// Invariants I2/I3 for the thunk form: the hook's signal outlives the call
+	// by a turn, so every settle path releases its listener and the thunk's own
+	// signal is never composed onto it (#2530's dependant-list leak).
+	it("leaves no listener and no composite on the hook signal, on every settle path", async () => {
+		const hook = new AbortController();
+		const before = dependantCount(hook.signal) ?? 0;
+		const options = {
+			ms: 60_000,
+			signal: hook.signal,
 			hook: "turn_end",
-			label: "thunk-listeners-timeout",
+		} as const;
+		for (let i = 0; i < 25; i += 1) {
+			await bounded(async () => i, { ...options, label: "thunk-settles" });
+		}
+		await expect(
+			bounded(
+				() => {
+					throw new Error("thunk threw");
+				},
+				{ ...options, label: "thunk-throws-sync" },
+			),
+		).rejects.toThrow("thunk threw");
+		await bounded(() => wedged<void>(), {
+			...options,
+			ms: 5,
+			label: "thunk-times-out",
 		});
-		expect(getEventListeners(ambient.signal, "abort")).toHaveLength(0);
-		expect(dependantCount(ambient.signal) ?? 0).toBe(before);
+		expect(getEventListeners(hook.signal, "abort")).toHaveLength(0);
+		expect(dependantCount(hook.signal) ?? 0).toBe(before);
 	});
 });

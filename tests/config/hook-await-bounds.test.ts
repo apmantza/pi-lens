@@ -4065,20 +4065,28 @@ describe("#2523 AC1 every hook-path await is bounded, and no new hand-rolled rac
 	// is read against the call's own form, so a row cannot say `threaded` over
 	// a promise or `pure-read` over a thunk, and a new call cannot register
 	// without the column at all.
-	it("every registered bounded() call states what happens to its work, and the word matches the call", () => {
-		expect(
-			auditBoundedWork(BOUNDED_CALL_SITES, boundedForms),
-			"BOUNDED_CALL_SITES `work` column",
-		).toEqual([]);
-	});
+	it(
+		"every registered bounded() call states what happens to its work, and the word matches the call",
+		() => {
+			expect(
+				auditBoundedWork(BOUNDED_CALL_SITES, boundedForms),
+				"BOUNDED_CALL_SITES `work` column",
+			).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// Recurrence prevented (#5550): the call detector reads `bounded(` only, so
 	// an alias, a value passed on, a re-export or a namespace member would call
 	// the primitive where no row could name it (AGENTS.md shape 69: a gate
 	// admits the known-good form and refuses the rest).
-	it("no module reaches bounded() by any spelling the call detector cannot see", () => {
-		expect(boundedReferences).toEqual([]);
-	});
+	it(
+		"no module reaches bounded() by any spelling the call detector cannot see",
+		() => {
+			expect(boundedReferences).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("MUTATION: auditBoundedWork refuses every row it must", () => {
 		const forms = new Map<string, "thunk" | "promise">([

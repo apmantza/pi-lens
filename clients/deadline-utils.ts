@@ -13,7 +13,6 @@
 
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import type { LedgerHookKey } from "./hook-budgets.js";
-import { getAmbientAbortSignal } from "./safe-spawn.js";
 import { spawnAbortScope } from "./spawn-abort-scope.js";
 
 /**
@@ -379,8 +378,14 @@ export interface BoundedOptions {
  * thunk's signal is NOT aborted when the work settles in time. A site that
  * keeps the promise form says why in the `work` column of
  * `BOUNDED_CALL_SITES` (`pure-read`, `outlives:<owner>` or `migrate:#<n>`), so a
- * new bound cannot leave its work running by omission. `getAmbientAbortSignal()`
- * keeps answering the turn's own signal inside the scope.
+ * new bound cannot leave its work running by omission.
+ *
+ * Inside the scope `getAmbientAbortSignal()` answers with the thunk's signal,
+ * not the turn's, so a bound whose own `signal` is some OTHER signal than the
+ * turn's would hide Esc from an LSP request the thunk starts. Every shipped
+ * thunk site passes the turn's signal (`ctx.signal`, `deps.signal`,
+ * `args.signal`), so none does; a site that cannot say the same keeps the
+ * promise form.
  */
 export async function bounded<T>(
 	work: BoundedWork<T>,
@@ -422,13 +427,6 @@ export async function bounded<T>(
 	// background work keeps it).
 	const workController =
 		typeof work === "function" ? new AbortController() : undefined;
-	// Inside the scope `getAmbientAbortSignal()` answers with the scope's
-	// signal, hiding the turn's own. Forward it, or Esc on an ambient signal
-	// that is not `options.signal` would stop reaching the LSP requests the
-	// work starts. Listened on directly, never `AbortSignal.any` (#2530).
-	const outerAmbient = workController ? getAmbientAbortSignal() : undefined;
-	let onAmbientAbort: (() => void) | undefined;
-
 	const abandoned = new Promise<typeof BOUND_ABORTED>((resolve) => {
 		// `abandonedError`'s precedence, unchanged: the caller's own signal
 		// first, then teardown, then the clock. A turn cancelled while the
@@ -450,13 +448,6 @@ export async function bounded<T>(
 		// `@ts-expect-error` probe, from making a helper whose whole job is
 		// keeping a hook from blowing up throw `Cannot read properties of
 		// undefined` (#2530 round 3 F5).
-		if (outerAmbient && workController) {
-			if (outerAmbient.aborted) workController.abort();
-			else {
-				onAmbientAbort = () => workController.abort();
-				outerAmbient.addEventListener("abort", onAmbientAbort, { once: true });
-			}
-		}
 		if (signal?.aborted) return fire("caller-abort");
 		if (shutdownSignal?.aborted) return fire("shutdown");
 		// A zero budget ("this hook may not await at all") is a bound that has
@@ -476,22 +467,15 @@ export async function bounded<T>(
 	});
 
 	// Started AFTER the bounds are armed, so a bound that has already elapsed
-	// hands the work an already-aborted signal (state table row 3b). A
-	// synchronous throw from the thunk is a rejection at this await, where the
-	// caller-side throw of the promise form surfaced too.
-	let promise: Promise<T>;
-	if (typeof work === "function" && workController) {
-		const workSignal = workController.signal;
-		try {
-			promise = Promise.resolve(
-				spawnAbortScope.run(workSignal, () => work(workSignal)),
-			);
-		} catch (error) {
-			promise = Promise.reject(error);
-		}
-	} else {
-		promise = work as Promise<T>;
-	}
+	// hands the work an already-aborted signal (state table row 3b). An async
+	// arrow turns a synchronous throw from the thunk into a rejection
+	// at this await, where the promise form's caller-side throw surfaced too.
+	const promise: Promise<T> =
+		typeof work === "function" && workController
+			? spawnAbortScope.run(workController.signal, async () =>
+					work(workController.signal),
+				)
+			: (work as Promise<T>);
 
 	// Late rejection from work a bound has already abandoned must not surface
 	// as an unhandled rejection. Attached to the BOXED promise, which is what
@@ -530,9 +514,6 @@ export async function bounded<T>(
 		if (onCallerAbort) signal?.removeEventListener("abort", onCallerAbort);
 		if (onShutdownAbort) {
 			shutdownSignal?.removeEventListener("abort", onShutdownAbort);
-		}
-		if (onAmbientAbort) {
-			outerAmbient?.removeEventListener("abort", onAmbientAbort);
 		}
 	}
 }
