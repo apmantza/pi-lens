@@ -456,28 +456,39 @@ jobs:
   # files by recorded per-file seconds (scripts/test-shard-weights.json,
   # scripts/lib/test-shard-assignment.mjs).
   #
-  # The count is chosen from data (#3801, 2026-11-14). Source: the per-file
-  # `vitest-results.json` of 15 green master pushes (2026-11-13), each file
-  # re-packed at N shards with the sequencer's own LPT pack and costed by the
-  # fit `Run tests` = 25 s + 1.21 x planned load (r = 0.94 over the 75 measured
-  # shard jobs), plus 41 s of per-job setup. The same model on the weights the
-  # runs used reproduces what ran (slowest shard job 690 s modelled against
-  # 694 s measured, 51.3 against 51.1 runner-min). Rows below pack each run
-  # with weights from the other 14 runs and judge it held out. Slowest shard
-  # job p50 / max-minus-mean p50 / runner-min p50:
+  # The count is chosen from a model fitted to 15 green master pushes (#3801,
+  # 2026-11-14). Source: the per-file `vitest-results.json` of those pushes
+  # (2026-11-13). The model re-packs each file at N shards with the sequencer's
+  # own LPT pack and costs a shard as `Run tests` = 25 s + 1.21 x planned load
+  # (r = 0.94 over the 75 measured shard jobs), plus 41 s of per-job setup.
+  # The fit is in-sample: it reproduces the runs it was fitted on (slowest
+  # shard job 690 s modelled against 694 s measured; 51.3 against 51.1
+  # runner-min). That is calibration, not validation.
+  #
+  # Rows below are modelled, not measured. Each row packs each run with weights
+  # from the other 14 runs and judges it held out. The rows leave out run noise.
+  # Slowest shard job p50 / max-minus-mean p50 (noise-free) / runner-min p50:
   #
   #   N=3  1014 s  20 s  49.1 min
   #   N=4   782 s  24 s  50.2 min
   #   N=5   646 s  16 s  51.3 min
   #   N=6   559 s  32 s  52.4 min
   #
-  # The target is the slowest shard job measured at N=5 on the previous
-  # weights (694 s p50). Four shards miss it by 88 s; five meet it, so five is
-  # the fewest that do. Each shard past it buys about 1.1 runner-min for
-  # 87 to 136 s, at a pool that sits near the 20-concurrent-job cap. The
-  # <=6-minute required-check target (#3753) is out of reach at any count the
-  # data supports (N=7 models 490 s): the lever is the cost of the serialized
-  # lanes (76% of the modelled load), not the matrix length.
+  # Run noise adds to the gap. With the fit's residuals resampled, the modelled
+  # N=5 gap is about 32 s p50 and 68 s p90. The measured gap on the previous
+  # weights was 62 s p50. The #3801 bar is a slowest-minus-mean gap under 30 s
+  # over 10 ci.yml runs, so that bar is probably not met at N=5.
+  #
+  # The target is the measured slowest shard job at N=5 on the previous weights
+  # (694 s p50), so N=5 meets it by construction. The model puts N=4 88 s over
+  # it, and five is the fewest count that meets it. The N=3, 4 and 6 figures
+  # are modelled only; no measured run at those counts exists. The model says
+  # each shard added past four buys about 1.1 runner-min for 87 to 136 s, at a
+  # pool that sits near the 20-concurrent-job cap. The <=6-minute
+  # required-check target (#3753) is out of reach at any count the model
+  # supports (it puts N=7 at 490 s). The lever is the cost of the serialized
+  # lanes (about 76% of the worker-divided cost, 1728 of 2284 s), not the
+  # matrix length.
   test:
     name: Unit tests (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
