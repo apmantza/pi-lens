@@ -42,6 +42,7 @@ import type {
 } from "../../govulncheck-client.js";
 import { govulncheckFindingToProjectDiagnostic } from "../../project-diagnostics/runner-adapters/govulncheck.js";
 import { STALE_LINE_MARKER } from "../../stale-marker.js";
+import { existingDependencyManifests } from "../../trivy-client.js";
 import type { FindingFreshnessSource } from "../../advisory-provenance.js";
 import type {
 	TurnEndLane,
@@ -151,26 +152,37 @@ function render(
 			report += `  … and ${kept.findings.length - findings.length} more\n`;
 		}
 		// #4617: the section reports the call sites it printed, so those files are
-		// the stamp's subject. A CVE with no traced filename reports only its
-		// module, so it contributes no path — and a section left with none
-		// declares nothing, which the composer treats as "the stamp does not
-		// speak for this part" (fail closed) rather than as a fileless part.
+		// the stamp's subject. A Go CVE is pinned by go.mod, not by the call site
+		// (#1622 H1), and a module- or package-level finding has no call site at
+		// all, so the Go module files at the scan root are a subject of every
+		// section, as a trivy row cites its manifests. A bump that fixes the
+		// module supersedes the text. With no go.mod on disk the module-only rows
+		// cite nothing and the composer fails closed (the evidence is gone, so
+		// the label is historical).
+		const callSites = kept.findings.flatMap((f) => {
+			const callSite = f.trace.find((t) => t.filename)?.filename;
+			return callSite === undefined ? [] : [callSite];
+		});
 		advisorySections.push({
 			part: report,
-			cites: [
-				...new Set(
-					kept.findings.flatMap((f) => {
-						const callSite = f.trace.find((t) => t.filename)?.filename;
-						return callSite === undefined ? [] : [callSite];
-					}),
-				),
-			],
+			cites: [...new Set([...callSites, ...goModuleFiles(ctx.cwd)])],
 		});
 	}
 	return {
 		advisoryParts: advisorySections,
 		dispositionSuppressed: { govulncheck: kept.suppressed },
 	};
+}
+
+/**
+ * The Go module files a module-level CVE is pinned by: the one manifest probe
+ * (`existingDependencyManifests`), narrowed to Go's two files so another
+ * ecosystem's manifest moving on does not supersede a Go finding.
+ */
+function goModuleFiles(cwd: string): string[] {
+	return existingDependencyManifests(cwd).flatMap((file) =>
+		/[\\/]go\.(?:mod|sum)$/.test(file) ? [file] : [],
+	);
 }
 
 /** The lane. Stateless — one object, no per-turn state to reset. */
