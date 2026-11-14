@@ -20,6 +20,7 @@ import {
 	getLatencyLogPath,
 } from "../../clients/latency-logger.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { waitForProjectSnapshotPersistsForTests } from "../../clients/project-snapshot.js";
 import type { SessionStartRootTelemetry } from "../../clients/runtime-session.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 import { installLspServiceDouble } from "../support/lsp-service-seam.js";
@@ -203,6 +204,13 @@ describe("session_start_total carries the classification decision (#2129)", () =
 		} finally {
 			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 			else process.env.PILENS_DATA_DIR = previousDataDir;
+			// #4591: full-mode session start reaches saveRuntimeProjectSnapshot,
+			// whose body persist runs off-thread (clients/project-snapshot.ts →
+			// gzip-stage worker) and recreates the fixture root with a recursive
+			// mkdir into $PILENS_DATA_DIR. Unawaited, that write landed after
+			// cleanup and left pi-lens-session-start-total-full-* at the tmp root
+			// (the #2912/#3186 shape). Drain it before removing the root.
+			await waitForProjectSnapshotPersistsForTests();
 			env.cleanup();
 		}
 	});
