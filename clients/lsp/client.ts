@@ -8365,14 +8365,10 @@ async function safeSendRequest<T>(
 		| undefined;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let timeoutError: Error | undefined;
-	let abandoned = false;
 	if (signal || bound?.cancel) tokenSource = new CancellationTokenSource();
 	if (bound) {
 		released = new Promise((resolve) => {
-			release = (why) => {
-				abandoned = true;
-				resolve(why);
-			};
+			release = resolve;
 		});
 		timer = setTimeout(
 			() => {
@@ -8448,12 +8444,11 @@ async function safeSendRequest<T>(
 					return undefined;
 				}
 				if (isContentModifiedError(err)) {
-					// Retry once (unless we've since been abandoned); if it's still
+					// Retry once (unless we've since been aborted); if it's still
 					// ContentModified after that, return empty rather than throwing a
 					// code callers don't understand. RequestFailed (-32803) and other
 					// codes are permanent and fall through to the rethrow below.
-					if (attempt < MAX_ATTEMPTS && !signal?.aborted && !abandoned)
-						continue;
+					if (attempt < MAX_ATTEMPTS && !signal?.aborted) continue;
 					return undefined;
 				}
 				throw err;
