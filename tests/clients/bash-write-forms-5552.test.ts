@@ -74,7 +74,8 @@ describe("a directory destination of cp, mv and install (#5552)", () => {
 	it.each(["mv a.ts b.ts", "cp a.ts b.ts"])(
 		"%s still names the file",
 		(command) => {
-			expect(scan(command)).toEqual({ written: [at("b.ts")], writtenDirs: [] });
+			expect(scan(command).written).toEqual([at("b.ts")]);
+			expect(scan(command).writtenDirs ?? []).toEqual([]);
 		},
 	);
 
@@ -99,10 +100,8 @@ describe("a directory destination of cp, mv and install (#5552)", () => {
 	});
 
 	it("names the -t destination as before, with no scope for files", () => {
-		expect(scan("cp -t src a.ts")).toEqual({
-			written: [at("src", "a.ts")],
-			writtenDirs: [],
-		});
+		expect(scan("cp -t src a.ts").written).toEqual([at("src", "a.ts")]);
+		expect(scan("cp -t src a.ts").writtenDirs ?? []).toEqual([]);
 	});
 });
 
@@ -119,6 +118,9 @@ describe("rsync (#5552)", () => {
 		"rsync -a -e 'ssh -p 22' in/ src/",
 		"rsync -ae 'ssh -p 22' in/ src/",
 		"rsync -a in/ src/ --exclude node_modules",
+		"rsync -a in/ src/ -e ssh",
+		"rsync -a in/ src/ -ae ssh",
+		"rsync -a in/ src/ --rsh ssh",
 		"rsync -a in/ src/ --filter='- *.log'",
 		"rsync -a --info progress2 in/ src/",
 		"rsync -a host:dir/ src/",

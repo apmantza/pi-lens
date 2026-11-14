@@ -80,6 +80,8 @@ function layout(name: string): Layout {
 	fs.mkdirSync(path.join(stage, "tree", "src"), { recursive: true });
 	fs.writeFileSync(path.join(proj, "package.json"), "{}\n");
 	fs.writeFileSync(target, CLEAN);
+	fs.mkdirSync(path.join(proj, "vendor"));
+	fs.writeFileSync(path.join(proj, "vendor", "a.ts"), CLEAN);
 	const git = (...args: string[]) =>
 		execFileSync("git", args, { cwd: proj, stdio: "ignore" });
 	git("init", "-q");
@@ -313,4 +315,45 @@ describe("a bash write into a directory keeps its old mtime (#5552)", () => {
 			expect(dispatchedRules(read, l.target)).toEqual([]);
 		},
 	);
+	// Recurrence prevented: a failed command's partial writes are not credited
+	// by name (the restore rule `cp` follows, #2000): an `exit 1` after the
+	// extraction leaves the old-mtime bytes on the mtime filter.
+	it("does not credit a directory a failed command filled", LANE, async () => {
+		const l = layout("tar-failed");
+		const session = await startPiSession({
+			root: fixture.root,
+			cwd: l.proj,
+			flags: new Map(GUARDED_FLAGS),
+			responses: [
+				step(
+					fauxToolCall("bash", {
+						command: `tar -xf ${l.stage}/x.tar -C src; exit 1`,
+					}),
+					"extracting",
+				),
+				endTurn("done"),
+			],
+		});
+		await session.prompt("extract");
+		expect(fs.readFileSync(l.target, "utf8")).toBe(BLOCKING);
+		const read = await rows(
+			session,
+			fs.realpathSync.native(path.dirname(l.proj)),
+		);
+		expect(dispatchedRules(read, l.target)).toEqual([]);
+	});
+
+	// Recurrence prevented: a file a scope credited joins the recognized set, and
+	// that set is the recordable one: a vendored tree is not dispatched.
+	it("does not dispatch a vendored file a tar filled", LANE, async () => {
+		const run = await runThenCommit(
+			"tar-vendor",
+			(l) => `tar -xf ${l.stage}/x.tar -C vendor`,
+		);
+		const vendored = path.join(run.l.proj, "vendor", "a.ts");
+		expect(fs.readFileSync(vendored, "utf8")).toBe(BLOCKING);
+		const read = await rows(run.session, run.scope);
+		expect(dispatchedRules(read, vendored)).toEqual([]);
+		expect(run.commit).toContain(RAN_MARKER);
+	});
 });
