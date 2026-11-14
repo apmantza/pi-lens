@@ -145,15 +145,19 @@ async function resolvePhpstan(cwd: string): Promise<LocalBinLookup | null> {
 const PHPSTAN_DUMP_TIMEOUT_MS = 15_000;
 
 /**
- * Whether a phpstan config can set `excludePaths` or `ignoreErrors` at all: it
- * names either key (or the 1.x spelling `excludes_analyse`) or includes another
- * file that might. A config that does neither has no ignore glob to anchor, so
- * the dump spawn is skipped. A false positive costs one spawn; a false negative
- * would need a config that sets a parameter without writing its name or an
- * include.
+ * Whether a phpstan config can hold an ignore glob at all: it names
+ * `excludePaths` (or the 1.x `excludes_analyse`), includes another file that
+ * might, or has an `ignoreErrors` entry with a `path` or `paths` key (a key can
+ * only follow the `ignoreErrors` it belongs to). A config that does none has no
+ * glob to anchor, so the dump spawn is skipped. A false positive costs one
+ * spawn; a false negative would need a config that sets a parameter without
+ * writing its name or an include.
  */
 export function phpstanConfigMayExclude(text: string): boolean {
-	return /exclude|includes|ignoreErrors/i.test(text);
+	return (
+		/exclude|includes/i.test(text) ||
+		/ignoreErrors[\s\S]*\bpaths?['"]?\s*:/i.test(text)
+	);
 }
 
 /** A neon string: JSON's double-quoted form, with `%` doubled so DI keeps it literal. */

@@ -431,8 +431,22 @@ describe("anchorPhpstanConfig", () => {
 			phpstanConfigMayExclude("parameters:\n  excludePaths:\n    - x\n"),
 		).toBe(true);
 		expect(phpstanConfigMayExclude("includes:\n  - base.neon\n")).toBe(true);
+		// An ignoreErrors entry holds a glob only through a path or paths key; a
+		// message alone (the captured top-level-errors fixture) has none to anchor.
 		expect(
-			phpstanConfigMayExclude("parameters:\n  ignoreErrors:\n    - '#x#'\n"),
+			phpstanConfigMayExclude(
+				"parameters:\n  paths:\n    - .\n  ignoreErrors:\n    - '#x#'\n",
+			),
+		).toBe(false);
+		expect(
+			phpstanConfigMayExclude(
+				"parameters:\n  ignoreErrors:\n    -\n      message: '#x#'\n      paths:\n        - a\n",
+			),
+		).toBe(true);
+		expect(
+			phpstanConfigMayExclude(
+				"parameters:\n  ignoreErrors:\n    - {message: '#x#', path: a}\n",
+			),
 		).toBe(true);
 		expect(
 			phpstanConfigMayExclude("parameters:\n  excludes_analyse:\n    - x\n"),
