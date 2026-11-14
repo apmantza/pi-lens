@@ -256,10 +256,10 @@ const sessionFacts = new FactStore("dispatch");
  * Cleared with them at `session_start`.
  */
 const preEditCaptureFacts = new FactStore("pre-edit-capture");
-/** #5553: the staged-delta read's own facts (`collectStagedLaneBlockers`). */
-const stagedDeltaFacts = new FactStore("staged-delta");
 /** #4543: retain live slots through teardown, including across session reset. */
 const preEditCapturesInFlight = new Map<string, AbortController>();
+/** #5553: the staged-delta read's own facts (`collectStagedLaneBlockers`). */
+const stagedDeltaFacts = new FactStore("staged-delta");
 const MAX_PRE_EDIT_CAPTURES = 4;
 
 // #2243 item 4: wire the fact-store's capacity-eviction telemetry to the

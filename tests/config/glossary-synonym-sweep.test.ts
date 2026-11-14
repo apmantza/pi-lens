@@ -519,6 +519,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/shared-checkout-guard.ts": 1,
 		"clients/single-flight.ts": 3,
 		"clients/smells-rollup.ts": 2,
+		// #5553: the `error` of a git spawn result, read as a failed listing.
+		"clients/staged-delta.ts": 1,
 		// 21 -> 23 (#5257): `isCompletedPassResult` reads the result's `error`,
 		// and the JSON parser sets the unreadable-output and load-failure errors.
 		"clients/test-runner-client.ts": 23,

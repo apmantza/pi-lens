@@ -883,7 +883,12 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			ctx.signal,
 		);
 		if (stagedGuard.block) {
-			return { block: true, reason: stagedGuard.reason };
+			return {
+				block: true,
+				...(stagedGuard.reason === undefined
+					? {}
+					: { reason: stagedGuard.reason }),
+			};
 		}
 	}
 

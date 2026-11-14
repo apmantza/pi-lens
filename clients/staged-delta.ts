@@ -214,7 +214,7 @@ async function runGit(
 		cwd: dir,
 		timeout: GIT_TIMEOUT_MS,
 		maxOutputBytes: MAX_GIT_OUTPUT_BYTES,
-		signal,
+		...(signal === undefined ? {} : { signal }),
 	});
 	if (truncatedByOutputCap(result))
 		return { ok: false, reason: "git_output_cut", status: result.status };

@@ -90,7 +90,7 @@ function seedProject(name: string, files: Record<string, string>) {
 	fs.writeFileSync(path.join(proj, "package.json"), "{}\n");
 	git(proj, "init", "-q");
 	git(proj, "config", "user.name", "t");
-	git(proj, "config", "user.email", "t@t");
+	git(proj, "config", "user.email", "t@t.local");
 	for (const [file, bytes] of Object.entries(files)) {
 		fs.mkdirSync(path.dirname(path.join(proj, file)), { recursive: true });
 		fs.writeFileSync(path.join(proj, file), bytes);

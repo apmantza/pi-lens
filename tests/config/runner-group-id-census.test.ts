@@ -29,8 +29,8 @@ const DYNAMIC_SITES: Record<string, string> = {
 		"result metadata copies the set of inconclusive runners; it does not construct a dispatch group",
 	"clients/dispatch/integration.ts#withPrimaryPolicyGroup:b9413ec9":
 		"filters lsp from the input group's existing runner ids; introduces no ids",
-	"clients/dispatch/integration.ts#capturePreEditLinterFindings:97a13cae":
-		"filters existing plan ids to eligible inline linters for pre-edit capture; introduces no ids",
+	"clients/dispatch/integration.ts#prepareSeedLaneRun:97a13cae":
+		"filters existing plan ids to eligible inline linters for the seed lanes (the pre-edit capture and the staged-delta read); introduces no ids",
 	"clients/dispatch/types.ts#checkedVerdict:0547fba4":
 		"a verdict's list of the runners that completed, copied from the result rows; it is not a dispatch group and introduces no ids",
 	"clients/language-policy.ts#getPrimaryDispatchGroup:17282e2d":
