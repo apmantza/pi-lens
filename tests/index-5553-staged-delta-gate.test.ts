@@ -56,17 +56,17 @@ beforeEach(() =>
 	}),
 );
 
-/** A clean committed file; `placeholder;` is a statement a writer can turn into `debugger;`. */
+/** A clean committed file; `void alpha;` is a statement a writer can turn into `debugger;`. */
 const CLEAN = [
 	"export function f(): number {",
 	"\tconst alpha = 1;",
-	"\tplaceholder;",
+	"\tvoid alpha;",
 	"\treturn alpha;",
 	"}",
 	"",
 ].join("\n");
 /** The committed file whose `debugger;` is the inherited blocker. */
-const WITH_BLOCKER = CLEAN.replace("placeholder;", "debugger;");
+const WITH_BLOCKER = CLEAN.replace("void alpha;", "debugger;");
 /** The clean file with the blocker added. */
 const ADDED = WITH_BLOCKER;
 /** An unrelated change to a line that is not the blocker's. */
@@ -229,7 +229,7 @@ describe("#5553 the commit gate judges the staged delta whoever wrote the bytes"
 				writer,
 				CLEAN,
 				ADDED,
-				"placeholder;",
+				"void alpha;",
 				"debugger;",
 			);
 			expect(commit?.text).toContain(GATE_BLOCK);
@@ -466,7 +466,7 @@ describe("#5553 the base each staged file is judged against", () => {
 			fs.writeFileSync(path.join(proj, A), c.bytes);
 			git(proj, "add", A);
 		});
-		expect(text.includes(GATE_BLOCK)).toBe(c.refused);
+		expect(text.includes(GATE_BLOCK), text).toBe(c.refused);
 		expect(text.includes(RAN_MARKER)).toBe(!c.refused);
 	});
 
