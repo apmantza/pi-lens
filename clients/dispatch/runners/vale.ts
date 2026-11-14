@@ -5,6 +5,7 @@ import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { hasToolConfig } from "../../tool-config-presence.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
+import { optionSafeTargetArg } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -142,9 +143,12 @@ const valeRunner: RunnerDefinition = {
 
 		// Vale exits 1 when a run reports an error-level alert and 0 for
 		// warning or suggestion alerts alone (exit table below).
+		// #5556: vale matches its `.vale.ini` section globs against this string, so
+		// an absolute path missed `[docs/*.md]` and met `[**/.claude/**]` in a
+		// lane's own ancestors (a silent `{}`); `-a.md` is a flag, not a file.
 		const result = await safeSpawnAsync(
 			cmd,
-			["--output", "JSON", ctx.filePath],
+			["--output", "JSON", optionSafeTargetArg(cwd, ctx.filePath)],
 			{ cwd, timeout: 15000 },
 		);
 

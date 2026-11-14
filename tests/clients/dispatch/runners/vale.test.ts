@@ -187,3 +187,66 @@ describe("vale config lookup (#4689 item 6)", () => {
 		}
 	});
 });
+
+describe("vale target argument (#5556)", () => {
+	// RECURRENCE GUARDED: vale matched its `.vale.ini` section globs against the
+	// ABSOLUTE dispatched path. A project-relative section (`[docs/*.md]`) never
+	// matched it, and a glob naming an ancestor (`[**/.claude/**]`, Claude
+	// Code's own worktree layout) matched the project's own files: a real
+	// vale 3.27 returned `{}` for the absolute spelling and the alert for the
+	// relative one. The spawn is the process boundary, so the argv the runner
+	// builds is what this pins; the real-binary cases are in
+	// ignore-glob-relative-argv-real.test.ts.
+	function valeArgv(project: string, filePath: string): Promise<string[]> {
+		fs.writeFileSync(
+			path.join(project, ".vale.ini"),
+			"MinAlertLevel = suggestion\n",
+		);
+		safeSpawnAsync.mockClear();
+		return valeRunner
+			.run({
+				filePath,
+				cwd: project,
+				kind: "markdown",
+				pi: { getFlag: () => false },
+				autofix: false,
+				deltaMode: true,
+				facts: new FactStore(),
+				hasTool: async () => true,
+				log: () => {},
+			} as never)
+			.then(() => {
+				const call = safeSpawnAsync.mock.calls.find((c) =>
+					(c[1] as string[]).includes("JSON"),
+				);
+				expect(call).toBeDefined();
+				return call?.[1] as string[];
+			});
+	}
+
+	it("names the file relative to the project, not by its absolute path", async () => {
+		const env = setupTestEnvironment("pi-lens-vale-argv-");
+		try {
+			const project = path.join(env.tmpDir, ".claude/worktrees/lane1");
+			fs.mkdirSync(path.join(project, "docs"), { recursive: true });
+			const filePath = path.join(project, "docs/a.md");
+			fs.writeFileSync(filePath, "# Doc\n");
+			const argv = await valeArgv(project, filePath);
+			expect(argv.at(-1)).toBe("docs/a.md");
+			expect(argv).not.toContain(filePath);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("keeps a file named like an option out of the option parser", async () => {
+		const env = setupTestEnvironment("pi-lens-vale-argv-opt-");
+		try {
+			fs.writeFileSync(path.join(env.tmpDir, "-a.md"), "# Doc\n");
+			const argv = await valeArgv(env.tmpDir, path.join(env.tmpDir, "-a.md"));
+			expect(argv.at(-1)).toBe("./-a.md");
+		} finally {
+			env.cleanup();
+		}
+	});
+});
