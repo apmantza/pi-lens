@@ -15,7 +15,7 @@ respawned server reports every finding it reported before eviction; the
 content-bound coverage check the auxiliary freeze depends on. A server that
 cannot demonstrate it is never proposed for eviction on perf grounds alone.
 
-_Last generated: 2026-11-11 on linux; 51 registry servers: 38 eligible, 0 vetoed, 3 inconclusive, 10 unavailable (0 not reached: budget)._
+_Last generated: 2026-11-14 on linux; 51 registry servers: 37 eligible, 0 vetoed, 3 inconclusive, 11 unavailable (0 not reached: budget)._
 
 ## Per-server rows
 
@@ -66,7 +66,7 @@ step log only, because it flaps.
 | nix | primary | unmeasured | unavailable | server-not-started | n/a | n/a |
 | ocaml | primary | unmeasured | unavailable | server-not-started | n/a | n/a |
 | omnisharp | primary | unmeasured | unavailable | no-fixture | n/a | n/a |
-| opengrep | auxiliary | transparent | eligible | · | ok | preserved |
+| opengrep | auxiliary | transparent | unavailable | server-not-started | n/a | n/a |
 | php | primary | transparent | eligible | · | ok | preserved |
 | powershell | primary | unmeasured | eligible | · | ok | preserved |
 | prisma | primary | transparent | eligible | · | ok | preserved |
@@ -103,6 +103,7 @@ nothing.
 - **go** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **kotlin** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **lua** [proposal] declared unmeasured but eviction and respawn preserved its findings
+- **opengrep** [info] declared transparent with no evidence this run: unavailable (server-not-started)
 - **powershell** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **ruby** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **rust** [proposal] declared unmeasured but eviction and respawn preserved its findings

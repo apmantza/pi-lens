@@ -299,7 +299,7 @@ carries the named admission until then.
 | dart | dart language-server | push-only | publishes-unversioned | direct | 2* | ci | — | — | — |
 | gleam | gleam lsp | push-only | publishes-unversioned | direct | 2* | ci | 1.19.2 | global-path | — |
 | clojure | clojure-lsp | push-only | publishes-unversioned | direct | 2* | ci | 2026.10.15-11.42.38 | global-path | — |
-| opengrep | opengrep (aux) | push-only | publishes-unversioned | direct | 2* | dev+ci | — | global-path | — |
+| opengrep | opengrep (aux) | push-only | publishes-unversioned | direct | 2* | dev+ci | — | global-path | since 2026-11-14 |
 | ast-grep | ast-grep (aux) | push-only | publishes-versioned | direct | 2 | dev+ci | — | — | — |
 | cue | CUE Language Server (cue lsp serve) | push-only | publishes-versioned | direct | 2 | dev+ci | 0.17.1 | global-path | — |
 | powershell | PowerShell Editor Services (pwsh Start-EditorServices.ps1 -Stdio) | push-only | publishes-unversioned | direct | 2* | ci | — | archive-dist | — |
@@ -484,9 +484,9 @@ dispatched nightly replaces it on the first night that reaches the server.
 | python-jedi | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture jedi) |
 | opengrep | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 1 publish event. Auxiliary, not gated. | `node scripts/probe-save-verdict.mjs` (fixture opengrep) |
 | gleam | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture gleam) |
-| go | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture go) |
+| go | `save` | no | Measured: answers without a save (2 publish events on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture go) |
 | zig | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 1 publish event. Gated. | `node scripts/probe-save-verdict.mjs` (fixture zig) |
-| rust | `save` | inconclusive | Measured: inconclusive — pull mode: every arm is a textDocument/diagnostic request, so no arm has the save as its only new input (arms: no-save silent (6000 ms), save alone silent (6000 ms), saved write 1 diagnostic). Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture rust) |
+| rust | `save` | inconclusive | Measured: inconclusive — pull mode: every arm is a textDocument/diagnostic request, so no arm has the save as its only new input (arms: no-save silent (6000 ms), save alone 1 diagnostic, saved write silent (6000 ms)). Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture rust) |
 | terraform | `save` | no | Measured: answers without a save (2 publish events on didOpen); a later save alone: 1 publish event. Gated. | `node scripts/probe-save-verdict.mjs` (fixture terraform) |
 | fsharp | `save+text` | no | Source: a save holds the source and refreshes code lenses; diagnostics come from open and change checks. Exempt: 0 findings in every run. | ionide/FsAutoComplete `8f011f1395a4`, `src/FsAutoComplete/LspServers/AdaptiveFSharpLspServer.fs` (`TextDocumentDidSave`); nightly run 39845687189 |
 | zizmor | · (registered dynamically) | no | Source: `didSave` is registered dynamically and pi-lens does not map that registration, so no save is sent. Auxiliary, not gated. | zizmor `crates/zizmor/src/lsp.rs` (`initialized`); `clients/lsp/wait-policy/strategies.ts:400-410` (#3548) |
@@ -573,5 +573,5 @@ streaks behind the `stale` column (#4512) and consecutive-night
 `idle-eviction` counts (#3989). Regenerated every run; never a measurement.
 
 ```json
-{"clean-behavior":{"fallow":{"pendingBehavior":"silent","pendingTier":"3","runs":1}},"first-publish":{"fallow":{"pendingFirstPublish":"direct","runs":1}},"idle-eviction":{"dart":{"nights":[{"day":"2026-11-06","rssMb":75,"coldMs":511},{"day":"2026-11-07","rssMb":75,"coldMs":538}]},"go":{"nights":[{"day":"2026-11-06","rssMb":89,"coldMs":567},{"day":"2026-11-07","rssMb":90,"coldMs":595}]}}}
+{"clean-behavior":{"fallow":{"pendingBehavior":"silent","pendingTier":"3","runs":1}},"first-publish":{"fallow":{"pendingFirstPublish":"direct","runs":1},"opengrep":{"firstMissed":"2026-11-14"}},"idle-eviction":{"csharp":{"nights":[{"day":"2026-11-14","rssMb":236,"coldMs":2940}]},"dart":{"nights":[{"day":"2026-11-06","rssMb":75,"coldMs":511},{"day":"2026-11-07","rssMb":75,"coldMs":538}]},"go":{"nights":[{"day":"2026-11-06","rssMb":89,"coldMs":567},{"day":"2026-11-07","rssMb":90,"coldMs":595}]},"kotlin":{"nights":[{"day":"2026-11-14","rssMb":291,"coldMs":2458}]},"powershell":{"nights":[{"day":"2026-11-14","rssMb":196,"coldMs":2079}]},"rust":{"nights":[{"day":"2026-11-14","rssMb":659,"coldMs":2601}]},"svelte":{"nights":[{"day":"2026-11-14","rssMb":234,"coldMs":2570}]}},"missed-probe":{"opengrep":{"clean-behavior":{"since":"2026-11-14","last":"2026-11-14","misses":1},"first-publish":{"since":"2026-11-14","last":"2026-11-14","misses":1}}}}
 ```
