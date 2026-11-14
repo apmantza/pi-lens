@@ -29,6 +29,7 @@ import {
 	complexityBaselineKey,
 } from "../../clients/metrics/complexity-baseline.js";
 import { runPipeline } from "../../clients/pipeline.js";
+import { getSharedTreeSitterClient } from "../../clients/tree-sitter-shared.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import {
 	clearLastAnalyzedStateCache,
@@ -99,6 +100,7 @@ async function touchThenWrite(next: string): Promise<void> {
 async function edit(
 	result: Record<string, unknown>,
 	flags: string[] = [],
+	escape?: AbortController,
 ): Promise<string> {
 	vi.mocked(runPipeline).mockReset();
 	vi.mocked(runPipeline).mockResolvedValue(result as never);
@@ -111,7 +113,14 @@ async function edit(
 			input: { path: filePath },
 			content: [{ type: "text", text: "ok" }],
 		},
-		getFlag: (name: string) => flags.includes(name),
+		getFlag: (name: string) => {
+			// The handler reads this flag on the line before the delta's bound, so
+			// Esc lands exactly there: the bound starts already fired, after the
+			// pipeline's own bounds have passed.
+			if (name === "no-complexity") escape?.abort();
+			return flags.includes(name);
+		},
+		...(escape === undefined ? {} : { signal: escape.signal }),
 		dbg: () => {},
 		runtime,
 		cacheManager: new CacheManager(false),
@@ -172,6 +181,43 @@ describe("#5087 the tool_result complexity delta", () => {
 				(entry) => entry.kind === "complexity-delta-failed",
 			),
 		).toHaveLength(1);
+	});
+
+	// Recurrence (#5550 r1, B2): the delta runs as `bounded((signal) =>
+	// adviseOnEdit({... signal}))`, and replacing that `signal` with `undefined`
+	// left every test green: the abandoned run, past a fired bound, then judged
+	// the edit and stored its table late. The caller's abort fires the bound
+	// before the run starts; the run must see the bound's abort, so it reads no
+	// stored baseline and writes nothing. The sentinel is the run's own parse:
+	// its continuation is queued before the test's, so by the time the test
+	// resumes the run has either returned or reached the baseline store.
+	it("hands the abandoned delta the bound's abort, so it stores nothing late (#5550)", async () => {
+		await touchThenWrite(fn("handle", 17));
+		const key = complexityBaselineKey(filePath);
+		const stored = runtime.complexityBaselines.get(key);
+		const client = getSharedTreeSitterClient();
+		if (client === null) throw new Error("no shared tree-sitter client");
+		const parses: Array<Promise<unknown>> = [];
+		const withParsedTree = client.withParsedTree.bind(client);
+		vi.spyOn(client, "withParsedTree").mockImplementation(((
+			...args: Parameters<typeof withParsedTree>
+		) => {
+			const parse = withParsedTree(...args);
+			parses.push(parse);
+			return parse;
+		}) as typeof client.withParsedTree);
+		const read = vi.spyOn(runtime.complexityBaselines, "get");
+		const set = vi.spyOn(runtime.complexityBaselines, "set");
+
+		const text = await edit(CLEAN, [], new AbortController());
+
+		expect(text).not.toContain("complexity vs");
+		// The run is abandoned, not stopped: it still reaches its parse.
+		await vi.waitFor(() => expect(parses).toHaveLength(1));
+		await parses[0];
+		expect(read).not.toHaveBeenCalled();
+		expect(set).not.toHaveBeenCalled();
+		expect(runtime.complexityBaselines.get(key)).toBe(stored);
 	});
 
 	it("honours --no-complexity", async () => {
