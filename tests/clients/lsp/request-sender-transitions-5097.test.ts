@@ -71,19 +71,20 @@ afterEach(() => {
 });
 
 describe("the request sender's transitions (#5097)", () => {
-	it("an answer in time sends no cancel and leaves the connection idle", async () => {
+	it("an answer in time sends no cancel, leaves the connection idle, and leaves no timer to cancel later", async () => {
 		const state = createMockState();
 		const seen = install(state, async () => ({ contents: "ok" }));
 		const abort = new AbortController();
 
 		await expect(
-			navRequest(state, "textDocument/hover", {}, undefined, 500, abort.signal),
+			navRequest(state, "textDocument/hover", {}, undefined, 30, abort.signal),
 		).resolves.toEqual({ contents: "ok" });
 
 		expect(seen.token?.isCancellationRequested).toBe(false);
 		expect(isConnectionBusy(state.connection)).toBe(false);
-		// The bound's timer is gone: nothing fires later and cancels a finished
-		// request's token.
+		// The bound's timer is gone and so is the abort listener: neither the
+		// deadline nor a later Esc cancels a finished request's token.
+		await wait(80);
 		abort.abort();
 		expect(seen.token?.isCancellationRequested).toBe(false);
 	});
