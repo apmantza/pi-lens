@@ -1297,6 +1297,17 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 		},
 	],
 	[
+		// The archive launcher is `bin/spotbugs`, which prints its version under
+		// `-version` and rejects `--version` (installer entry, #133).
+		"spotbugs",
+		{
+			command: "spotbugs",
+			windowsExt: ".bat",
+			versionArgs: ["-version"],
+			managedToolId: "spotbugs",
+		},
+	],
+	[
 		"htmlhint",
 		{
 			command: "htmlhint",

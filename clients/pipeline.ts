@@ -65,12 +65,10 @@ import { toRunnerDisplayPath } from "./dispatch/runner-context.js";
 import {
 	type AvailabilityLatch,
 	classifyProbeFailure,
-	createAvailabilityChecker,
 	createAvailabilityLatch,
 	describeProbeEvidence,
 	logAvailabilityDecision,
 	startHostStallSampler,
-	resolveAvailableOrInstall,
 	resolveCommandArgsWithInstallFallback,
 	resolveToolCommand,
 	resolveToolCommandWithInstallFallback,
@@ -762,24 +760,15 @@ async function tryKtlintFix(
 	return detectFileChangedAfterCommand(filePath, cmd, ["-F", filePath], cwd);
 }
 
-// ktfmt's autofix keeps its own managed-first checker: the registry row for
-// ktfmt is the formatter ladder (PATH before managed, #5492 r2) and carries no
-// `.bat` Windows extension, so folding this one is not behaviour-preserving.
-const ktfmtAutofixChecker = createAvailabilityChecker("ktfmt", ".bat");
-
 async function tryKtfmtFix(
 	filePath: string,
 	cwd: string,
 	writeHold?: FileMutationHold,
 ): Promise<number> {
 	// Config-first: the autofix policy only reaches here when the project opted
-	// into ktfmt, so resolveAvailableOrInstall honors that gate. ktfmt writes the
+	// into ktfmt, so the registry resolver honors that gate. ktfmt writes the
 	// formatted file in place and exits 0; treat any byte change as the fix.
-	const cmd = await resolveAvailableOrInstall(
-		ktfmtAutofixChecker,
-		"ktfmt",
-		cwd,
-	);
+	const cmd = await resolveToolCommandWithInstallFallback(cwd, "ktfmt");
 	if (!cmd) return 0;
 	if (writeHold) await writeHold.acquire();
 	const absPath = path.resolve(cwd, filePath);

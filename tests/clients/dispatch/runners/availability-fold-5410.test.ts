@@ -28,6 +28,7 @@ import type { RunnerDefinition } from "../../../../clients/dispatch/types.js";
 import {
 	resetDispatchAvailabilityState,
 	resolveToolCommandWithInstallFallback,
+	toolBinaryVerdict,
 } from "../../../../clients/dispatch/runners/utils/runner-helpers.js";
 import { resetProjectLensConfigCache } from "../../../../clients/project-lens-config.js";
 import { runAutofix } from "../../../../clients/pipeline.js";
@@ -75,13 +76,13 @@ const { safeSpawnAsync, spawnCalls, probeMode } = vi.hoisted(() => {
 				(args[0] === "version" && args[1] === "--short");
 			if (isProbe) {
 				const tool = path.basename(String(cmd)).replace(/\.(exe|bat)$/, "");
-				// helm 4 has no --version flag and an old JVM has no --version
-				// either: each answers only its own spelling, so a registry row
+				// helm 4 has no --version flag, an old JVM has no --version and the
+				// spotbugs launcher rejects it: each answers only its own spelling, so a registry row
 				// with the wrong versionArgs reads as a rejected binary (#4453).
 				const spelling =
 					tool === "helm"
 						? args[0] === "version"
-						: tool === "java"
+						: tool === "java" || tool === "spotbugs"
 							? args.includes("-version")
 							: true;
 				const mode = spelling ? (probeMode[tool] ?? "ok") : "reject";
@@ -118,6 +119,8 @@ const WINDOWS_EXT: Record<string, string> = {
 	helm: ".exe",
 	trivy: ".exe",
 	java: ".exe",
+	spotbugs: ".bat",
+	ktfmt: "",
 };
 
 /**
@@ -252,6 +255,45 @@ describe("one availability ladder per binary (#5410)", () => {
 				(c) => c.cmd === tool && c.args.includes("--auto-correct"),
 			),
 		).toBe(true);
+	});
+
+	// Recurrence (#5410 remainder): the ktfmt autofix lane kept a module-level
+	// checker of its own, so the registry never held its verdict, the
+	// `node_modules/.bin` rung the registry ladder walks was missing from it,
+	// and no reader could ask what the lane decided.
+	it("resolves a ktfmt autofix through the registry ladder", async () => {
+		const root = workspace.tmpDir;
+		const shim = plantTool(root, "ktfmt", path.join("node_modules", ".bin"));
+		fs.writeFileSync(path.join(root, "build.gradle.kts"), "// ktfmt {}\n");
+		fs.writeFileSync(path.join(root, ".ktfmt"), "");
+		const file = path.join(root, "Main.kt");
+		fs.writeFileSync(file, "fun main() {}\n");
+		await autofix(file, root);
+		expect(probesOf(shim)).toHaveLength(1);
+		expect(
+			spawnCalls.some((c) => c.cmd === shim && c.args.includes(file)),
+		).toBe(true);
+		expect(toolBinaryVerdict("ktfmt", root).outcome).toBe("success");
+	});
+
+	// Recurrence: spotbugs held its own checker, so the registry could not
+	// answer for it (the spec row is what the runner's checker lacked).
+	it("resolves spotbugs through the registry ladder", async () => {
+		const root = workspace.tmpDir;
+		plantTool(root, "java");
+		const shim = plantTool(root, "spotbugs");
+		fs.mkdirSync(path.join(root, "target", "classes"), { recursive: true });
+		fs.writeFileSync(path.join(root, "target", "classes", "A.class"), "x");
+		const file = path.join(root, "A.java");
+		fs.writeFileSync(file, "class A {}\n");
+		await dispatch(
+			file,
+			root,
+			(await import("../../../../clients/dispatch/runners/spotbugs.js"))
+				.default,
+		);
+		expect(probesOf(shim)).toHaveLength(1);
+		expect(toolBinaryVerdict("spotbugs", root).outcome).toBe("success");
 	});
 
 	// Recurrence: helm-lint and helm-render each held a helm checker.
