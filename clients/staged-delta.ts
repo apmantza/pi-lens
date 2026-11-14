@@ -6,189 +6,64 @@
  * recognised bash write, a tool that names its path. Bytes nobody authored (a
  * script no recogniser reads, a foreign tool that names no path, an external
  * editor) reach `git commit` with no record, so a `debugger;` in them
- * committed. This module is the gate's own read: it lists the files the
- * commit can carry from the commit's argv and git, takes the lines each adds
- * against `HEAD`, runs the staged-delta lanes over the file's bytes
- * (`collectStagedLaneBlockers`) and reports a blocker on an added line.
+ * committed. This module is the gate's own read of what the commit carries.
  *
- * The line read stands in for linting the HEAD blob: a blocker on a line the
- * commit leaves untouched is inherited debt (acceptance 5), one on a line it
- * adds is new, and no sibling copy of the old bytes is written to the user's
- * tree to be linted. A finding an edit moves onto an untouched line (an import
- * that loses its last use) is not read as added: the writer baseline's identity
- * match (`clients/dispatch/pre-edit-seed.ts`) is the finer rule for the writers
- * that have one; this is the floor for the rest.
+ * git resolves the commit (the maintainer, 2026-11-14). The command's commit
+ * is replayed as `git commit --dry-run --porcelain -z` with its own arguments,
+ * git options, assignments and directory (`planStagedCommit`), on a private
+ * copy of the index it would use; a `git add` that runs before it in the same
+ * command is replayed on that copy first. Each path the dry run says the
+ * commit carries with content is judged on its committed bytes: the working
+ * file when git reports the commit's entry equal to it, otherwise the index
+ * blob. A line of those bytes is added when no base holds it, the bases being
+ * the path's blob (or its rename source's) in `HEAD` and, during a merge, in
+ * each `MERGE_HEAD`. A file whose committed blob is a base's adds nothing and
+ * runs no lane. A blocking finding of the seeded lanes
+ * (`collectStagedLaneBlockers`) on an added line refuses.
  *
- * Fail closed (the gate admits known-good forms and refuses the rest). A commit argv this does not
- * recognise is not a pass: the files are every one that differs from `HEAD` or
- * is untracked, each judged on its added lines. A git read that fails or is
- * cut, a file that cannot be read, a lane that times out, and a staged file
- * whose working bytes are not the index's (the lanes read the working file)
- * each refuse as degraded, never allow.
+ * Fail closed. A command pi-lens cannot replay, a git read that fails or is
+ * cut, a file it cannot read, a lane that gives no answer, a throw, and the
+ * bound each refuse as degraded, never allow.
  */
+import { randomBytes } from "node:crypto";
 import * as nodeFs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
-import type { DecodedShellWord } from "./bash-file-access.js";
 import { bounded } from "./deadline-utils.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
-import { applyInlineBlockerPolicy } from "./inline-blocker-dispositions.js";
-import { isPathIgnoredByProject } from "./file-utils.js";
-import { isExternalOrVendorFile, toProjectRelativePath } from "./path-utils.js";
-import {
-	logDecision,
-	mayRunGitCommit,
-	readGuardedSegments,
-	unknown,
-	type GuardDecision,
-} from "./git-guard.js";
-import { resolveGitCheckout } from "./review-graph/git-identity.js";
-import { safeSpawnAsync } from "./safe-spawn.js";
-import { truncatedByOutputCap } from "./spawn-output-cap.js";
 import { loadDispatchIntegration } from "./dispatch/lazy.js";
 import type { Diagnostic } from "./dispatch/types.js";
+import { isPathIgnoredByProject } from "./file-utils.js";
+import {
+	type GuardDecision,
+	logDecision,
+	mayRunGitCommit,
+	planStagedCommit,
+	type ReplayedGit,
+	unknown,
+} from "./git-guard.js";
+import { applyInlineBlockerPolicy } from "./inline-blocker-dispositions.js";
+import { alignLines, lineHashesOf } from "./line-alignment.js";
+import { isExternalOrVendorFile, toProjectRelativePath } from "./path-utils.js";
+import { safeSpawnAsync } from "./safe-spawn.js";
+import { truncatedByOutputCap } from "./spawn-output-cap.js";
 
-/** Where a commit takes its files from (git's own `--only`, `--include`, `-a`). */
-type StageSource = "index" | "all" | "paths" | "index+paths";
-
-export interface CommitStageForm {
-	source: StageSource;
-	pathspecs: readonly string[];
-}
-
-/** `git commit` options that take a value, as `--opt value` or `--opt=value`. */
-const VALUE_LONG_OPTIONS: ReadonlySet<string> = new Set([
-	"message",
-	"file",
-	"reuse-message",
-	"reedit-message",
-	"template",
-	"author",
-	"date",
-	"cleanup",
-	"fixup",
-	"squash",
-	"trailer",
-]);
-/** `git commit` options with no effect on which files the commit carries. */
-const NEUTRAL_LONG_OPTIONS: ReadonlySet<string> = new Set([
-	"amend",
-	"no-verify",
-	"verify",
-	"allow-empty",
-	"allow-empty-message",
-	"no-edit",
-	"edit",
-	"signoff",
-	"no-signoff",
-	"quiet",
-	"verbose",
-	"reset-author",
-	"no-post-rewrite",
-	"status",
-	"no-status",
-	"no-gpg-sign",
-	"gpg-sign",
-	"untracked-files",
-]);
-const VALUE_SHORT_OPTIONS = "mFCct";
-const NEUTRAL_SHORT_OPTIONS = "qvsenSu";
-
-/**
- * Which files the words after `git commit` make it carry, or `undefined` for a
- * form this does not read (an unknown option, `-p`, `--pathspec-from-file`, a
- * word the shell expands): only a listed form is resolved, everything else is
- * unrecognized and judged by the superset.
- */
-export function parseCommitStageForm(
-	args: readonly DecodedShellWord[],
-): CommitStageForm | undefined {
-	let all = false;
-	let include = false;
-	const pathspecs: string[] = [];
-	let onlyPaths = false;
-	for (let i = 0; i < args.length; i++) {
-		const word = args[i];
-		if (word === undefined) return undefined;
-		const text = word.text;
-		const isOption = !onlyPaths && text.startsWith("-") && text !== "-";
-		if (!isOption) {
-			if (word.hidden || word.tildeExpands) return undefined;
-			pathspecs.push(text);
-			continue;
-		}
-		if (text === "--") {
-			onlyPaths = true;
-			continue;
-		}
-		if (word.hidden) return undefined;
-		if (text.startsWith("--")) {
-			const [name = "", inline] = text.slice(2).split(/=(.*)/s, 2);
-			if (name === "all") all = true;
-			else if (name === "include") include = true;
-			else if (name === "only") include = false;
-			else if (VALUE_LONG_OPTIONS.has(name)) {
-				if (inline === undefined) i += 1;
-			} else if (!NEUTRAL_LONG_OPTIONS.has(name)) return undefined;
-			continue;
-		}
-		// A cluster of short options: the first value-taking one ends it.
-		for (let c = 1; c < text.length; c++) {
-			const letter = text[c] ?? "";
-			if (letter === "a") all = true;
-			else if (letter === "i") include = true;
-			else if (letter === "o") include = false;
-			else if (VALUE_SHORT_OPTIONS.includes(letter)) {
-				if (c === text.length - 1) i += 1;
-				break;
-			} else if (letter === "S" || letter === "u") break;
-			else if (!NEUTRAL_SHORT_OPTIONS.includes(letter)) return undefined;
-		}
-	}
-	const hasPaths = pathspecs.length > 0;
-	return {
-		source: all
-			? "all"
-			: hasPaths
-				? include
-					? "index+paths"
-					: "paths"
-				: "index",
-		pathspecs,
-	};
-}
-
-/** The tree git diffs against when `HEAD` does not exist yet (a first commit). */
-const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const GIT_TIMEOUT_MS = 5000;
 const MAX_GIT_OUTPUT_BYTES = 16 * 1024 * 1024;
 /** Files whose findings the refusal names. */
 const MAX_NAMED_FILES = 5;
-/** Lane runs in flight at once: the lanes are in-process or one spawn each. */
+/** Files judged at once: each runs git reads and the lanes. */
 const LANE_CONCURRENCY = 4;
 
-interface StagedEntry {
-	/** Path relative to the top of the checkout. */
-	path: string;
-	/** The path in `HEAD` of a renamed or copied file. */
-	from?: string;
-	/** git's status letter, `?` for an untracked file. */
-	status: string;
-	/** Whether the entry came from the index listing. */
-	fromIndex: boolean;
-}
-
-/** Why the staged set or a file's delta could not be read: a refusal, never a pass. */
+/** Why the read could not answer: a refusal, never a pass. */
 export type StagedDeltaDegraded =
+	| "unresolved_command"
 	| "git_failed"
 	| "git_output_cut"
-	| "no_checkout"
-	| "bytes_not_staged"
 	| "file_unreadable"
 	| "lane_incomplete";
 
 export type StagedDeltaVerdict =
-	/** The command cannot commit (a push alone): nothing is staged by it. */
-	| { kind: "not_a_commit" }
 	| { kind: "clean"; files: number }
 	| {
 			kind: "added";
@@ -198,288 +73,352 @@ export type StagedDeltaVerdict =
 	  }
 	| { kind: "degraded"; reason: StagedDeltaDegraded; detail: string };
 
-async function runGit(
-	dir: string,
-	args: readonly string[],
-	signal: AbortSignal | undefined,
-): Promise<
-	| { ok: true; stdout: string }
-	| {
-			ok: false;
-			reason: "git_failed" | "git_output_cut";
-			status: number | null;
-	  }
-> {
-	const result = await safeSpawnAsync("git", ["--literal-pathspecs", ...args], {
-		cwd: dir,
-		timeout: GIT_TIMEOUT_MS,
-		maxOutputBytes: MAX_GIT_OUTPUT_BYTES,
-		...(signal === undefined ? {} : { signal }),
-	});
-	if (truncatedByOutputCap(result))
-		return { ok: false, reason: "git_output_cut", status: result.status };
-	if (result.error || result.status !== 0)
-		return { ok: false, reason: "git_failed", status: result.status };
-	return { ok: true, stdout: result.stdout ?? "" };
-}
+const degraded = (
+	reason: StagedDeltaDegraded,
+	detail: string,
+): StagedDeltaVerdict => ({ kind: "degraded", reason, detail });
 
-/** `git diff --raw -z` entries, or `undefined` for output that is not that. */
-function parseRawDiff(
-	stdout: string,
-	fromIndex: boolean,
-): StagedEntry[] | undefined {
-	const entries: StagedEntry[] = [];
-	const tokens = stdout.split("\0");
-	for (let i = 0; i < tokens.length;) {
-		const header = tokens[i] ?? "";
-		if (header === "") {
-			i += 1;
-			continue;
-		}
-		if (!header.startsWith(":")) return undefined;
-		const status = header.slice(header.lastIndexOf(" ") + 1);
-		const moved = status.startsWith("R") || status.startsWith("C");
-		const first = tokens[i + 1];
-		const second = tokens[i + 2];
-		if (first === undefined || (moved && second === undefined))
-			return undefined;
-		entries.push(
-			moved
-				? {
-						path: second ?? "",
-						from: first,
-						status: status[0] ?? "R",
-						fromIndex,
-					}
-				: { path: first, status: status[0] ?? "M", fromIndex },
-		);
-		i += moved ? 3 : 2;
-	}
-	return entries;
-}
-
-const RAW_DIFF = [
-	"diff",
-	"--raw",
-	"-z",
-	"-M",
-	"--no-ext-diff",
-	"--no-textconv",
-] as const;
-
-/** The line ranges a `git diff -U0` adds, from its hunk headers. */
-function parseAddedRanges(stdout: string): Array<[number, number]> {
-	const ranges: Array<[number, number]> = [];
-	for (const line of stdout.split("\n")) {
-		const match = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
-		if (!match) continue;
-		const start = Number(match[1]);
-		const count = match[2] === undefined ? 1 : Number(match[2]);
-		if (count > 0) ranges.push([start, start + count - 1]);
-	}
-	return ranges;
-}
-
-interface Listing {
-	base: string;
-	entries: StagedEntry[];
-	/** Whether the set is the superset an unrecognized form reads. */
-	superset: boolean;
-}
-
-/** Files a commit of `form` carries, in the checkout `dir` belongs to. */
-async function listCommitFiles(
-	dir: string,
-	form: CommitStageForm | undefined,
-	signal: AbortSignal | undefined,
-): Promise<Listing | { degraded: StagedDeltaDegraded; detail: string }> {
-	const head = await runGit(
-		dir,
-		["rev-parse", "--verify", "-q", "HEAD"],
-		signal,
-	);
-	// `-q` exits 1 for a HEAD that does not exist yet; any other failure is a
-	// read that did not answer.
-	if (!head.ok && head.status !== 1)
-		return { degraded: head.reason, detail: "reading HEAD" };
-	const base = head.ok ? "HEAD" : EMPTY_TREE;
-	const reads: Array<{ args: string[]; fromIndex: boolean }> = [];
-	const source = form?.source;
-	if (source === undefined) {
-		reads.push({ args: [...RAW_DIFF, base], fromIndex: false });
-		reads.push({ args: [...RAW_DIFF, "--cached", base], fromIndex: true });
-	} else {
-		if (source === "index" || source === "index+paths")
-			reads.push({ args: [...RAW_DIFF, "--cached", base], fromIndex: true });
-		if (source === "all")
-			reads.push({ args: [...RAW_DIFF, base], fromIndex: false });
-		if (source === "paths" || source === "index+paths")
-			reads.push({
-				args: [...RAW_DIFF, base, "--", ...(form?.pathspecs ?? [])],
-				fromIndex: false,
-			});
-	}
-	const merged = new Map<string, StagedEntry>();
-	for (const read of reads) {
-		const out = await runGit(dir, read.args, signal);
-		if (!out.ok) return { degraded: out.reason, detail: "listing the files" };
-		const parsed = parseRawDiff(out.stdout, read.fromIndex);
-		if (!parsed)
-			return { degraded: "git_failed", detail: "reading the listing" };
-		for (const entry of parsed) {
-			const known = merged.get(entry.path);
-			// A file a working-tree read also lists commits its working bytes.
-			merged.set(entry.path, {
-				...entry,
-				fromIndex: entry.fromIndex && (known?.fromIndex ?? true),
-			});
-		}
-	}
-	if (source === undefined) {
-		const untracked = await runGit(
-			dir,
-			["ls-files", "-o", "--exclude-standard", "-z"],
-			signal,
-		);
-		if (!untracked.ok)
-			return { degraded: untracked.reason, detail: "listing untracked files" };
-		for (const file of untracked.stdout.split("\0").filter(Boolean))
-			if (!merged.has(file))
-				merged.set(file, { path: file, status: "?", fromIndex: false });
-	}
-	return {
-		base,
-		entries: [...merged.values()],
-		superset: source === undefined,
-	};
-}
-
-export interface StagedDeltaDeps {
+interface StagedDeltaDeps {
 	cwd: string;
 	projectRoot: string;
 	getFlag: (flag: string) => boolean | string | undefined;
 	signal?: AbortSignal;
 }
 
+interface GitRead {
+	status: number | null;
+	stdout: string;
+	stderr: string;
+	cut: boolean;
+}
+
+/** One git read under the replayed command's options, on our index copy. */
+async function runGit(
+	replay: ReplayedGit,
+	extra: { index?: string; config?: string; input?: string },
+	args: readonly string[],
+	signal: AbortSignal | undefined,
+): Promise<GitRead> {
+	const result = await safeSpawnAsync(
+		"git",
+		[
+			...replay.globals,
+			...(extra.config === undefined ? [] : ["-c", extra.config]),
+			...args,
+		],
+		{
+			cwd: replay.cwd,
+			env: {
+				...replay.env,
+				...(extra.index === undefined ? {} : { GIT_INDEX_FILE: extra.index }),
+				GIT_TERMINAL_PROMPT: "0",
+				GIT_EDITOR: "false",
+			},
+			timeout: GIT_TIMEOUT_MS,
+			maxOutputBytes: MAX_GIT_OUTPUT_BYTES,
+			input: extra.input ?? "",
+			...(signal === undefined ? {} : { signal }),
+		},
+	);
+	return {
+		status: result.error ? null : result.status,
+		stdout: result.stdout ?? "",
+		stderr: result.stderr ?? "",
+		cut: truncatedByOutputCap(result),
+	};
+}
+
+/** A git read's failure as the refusal names it. */
+function gitFailure(out: GitRead, what: string): StagedDeltaVerdict {
+	if (out.cut) return degraded("git_output_cut", what);
+	const first = out.stderr.trim().split("\n")[0] ?? "";
+	return degraded("git_failed", first ? `${what}: ${first}` : what);
+}
+
+/** One path a dry run lists. */
+interface Carried {
+	/** git's X (the commit's index against the base) and Y (against the working file). */
+	x: string;
+	y: string;
+	/** Path from the top of the checkout. */
+	path: string;
+	/** The rename or copy source. */
+	from?: string;
+}
+
+/** `git commit --dry-run --porcelain -z` output, or `undefined` for anything else. */
+function parseDryRun(stdout: string): Carried[] | undefined {
+	const entries: Carried[] = [];
+	const tokens = stdout.split("\0");
+	for (let i = 0; i < tokens.length; i++) {
+		const token = tokens[i] ?? "";
+		if (token === "" && i === tokens.length - 1) break;
+		if (!/^[ MADRCTU?!]{2} ./s.test(token)) return undefined;
+		const x = token[0] ?? " ";
+		const y = token[1] ?? " ";
+		const moved = "RC".includes(x) || "RC".includes(y);
+		const from = moved ? tokens[++i] : undefined;
+		if (moved && !from) return undefined;
+		entries.push({ x, y, path: token.slice(3), ...(from && { from }) });
+	}
+	return entries;
+}
+
+/** Lines of `committed` that no base holds (1-based), or `"all"`. */
+function addedLines(
+	committed: string,
+	bases: readonly string[],
+	wholeFile: boolean,
+): Set<number> | "all" {
+	const after = lineHashesOf(committed);
+	if (wholeFile || !after) return "all";
+	const inherited = new Set<number>();
+	for (const base of bases) {
+		const before = lineHashesOf(base);
+		const map = before && alignLines(before, after);
+		if (!before || !map) continue;
+		for (let line = 1; line <= before.length; line++) {
+			const target = map(line);
+			if (target !== undefined) inherited.add(target);
+		}
+	}
+	const added = new Set<number>();
+	for (let line = 1; line <= after.length; line++)
+		if (!inherited.has(line)) added.add(line);
+	return added;
+}
+
+/** What the read knows of one carried file before its lanes run. */
+interface Candidate {
+	abs: string;
+	committedId: string;
+	/** The committed bytes are the working file's (git's Y is blank). */
+	fromWork: boolean;
+	baseIds: string[];
+}
+
+interface Repo {
+	top: string;
+	copy: string;
+	mergeHead: string;
+	replay: ReplayedGit;
+}
+
 /**
- * The staged-delta verdict for one `git commit` command: a verdict per the
- * added lines of each file it carries. A degraded read is recorded once per reason and session
- * (`staged-delta-degraded`).
+ * The staged-delta verdict for one command that may commit: a verdict per the
+ * added lines of each file the commit carries.
  */
 async function judgeStagedDelta(
 	toolName: string,
 	input: unknown,
 	deps: StagedDeltaDeps,
 ): Promise<StagedDeltaVerdict> {
-	if (!mayRunGitCommit(toolName, input)) return { kind: "not_a_commit" };
-	const segments = readGuardedSegments(toolName, input, deps.cwd);
-	// The forms this reads: every git segment a plain commit or a read-only
-	// verb, each commit option listed. Anything else judges the superset, in
-	// the directory the command starts in (the best this can name).
-	const commits = segments?.guarded.filter((segment) => segment.commit) ?? [];
-	const requests: Array<{
-		dir: string;
-		form: CommitStageForm | undefined;
-		/** The directory is the commit's own, not the one the shell starts in. */
-		placed: boolean;
-	}> =
-		segments && !segments.indexMayChange && commits.length > 0
-			? commits.map((commit) => ({
-					dir: commit.directory,
-					form: parseCommitStageForm(commit.args),
-					placed: true,
-				}))
-			: [{ dir: deps.cwd, form: undefined, placed: false }];
-	let judged = 0;
-	for (const request of requests) {
-		const outcome = await judgeOne(request, deps);
-		if (outcome.kind === "degraded")
-			recordDegradationOnce({
-				kind: "staged-delta-degraded",
-				subject: outcome.reason,
-				reason: outcome.detail,
-			});
-		if (outcome.kind !== "clean") return outcome;
-		judged += outcome.files;
+	const plan = planStagedCommit(toolName, input, deps.cwd);
+	if ("unresolved" in plan)
+		return degraded("unresolved_command", plan.unresolved);
+	const scratch = nodeFs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-staged-"));
+	try {
+		// A dry run that an argument turns into a real commit
+		// (`--no-porcelain --no-null --no-dry-run`) stops at this hook, which
+		// `--no-verify` does not skip. Its stderr line keeps the exit from
+		// reading as "nothing to commit".
+		const hooks = path.join(scratch, "hooks");
+		nodeFs.mkdirSync(hooks);
+		nodeFs.writeFileSync(
+			path.join(hooks, "prepare-commit-msg"),
+			"#!/bin/sh\necho 'the command turns the dry run into a real commit' >&2\nexit 1\n",
+			{ mode: 0o755 },
+		);
+		const copies = new Map<string, string>();
+		const repoOf = async (
+			replay: ReplayedGit,
+		): Promise<Repo | StagedDeltaVerdict> => {
+			const out = await runGit(
+				replay,
+				{},
+				[
+					"rev-parse",
+					"--path-format=absolute",
+					"--show-toplevel",
+					"--git-path",
+					"index",
+					"--git-path",
+					"MERGE_HEAD",
+				],
+				deps.signal,
+			);
+			const [top, index, mergeHead] = out.stdout.split("\n");
+			if (out.status !== 0 || !top || !index || !mergeHead)
+				return gitFailure(out, "finding the repository the commit runs in");
+			let copy = copies.get(index);
+			if (copy === undefined) {
+				copy = path.join(scratch, `index-${copies.size}`);
+				copies.set(index, copy);
+				// No index yet is an empty one, for git and for the copy alike.
+				if (nodeFs.existsSync(index)) nodeFs.copyFileSync(index, copy);
+			}
+			return { top, copy, mergeHead, replay };
+		};
+		for (const add of plan.adds) {
+			const repo = await repoOf(add);
+			if ("kind" in repo) return repo;
+			const out = await runGit(
+				add,
+				{ index: repo.copy },
+				["add", ...add.args],
+				deps.signal,
+			);
+			if (out.status !== 0) return gitFailure(out, "replaying git add");
+		}
+		const repo = await repoOf(plan.commit);
+		if ("kind" in repo) return repo;
+		const dry = await runGit(
+			plan.commit,
+			{
+				index: repo.copy,
+				config: `core.hooksPath=${hooks}`,
+				// `--pathspec-from-file=-` then reads every path: a superset of
+				// any list the command feeds it.
+				input: ":/\n",
+			},
+			[
+				"commit",
+				"--dry-run",
+				"--porcelain",
+				"-z",
+				"--untracked-files=no",
+				...plan.commit.args,
+			],
+			deps.signal,
+		);
+		// Exit 1 with nothing on stderr is "nothing to commit": git refuses the
+		// commit itself, and the output lists nothing carried.
+		if (dry.status !== 0 && (dry.status !== 1 || dry.stderr.trim() !== ""))
+			return gitFailure(dry, "the commit's dry run");
+		const entries = parseDryRun(dry.stdout);
+		if (!entries) return gitFailure(dry, "reading the commit's dry run");
+		return await judgeCarried(
+			entries.filter((entry) => "AMRCT".includes(entry.x)),
+			repo,
+			deps,
+		);
+	} finally {
+		nodeFs.rmSync(scratch, { recursive: true, force: true });
 	}
-	return { kind: "clean", files: judged };
 }
 
-async function judgeOne(
-	{
-		dir,
-		form,
-		placed,
-	}: { dir: string; form: CommitStageForm | undefined; placed: boolean },
+async function judgeCarried(
+	carried: readonly Carried[],
+	repo: Repo,
 	deps: StagedDeltaDeps,
 ): Promise<StagedDeltaVerdict> {
-	const toplevel = await runGit(
-		dir,
-		["rev-parse", "--show-toplevel"],
-		deps.signal,
-	);
-	if (!toplevel.ok) {
-		// git itself says the directory is no repository (exit 128): a commit
-		// there fails on its own, so it carries nothing. A command that may
-		// start elsewhere (a `cd`) is no such answer: it cannot be placed.
-		if (toplevel.status === 128 && placed) return { kind: "clean", files: 0 };
-		return {
-			kind: "degraded",
-			reason: toplevel.status === 128 ? "no_checkout" : toplevel.reason,
-			detail: "finding the repository the commit runs in",
-		};
+	if (
+		carried.some((entry) => `${entry.path}${entry.from ?? ""}`.includes("\n"))
+	)
+		return degraded("git_failed", "a carried path holds a newline");
+	// git spells the top with symlinks resolved; the session root may not.
+	let top = repo.top;
+	try {
+		top = path.resolve(
+			deps.projectRoot,
+			path.relative(nodeFs.realpathSync(deps.projectRoot), repo.top),
+		);
+	} catch {
+		// none: a session root that cannot be resolved keeps git's spelling; a
+		// file outside the root is then skipped as any outside file is.
 	}
-	const top = resolveGitCheckout(dir)?.spelledRoot ?? toplevel.stdout.trim();
-	const listing = await listCommitFiles(dir, form, deps.signal);
-	if ("degraded" in listing)
-		return {
-			kind: "degraded",
-			reason: listing.degraded,
-			detail: listing.detail,
-		};
-	const candidates = listing.entries.filter((entry) => entry.status !== "D");
-	// The lanes read the working file; a staged file whose working bytes are not
-	// the index's would be linted for bytes the commit does not carry.
-	const indexed = candidates.filter((entry) => entry.fromIndex);
-	if (indexed.length > 0 && !listing.superset) {
-		const dirty = await runGit(dir, ["diff", "--name-only", "-z"], deps.signal);
-		if (!dirty.ok)
-			return {
-				kind: "degraded",
-				reason: dirty.reason,
-				detail: "comparing the index with the working files",
-			};
-		const unstaged = new Set(dirty.stdout.split("\0").filter(Boolean));
-		const differing = indexed.filter((entry) => unstaged.has(entry.path));
-		if (differing.length > 0)
-			return {
-				kind: "degraded",
-				reason: "bytes_not_staged",
-				detail: `${differing[0]?.path ?? "a file"} differs from the index`,
-			};
+	let mergeHeads: string[] = [];
+	try {
+		mergeHeads = nodeFs
+			.readFileSync(repo.mergeHead, "utf8")
+			.split("\n")
+			.filter((line) => /^[0-9a-f]{40,64}$/.test(line));
+	} catch {
+		// none: no MERGE_HEAD file is no merge in progress.
 	}
-	const wholeFile = deps.getFlag("no-delta") === true;
+	// A symlink or a submodule the working tree holds is no file to lint.
+	const judged = carried.filter((entry) => {
+		if (entry.y !== " ") return true;
+		try {
+			return nodeFs.lstatSync(path.resolve(top, entry.path)).isFile();
+		} catch {
+			return false;
+		}
+	});
+	const fromWork = judged.filter((entry) => entry.y === " ");
+	const git = { index: repo.copy };
+	let workIds: string[] = [];
+	if (fromWork.length > 0) {
+		const hashed = await runGit(
+			repo.replay,
+			{
+				...git,
+				input: `${fromWork.map((entry) => path.resolve(top, entry.path)).join("\n")}\n`,
+			},
+			["hash-object", "--stdin-paths"],
+			deps.signal,
+		);
+		workIds = hashed.stdout.split("\n").filter(Boolean);
+		if (hashed.status !== 0 || workIds.length !== fromWork.length)
+			return gitFailure(hashed, "hashing the working files the commit carries");
+	}
+	const revs = ["HEAD", ...mergeHeads];
+	const names = judged.flatMap((entry) => [
+		...(entry.y === " " ? [] : [`:0:${entry.path}`]),
+		...revs.map((rev) => `${rev}:${entry.from ?? entry.path}`),
+	]);
+	const blobs = new Map<string, string>();
+	if (names.length > 0) {
+		const checked = await runGit(
+			repo.replay,
+			{ ...git, input: `${names.join("\n")}\n` },
+			["cat-file", "--batch-check"],
+			deps.signal,
+		);
+		const lines = checked.stdout.split("\n");
+		if (checked.status !== 0 || lines.length < names.length)
+			return gitFailure(checked, "reading the blobs the commit carries");
+		names.forEach((name, at) => {
+			const match = /^([0-9a-f]{40,64}) blob \d+$/.exec(lines[at] ?? "");
+			if (match?.[1]) blobs.set(name, match[1]);
+		});
+	}
+	const candidates: Candidate[] = [];
+	for (const entry of judged) {
+		const work = fromWork.indexOf(entry);
+		const committedId =
+			work >= 0 ? workIds[work] : blobs.get(`:0:${entry.path}`);
+		if (committedId === undefined)
+			return degraded("git_failed", `the index has no blob for ${entry.path}`);
+		const baseIds = revs.flatMap((rev) => {
+			const id = blobs.get(`${rev}:${entry.from ?? entry.path}`);
+			return id === undefined ? [] : [id];
+		});
+		// Equal to a base: the commit adds nothing to this file (a file a merge
+		// brings in, a file `--amend` keeps as HEAD has it).
+		if (baseIds.includes(committedId)) continue;
+		candidates.push({
+			abs: path.resolve(top, entry.path),
+			committedId,
+			fromWork: work >= 0,
+			baseIds,
+		});
+	}
 	const findings: Array<{ file: string; body: string }> = [];
-	let judged = 0;
+	let files = 0;
 	for (let at = 0; at < candidates.length; at += LANE_CONCURRENCY) {
-		const chunk = candidates.slice(at, at + LANE_CONCURRENCY);
 		const results = await Promise.all(
-			chunk.map((entry) =>
-				judgeFile(entry, top, listing.base, wholeFile, deps),
-			),
+			candidates
+				.slice(at, at + LANE_CONCURRENCY)
+				.map((candidate) => judgeFile(candidate, repo, deps)),
 		);
 		for (const result of results) {
-			if ("degraded" in result)
-				return {
-					kind: "degraded",
-					reason: result.degraded,
-					detail: result.detail,
-				};
-			if (result.judged) judged += 1;
+			if ("kind" in result) return result;
+			if (result.judged) files += 1;
 			if (result.body) findings.push({ file: result.file, body: result.body });
 		}
 	}
-	if (findings.length === 0) return { kind: "clean", files: judged };
+	if (findings.length === 0) return { kind: "clean", files };
 	return {
 		kind: "added",
 		files: findings.map((f) => f.file),
@@ -491,104 +430,100 @@ async function judgeOne(
 }
 
 async function judgeFile(
-	entry: StagedEntry,
-	top: string,
-	base: string,
-	wholeFile: boolean,
+	candidate: Candidate,
+	repo: Repo,
 	deps: StagedDeltaDeps,
 ): Promise<
-	| { judged: boolean; file: string; body?: string }
-	| { degraded: StagedDeltaDegraded; detail: string }
+	{ judged: boolean; file: string; body?: string } | StagedDeltaVerdict
 > {
-	const abs = path.resolve(top, entry.path);
+	const { abs } = candidate;
 	const file = toProjectRelativePath(abs, deps.projectRoot);
-	try {
-		if (!nodeFs.lstatSync(abs).isFile()) return { judged: false, file };
-	} catch {
-		// none: a path that is gone has no bytes to judge (a file the commit
-		// deletes is listed `D` and never reaches here).
-		return { judged: false, file };
-	}
 	if (
 		isExternalOrVendorFile(abs, deps.projectRoot) ||
 		isPathIgnoredByProject(abs, deps.projectRoot, false)
 	)
 		return { judged: false, file };
-	let ranges: Array<[number, number]> | undefined;
-	if (!wholeFile && (entry.status === "M" || entry.status === "R")) {
-		const diff = await runGit(
-			path.dirname(abs),
-			[
-				"diff",
-				"-U0",
-				"--no-color",
-				"--no-ext-diff",
-				"--no-textconv",
-				"-M",
-				base,
-				"--",
-				...(entry.from === undefined ? [] : [path.resolve(top, entry.from)]),
-				abs,
-			],
+	const blob = async (id: string): Promise<string | StagedDeltaVerdict> => {
+		const out = await runGit(
+			repo.replay,
+			{ index: repo.copy },
+			["cat-file", "blob", id],
 			deps.signal,
 		);
-		if (!diff.ok)
-			return { degraded: diff.reason, detail: `reading the diff of ${file}` };
-		ranges = parseAddedRanges(diff.stdout);
-		if (ranges.length === 0) return { judged: false, file };
+		return out.status === 0 ? out.stdout : gitFailure(out, `reading ${file}`);
+	};
+	let committed: string | StagedDeltaVerdict;
+	if (candidate.fromWork) {
+		try {
+			committed = nodeFs.readFileSync(abs, "utf8");
+		} catch {
+			return degraded("file_unreadable", file);
+		}
+	} else committed = await blob(candidate.committedId);
+	if (typeof committed !== "string") return committed;
+	const bases: string[] = [];
+	for (const id of candidate.baseIds) {
+		const base = await blob(id);
+		if (typeof base !== "string") return base;
+		bases.push(base);
 	}
-	const integration = await loadDispatchIntegration();
-	const run = await integration
-		.collectStagedLaneBlockers(abs, deps.projectRoot, {
-			getFlag: deps.getFlag,
-		})
-		.catch((cause: unknown) => {
-			const failure = cause instanceof Error ? cause.message : String(cause);
-			recordDegradationOnce({
-				kind: "staged-delta-degraded",
-				subject: "lane_incomplete",
-				reason: `a lane run threw: ${failure}`,
-			});
-			return { status: "failed", failure } as const;
-		});
-	if (run.status === "failed")
-		return { degraded: "lane_incomplete", detail: `${file}: ${run.failure}` };
-	if (run.status === "skipped") {
-		if (run.reason === "unreadable")
-			return { degraded: "file_unreadable", detail: file };
-		return { judged: false, file };
+	const added = addedLines(committed, bases, deps.getFlag("no-delta") === true);
+	if (added !== "all" && added.size === 0) return { judged: false, file };
+	// The lanes read a file: an index blob the working file does not hold is
+	// written beside it for one read, so the project's config applies to it.
+	const copy = candidate.fromWork
+		? undefined
+		: path.join(
+				path.dirname(abs),
+				`pi-lens-staged-${randomBytes(4).toString("hex")}.${path.basename(abs)}`,
+			);
+	try {
+		if (copy) nodeFs.writeFileSync(copy, committed, { flag: "wx" });
+		const integration = await loadDispatchIntegration();
+		const run = await integration.collectStagedLaneBlockers(
+			abs,
+			deps.projectRoot,
+			{ getFlag: deps.getFlag },
+			copy,
+		);
+		if (run.outcome === "skipped")
+			return run.reason === "unreadable"
+				? degraded("file_unreadable", file)
+				: { judged: false, file };
+		if (run.unanswered.length > 0)
+			return degraded(
+				"lane_incomplete",
+				`${file}: ${run.unanswered.join(", ")} gave no answer`,
+			);
+		const blockers = run.blockers.filter(
+			(blocker) =>
+				added === "all" ||
+				(blocker.line !== undefined && added.has(blocker.line)),
+		);
+		if (blockers.length === 0) return { judged: true, file };
+		const policy = applyInlineBlockerPolicy(
+			{ filePath: abs, summary: "", diagnostics: blockers as Diagnostic[] },
+			deps.projectRoot,
+		);
+		if (policy.kept === 0) return { judged: true, file };
+		return { judged: true, file, body: policy.body ?? "" };
+	} finally {
+		if (copy) nodeFs.rmSync(copy, { force: true });
 	}
-	const added = run.blockers.filter(
-		(blocker) =>
-			ranges === undefined ||
-			blocker.line === undefined ||
-			ranges.some(
-				([start, end]) => blocker.line! >= start && blocker.line! <= end,
-			),
-	);
-	if (added.length === 0) return { judged: true, file };
-	const policy = applyInlineBlockerPolicy(
-		{ filePath: abs, summary: "", diagnostics: added as Diagnostic[] },
-		deps.projectRoot,
-	);
-	if (policy.kept === 0) return { judged: true, file };
-	return { judged: true, file, body: policy.body ?? "" };
 }
 
 /** What clears each degraded read: each names an action the next attempt reads afresh. */
 const DEGRADED_REMEDY: Readonly<Record<StagedDeltaDegraded, string>> = {
-	bytes_not_staged:
-		"Stage the file's current bytes (git add <file>) so the commit carries what pi-lens checked, then commit again.",
+	unresolved_command:
+		"pi-lens judges a commit by replaying it with git before it runs, and cannot replay this command. Run the other commands first, then run git commit on its own (git add, cd and a -m \"$(cat <<'EOF' ... EOF)\" message may stay in it).",
 	lane_incomplete:
-		"pi-lens could not finish checking the staged files in time. Commit again; commit fewer files at once if it repeats.",
+		"pi-lens could not finish checking the staged files: a linter gave no answer, or the check ran out of time. Fix the linter or its config if one is named, then commit again.",
 	file_unreadable:
 		"pi-lens could not read a staged file. Make it readable, then commit again.",
 	git_failed:
-		"pi-lens could not read the staged files from git. Commit from inside the repository (git -C <dir> commit for another one), then commit again.",
+		"git refused the commit's dry run or a read of the staged files, for the reason above. Fix what it names, then commit again.",
 	git_output_cut:
 		"The staged set is too large for pi-lens to read in one commit. Commit fewer files at once.",
-	no_checkout:
-		"The commit's directory is in no git checkout pi-lens can read. Commit from inside the repository (git -C <dir> commit for another one).",
 };
 
 /** The gate's answer to the staged-delta read of one commit command. */
@@ -596,7 +531,6 @@ export function stagedDeltaDecision(
 	cwd: string,
 	verdict: StagedDeltaVerdict,
 ): GuardDecision {
-	if (verdict.kind === "not_a_commit") return { block: false };
 	if (verdict.kind === "clean") {
 		logDecision(cwd, "allowed", "staged_delta_clean", { files: verdict.files });
 		return { block: false };
@@ -606,7 +540,7 @@ export function stagedDeltaDecision(
 			cwd,
 			`staged_delta_${verdict.reason}`,
 			{},
-			DEGRADED_REMEDY[verdict.reason],
+			`${verdict.detail}. ${DEGRADED_REMEDY[verdict.reason]}`,
 		);
 	logDecision(cwd, "blocked", "staged_delta_blockers", {
 		files: verdict.files.length,
@@ -619,15 +553,17 @@ export function stagedDeltaDecision(
 
 /**
  * #5553: how long the commit gate waits for its staged-delta read (the git
- * listing and the lanes over each file the commit carries). `tool_call` has no
+ * replay and the lanes over each file the commit carries). `tool_call` has no
  * budget of its own (clients/hook-budgets.ts), so the read carries its own.
  */
 export const STAGED_DELTA_BUDGET_MS = 20_000;
 
 /**
- * The gate's one entry for the staged-delta read: the verdict for the commit
- * command `input`, as the decision `tool_call` returns. A read that gives no
- * answer inside `budgetMs` refuses as degraded, never allows.
+ * The gate's one entry for the staged-delta read: the decision `tool_call`
+ * returns for `input`. It never throws: a read that throws, gives no answer
+ * inside `budgetMs` or is aborted refuses as degraded, recorded once per
+ * reason and session (`staged-delta-degraded`). Work the bound abandoned
+ * records nothing.
  */
 export async function gateStagedDelta(
 	toolName: string,
@@ -636,28 +572,30 @@ export async function gateStagedDelta(
 	signal: AbortSignal | undefined,
 	budgetMs: number = STAGED_DELTA_BUDGET_MS,
 ): Promise<GuardDecision> {
-	const verdict = await bounded(
-		(workSignal) =>
-			judgeStagedDelta(toolName, input, { ...deps, signal: workSignal }),
-		{
-			ms: budgetMs,
-			signal,
-			hook: "tool_call",
-			label: "staged-delta-gate",
-		},
+	if (!mayRunGitCommit(toolName, input)) return { block: false };
+	let verdict: StagedDeltaVerdict | undefined;
+	try {
+		verdict = await bounded(
+			(workSignal) =>
+				judgeStagedDelta(toolName, input, { ...deps, signal: workSignal }),
+			{ ms: budgetMs, signal, hook: "tool_call", label: "staged-delta-gate" },
+		);
+	} catch (cause) {
+		const failure = cause instanceof Error ? cause.message : String(cause);
+		verdict = degraded(
+			"lane_incomplete",
+			`the staged-delta read threw: ${failure}`,
+		);
+	}
+	verdict ??= degraded(
+		"lane_incomplete",
+		"the staged-delta read gave no answer inside its bound",
 	);
-	if (verdict === undefined)
+	if (verdict.kind === "degraded")
 		recordDegradationOnce({
 			kind: "staged-delta-degraded",
-			subject: "lane_incomplete",
-			reason: "the staged-delta read gave no answer inside its bound",
+			subject: verdict.reason,
+			reason: verdict.detail,
 		});
-	return stagedDeltaDecision(
-		deps.cwd,
-		verdict ?? {
-			kind: "degraded",
-			reason: "lane_incomplete",
-			detail: "the staged-delta read gave no answer inside its bound",
-		},
-	);
+	return stagedDeltaDecision(deps.cwd, verdict);
 }

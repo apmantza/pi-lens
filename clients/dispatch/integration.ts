@@ -3554,6 +3554,9 @@ export async function capturePreEditLinterFindings(
 		pi,
 		spanless,
 		preEditCaptureFacts,
+		// The capture runs under its own 1500 ms bound, so a runner the
+		// observed tier has moved to collect-later stays out of it.
+		(id) => classifyObservedRunner(projectRoot, id) === "inline",
 	);
 	if ("skip" in prepared) return { outcome: "skipped", reason: prepared.skip };
 	const { run } = prepared;
@@ -3606,7 +3609,9 @@ interface SeedLaneRun {
  * #4483, #5553: the lanes a capture runs over one file's bytes on disk, with
  * the bytes read once. The pre-edit capture seeds with their blockers; the
  * commit gate's staged-delta read (`collectStagedLaneBlockers`) judges them.
- * `skip` is why no lane applies to the file.
+ * `admit` keeps a runner (the capture keeps the inline tier); `bytesPath` is
+ * the file the lanes read when it is not `filePath` itself (a staged copy),
+ * judged with `filePath`'s kind and lanes. `skip` is why no lane applies.
  */
 function prepareSeedLaneRun(
 	filePath: string,
@@ -3616,6 +3621,8 @@ function prepareSeedLaneRun(
 	pi: PiAgentAPI,
 	spanless: boolean,
 	facts: FactStore,
+	admit: (runnerId: string) => boolean,
+	bytesPath?: string,
 ): { skip: PreEditCaptureSkip } | { run: SeedLaneRun } {
 	const created = createDispatchContext(
 		filePath,
@@ -3634,6 +3641,7 @@ function prepareSeedLaneRun(
 	);
 	const ctx: DispatchContext = {
 		...created,
+		...(bytesPath !== undefined && { filePath: normalizeMapKey(bytesPath) }),
 		deltaMode: false,
 		preEditCapture: true,
 		hasTool: (command) => checkToolAvailability(command),
@@ -3647,9 +3655,7 @@ function prepareSeedLaneRun(
 		ctx,
 	).flatMap((group) => {
 		const runnerIds = group.runnerIds.filter(
-			(id) =>
-				isPreEditSeedRunner(id, spanless) &&
-				classifyObservedRunner(projectRoot, id) === "inline",
+			(id) => isPreEditSeedRunner(id, spanless) && admit(id),
 		);
 		return runnerIds.length > 0 ? [{ ...group, runnerIds }] : [];
 	});
@@ -3687,24 +3693,30 @@ async function dispatchSeedLanes(
 
 /**
  * #5553: the blocking findings of the seeded lanes (linters, and the
- * edit-gated ast-grep and tree-sitter lanes read whole) over the bytes `filePath`
- * holds now: the commit gate's own read of a file the commit carries, whoever
- * wrote it. Read-only: it installs no seed and takes no delta baseline, and
- * runs on a fact store of its own so a capture of the same file never shares
- * its facts. Findings are the lanes' raw blockers; the caller places them on
- * the lines the commit adds and applies the finding policy.
+ * edit-gated ast-grep and tree-sitter lanes read whole) over the bytes
+ * `filePath` holds now, or over `stagedCopy` (an index blob written beside it)
+ * judged as `filePath`: the commit gate's own read of a file the commit
+ * carries, whoever wrote it. Read-only: it installs no seed and takes no delta
+ * baseline, and runs on a fact store of its own so a capture of the same file
+ * never shares its facts. Every seeded runner runs, a collect-later one
+ * included, inside the gate's bound. `unanswered` names the runners that ran
+ * and reached no verdict (failed, deferred or inconclusive); a runner skipped
+ * for a stated cause (a missing tool, no config, not preferred) read nothing
+ * and is not one. Findings are the lanes' raw blockers; the caller places them
+ * on the lines the commit adds and applies the finding policy.
  */
 export async function collectStagedLaneBlockers(
 	filePath: string,
 	workspaceRoot: string,
 	pi: PiAgentAPI,
+	stagedCopy?: string,
 ): Promise<
-	| { status: "ran"; blockers: Diagnostic[] }
-	| { status: "skipped"; reason: PreEditCaptureSkip }
+	| { outcome: "ran"; blockers: Diagnostic[]; unanswered: string[] }
+	| { outcome: "skipped"; reason: PreEditCaptureSkip }
 > {
 	const analysisRootMode = resolveAnalysisRoot(filePath, workspaceRoot);
 	if (analysisRootMode === "none" || analysisRootMode === "adopted")
-		return { status: "skipped", reason: "outside-session-root" };
+		return { outcome: "skipped", reason: "outside-session-root" };
 	const projectRoot = nodePath.resolve(workspaceRoot);
 	const prepared = prepareSeedLaneRun(
 		filePath,
@@ -3714,10 +3726,21 @@ export async function collectStagedLaneBlockers(
 		pi,
 		true,
 		stagedDeltaFacts,
+		() => true,
+		stagedCopy,
 	);
-	if ("skip" in prepared) return { status: "skipped", reason: prepared.skip };
+	if ("skip" in prepared) return { outcome: "skipped", reason: prepared.skip };
 	const result = await dispatchSeedLanes(prepared.run, stagedDeltaFacts);
-	return { status: "ran", blockers: result.blockers };
+	const rows = new Map(
+		(result.latencyReport?.runners ?? []).map((row) => [row.runnerId, row]),
+	);
+	const unanswered = (result.inconclusiveSources?.runnerIds ?? []).filter(
+		(id) => {
+			const row = rows.get(id);
+			return !(row?.status === "skipped" && row.skipReason !== undefined);
+		},
+	);
+	return { outcome: "ran", blockers: result.blockers, unanswered };
 }
 
 /** Per-runner outcome captured while driving the real dispatch path. */

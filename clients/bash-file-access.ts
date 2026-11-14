@@ -225,7 +225,7 @@ interface ShellWord {
  * (`2>&1`, `>&2`, `&>f`), so the next segment is the same simple command; a
  * `|&` is a `pipe`; `end` is the end of the text.
  */
-type ShellSegmentExit =
+export type ShellSegmentExit =
 	| "and"
 	| "or"
 	| "pipe"
@@ -248,6 +248,10 @@ interface ShellSegmentRange {
 	exit: ShellSegmentExit;
 	/** An unquoted `(`, `)`, `{`, `}` or backtick appeared in the segment. */
 	grouping: boolean;
+	/** An unquoted `<` (a file, here-doc or here-string as input) appeared in it. */
+	input: boolean;
+	/** An unquoted `>` (a file written, a descriptor copied) appeared in it. */
+	output: boolean;
 	/** Per word: a redirection's descriptor or target, not an argument. */
 	redirectWords: readonly boolean[];
 	/**
@@ -482,6 +486,87 @@ export function decodeShellWords(command: string): DecodedShellSegment[] {
 	}));
 }
 
+/**
+ * #5553: one simple command as bash runs it. `words` are its argv, each the
+ * value bash passes (quote removal, no path reading), without the words of a
+ * redirection. A `2>&1` does not end it.
+ */
+export interface DecodedSimpleCommand {
+	words: Array<
+		DecodedShellWord & {
+			/**
+			 * Bash expands this word only inside double quotes and not as `$@`,
+			 * `$*` or an array's `[@]`/`[*]`, so it stays one word.
+			 */
+			singleField?: true;
+		}
+	>;
+	/** The command has a redirection (`>`, `<`, `2>&1`, a here-string). */
+	redirected: boolean;
+	/** One of its redirections is an input: `<`, a here-doc, a here-string. */
+	input: boolean;
+	/** One of its redirections is an output: `>`, `>>`, `2>&1`. */
+	output: boolean;
+	/** How it ended: `and`, `or`, `pipe`, `seq`, `background` or `end`. */
+	exit: ShellSegmentExit;
+	/** An unquoted `(`, `)`, `{`, `}` or backtick appeared in it. */
+	grouping: boolean;
+}
+
+const MULTI_FIELD_EXPANSION = /\$[@*]|\[[@*]\]/;
+
+/** #5553: the simple commands of `command`, in the order bash runs them. */
+export function decodeShellCommand(command: string): DecodedSimpleCommand[] {
+	const commands: DecodedSimpleCommand[] = [];
+	let open: DecodedSimpleCommand | undefined;
+	for (const range of tokenizeShellCommandWithRanges(command)) {
+		const current: DecodedSimpleCommand = open ?? {
+			words: [],
+			redirected: false,
+			input: false,
+			output: false,
+			exit: range.exit,
+			grouping: false,
+		};
+		range.words.forEach((word, index) => {
+			if (word.syntax === true) return;
+			if (range.redirectWords[index] === true) {
+				current.redirected = true;
+				return;
+			}
+			const expanding = word.parts.filter((part) =>
+				EXPANDING_CHARS[part.kind]?.test(part.text),
+			);
+			const hidden = expanding.length > 0;
+			current.words.push({
+				text: wordValue(word),
+				...(hidden && { hidden: "expansion" as const }),
+				...(word.tildeExpands && { tildeExpands: true as const }),
+				...(hidden &&
+					expanding.every(
+						(part) =>
+							part.kind === "double" && !MULTI_FIELD_EXPANSION.test(part.text),
+					) && { singleField: true as const }),
+			});
+		});
+		current.grouping ||= range.grouping;
+		// A here-doc's delimiter leaves no redirection word behind.
+		current.input ||= range.input;
+		current.output ||= range.output;
+		current.redirected ||= range.input;
+		current.exit = range.exit;
+		if (range.exit === "redirect") {
+			current.redirected = true;
+			open = current;
+			continue;
+		}
+		open = undefined;
+		commands.push(current);
+	}
+	if (open) commands.push(open);
+	return commands;
+}
+
 function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 	const segments: ShellSegmentRange[] = [];
 	const pendingHeredocs: PendingHeredoc[] = [];
@@ -504,6 +589,8 @@ function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 	let atTokenStart = true;
 	let segmentStart = 0;
 	let grouping = false;
+	let input = false;
+	let output = false;
 	let redirectWords: boolean[] = [];
 	// The next word is a redirection's target (`> f`, `2>&1`'s `1`).
 	let redirectPending = false;
@@ -567,6 +654,8 @@ function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 				end,
 				exit,
 				grouping,
+				input,
+				output,
 				redirectWords,
 				words,
 			});
@@ -574,6 +663,8 @@ function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 		words = [];
 		redirectWords = [];
 		grouping = false;
+		input = false;
+		output = false;
 		unsupported = false;
 		atTokenStart = true;
 		segmentStart = end + 1;
@@ -730,6 +821,8 @@ function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 				redirectPending = true;
 			flushWord();
 			redirectPending = true;
+			if (ch === "<") input = true;
+			else output = true;
 			if (
 				ch === "<" &&
 				next === "<" &&

@@ -1,172 +1,174 @@
 /**
- * #5553: which files a `git commit` argv makes it carry, and which commands
- * the gate reads as a plain commit at all.
+ * #5553: which bash commands the commit gate's staged-delta read can replay
+ * with `git commit --dry-run`, and how it replays them.
  *
- * Recurrence prevented: a commit option the parser did not list read as no
- * option (`-a` lost in a cluster, `--only` after `--include`, a value taken
- * for a pathspec) names the wrong set of files, so a file the commit carries
- * is never judged. Only a listed form resolves; every other argv is `undefined`
- * and judged by the superset (a gate refuses what it does not recognise).
+ * Recurrence prevented: the read replays the commit on a private index copy
+ * before the command runs, so any earlier command that may change what the
+ * commit carries (`npm test`, `git rm`, a script, a substitution that writes)
+ * would leave it judging a set the commit no longer has. Only the listed forms
+ * replay; everything else is `unresolved`, which the gate refuses (a gate
+ * refuses what it does not recognise).
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { decodeShellWords } from "../../clients/bash-file-access.js";
-import { readGuardedSegments } from "../../clients/git-guard.js";
-import { parseCommitStageForm } from "../../clients/staged-delta.js";
+import { decodeShellCommand } from "../../clients/bash-file-access.js";
+import { planStagedCommit, REPLAYED_MESSAGE } from "../../clients/git-guard.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
-/** The form of the one `git commit` in `command`, as the gate reads it. */
-function formOf(command: string, cwd: string) {
-	const segments = readGuardedSegments("bash", { command }, cwd);
-	const commit = segments?.guarded.find((segment) => segment.commit);
-	return commit ? parseCommitStageForm(commit.args) : "unread";
-}
-
-describe("parseCommitStageForm", () => {
-	const ROWS: ReadonlyArray<
-		[string, string, { source: string; pathspecs: string[] } | undefined]
-	> = [
-		["no option", "git commit", { source: "index", pathspecs: [] }],
-		["a message", 'git commit -m "a b"', { source: "index", pathspecs: [] }],
-		[
-			"a message that looks like an option",
-			'git commit -m "-a"',
-			{ source: "index", pathspecs: [] },
-		],
-		["-a", "git commit -a", { source: "all", pathspecs: [] }],
-		["--all", "git commit --all -m x", { source: "all", pathspecs: [] }],
-		["-a in a cluster", "git commit -qam x", { source: "all", pathspecs: [] }],
-		[
-			"-a ahead of an attached message",
-			"git commit -amx",
-			{ source: "all", pathspecs: [] },
-		],
-		[
-			"a pathspec",
-			"git commit -m x src/a.ts",
-			{ source: "paths", pathspecs: ["src/a.ts"] },
-		],
-		[
-			"pathspecs after --",
-			"git commit -m x -- src/a.ts -b",
-			{ source: "paths", pathspecs: ["src/a.ts", "-b"] },
-		],
-		[
-			"--only",
-			"git commit --only -m x src/a.ts",
-			{ source: "paths", pathspecs: ["src/a.ts"] },
-		],
-		[
-			"-o",
-			"git commit -o -m x src/a.ts",
-			{ source: "paths", pathspecs: ["src/a.ts"] },
-		],
-		[
-			"-i with a pathspec",
-			"git commit -i -m x src/a.ts",
-			{ source: "index+paths", pathspecs: ["src/a.ts"] },
-		],
-		[
-			"--include with a pathspec",
-			"git commit --include src/a.ts -m x",
-			{ source: "index+paths", pathspecs: ["src/a.ts"] },
-		],
-		[
-			"--amend",
-			"git commit --amend --no-edit",
-			{ source: "index", pathspecs: [] },
-		],
-		[
-			"--amend -a",
-			"git commit --amend -a --no-edit",
-			{ source: "all", pathspecs: [] },
-		],
-		[
-			"a value option written with =",
-			"git commit --message=x --author=a",
-			{ source: "index", pathspecs: [] },
-		],
-		[
-			"a value option written apart",
-			"git commit --message x --author a src/a.ts",
-			{ source: "paths", pathspecs: ["src/a.ts"] },
-		],
-		["an unknown long option", "git commit --frobnicate", undefined],
-		["an unknown short option", "git commit -Z", undefined],
-		["-p", "git commit -p", undefined],
-		["--patch", "git commit --patch", undefined],
-		[
-			"--pathspec-from-file",
-			"git commit --pathspec-from-file=list.txt",
-			undefined,
-		],
-		["an option the shell expands", 'git commit "$FLAGS"', undefined],
-		["a pathspec the shell expands", "git commit src/*.ts", undefined],
-		["a pathspec from a variable", 'git commit -m x "$FILE"', undefined],
-	];
-	it.each(ROWS)("%s", (_name, command, expected) => {
-		const words = decodeShellWords(command)[0]?.words.slice(2) ?? [];
-		const form = parseCommitStageForm(words);
-		expect(
-			form === undefined
-				? undefined
-				: { source: form.source, pathspecs: [...form.pathspecs] },
-		).toEqual(expected);
-	});
-});
-
-describe("readGuardedSegments", () => {
+describe("planStagedCommit", () => {
 	const env = setupTestEnvironment("staged-delta-form-");
 	const dir = () => fs.realpathSync.native(env.tmpDir);
+	const plan = (command: string) =>
+		planStagedCommit("bash", { command }, dir());
 
-	it("reads a plain commit with a trailing echo", () => {
-		expect(formOf('git commit -m "x"; echo done', dir())).toMatchObject({
-			source: "index",
+	it.each([
+		{ command: 'git commit -m "a b"', globals: [], args: ["-m", "a b"] },
+		{
+			command: "git -C sub -c k=v commit -a",
+			globals: ["-C", "sub", "-c", "k=v"],
+			args: ["-a"],
+		},
+		// The message is the shell's; the replay passes a literal in its place.
+		{
+			command: `git commit -m "$(cat <<'EOF'\nsubject\n\nbody\nEOF\n)"`,
+			globals: [],
+			args: ["-m", REPLAYED_MESSAGE],
+		},
+		{
+			command: 'git commit -m "$msg"',
+			globals: [],
+			args: ["-m", REPLAYED_MESSAGE],
+		},
+		{ command: 'git commit -m "x"; echo done', globals: [], args: ["-m", "x"] },
+		{
+			command: 'git commit -m "x" 2>&1 | tail -3',
+			globals: [],
+			args: ["-m", "x"],
+		},
+		{
+			command: "git status && git diff --stat && git commit -m x",
+			globals: [],
+			args: ["-m", "x"],
+		},
+	])("replays $command", ({ command, globals, args }) => {
+		expect(plan(command)).toEqual({
+			adds: [],
+			commit: { cwd: dir(), env: {}, globals, args },
 		});
 	});
 
-	// Recurrence prevented: an index-changing verb ahead of the commit makes the
-	// staged set the one the command will build, not the one on disk now.
-	it.each(["git add -A && git commit -m x", "git rm a.ts && git commit -m x"])(
-		"marks %s as one that may change the index",
-		(command) => {
-			expect(
-				readGuardedSegments("bash", { command }, dir())?.indexMayChange,
-			).toBe(true);
-		},
-	);
-
-	it("lets a read-only verb ahead of the commit leave the index alone", () => {
+	it("replays a git add and a cd before the commit, in the directory each runs in", () => {
+		const src = path.join(dir(), "src");
+		fs.mkdirSync(src, { recursive: true });
 		expect(
-			readGuardedSegments(
-				"bash",
-				{ command: "git status && git diff && git commit -m x" },
-				dir(),
-			)?.indexMayChange,
-		).toBe(false);
+			plan(
+				"git add -A && cd src && GIT_INDEX_FILE=../.git/alt git commit -m x",
+			),
+		).toEqual({
+			adds: [{ cwd: dir(), env: {}, globals: [], args: ["-A"] }],
+			commit: {
+				cwd: src,
+				env: { GIT_INDEX_FILE: "../.git/alt" },
+				globals: [],
+				args: ["-m", "x"],
+			},
+		});
 	});
 
-	it("places a commit by the -C directory it names", () => {
-		const sub = path.join(dir(), "sub");
-		fs.mkdirSync(sub);
-		const guarded = readGuardedSegments(
-			"bash",
-			{ command: "git -C sub commit -m x" },
-			dir(),
-		)?.guarded;
-		expect(guarded?.map((g) => g.directory)).toEqual([sub]);
-	});
-
-	// Recurrence prevented: a `cd`, an assignment, a wrapper and a launcher can
-	// retarget the commit, so they are no form this reads.
+	// Each row is a form that may change what the commit carries after the
+	// replay looked, or one the replay cannot pass to git as bash would.
 	it.each([
-		"cd sub && git commit -m x",
-		"GIT_DIR=x git commit -m x",
-		"sh -c 'git commit -m x'",
-		"git -c user.name=t commit -m x",
-		"git -C missing-dir commit -m x",
-	])("does not read %s", (command) => {
-		expect(readGuardedSegments("bash", { command }, dir())).toBeUndefined();
+		["an indirect launcher", "sh -c 'git commit -m x'", "another command"],
+		["a command that may write", "npm test && git commit -m x", "`npm`"],
+		["git rm", "git rm a.ts && git commit -m x", "git rm"],
+		["two commits", "git commit -m a && git commit -m b", "more than one"],
+		["a glob the shell expands", "git commit -m x src/*.ts", "shell expands"],
+		[
+			"a git option the shell expands",
+			'git -c "$k" commit -m x',
+			"shell expands",
+		],
+		[
+			"a substitution that writes",
+			'git commit -m "$(rm -rf x)"',
+			"substitution runs `rm`",
+		],
+		[
+			"a substitution that writes a file",
+			'git commit -m "$(echo x > f)"',
+			"output redirection",
+		],
+		[
+			"a substitution that stages",
+			'git commit -m "$(git add -A)"',
+			"substitution runs `git`",
+		],
+		["an input redirection", "git commit --interactive < answers", "input"],
+		["a here-doc message file", "git commit -F - <<'EOF'\nx\nEOF", "input"],
+		["an assignment outside git's own", "FOO=1 git commit -m x", "FOO="],
+		["an add alongside it", "git add -A & git commit -m x", "alongside"],
+		[
+			"an add with a redirection",
+			"git add -A > log && git commit -m x",
+			"redirection",
+		],
+		["an add in a group", "(git add -A) && git commit -m x", "group"],
+		["a background commit", "git commit -m x &", "background"],
+		["a cd it cannot follow", "cd missing && git commit -m x", "`cd`"],
+		["a cd to home", "cd ~/x && git commit -m x", "`cd`"],
+		// The guard reads `co^mmit` as `commit` (cmd.exe drops a caret); bash
+		// passes it as written, so it is no commit the replay can run.
+		["a verb only the guard reads as commit", "git co^mmit -m x", "may commit"],
+	])("does not replay %s", (_name, command, why) => {
+		const answer = plan(command);
+		expect(answer).toHaveProperty("unresolved");
+		expect((answer as { unresolved: string }).unresolved).toContain(why);
+	});
+
+	it("does not replay another tool's command", () => {
+		expect(planStagedCommit("edit", { path: "a.ts" }, dir())).toEqual({
+			unresolved: "the edit tool",
+		});
+	});
+});
+
+describe("decodeShellCommand", () => {
+	// Recurrence prevented: a `2>&1` read as a command boundary would split
+	// the commit from its own redirection, and an input redirection read as
+	// an output one would let a commit's stdin go unreplayed.
+	it.each([
+		{ command: "git commit -m x 2>&1", input: false, output: true },
+		{ command: "git commit -m x > log", input: false, output: true },
+		{ command: "git commit < answers", input: true, output: false },
+		{ command: "git commit -F - <<'EOF'\nx\nEOF", input: true, output: false },
+		{ command: "git commit -F - <<< x", input: true, output: false },
+		{ command: 'git commit -m "a b"', input: false, output: false },
+	])("reads $command as one command", ({ command, input, output }) => {
+		const commands = decodeShellCommand(command);
+		expect(commands).toHaveLength(1);
+		expect(commands[0]).toMatchObject({
+			redirected: input || output,
+			input,
+			output,
+		});
+		expect(commands[0]?.words[0]?.text).toBe("git");
+	});
+
+	it("passes each word's value as bash does", () => {
+		const [simple] = decodeShellCommand(`git commit -m "a b" 'c'd "$x" $y`);
+		expect(simple?.words.slice(0, 5).map((word) => word.text)).toEqual([
+			"git",
+			"commit",
+			"-m",
+			"a b",
+			"cd",
+		]);
+		expect(simple?.words[5]).toMatchObject({
+			hidden: "expansion",
+			singleField: true,
+		});
+		expect(simple?.words[6]?.hidden).toBe("expansion");
+		expect(simple?.words[6]?.singleField).toBeUndefined();
 	});
 });

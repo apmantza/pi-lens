@@ -19,7 +19,12 @@ import {
 	sameCheckoutOtherRoot,
 	type GitCheckout,
 } from "./review-graph/git-identity.js";
-import { decodeShellWords, type DecodedShellWord } from "./bash-file-access.js";
+import {
+	decodeShellCommand,
+	decodeShellWords,
+	type DecodedShellWord,
+	type DecodedSimpleCommand,
+} from "./bash-file-access.js";
 import {
 	incrementDegradationCount,
 	recordDegradationOnce,
@@ -1098,17 +1103,6 @@ export interface CommitScope {
 	contains(target: string): boolean;
 }
 
-/** Git verbs that read and never write the index or the working files. */
-const READ_ONLY_GIT_VERBS: readonly string[] = [
-	"status",
-	"diff",
-	"log",
-	"show",
-	"rev-parse",
-	"ls-files",
-	"push",
-];
-
 /**
  * Commands that cannot move a later `git`'s directory or environment: the
  * only words besides `git` itself a scoped command may contain. `cd`,
@@ -1168,38 +1162,20 @@ function isExistingDirectory(directory: string): boolean {
 }
 
 /**
- * The commit/push segments of a bash command, where each runs, and whether any
- * other git segment can change the index, or `undefined` when it is not a form
- * this reads. Admitted: segments that are a plain `git` (no assignment,
+ * The trees a bash `git commit`/`git push` command targets, or `undefined`
+ * when it is not a form this reads, in which case the gate judges every
+ * blocker. Admitted: segments that are a plain `git` (no assignment,
  * wrapper or substitution that runs git, and only a {@link SCOPE_GIT_HEADS}
  * spelling of it) or a {@link SCOPE_NEUTRAL_COMMANDS} word, with at least one
  * commit/push segment whose only global options are `-C <readable existing
- * directory>`, in a process whose environment does not retarget git
- * ({@link GIT_RETARGETING_ENV}). Whether that directory is inside a checkout
- * is the caller's question: the scope below needs it, the staged-delta read
- * asks git.
+ * directory>` and whose directory is inside a git checkout, in a process
+ * whose environment does not retarget git ({@link GIT_RETARGETING_ENV}).
  */
-export function readGuardedSegments(
+export function resolveCommitScope(
 	toolName: string,
 	input: unknown,
 	cwd: string,
-):
-	| {
-			guarded: ReadonlyArray<{
-				directory: string;
-				commit: boolean;
-				/** #5553: the shell words after the verb. */
-				args: readonly DecodedShellWord[];
-			}>;
-			/**
-			 * #5553: a `git` segment of another verb than commit, push or a
-			 * read-only one (`add`, `rm`, `mv`, `reset`, `checkout`, ...) can change
-			 * the index the commit reads, so the staged set is not the one on disk
-			 * now.
-			 */
-			indexMayChange: boolean;
-	  }
-	| undefined {
+): CommitScope | undefined {
 	if (toolName !== "bash") return undefined;
 	if (GIT_RETARGETING_ENV.some((name) => process.env[name])) return undefined;
 	const command = getShellCommand(input);
@@ -1208,12 +1184,7 @@ export function readGuardedSegments(
 	if (containsGuardedSubstitution(canonical, 0, COMMIT_PUSH_MATCHER)) {
 		return undefined;
 	}
-	const guarded: Array<{
-		directory: string;
-		commit: boolean;
-		args: readonly DecodedShellWord[];
-	}> = [];
-	let indexMayChange = false;
+	const trees: GitCheckout[] = [];
 	for (const segment of decodeShellWords(canonical)) {
 		const words = segment.words;
 		const head = words[0]?.text;
@@ -1223,16 +1194,7 @@ export function readGuardedSegments(
 			continue;
 		}
 		const tokens = words.map((word) => word.text);
-		if (!matchGitVerbAtCommandPosition(tokens, COMMIT_PUSH_MATCHER)) {
-			const otherVerbAt = gitVerbIndex(tokens);
-			if (
-				otherVerbAt === undefined ||
-				!READ_ONLY_GIT_VERBS.includes(tokens[otherVerbAt] ?? "")
-			) {
-				indexMayChange = true;
-			}
-			continue;
-		}
+		if (!matchGitVerbAtCommandPosition(tokens, COMMIT_PUSH_MATCHER)) continue;
 		const verbAt = gitVerbIndex(tokens);
 		if (verbAt === undefined) return undefined;
 		for (let i = 1; i < verbAt; i += 2) {
@@ -1248,33 +1210,11 @@ export function readGuardedSegments(
 		}
 		const directory = resolveGitTargetDirectory(tokens, cwd);
 		if (!isExistingDirectory(directory)) return undefined;
-		guarded.push({
-			directory,
-			commit: matchGitVerbAtCommandPosition(tokens, COMMIT_ONLY_MATCHER),
-			args: words.slice(verbAt + 1),
-		});
-	}
-	return guarded.length === 0 ? undefined : { guarded, indexMayChange };
-}
-
-/**
- * The trees a bash `git commit`/`git push` command targets, or `undefined`
- * when it is not a form {@link readGuardedSegments} reads or a target lies in
- * no git checkout, in which case the gate judges every blocker.
- */
-export function resolveCommitScope(
-	toolName: string,
-	input: unknown,
-	cwd: string,
-): CommitScope | undefined {
-	const segments = readGuardedSegments(toolName, input, cwd);
-	if (!segments) return undefined;
-	const trees: GitCheckout[] = [];
-	for (const { directory } of segments.guarded) {
 		const checkout = resolveGitCheckout(directory);
 		if (!checkout) return undefined;
 		trees.push(checkout);
 	}
+	if (trees.length === 0) return undefined;
 	return {
 		// The target's own checkout, or one nested inside a committed tree: the
 		// parent's commit stages a tracked file under it (#4941 r2 F2). A linked
@@ -1291,6 +1231,213 @@ export function resolveCommitScope(
 			);
 		},
 	};
+}
+
+/**
+ * #5553: one `git` command the staged-delta read replays, as bash would run
+ * it: the directory, the literal assignments before `git`, the words between
+ * `git` and its verb, and the words after the verb.
+ */
+export interface ReplayedGit {
+	cwd: string;
+	env: Readonly<Record<string, string>>;
+	globals: readonly string[];
+	args: readonly string[];
+}
+
+/**
+ * #5553: what the staged-delta read replays for a command that may commit:
+ * the `git add` commands that run before the commit, then the commit, or why
+ * the command is not one it can replay.
+ */
+export type StagedCommitPlan =
+	| { adds: readonly ReplayedGit[]; commit: ReplayedGit }
+	| { unresolved: string };
+
+/** Git verbs that read and never write the index or the working files. */
+const READ_ONLY_GIT_VERBS: readonly string[] = [
+	"status",
+	"diff",
+	"log",
+	"show",
+	"rev-parse",
+	"ls-files",
+];
+
+/**
+ * Assignments a replayed `git` may carry: git's own repository, index and
+ * identity variables. Any other name (`GIT_CONFIG_PARAMETERS`, `PATH`, ...)
+ * could change what runs, so the command is not replayed.
+ */
+const REPLAYED_ASSIGNMENTS: readonly string[] = [
+	"GIT_INDEX_FILE",
+	"GIT_DIR",
+	"GIT_WORK_TREE",
+	"GIT_AUTHOR_NAME",
+	"GIT_AUTHOR_EMAIL",
+	"GIT_AUTHOR_DATE",
+	"GIT_COMMITTER_NAME",
+	"GIT_COMMITTER_EMAIL",
+	"GIT_COMMITTER_DATE",
+];
+
+/** The commit options whose next word is the message. */
+const MESSAGE_OPTIONS: readonly string[] = ["-m", "--message", "-am"];
+
+/**
+ * The literal a replay passes for a message the shell expands. If it is
+ * really a pathspec (`--author -m "$x"`), git finds no file of that name and
+ * the dry run fails, which refuses.
+ */
+export const REPLAYED_MESSAGE = "pi-lens staged-delta dry run";
+
+/** A simple command's `git` invocation, or `undefined` when it is not one. */
+function readGitCommand(
+	simple: DecodedSimpleCommand,
+	cwd: string,
+	expandedMessage: boolean,
+): { verb: string; replay: ReplayedGit } | { unresolved: string } | undefined {
+	const words = simple.words;
+	const env: Record<string, string> = {};
+	let at = 0;
+	for (; /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[at]?.text ?? ""); at++) {
+		const word = words[at];
+		const name = word?.text.slice(0, word.text.indexOf("=")) ?? "";
+		if (!word || word.hidden || !REPLAYED_ASSIGNMENTS.includes(name))
+			return { unresolved: `the assignment ${name}= before it` };
+		env[name] = word.text.slice(name.length + 1);
+	}
+	const head = words[at];
+	if (!head || head.hidden || !SCOPE_GIT_HEADS.includes(head.text))
+		return undefined;
+	const command = words.slice(at);
+	const verbAt = gitVerbIndex(command.map((word) => word.text));
+	const verb = verbAt === undefined ? undefined : command[verbAt];
+	if (verbAt === undefined || !verb || verb.hidden)
+		return { unresolved: "a git command whose verb pi-lens cannot read" };
+	const globals = command.slice(1, verbAt);
+	if (globals.some((word) => word.hidden || word.tildeExpands))
+		return { unresolved: "a git option the shell expands" };
+	const args: string[] = [];
+	for (const word of command.slice(verbAt + 1)) {
+		if (!word.hidden && !word.tildeExpands) args.push(word.text);
+		else if (
+			expandedMessage &&
+			word.singleField &&
+			MESSAGE_OPTIONS.includes(args.at(-1) ?? "")
+		)
+			args.push(REPLAYED_MESSAGE);
+		else return { unresolved: `the word ${word.text} the shell expands` };
+	}
+	return {
+		verb: verb.text,
+		replay: { cwd, env, globals: globals.map((word) => word.text), args },
+	};
+}
+
+/** Why a command a substitution runs may write, or `undefined` when it only reads. */
+function substitutionWrites(simple: DecodedSimpleCommand): string | undefined {
+	const head = simple.words[0];
+	if (!head) return undefined;
+	// An input (a here-doc message) only reads; an output may write a file.
+	if (simple.output) return `\`${head.text}\` with an output redirection`;
+	if (!head.hidden && SCOPE_NEUTRAL_COMMANDS.includes(head.text))
+		return undefined;
+	const git = readGitCommand(simple, "", false);
+	if (git && "verb" in git && READ_ONLY_GIT_VERBS.includes(git.verb))
+		return undefined;
+	return `\`${head.text}\``;
+}
+
+/**
+ * #5553: the commit a bash command runs, as the staged-delta read replays it
+ * with `git commit --dry-run`. Admitted, and nothing else (gates fail closed):
+ * exactly one command that may commit, a plain `git commit` with literal
+ * words (a double-quoted `-m` value is replaced by {@link REPLAYED_MESSAGE}),
+ * preceded only by `cd <existing dir>`, a {@link SCOPE_NEUTRAL_COMMANDS} word,
+ * a read-only git verb or a `git add`, each finishing before the next starts
+ * (`&&` or `;`) with no redirection or group, and command substitutions that
+ * only run those reading commands. Anything else is `unresolved`, which the
+ * read refuses: an earlier command (`npm test`, `git rm`, a script) may change
+ * what the commit carries after pi-lens looked.
+ */
+export function planStagedCommit(
+	toolName: string,
+	input: unknown,
+	cwd: string,
+): StagedCommitPlan {
+	if (toolName !== "bash") return { unresolved: `the ${toolName} tool` };
+	const canonical = canonicalizeGuardCommand(getShellCommand(input));
+	const substitutions = commandSubstitutions(canonical);
+	if (!substitutions.complete)
+		return { unresolved: "command substitutions nested past three levels" };
+	for (const { body } of substitutions.bodies)
+		for (const simple of decodeShellCommand(body)) {
+			const writes = substitutionWrites(simple);
+			if (writes)
+				return { unresolved: `a command substitution runs ${writes}` };
+		}
+	const mayCommit = decodeShellWords(canonical).filter((segment) =>
+		containsGuardedGitVerb(segment.words, 0, COMMIT_ONLY_MATCHER),
+	);
+	if (mayCommit.length > 1)
+		return { unresolved: "more than one command that may commit" };
+	const commands = decodeShellCommand(canonical);
+	const commitAt = commands.findIndex((simple) =>
+		containsGuardedGitVerb(simple.words, 0, COMMIT_ONLY_MATCHER),
+	);
+	if (commitAt < 0)
+		return { unresolved: "git commit run through another command" };
+	let dir = cwd;
+	const adds: ReplayedGit[] = [];
+	for (const simple of commands.slice(0, commitAt)) {
+		const head = simple.words[0];
+		const name = head?.text ?? "";
+		if (simple.exit !== "and" && simple.exit !== "seq")
+			return { unresolved: `\`${name}\` running alongside the commit` };
+		if (simple.grouping || simple.redirected)
+			return { unresolved: `\`${name}\` with a group or a redirection` };
+		if (!head || head.hidden) return { unresolved: `\`${name}\`` };
+		if (name === "cd") {
+			const target = simple.words[1];
+			const next =
+				simple.words.length === 2 &&
+				target &&
+				!target.hidden &&
+				!target.tildeExpands &&
+				!target.text.startsWith("-")
+					? path.resolve(dir, target.text)
+					: undefined;
+			if (!next || !isExistingDirectory(next))
+				return { unresolved: "a `cd` pi-lens cannot follow" };
+			dir = next;
+			continue;
+		}
+		if (SCOPE_NEUTRAL_COMMANDS.includes(name)) continue;
+		const git = readGitCommand(simple, dir, false);
+		if (git === undefined)
+			return { unresolved: `\`${name}\`, which runs before the commit` };
+		if ("unresolved" in git) return git;
+		if (READ_ONLY_GIT_VERBS.includes(git.verb)) continue;
+		if (git.verb !== "add")
+			return { unresolved: `git ${git.verb}, which runs before the commit` };
+		adds.push(git.replay);
+	}
+	const simple = commands[commitAt];
+	if (!simple || simple.grouping || simple.exit === "background")
+		return { unresolved: "a commit in a group or the background" };
+	// The dry run reads its own input; what a redirection feeds the commit
+	// (an answer to `--interactive`, a path list) is not replayed.
+	if (simple.input)
+		return { unresolved: "a commit that reads a redirection as input" };
+	const commit = readGitCommand(simple, dir, true);
+	if (!commit) return { unresolved: "git commit run through another command" };
+	if ("unresolved" in commit) return commit;
+	// The one command that may commit is a plain git of another verb
+	// (`git $verb` reads as one that may): nothing to replay it as.
+	if (commit.verb !== "commit")
+		return { unresolved: `git ${commit.verb} that may commit` };
+	return { adds, commit: commit.replay };
 }
 
 function isTurnEndFindingsCache(value: unknown): value is TurnEndFindingsCache {

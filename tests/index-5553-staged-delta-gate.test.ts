@@ -7,41 +7,48 @@
  * a classified route fills, so bytes nobody authored (a bash command no
  * recogniser reads, a foreign tool that names no path, an external editor)
  * committed with a `debugger;` in them (`allowed(committed)`, writer-route
- * audit G2, 2026-11-13). The gate now lists the staged set itself and judges
- * each file on the lines the commit adds against `HEAD`.
+ * audit G2, 2026-11-13). The gate now asks git what the commit carries (a
+ * dry run of the command's own commit) and judges each file's committed bytes
+ * on the lines no base holds.
  *
- * REAL here: the BUILT extension's handlers inside a real pi `AgentSession`,
- * the dispatcher's lanes, the commit gate and a real git repository. Scripted
- * is the model only, at the provider boundary.
+ * REAL here: the BUILT extension's handlers inside a real pi `AgentSession`
+ * (acceptance), the gate's own entry `gateStagedDelta` (the forms), the
+ * dispatcher's lanes and real git repositories. Scripted is the model only,
+ * at the provider boundary.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { Type } from "../clients/deps/typebox.js";
 import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../clients/degradation-ledger.js";
-import { gateStagedDelta } from "../clients/staged-delta.js";
-import { useGlobalConfig } from "./support/global-config.js";
-import { execFileSync } from "./support/git-fixture-env.js";
+import { Type } from "../clients/deps/typebox.js";
 import {
+	classifyObservedRunner,
+	observeRunnerLatency,
+	resetObservedRunnerLatency,
+} from "../clients/dispatch/collect-later-tier.js";
+import { gateStagedDelta } from "../clients/staged-delta.js";
+import { execFileSync } from "./support/git-fixture-env.js";
+import { useGlobalConfig } from "./support/global-config.js";
+import {
+	fauxToolCall,
+	type PiFauxReply,
+	piSessionFixture,
+	startPiSession,
+} from "./support/pi-session.js";
+import {
+	endTurn,
 	GATE_BLOCK,
 	GUARDED_FLAGS,
 	RAN_MARKER,
-	endTurn,
 	readTarget,
 	step,
 	toolResults,
 	warmGuardedSession,
 } from "./support/pi-session-commit-gate.js";
-import {
-	type PiFauxReply,
-	fauxToolCall,
-	piSessionFixture,
-	startPiSession,
-} from "./support/pi-session.js";
 
 const fixture = piSessionFixture();
 const setGlobalConfig = useGlobalConfig();
@@ -241,7 +248,9 @@ describe("#5553 the commit gate judges the staged delta whoever wrote the bytes"
 		// `debugger;` that reads like the committed one commit.
 		it(
 			"refuses a second blocker added beside the inherited one",
-			{ timeout: 120_000 },
+			{
+				timeout: 120_000,
+			},
 			async () => {
 				const commit = await commitAfter(
 					`${slug}-second`,
@@ -262,7 +271,9 @@ describe("#5553 the commit gate judges the staged delta whoever wrote the bytes"
 		// the inherited-debt block #5553 closed for the named writers.
 		it(
 			"commits an unrelated change to a file whose only blocker is in HEAD",
-			{ timeout: 120_000 },
+			{
+				timeout: 120_000,
+			},
 			async () => {
 				const commit = await commitAfter(
 					`${slug}-unrelated`,
@@ -279,244 +290,437 @@ describe("#5553 the commit gate judges the staged delta whoever wrote the bytes"
 	});
 });
 
-/** What the gate answered one commit command in a project, as the model read it. */
-async function commitCommand(
+/** What the commit gate answers `command`, asked as the `tool_call` hook asks it. */
+function decide(
 	proj: string,
 	command: string,
-	between: () => void,
+	options: {
+		cwd?: string;
+		budgetMs?: number;
+		signal?: AbortSignal;
+		noDelta?: boolean;
+	} = {},
 ) {
-	const handle = await startPiSession({
-		root: fixture.root,
-		cwd: proj,
-		flags: flags(),
-		inlineFactory: async () => (await import("../index.js")).default,
-		responses: [
-			step(readTarget(path.join(proj, "package.json")), "reading"),
-			endTurn("looked"),
-			COMMIT(command),
-			endTurn("done"),
-		],
-	});
-	await handle.prompt("look at the project");
-	between();
-	await handle.prompt("commit");
-	const commits = toolResults(handle.requests.at(-1) ?? [], "bash").filter(
-		(r) => r.text.includes(RAN_MARKER) || r.text.includes(GATE_BLOCK),
+	return gateStagedDelta(
+		"bash",
+		{ command },
+		{
+			cwd: options.cwd ?? proj,
+			projectRoot: proj,
+			getFlag: (flag) => flag === "no-delta" && options.noDelta === true,
+		},
+		options.signal,
+		options.budgetMs,
 	);
-	expect(commits).toHaveLength(1);
-	return commits[0]?.text ?? "";
+}
+
+/** `commits`, `refuses` naming `file`, or `unknown` with the degraded reason. */
+type Outcome = "commits" | `refuses ${string}` | `unknown ${string}`;
+
+function expectOutcome(
+	decision: Awaited<ReturnType<typeof decide>>,
+	outcome: Outcome,
+): void {
+	const reason = decision.reason ?? "";
+	if (outcome === "commits") {
+		expect(decision.block, reason).toBe(false);
+		return;
+	}
+	const [kind, detail = ""] = outcome.split(" ");
+	expect(decision.block, reason).toBe(true);
+	if (kind === "refuses") {
+		expect(decision.unknown, reason).toBeUndefined();
+		expect(reason).toContain("adds blocking findings");
+		expect(reason).toContain(`${detail}:`);
+	} else {
+		expect(decision.unknown, reason).toBe(true);
+		expect(reason).toContain(`staged_delta_${detail}`);
+	}
 }
 
 const A = "src/a.ts";
 const B = "src/b.ts";
 const B_EDITED = CLEAN.replace("return alpha;", "return alpha + 1;");
 
-describe("#5553 the staged set is read from the commit's argv", () => {
+function gitOut(proj: string, ...args: string[]): string {
+	return execFileSync("git", args, { cwd: proj, encoding: "utf8" }).trim();
+}
+
+function write(proj: string, file: string, bytes: string): void {
+	fs.mkdirSync(path.dirname(path.join(proj, file)), { recursive: true });
+	fs.writeFileSync(path.join(proj, file), bytes);
+}
+
+/** Staged-copy files the read writes beside a file; none outlives a call. */
+function stagedCopies(dir: string): string[] {
+	return fs
+		.readdirSync(dir)
+		.filter((name) => name.startsWith("pi-lens-staged-"));
+}
+
+let seeded = 0;
+/**
+ * Two clean files in HEAD. An external editor then puts a `debugger;` in
+ * `a.ts` and leaves it unstaged, and edits `b.ts` cleanly and stages it.
+ */
+function twoFileProject(): string {
+	const proj = seedProject(`form-${seeded++}`, { [A]: CLEAN, [B]: CLEAN });
+	write(proj, A, ADDED);
+	write(proj, B, B_EDITED);
+	git(proj, "add", B);
+	return proj;
+}
+
+describe("#5553 git resolves what the commit carries", () => {
 	/**
-	 * Two clean files in HEAD. An external editor then puts a `debugger;` in
-	 * `a.ts` and leaves it unstaged, and edits `b.ts` cleanly and stages it. A
-	 * commit form that carries `a.ts` refuses; one that does not, commits.
-	 * Recurrence prevented: reading the set from the record (nothing, for
-	 * bytes nobody authored) or from the whole tree (every dirty file) would
-	 * pass the first row or refuse the second.
+	 * A form that carries `a.ts` refuses on its `debugger;`; one that does not,
+	 * commits. Recurrence prevented: round 1 read the set from the commit's
+	 * argv, and each review found a spelling it read wrong (a quoted glob, a
+	 * magic pathspec, `-c`, a `git add` before the commit read as the whole
+	 * tree); git's own dry run answers every one of them.
 	 */
 	const FORMS: ReadonlyArray<{
 		form: string;
 		command: string;
-		refused: boolean;
+		outcome: Outcome;
 	}> = [
 		{
 			form: "plain, an index with b",
 			command: 'git commit -m "wip"',
-			refused: false,
+			outcome: "commits",
 		},
-		{ form: "-a", command: 'git commit -a -m "wip"', refused: true },
-		{ form: "--all", command: 'git commit --all -m "wip"', refused: true },
+		{ form: "-a", command: 'git commit -a -m "wip"', outcome: `refuses ${A}` },
+		{
+			form: "--all",
+			command: 'git commit --all -m "wip"',
+			outcome: `refuses ${A}`,
+		},
+		{ form: "-am", command: 'git commit -am "wip"', outcome: `refuses ${A}` },
 		{
 			form: "a pathspec naming a",
 			command: `git commit -m "wip" ${A}`,
-			refused: true,
+			outcome: `refuses ${A}`,
 		},
 		{
 			form: "a pathspec naming b",
 			command: `git commit -m "wip" ${B}`,
-			refused: false,
+			outcome: "commits",
 		},
 		{
 			form: "-o naming b",
 			command: `git commit -o -m "wip" ${B}`,
-			refused: false,
+			outcome: "commits",
 		},
 		{
 			form: "-i naming a",
 			command: `git commit -i -m "wip" ${A}`,
-			refused: true,
+			outcome: `refuses ${A}`,
+		},
+		{
+			form: "a quoted glob git expands",
+			command: `git commit -m "wip" 'src/*.ts'`,
+			outcome: `refuses ${A}`,
+		},
+		{
+			form: "a :(glob) magic pathspec",
+			command: `git commit -m "wip" ':(glob)src/**'`,
+			outcome: `refuses ${A}`,
+		},
+		{
+			form: "a :/ top pathspec",
+			command: `git commit -m "wip" ':/src'`,
+			outcome: `refuses ${A}`,
+		},
+		{
+			form: "an exclude pathspec",
+			command: `git commit -m "wip" ':!${B}'`,
+			outcome: `refuses ${A}`,
+		},
+		{
+			form: "--pathspec-from-file=-",
+			command: 'git commit --pathspec-from-file=- -m "wip"',
+			outcome: `refuses ${A}`,
 		},
 		{
 			form: "--amend on the index",
 			command: "git commit --amend --no-edit",
-			refused: false,
+			outcome: "commits",
 		},
 		{
 			form: "--amend -a",
 			command: "git commit --amend -a --no-edit",
-			refused: true,
+			outcome: `refuses ${A}`,
 		},
 		{
-			form: "a short cluster -am",
-			command: 'git commit -am "wip"',
-			refused: true,
+			form: "-c before the verb",
+			command: 'git -c user.name=z commit -m "wip"',
+			outcome: "commits",
+		},
+		{
+			form: "-c before the verb, -a",
+			command: 'git -c user.name=z commit -a -m "wip"',
+			outcome: `refuses ${A}`,
 		},
 		{
 			form: "-C <dir> before the verb",
 			command: 'git -C . commit -a -m "wip"',
-			refused: true,
-		},
-		{
-			form: "an unknown option",
-			command: 'git commit --frobnicate -m "wip"',
-			refused: true,
-		},
-		{ form: "-p", command: "git commit -p", refused: true },
-		{
-			form: "a pathspec the shell expands",
-			command: `git commit -m "wip" src/*.ts`,
-			refused: true,
+			outcome: `refuses ${A}`,
 		},
 		{
 			form: "a cd before it",
 			command: 'cd src && git commit -m "wip"',
-			refused: true,
+			outcome: "commits",
 		},
 		{
-			form: "git add and commit in one command",
-			command: 'git add src/b.ts && git commit -m "wip"',
-			refused: true,
+			form: "a cd before it, -a",
+			command: 'cd src && git commit -a -m "wip"',
+			outcome: `refuses ${A}`,
 		},
-		// Recurrence prevented: a push segment read as a commit would parse its
-		// own words (`--force`) as the commit's form and judge the superset.
+		{
+			form: "git add of b before it",
+			command: `git add ${B} && git commit -m "wip"`,
+			outcome: "commits",
+		},
+		{
+			form: "git add of a before it",
+			command: `git add ${A} && git commit -m "wip"`,
+			outcome: `refuses ${A}`,
+		},
+		{
+			form: "a here-doc message",
+			command: `git commit -m "$(cat <<'EOF'\nwip\n\nbody\nEOF\n)"`,
+			outcome: "commits",
+		},
+		{
+			form: "a here-doc message, -a",
+			command: `git commit -a -m "$(cat <<'EOF'\nwip\nEOF\n)"`,
+			outcome: `refuses ${A}`,
+		},
+		{
+			form: "read-only git before it",
+			command: 'git status && git diff --stat && git commit -m "wip"',
+			outcome: "commits",
+		},
+		// Recurrence prevented: a push segment read as a commit would pass its
+		// own words (`--force`) to the commit's replay.
 		{
 			form: "a push after the commit",
 			command: 'git commit -m "wip" && git push --force origin',
-			refused: false,
+			outcome: "commits",
+		},
+		{
+			form: "output piped after it",
+			command: 'git commit -m "wip" 2>&1 | tail -3',
+			outcome: "commits",
+		},
+		{
+			form: "an unknown option",
+			command: 'git commit --frobnicate -m "wip"',
+			outcome: "unknown git_failed",
 		},
 		{
 			form: "an indirect launcher",
 			command: `sh -c 'git commit -m wip'`,
-			refused: true,
+			outcome: "unknown unresolved_command",
+		},
+		{
+			form: "a command before it that may write",
+			command: 'npm test && git commit -m "wip"',
+			outcome: "unknown unresolved_command",
+		},
+		{
+			form: "git rm before it",
+			command: `git rm -q ${B} && git commit -m "wip"`,
+			outcome: "unknown unresolved_command",
+		},
+		{
+			form: "a pathspec the shell expands",
+			command: 'git commit -m "wip" src/*.ts',
+			outcome: "unknown unresolved_command",
+		},
+		{
+			form: "a message substitution that writes",
+			command: 'git commit -m "$(git add -A)"',
+			outcome: "unknown unresolved_command",
+		},
+		{
+			form: "two commits",
+			command: "git commit -m a && git commit -am b",
+			outcome: "unknown unresolved_command",
+		},
+		{
+			form: "an input redirection",
+			command: "git commit --interactive < answers.txt",
+			outcome: "unknown unresolved_command",
+		},
+		{
+			form: "an assignment outside git's own",
+			command: 'GIT_CONFIG_PARAMETERS="" git commit -m "wip"',
+			outcome: "unknown unresolved_command",
 		},
 	];
 	it.each(FORMS)(
 		"$form",
 		{ timeout: 120_000 },
-		async ({ form, command, refused }) => {
-			const proj = seedProject(`form-${form.replace(/\W+/g, "-")}`, {
-				[A]: CLEAN,
-				[B]: CLEAN,
-			});
-			const text = await commitCommand(proj, command, () => {
-				fs.writeFileSync(path.join(proj, A), ADDED);
-				fs.writeFileSync(path.join(proj, B), B_EDITED);
-				git(proj, "add", B);
-			});
-			if (refused) {
-				expect(text).toContain(GATE_BLOCK);
-				expect(text).toContain("src/a.ts");
-				expect(text).not.toContain(RAN_MARKER);
-			} else {
-				expect(text).not.toContain(GATE_BLOCK);
-				expect(text).toContain(RAN_MARKER);
-			}
+		async ({ command, outcome }) => {
+			const proj = twoFileProject();
+			expectOutcome(await decide(proj, command), outcome);
+			// The replay leaves the real index as it found it.
+			expect(gitOut(proj, "diff", "--cached", "--name-only")).toBe(B);
 		},
 	);
 
-	// Recurrence prevented: `git add -A` stages a file git does not list as
-	// differing from HEAD, so a superset read from `git diff` alone would never
-	// see a new file an external editor created.
-	it(
-		"reads an untracked file when the form stages by itself",
+	// Recurrence prevented: a session in a subdirectory read the staged set
+	// from that directory alone (C6), so `a.ts` would escape a commit run there.
+	it.each([
+		{ command: 'git commit -m "wip"', outcome: "commits" as const },
+		{ command: 'git commit -a -m "wip"', outcome: `refuses ${A}` as const },
+	])(
+		"judges $command from a subdirectory as git runs it",
 		{ timeout: 120_000 },
-		async () => {
-			const proj = seedProject("form-untracked", { [B]: CLEAN });
-			const text = await commitCommand(
-				proj,
-				'git add -A && git commit -m "wip"',
-				() => fs.writeFileSync(path.join(proj, A), ADDED),
+		async ({ command, outcome }) => {
+			const proj = twoFileProject();
+			write(proj, "other/keep.ts", CLEAN);
+			expectOutcome(
+				await decide(proj, command, { cwd: path.join(proj, "other") }),
+				outcome,
 			);
-			expect(text).toContain(GATE_BLOCK);
-			expect(text).toContain("src/a.ts");
-			expect(text).not.toContain(RAN_MARKER);
 		},
 	);
 
-	// Recurrence prevented: a push stages and commits nothing, so reading the
-	// tree for it would refuse every push over a dirty file.
-	it("reads nothing for a push", { timeout: 120_000 }, async () => {
-		const proj = seedProject("form-push", { [A]: CLEAN });
-		const text = await commitCommand(proj, "git push --dry-run origin", () =>
-			fs.writeFileSync(path.join(proj, A), ADDED),
-		);
-		expect(text).not.toContain(GATE_BLOCK);
-	});
+	// Recurrence prevented: `--no-dry-run` after the replay's own `--dry-run`
+	// turns the replay into a real commit; the hook net stops it before the
+	// commit exists, and its refusal must not read as "nothing to commit".
+	it(
+		"refuses a command that turns the dry run into a real commit, and commits nothing",
+		{
+			timeout: 120_000,
+		},
+		async () => {
+			const proj = twoFileProject();
+			const head = gitOut(proj, "rev-parse", "HEAD");
+			for (const extra of ["", " --no-verify"])
+				expectOutcome(
+					await decide(
+						proj,
+						`git commit -a --no-porcelain --no-null --no-dry-run${extra} -m wip`,
+					),
+					"unknown git_failed",
+				);
+			expect(gitOut(proj, "rev-parse", "HEAD")).toBe(head);
+		},
+	);
 });
 
-describe("#5553 the base each staged file is judged against", () => {
-	// Recurrence prevented: `git diff HEAD` fails with no commit, which a gate
-	// that read the failure as "nothing staged" would pass.
+describe("#5553 the bytes each carried file is judged on", () => {
+	// Recurrence prevented (F2): the lanes read the working file, so a
+	// `debugger;` staged and then edited away in the working file committed
+	// through `-c` or `GIT_INDEX_FILE=` forms. The index blob is what commits.
 	it.each([
-		{ name: "adds a blocker", bytes: ADDED, refused: true },
-		{ name: "is clean", bytes: CLEAN, refused: false },
-	])("a first commit with no HEAD $name", { timeout: 120_000 }, async (c) => {
-		const proj = seedProject(`first-${c.name.replace(/\W+/g, "-")}`, {});
-		const text = await commitCommand(proj, 'git commit -m "wip"', () => {
-			fs.mkdirSync(path.join(proj, "src"));
-			fs.writeFileSync(path.join(proj, A), c.bytes);
+		'git commit -m "x"',
+		'git -c user.name=z commit -m "x"',
+		'GIT_INDEX_FILE=.git/index git commit -m "x"',
+	])(
+		"refuses %s when the index holds a blocker the working file does not",
+		{ timeout: 120_000 },
+		async (command) => {
+			const proj = seedProject(`index-blob-${seeded++}`, { [A]: CLEAN });
+			write(proj, A, ADDED);
 			git(proj, "add", A);
-		});
-		expect(text.includes(GATE_BLOCK), text).toBe(c.refused);
-		expect(text.includes(RAN_MARKER)).toBe(!c.refused);
+			write(proj, A, CLEAN);
+			expectOutcome(await decide(proj, command), `refuses ${A}`);
+			expect(stagedCopies(path.join(proj, "src"))).toEqual([]);
+		},
+	);
+
+	// Recurrence prevented (F7): round 1 refused every partial staging as
+	// `bytes_not_staged`; a clean index blob commits whatever the working file holds.
+	it(
+		"commits a clean index blob beside a working file with a blocker",
+		{
+			timeout: 120_000,
+		},
+		async () => {
+			const proj = seedProject("partial", { [A]: CLEAN });
+			write(proj, A, B_EDITED);
+			git(proj, "add", A);
+			write(proj, A, ADDED);
+			expectOutcome(await decide(proj, 'git commit -m "x"'), "commits");
+			expect(stagedCopies(path.join(proj, "src"))).toEqual([]);
+		},
+	);
+
+	// Recurrence prevented (F6): a file git reads as binary (a NUL byte, a
+	// `-diff` attribute) has no hunks, so a delta read from `git diff` judged
+	// none of it.
+	it.each([
+		{ name: "holds a NUL byte", attributes: undefined, nul: true },
+		{ name: "has the -diff attribute", attributes: "*.ts -diff\n", nul: false },
+	])(
+		"refuses a blocker in a file that $name",
+		{ timeout: 120_000 },
+		async ({ attributes, nul }) => {
+			const proj = seedProject(`binary-${seeded++}`, {
+				[A]: CLEAN,
+				...(attributes && { ".gitattributes": attributes }),
+			});
+			write(
+				proj,
+				A,
+				nul
+					? ADDED.replace("const alpha = 1;", "const alpha = 1; // \0")
+					: ADDED,
+			);
+			git(proj, "add", A);
+			expectOutcome(await decide(proj, 'git commit -m "x"'), `refuses ${A}`);
+		},
+	);
+
+	// Recurrence prevented: with no HEAD there is no base, which a read that
+	// took a failed base lookup for "nothing staged" would pass.
+	it.each([
+		{ name: "adds a blocker", bytes: ADDED, outcome: `refuses ${A}` as const },
+		{ name: "is clean", bytes: CLEAN, outcome: "commits" as const },
+	])("a first commit with no HEAD $name", { timeout: 120_000 }, async (c) => {
+		const proj = seedProject(`first-${seeded++}`, {});
+		write(proj, A, c.bytes);
+		git(proj, "add", A);
+		expectOutcome(await decide(proj, 'git commit -m "wip"'), c.outcome);
 	});
 
-	// Recurrence prevented: a deleted file has no bytes; listing it as a file to
-	// lint would read a missing path as degraded or, worse, as the old blocker.
+	// Recurrence prevented: a deleted file has no bytes; listing it as a file
+	// to lint would read a missing path as degraded or as the old blocker.
 	it(
 		"commits the deletion of a file that held a blocker",
-		{ timeout: 120_000 },
+		{
+			timeout: 120_000,
+		},
 		async () => {
 			const proj = seedProject("deleted", { [A]: WITH_BLOCKER, [B]: CLEAN });
-			const text = await commitCommand(proj, 'git commit -m "wip"', () =>
-				git(proj, "rm", "-q", A),
-			);
-			expect(text).not.toContain(GATE_BLOCK);
-			expect(text).toContain(RAN_MARKER);
+			git(proj, "rm", "-q", A);
+			expectOutcome(await decide(proj, 'git commit -m "wip"'), "commits");
 		},
 	);
 
 	// Recurrence prevented: a rename read as a new file is wholly added, so a
 	// move of a file with an inherited blocker would refuse over HEAD's debt;
-	// read as a plain modification it would miss the line the move adds.
+	// read without its source it would miss the line the move adds.
 	it.each([
-		{ name: "a pure rename", edit: (p: string) => p, refused: false },
+		{ name: "a pure rename", bytes: undefined, outcome: "commits" as const },
 		{
 			name: "a rename that adds a blocker",
-			edit: () => WITH_BLOCKER_PLUS_ONE_MORE,
-			refused: true,
+			bytes: WITH_BLOCKER_PLUS_ONE_MORE,
+			outcome: "refuses src/moved.ts" as const,
 		},
 	])(
-		"judges $name by its hunks against the old blob",
+		"judges $name against the source's blob",
 		{ timeout: 120_000 },
 		async (c) => {
-			const proj = seedProject(`rename-${c.name.replace(/\W+/g, "-")}`, {
-				[A]: WITH_BLOCKER,
-			});
-			const text = await commitCommand(proj, 'git commit -m "wip"', () => {
-				git(proj, "mv", A, "src/moved.ts");
-				if (c.refused)
-					fs.writeFileSync(path.join(proj, "src/moved.ts"), c.edit(""));
-				git(proj, "add", "src/moved.ts");
-			});
-			expect(text.includes(GATE_BLOCK)).toBe(c.refused);
-			expect(text.includes(RAN_MARKER)).toBe(!c.refused);
+			const proj = seedProject(`rename-${seeded++}`, { [A]: WITH_BLOCKER });
+			git(proj, "mv", A, "src/moved.ts");
+			if (c.bytes) write(proj, "src/moved.ts", c.bytes);
+			git(proj, "add", "src/moved.ts");
+			expectOutcome(await decide(proj, 'git commit -m "wip"'), c.outcome);
 		},
 	);
 
@@ -524,160 +728,277 @@ describe("#5553 the base each staged file is judged against", () => {
 	// keep passing a file the operator asked to judge whole.
 	it(
 		"judges the whole file under --no-delta",
-		{ timeout: 120_000 },
+		{
+			timeout: 120_000,
+		},
 		async () => {
 			const proj = seedProject("no-delta", { [A]: WITH_BLOCKER });
-			const handle = await startPiSession({
-				root: fixture.root,
-				cwd: proj,
-				flags: new Map(GUARDED_FLAGS),
-				inlineFactory: async () => (await import("../index.js")).default,
-				responses: [COMMIT(), endTurn("done")],
-			});
-			fs.writeFileSync(path.join(proj, A), UNRELATED);
+			write(proj, A, UNRELATED);
 			git(proj, "add", A);
-			await handle.prompt("commit");
-			const text =
-				toolResults(handle.requests.at(-1) ?? [], "bash").at(0)?.text ?? "";
-			expect(text).toContain(GATE_BLOCK);
+			expectOutcome(await decide(proj, 'git commit -m "x"'), "commits");
+			expectOutcome(
+				await decide(proj, 'git commit -m "x"', { noDelta: true }),
+				`refuses ${A}`,
+			);
 		},
 	);
 });
 
-describe("#5553 a staged set the gate cannot read refuses, once", () => {
-	// Recurrence prevented: the lanes read the working file, so a file staged
-	// clean and then edited would be judged for bytes the commit does not carry.
+describe("#5553 a git add before the commit is replayed", () => {
+	// Recurrence prevented (F5): round 1 judged the whole tree for any
+	// `git add X && git commit`, and refused over an untracked scratch file the
+	// add never staged.
 	it(
-		"refuses a staged file whose working bytes differ from the index",
-		{ timeout: 120_000 },
+		"judges what the add stages, not an untracked file it leaves",
+		{
+			timeout: 120_000,
+		},
 		async () => {
-			const proj = seedProject("not-staged", { [A]: CLEAN });
-			resetDegradationLedger();
-			const handle = await startPiSession({
-				root: fixture.root,
-				cwd: proj,
-				flags: flags(),
-				inlineFactory: async () => (await import("../index.js")).default,
-				responses: [
-					step(readTarget(path.join(proj, "package.json")), "reading"),
-					endTurn("looked"),
-					COMMIT(),
-					COMMIT(),
-					endTurn("done"),
-				],
-			});
-			await handle.prompt("look");
-			fs.writeFileSync(path.join(proj, A), UNRELATED);
-			git(proj, "add", A);
-			fs.writeFileSync(path.join(proj, A), ADDED);
-			await handle.prompt("commit twice");
-			const commits = toolResults(handle.requests.at(-1) ?? [], "bash");
-			expect(commits).toHaveLength(2);
-			for (const commit of commits) {
-				expect(commit.text).toContain(GATE_BLOCK);
-				expect(commit.text).toContain("staged_delta_bytes_not_staged");
-				expect(commit.text).toContain("git add");
-			}
-			// Bounded observability: two refusals, one degradation record.
-			const group = getDegradationSummary().find(
-				(g) => g.kind === "staged-delta-degraded",
+			const proj = seedProject("scratch", { [B]: CLEAN });
+			write(proj, B, B_EDITED);
+			write(proj, "scratch/probe.ts", ADDED);
+			expectOutcome(
+				await decide(proj, `git add ${B} && git commit -m "x"`),
+				"commits",
 			);
-			expect(group?.count).toBe(1);
-			expect(group?.latestReasons.map((r) => r.subject)).toEqual([
-				"bytes_not_staged",
-			]);
+			expectOutcome(
+				await decide(proj, 'git add -A && git commit -m "x"'),
+				"refuses scratch/probe.ts",
+			);
+			// The replay staged nothing for real.
+			expect(gitOut(proj, "diff", "--cached", "--name-only")).toBe("");
 		},
 	);
 
-	// Recurrence prevented: a staged-delta read that gave no answer (git slow,
-	// a lane hung, the turn aborted) read as "nothing found" would let the
-	// commit through; it refuses as degraded instead.
-	describe("a read that gives no answer", () => {
-		const COMMIT_X = { command: 'git commit -m "x"' };
-		const stagedProject = (name: string) => {
-			const proj = seedProject(name, { [A]: CLEAN });
-			fs.writeFileSync(path.join(proj, A), ADDED);
+	// Recurrence prevented (C6): an untracked file listed from a subdirectory
+	// cwd was cwd-scoped, so `git add -A` there (which stages the whole tree)
+	// carried a file the read never saw.
+	it.each(["src", "other"])(
+		"judges git add -A run from %s as the whole tree",
+		{ timeout: 120_000 },
+		async (dir) => {
+			const proj = seedProject(`subdir-${seeded++}`, {
+				[B]: CLEAN,
+				"other/o.ts": CLEAN,
+			});
+			write(proj, "src/new.ts", ADDED);
+			expectOutcome(
+				await decide(proj, 'git add -A && git commit -m "x"', {
+					cwd: path.join(proj, dir),
+				}),
+				"refuses src/new.ts",
+			);
+		},
+	);
+
+	// Recurrence prevented (C7): a `-C` on the add and the commit read the
+	// session's repository instead of the nested one they name.
+	it(
+		"replays git -C on the repository it names",
+		{
+			timeout: 120_000,
+		},
+		async () => {
+			const proj = seedProject("outer", { [A]: CLEAN });
+			const nested = path.join(proj, "nested");
+			fs.mkdirSync(nested);
+			git(nested, "init", "-q");
+			git(nested, "config", "user.name", "t");
+			git(nested, "config", "user.email", "t@t.local");
+			write(nested, "x.ts", CLEAN);
+			git(nested, "add", "-A");
+			git(nested, "commit", "-qm", "base");
+			write(nested, "y.ts", ADDED);
+			expectOutcome(
+				await decide(
+					proj,
+					'git -C nested add -A && git -C nested commit -m "x"',
+				),
+				"refuses nested/y.ts",
+			);
+		},
+	);
+});
+
+describe("#5553 a merge commit is judged against every parent", () => {
+	// Recurrence prevented (F4): judged against the first parent alone, a merge
+	// refused over a blocker the other parent already holds, and read every
+	// incoming file through the lanes until the bound passed.
+	it(
+		"commits an incoming blocker and 300 incoming files inside a 5 s bound, refuses one the resolution adds",
+		{
+			timeout: 120_000,
+		},
+		async () => {
+			const proj = seedProject("merge", { [A]: CLEAN, [B]: CLEAN });
+			git(proj, "checkout", "-qb", "topic");
+			write(proj, A, ADDED);
+			for (let i = 0; i < 300; i++)
+				write(proj, `gen/f${i}.ts`, `export const v${i} = ${i};\n`);
+			git(proj, "add", "-A");
+			git(proj, "commit", "-qm", "topic");
+			git(proj, "checkout", "-q", "-");
+			write(proj, B, B_EDITED);
+			git(proj, "commit", "-qam", "main");
+			git(proj, "merge", "--no-commit", "--no-ff", "topic");
+			expectOutcome(
+				await decide(proj, "git commit --no-edit", { budgetMs: 5_000 }),
+				"commits",
+			);
+			write(proj, B, ADDED);
+			git(proj, "add", B);
+			expectOutcome(await decide(proj, "git commit --no-edit"), `refuses ${B}`);
+		},
+	);
+});
+
+describe("#5553 a lane that gives no answer refuses", () => {
+	// Recurrence prevented (F3): a lane that failed on its config read as a
+	// lane that found nothing, so a broken config let every commit through.
+	// The control is the same file in a project with no such config.
+	it(
+		"refuses when a linter fails on its config, and names it",
+		{
+			timeout: 120_000,
+		},
+		async () => {
+			const proj = seedProject("broken-config", { "biome.json": "{ not json" });
+			write(proj, A, CLEAN);
 			git(proj, "add", A);
-			return proj;
-		};
-		const decide = (
-			proj: string,
-			signal: AbortSignal | undefined,
-			budgetMs?: number,
-		) =>
-			gateStagedDelta(
-				"bash",
-				COMMIT_X,
-				{ cwd: proj, projectRoot: proj, getFlag: () => false },
-				signal,
-				budgetMs,
-			);
+			const decision = await decide(proj, 'git commit -m "x"');
+			expectOutcome(decision, "unknown lane_incomplete");
+			expect(decision.reason).toContain("biome");
+			const control = seedProject("valid-config", {});
+			write(control, A, CLEAN);
+			git(control, "add", A);
+			expectOutcome(await decide(control, 'git commit -m "x"'), "commits");
+		},
+	);
 
-		it("refuses once the bound has passed", { timeout: 120_000 }, async () => {
-			resetDegradationLedger();
-			const decision = await decide(stagedProject("bound"), undefined, 1);
-			expect(decision).toMatchObject({ block: true, unknown: true });
-			expect(decision.reason).toContain("staged_delta_lane_incomplete");
-			// The read that gave no answer is recorded once, not left silent.
-			const group = getDegradationSummary().find(
-				(g) => g.kind === "staged-delta-degraded",
-			);
-			expect(group?.count).toBe(1);
-		});
-
-		it(
-			"refuses for a turn that was aborted",
-			{ timeout: 120_000 },
-			async () => {
-				const decision = await decide(
-					stagedProject("aborted"),
-					AbortSignal.abort(),
+	// Recurrence prevented (C2): a runner the latency tier once saw as slow
+	// moved to collect-later, and the staged read dropped it, so the file read
+	// as having no linter.
+	it(
+		"runs a runner the latency tier moved to collect-later",
+		{
+			timeout: 120_000,
+		},
+		async () => {
+			const proj = seedProject("collect-later", { [A]: CLEAN });
+			write(proj, A, ADDED);
+			git(proj, "add", A);
+			try {
+				observeRunnerLatency({
+					projectRoot: proj,
+					runnerId: "tree-sitter",
+					durationMs: 600_000,
+					timedOut: true,
+				});
+				expect(classifyObservedRunner(proj, "tree-sitter")).toBe(
+					"collect-later",
 				);
-				expect(decision).toMatchObject({ block: true, unknown: true });
-				expect(decision.reason).toContain("staged_delta_lane_incomplete");
-			},
-		);
+				expectOutcome(await decide(proj, 'git commit -m "x"'), `refuses ${A}`);
+			} finally {
+				resetObservedRunnerLatency();
+			}
+		},
+	);
+});
 
-		// Recurrence prevented: a commit git places in a directory that is no
-		// repository fails by itself and carries nothing, but a command that may
-		// start elsewhere (a `cd`) cannot be placed, so the same answer from the
-		// directory the shell started in must not read as "nothing to judge".
-		it(
-			"refuses a `cd` command run outside any repository, passes a placed one",
-			{ timeout: 120_000 },
-			async () => {
-				const bare = path.join(fixture.root, "norepo");
-				fs.mkdirSync(bare, { recursive: true });
-				try {
-					const ask = (command: string) =>
-						gateStagedDelta(
-							"bash",
-							{ command },
-							{ cwd: bare, projectRoot: bare, getFlag: () => false },
-							undefined,
-						);
-					const placed = await ask(`git -C ${bare} commit -m "x"`);
-					expect(placed.block).toBe(false);
-					const unplaced = await ask('cd src && git commit -m "x"');
-					expect(unplaced).toMatchObject({ block: true, unknown: true });
-					expect(unplaced.reason).toContain("staged_delta_no_checkout");
-				} finally {
-					fs.rmSync(bare, { recursive: true, force: true });
-				}
-			},
-		);
+describe("#5553 a read that gives no answer refuses, recorded once", () => {
+	const stagedProject = (name: string) => {
+		const proj = seedProject(name, { [A]: CLEAN });
+		write(proj, A, ADDED);
+		git(proj, "add", A);
+		return proj;
+	};
+	const subjects = () =>
+		getDegradationSummary()
+			.find((g) => g.kind === "staged-delta-degraded")
+			?.latestReasons.map((r) => r.subject);
 
-		// Control: the same staged file and the real budget refuse on the
-		// finding, so the two refusals above are the bound's and not the file's.
-		it(
-			"control: the same file refuses on its blocker inside the bound",
-			{ timeout: 120_000 },
-			async () => {
-				const decision = await decide(stagedProject("control"), undefined);
-				expect(decision.block).toBe(true);
-				expect(decision.unknown).toBeUndefined();
-				expect(decision.reason).toContain("src/a.ts");
-			},
+	// Recurrence prevented (F10): the bound's refusal also wrote a `git_failed`
+	// row for the git read it abandoned, naming a cause that did not happen.
+	it("refuses once the bound has passed", { timeout: 120_000 }, async () => {
+		resetDegradationLedger();
+		const proj = stagedProject("bound");
+		expectOutcome(
+			await decide(proj, 'git commit -m "x"', { budgetMs: 1 }),
+			"unknown lane_incomplete",
+		);
+		// Let the abandoned work settle before reading the ledger.
+		await new Promise((resolve) => setTimeout(resolve, 2_000));
+		expect(subjects()).toEqual(["lane_incomplete"]);
+	});
+
+	it("refuses for a turn that was aborted", { timeout: 120_000 }, async () => {
+		expectOutcome(
+			await decide(stagedProject("aborted"), 'git commit -m "x"', {
+				signal: AbortSignal.abort(),
+			}),
+			"unknown lane_incomplete",
 		);
 	});
+
+	// Recurrence prevented (C9): a throw outside the lanes' own catch escaped
+	// the gate, and `tool_call`'s catch let the command run.
+	it("refuses when the read throws", { timeout: 120_000 }, async () => {
+		const proj = stagedProject("throws");
+		const saved = process.env.TMPDIR;
+		process.env.TMPDIR = path.join(fixture.root, "no-such-tmp");
+		try {
+			const decision = await decide(proj, 'git commit -m "x"');
+			expectOutcome(decision, "unknown lane_incomplete");
+			expect(decision.reason).toContain("threw");
+		} finally {
+			process.env.TMPDIR = saved;
+		}
+	});
+
+	// Bounded observability: one record per subject per session.
+	it("records a repeated refusal once", { timeout: 120_000 }, async () => {
+		resetDegradationLedger();
+		const proj = stagedProject("repeated");
+		for (let i = 0; i < 2; i++)
+			expectOutcome(
+				await decide(proj, `sh -c 'git commit -m x${i}'`),
+				"unknown unresolved_command",
+			);
+		const group = getDegradationSummary().find(
+			(g) => g.kind === "staged-delta-degraded",
+		);
+		expect(group?.count).toBe(1);
+		expect(subjects()).toEqual(["unresolved_command"]);
+	});
+
+	// A commit git runs outside any repository fails by itself; the read
+	// refuses it with git's own reason rather than read nothing as clean.
+	it(
+		"refuses a commit outside any repository with git's reason",
+		{
+			timeout: 120_000,
+		},
+		async () => {
+			const bare = path.join(fixture.root, "norepo");
+			fs.mkdirSync(bare, { recursive: true });
+			const decision = await decide(bare, 'git commit -m "x"');
+			expectOutcome(decision, "unknown git_failed");
+			expect(decision.reason).toContain("not a git repository");
+		},
+	);
+
+	// Control: the same staged file and the real budget refuse on the
+	// finding, so the refusals above are the bound's and not the file's.
+	it(
+		"control: the same file refuses on its blocker inside the bound",
+		{
+			timeout: 120_000,
+		},
+		async () => {
+			expectOutcome(
+				await decide(stagedProject("control"), 'git commit -m "x"'),
+				`refuses ${A}`,
+			);
+		},
+	);
 });
