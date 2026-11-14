@@ -60,9 +60,11 @@ import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
 import {
 	buildProjectSnapshotFromRuntime,
 	getProjectSnapshotPath,
+	getProjectSnapshotPersistStateForTests,
 	saveProjectSnapshot,
-	waitForProjectSnapshotPersistsForTests,
 } from "../../clients/project-snapshot.js";
+import { waitFor } from "../clients/interleaving-kit.js";
+import { drainRegisteredBackgroundWritesForTests } from "../support/background-write-drains.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { findNearestProjectRoot } from "../../clients/startup-scan.js";
 
@@ -1941,20 +1943,19 @@ describe("tmp-fixture-hygiene", () => {
 	// The real fix is at the producer, not an admission here: every call
 	// site (including tool-policy-conventions.test.ts's own afterEach, as of
 	// this change) awaits the drain seam the repo already ships for exactly
-	// this — waitForProjectSnapshotPersistsForTests — before its cleanup
+	// this — an idle wait that throws, then the registry drain — before its cleanup
 	// runs, so nothing is left in flight to recreate the directory once
-	// removed. Proven WITHOUT a raw wall-clock wait (this file's own
-	// dedicated, fully-serialized project is not in vitest.config.ts's
-	// wallClockBudgetInclude/realHarnessInclude, so a new raw timer here
-	// would need moving the file's whole project assignment just for one
-	// case): JS is single-threaded, so immediately after the synchronous
+	// removed. The wait is a state poll with a throwing budget, not a fixed
+	// pause; vitest's 5 s testTimeout is the bound that binds first (this
+	// project sets none of its own). JS is single-threaded, so immediately
+	// after the synchronous
 	// saveProjectSnapshot() call returns, NO microtask or macrotask of its
 	// fire-and-forget worker/main-thread-fallback dispatch has run yet —
 	// the body file cannot exist. Awaiting the real drain seam instead of a
 	// fixed pause is what proves completion, not elapsed time: once it
 	// resolves, the body file is verifiably ON DISK (not "probably done by
 	// now"), so cleanup right after it can leave nothing pending to recreate
-	// what it removes — checked synchronously, no wait either side.
+	// what it removes.
 	it("draining the real project-snapshot persist before cleanup leaves nothing to recreate pi-lens-tool-policy-conventions dirs", async () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-conventions-");
 		const cwd = path.join(env.tmpDir, "project");
@@ -1979,7 +1980,11 @@ describe("tmp-fixture-hygiene", () => {
 			fs.existsSync(gzPath),
 			"the persist is dispatched fire-and-forget; it cannot have landed in the same synchronous tick",
 		).toBe(false);
-		await waitForProjectSnapshotPersistsForTests(); // the #3186 fix
+		await waitFor(
+			() => getProjectSnapshotPersistStateForTests(cwd),
+			(state) => !state.active && !state.queued,
+		); // the #3186 fix: an idle wait that throws, not the bounded helper
+		await drainRegisteredBackgroundWritesForTests();
 		expect(
 			fs.existsSync(gzPath),
 			"the drain must not resolve before the persist actually reaches disk",
