@@ -226,6 +226,12 @@ invalid:
       const [row] = await rows("agent_nudge");
       if (row) return row;
     }
+  # A clock read in a poll with no count: read, never compared in an exit.
+  - |
+    while (!ready()) {
+      await tick();
+      log(`polled at ${Date.now()}`);
+    }
   # A deadline reached through another binding.
   - |
     while (!done) {
