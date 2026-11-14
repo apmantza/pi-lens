@@ -39,7 +39,9 @@
  * unless the caller names the epoch of the live server rooted there (#4532):
  * an install, or a config file (#5501 r3), fresher than that epoch is the
  * change the server missed, so it is published instead of recorded as a
- * baseline the server never read.
+ * baseline the server never read. The session root's and the MCP cwd's looks
+ * hand over the live clients instead, whose epoch judges config files only
+ * (#5501), so those first looks still restart no client for an install.
  */
 import { promises as fsp } from "node:fs";
 import * as os from "node:os";
@@ -67,6 +69,7 @@ import {
 	isUnderDir,
 	normalizeMapKey,
 	realpathOrResolve,
+	rootsOverlap,
 } from "./path-utils.js";
 import {
 	BELOW_ROOT_CONFIG_FILE_NAMES,
@@ -667,6 +670,28 @@ function firstLookFreshConfigs(
 }
 
 /**
+ * #5501: the epoch a first look at `root` names for its config files when the
+ * caller hands it the live clients (`liveClients`): the earliest launch among
+ * the clients whose root overlaps `root`, 0 (no epoch) when none does. A
+ * client with no launch stamp reports 0 (`livePrimaryClientRoots`), so the
+ * root then names no epoch, as at a client root.
+ */
+function earliestOverlappingLaunch(
+	root: string,
+	clients: ReadonlyArray<{ root: string; spawnedAt: number }>,
+): number {
+	const rootKey = normalizeMapKey(root);
+	let earliest: number | undefined;
+	for (const client of clients)
+		if (rootsOverlap(normalizeMapKey(client.root), rootKey))
+			earliest =
+				earliest === undefined
+					? client.spawnedAt
+					: Math.min(earliest, client.spawnedAt);
+	return earliest ?? 0;
+}
+
+/**
  * What a look needs to know beyond its root (#4532).
  */
 export interface OutOfBandLookOptions {
@@ -678,6 +703,19 @@ export interface OutOfBandLookOptions {
 	 * a first look records and changes nothing.
 	 */
 	since?: number;
+	/**
+	 * #5501: the live primary clients, for a caller that looks at one root for
+	 * every client under or above it (the session root, the MCP cwd) rather
+	 * than per client root. Read only at a FIRST look of this root: the earliest
+	 * launch among the clients whose root overlaps it (the set an install there
+	 * would restart) is the epoch that judges this look's config files, the
+	 * root's own and the walk's member manifests. It never judges an install:
+	 * these looks restarted no client at a first look before, and a lockfile a
+	 * server's own start writes (rust-analyzer's `cargo metadata` creates
+	 * `Cargo.lock`, measured) would read as one. `since` keeps that, at a client
+	 * root. A function, so a later look pays nothing for it.
+	 */
+	liveClients?: () => ReadonlyArray<{ root: string; spawnedAt: number }>;
 	/**
 	 * When the declaration walk runs. `"trigger"` (the default) keeps #4476's
 	 * rule: a `tool_result` always walks, a `tool_call` walks at most once per
@@ -715,10 +753,11 @@ export interface OutOfBandLookOptions {
  * sequence through; without it the change still reaches every subscriber, but
  * no sequence is allocated.
  *
- * `options.since` is the one way a FIRST look of a root publishes (#4532): it
- * names the epoch of the server that has to re-read the root, so an install
- * that appeared after that server spawned is not mistaken for state it already
- * read.
+ * `options.since` is the one way a FIRST look of a root publishes an install
+ * (#4532): it names the epoch of the server that has to re-read the root, so
+ * an install that appeared after that server spawned is not mistaken for state
+ * it already read. `options.liveClients` names one for config files only
+ * (#5501).
  */
 export function lookForOutOfBandChanges(
 	root: string,
@@ -902,14 +941,18 @@ async function lookOnce(
 			? firstLookSawInstall(install, options.since)
 			: install.stamp !== prior.stamp;
 	// #5501 r3: a config file takes the same test, and goes out as Changed (its
-	// birth is not knowable from one look).
+	// birth is not knowable from one look). #5501: a caller that names no
+	// `since` but hands the live clients names their epoch for configs only.
 	const firstLookConfigs =
 		prior === undefined
 			? firstLookFreshConfigs(
 					root,
 					install.configs,
 					observed?.declarations,
-					options.since,
+					options.since ??
+						(options.liveClients
+							? earliestOverlappingLaunch(root, options.liveClients())
+							: undefined),
 				)
 			: [];
 	if (prior === undefined && !installed && firstLookConfigs.length === 0)
@@ -966,7 +1009,8 @@ async function lookOnce(
 			trigger,
 			restarted,
 			// Which look produced this row: the root's FIRST look (no record yet,
-			// so only `since` can make it publish — the #4532 live-client epoch)
+			// so only a live-client epoch can make it publish: `since`, #4532, or
+			// `liveClients` for configs, #5501)
 			// or a later look compared against the recorded stamp. Both the
 			// session-cwd root and a live client's root write the same record,
 			// so this names the look, not the caller.

@@ -81,9 +81,9 @@ import {
 } from "./pending-aux-coverage.js";
 import {
 	isAtOrAboveHomeDir,
-	isWithinForm,
 	normalizeMapKey,
 	realpathOrResolve,
+	rootsOverlap,
 	toPosix,
 	uriToPath,
 } from "../path-utils.js";
@@ -2875,8 +2875,7 @@ export class LSPService {
 			const separator = key.indexOf(":");
 			const serverId = separator >= 0 ? key.slice(0, separator) : key;
 			const root = normalizeMapKey(client.root);
-			const sameOrNested =
-				isWithinForm(root, normalizedCwd) || isWithinForm(normalizedCwd, root);
+			const sameOrNested = rootsOverlap(root, normalizedCwd);
 			if (!sameOrNested) continue;
 			entries.push({ clientKey: key, serverId, client });
 		}

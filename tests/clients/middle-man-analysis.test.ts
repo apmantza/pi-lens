@@ -61,7 +61,7 @@ describe("middle-man / delegate-only class detection (#325)", () => {
 
 		const report = await moduleReport(file, env.tmpDir);
 		const handle = findClass(
-			[...report.api, ...report.internal],
+			[...report.api, ...report.internal, ...(report.unclassified ?? [])],
 			"ThingHandle",
 		);
 
@@ -86,7 +86,10 @@ describe("middle-man / delegate-only class detection (#325)", () => {
 		);
 
 		const report = await moduleReport(file, env.tmpDir);
-		const handle = findClass([...report.api, ...report.internal], "TinyHandle");
+		const handle = findClass(
+			[...report.api, ...report.internal, ...(report.unclassified ?? [])],
+			"TinyHandle",
+		);
 
 		expect(handle).toBeDefined();
 		expect(handle?.flags ?? []).not.toContain("middle man");
@@ -127,7 +130,10 @@ describe("middle-man / delegate-only class detection (#325)", () => {
 		);
 
 		const report = await moduleReport(file, env.tmpDir);
-		const svc = findClass([...report.api, ...report.internal], "OrderService");
+		const svc = findClass(
+			[...report.api, ...report.internal, ...(report.unclassified ?? [])],
+			"OrderService",
+		);
 
 		expect(svc).toBeDefined();
 		expect(svc?.flags ?? []).not.toContain("middle man");
@@ -154,7 +160,10 @@ describe("middle-man / delegate-only class detection (#325)", () => {
 			);
 
 			const report = await moduleReport(file, env.tmpDir);
-			const cls = findClass([...report.api, ...report.internal], name);
+			const cls = findClass(
+				[...report.api, ...report.internal, ...(report.unclassified ?? [])],
+				name,
+			);
 			expect(cls, `${name} should be extracted`).toBeDefined();
 			expect(
 				cls?.flags ?? [],
@@ -187,7 +196,10 @@ describe("middle-man / delegate-only class detection (#325)", () => {
 		);
 
 		const report = await moduleReport(file, env.tmpDir);
-		const cls = findClass([...report.api, ...report.internal], "StoreImpl");
+		const cls = findClass(
+			[...report.api, ...report.internal, ...(report.unclassified ?? [])],
+			"StoreImpl",
+		);
 
 		expect(cls).toBeDefined();
 		expect(cls?.flags ?? []).not.toContain("middle man");
@@ -217,7 +229,7 @@ describe("middle-man / delegate-only class detection (#325)", () => {
 
 		const report = await moduleReport(file, env.tmpDir);
 		const handle = findClass(
-			[...report.api, ...report.internal],
+			[...report.api, ...report.internal, ...(report.unclassified ?? [])],
 			"SplitHandle",
 		);
 
@@ -246,7 +258,7 @@ describe("middle-man / delegate-only class detection (#325)", () => {
 
 		const report = await moduleReport(file, env.tmpDir);
 		const handle = findClass(
-			[...report.api, ...report.internal],
+			[...report.api, ...report.internal, ...(report.unclassified ?? [])],
 			"TransformHandle",
 		);
 
@@ -275,7 +287,10 @@ describe("middle-man / delegate-only class detection (#325)", () => {
 		);
 
 		const report = await moduleReport(file, env.tmpDir);
-		const handle = findClass([...report.api, ...report.internal], "Handle");
+		const handle = findClass(
+			[...report.api, ...report.internal, ...(report.unclassified ?? [])],
+			"Handle",
+		);
 
 		expect(handle).toBeDefined();
 		expect(handle?.flags).toContain("middle man");
@@ -302,7 +317,7 @@ describe("middle-man / delegate-only class detection (#325)", () => {
 
 		const report = await moduleReport(file, env.tmpDir);
 		const handle = findClass(
-			[...report.api, ...report.internal],
+			[...report.api, ...report.internal, ...(report.unclassified ?? [])],
 			"ThingHandle",
 		);
 

@@ -40,6 +40,7 @@ Returns a structured outline of one module (default `summary-text`; see the `vie
   },
   "api":       [ /* exported ModuleSymbolEntry[] */ ],
   "internal":  [ /* non-exported ModuleSymbolEntry[] */ ],
+  "unclassified": [ /* optional: top-level symbols of a language with no export rule (#5599) */ ],
   "recommendedReads": [ /* top-3 ranked by fanout / complexity / export */ ],
   "semantic": { "source": "review-graph", "references": true, "implementations": false }
 }
@@ -70,8 +71,11 @@ per symbol cost real tokens for zero new information. **To read a symbol:**
 call `read`/`read_symbol` with `offset=startLine, limit=endLine-startLine+1`
 on THIS report's `path`. Cross-file sections keep their own path — `usedBy[].file`
 (the caller's file) and `blastRadius.files[].read` (the dependent file) — since
-those legitimately point elsewhere. `exported` stays a boolean only; it is NOT
-also repeated inside `flags` — `flags` carries non-derivable signals only
+those legitimately point elsewhere. `exported` stays a boolean only, absent when
+the language has no export rule (#5599): such a symbol is neither API nor
+INTERNAL, so it sits in `unclassified` (rendered `SYMBOLS (visibility unknown):`)
+and `summary.exports` is omitted when no top-level symbol has an answer. It is
+NOT also repeated inside `flags` — `flags` carries non-derivable signals only
 (`async`, `high fanout`, `high complexity`, `boundary wrapper`). `doc` is the
 first sentence (or line) of an attached doc comment, whitespace-collapsed and
 capped ~120 chars — the highest-value token for deciding which symbol to read;

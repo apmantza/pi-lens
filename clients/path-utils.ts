@@ -1327,6 +1327,18 @@ export function isWithinForm(child: string, parent: string): boolean {
 	return child === parent || child.startsWith(parentPrefix);
 }
 
+/**
+ * The same directory, or one contains the other, on segment boundaries
+ * (`/repo-backup` never overlaps `/repo`): {@link isWithinForm} both ways, for
+ * two paths already in one form. The live clients an install at a root
+ * restarts (`ClientRegistry.restartPrimaryClientsUnder`) and the clients whose
+ * epoch a first look names (`clients/out-of-band-changes.ts`, #5501) are one
+ * set by this test.
+ */
+export function rootsOverlap(a: string, b: string): boolean {
+	return isWithinForm(a, b) || isWithinForm(b, a);
+}
+
 /** True when a path is outside the session's project root. */
 export function isOutsideProjectRoot(
 	filePath: string,

@@ -636,9 +636,13 @@ export function createLspDiagnosticsTool(
 			// sweep so a client a publish restarts receives the re-push that follows.
 			// #5005 F3: the caller's signal rides along, so an abandoned answer is
 			// neither held by this walk nor paying for it.
+			// #5501: an MCP hover may have spawned a server before this cwd's first
+			// look, so the look names the live clients' epoch for the config files
+			// it finds; without it a manifest fixed in between was only recorded.
 			await lookForOutOfBandChanges(cwd, "tool_call", undefined, {
 				walk: "always",
 				signal,
+				liveClients: () => lspService.livePrimaryClientRoots?.() ?? [],
 			});
 
 			// #4532 gap 13: a document the server already holds may have changed

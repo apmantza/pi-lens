@@ -2807,6 +2807,28 @@
 					"test": "tests/clients/disk-changes.test.ts",
 					"title": "isolates a throwing subscriber, still reaches the next one, and records once per consumer per session"
 				},
+				"SessionLookConfigEpoch": {
+					"value": "TRUE",
+					"test": "tests/clients/lsp/out-of-band-client-root-4532.test.ts",
+					"title": "forwards a manifest edited after the client spawned, at the session root's first look",
+					"also": [
+						{
+							"test": "tests/clients/lsp/out-of-band-client-root-4532.test.ts",
+							"title": "forwards a manifest edited after the client spawned, at the MCP cwd's first look"
+						}
+					]
+				},
+				"SessionLookInstallEpoch": {
+					"value": "FALSE",
+					"test": "tests/clients/lsp/out-of-band-client-root-4532.test.ts",
+					"title": "restarts no client for an install at the session root's first look",
+					"also": [
+						{
+							"test": "tests/clients/lsp/out-of-band-client-root-4532.test.ts",
+							"title": "restarts no client for an install at the MCP cwd's first look"
+						}
+					]
+				},
 				"TrailingSeesFlightRecord": {
 					"value": "TRUE",
 					"test": "tests/clients/head-move-resync-4476.test.ts",

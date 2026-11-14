@@ -54,7 +54,7 @@ import {
 	STALE_HEARTBEAT_MS,
 	terminateScannerChild,
 } from "./instance-reaper.js";
-import { isWithinForm, normalizeFilePath } from "./path-utils.js";
+import { normalizeFilePath, rootsOverlap } from "./path-utils.js";
 import {
 	isInPidNamespace,
 	ownPidNamespace,
@@ -1331,8 +1331,7 @@ export function selectLivePeerInstances(
 						? entryRoot === normalizedRoot
 						: // Same directory, or one contains the other, on segment
 							// boundaries: `/repo-backup` never matches `/repo`.
-							isWithinForm(entryRoot, normalizedRoot) ||
-							isWithinForm(normalizedRoot, entryRoot),
+							rootsOverlap(entryRoot, normalizedRoot),
 				) &&
 				isPidAlive(entry.pid) &&
 				Number.isFinite(Date.parse(entry.heartbeatAt)) &&
