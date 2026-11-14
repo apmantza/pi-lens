@@ -23,6 +23,7 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../clients/degradation-ledger.js";
+import { gateStagedDelta } from "../clients/staged-delta.js";
 import { useGlobalConfig } from "./support/global-config.js";
 import { execFileSync } from "./support/git-fixture-env.js";
 import {
@@ -422,6 +423,25 @@ describe("#5553 the staged set is read from the commit's argv", () => {
 		},
 	);
 
+	// Recurrence prevented: `git add -A` stages a file git does not list as
+	// differing from HEAD, so a superset read from `git diff` alone would never
+	// see a new file an external editor created.
+	it(
+		"reads an untracked file when the form stages by itself",
+		{ timeout: 120_000 },
+		async () => {
+			const proj = seedProject("form-untracked", { [B]: CLEAN });
+			const text = await commitCommand(
+				proj,
+				'git add -A && git commit -m "wip"',
+				() => fs.writeFileSync(path.join(proj, A), ADDED),
+			);
+			expect(text).toContain(GATE_BLOCK);
+			expect(text).toContain("src/a.ts");
+			expect(text).not.toContain(RAN_MARKER);
+		},
+	);
+
 	// Recurrence prevented: a push stages and commits nothing, so reading the
 	// tree for it would refuse every push over a dirty file.
 	it("reads nothing for a push", { timeout: 120_000 }, async () => {
@@ -561,4 +581,62 @@ describe("#5553 a staged set the gate cannot read refuses, once", () => {
 			]);
 		},
 	);
+
+	// Recurrence prevented: a staged-delta read that gave no answer (git slow,
+	// a lane hung, the turn aborted) read as "nothing found" would let the
+	// commit through; it refuses as degraded instead.
+	describe("a read that gives no answer", () => {
+		const COMMIT_X = { command: 'git commit -m "x"' };
+		const stagedProject = (name: string) => {
+			const proj = seedProject(name, { [A]: CLEAN });
+			fs.writeFileSync(path.join(proj, A), ADDED);
+			git(proj, "add", A);
+			return proj;
+		};
+		const decide = (
+			proj: string,
+			signal: AbortSignal | undefined,
+			budgetMs?: number,
+		) =>
+			gateStagedDelta(
+				"bash",
+				COMMIT_X,
+				{ cwd: proj, projectRoot: proj, getFlag: () => false },
+				signal,
+				budgetMs,
+			);
+
+		it("refuses once the bound has passed", { timeout: 120_000 }, async () => {
+			resetDegradationLedger();
+			const decision = await decide(stagedProject("bound"), undefined, 1);
+			expect(decision).toMatchObject({ block: true, unknown: true });
+			expect(decision.reason).toContain("staged_delta_lane_incomplete");
+		});
+
+		it(
+			"refuses for a turn that was aborted",
+			{ timeout: 120_000 },
+			async () => {
+				const decision = await decide(
+					stagedProject("aborted"),
+					AbortSignal.abort(),
+				);
+				expect(decision).toMatchObject({ block: true, unknown: true });
+				expect(decision.reason).toContain("staged_delta_lane_incomplete");
+			},
+		);
+
+		// Control: the same staged file and the real budget refuse on the
+		// finding, so the two refusals above are the bound's and not the file's.
+		it(
+			"control: the same file refuses on its blocker inside the bound",
+			{ timeout: 120_000 },
+			async () => {
+				const decision = await decide(stagedProject("control"), undefined);
+				expect(decision.block).toBe(true);
+				expect(decision.unknown).toBeUndefined();
+				expect(decision.reason).toContain("src/a.ts");
+			},
+		);
+	});
 });

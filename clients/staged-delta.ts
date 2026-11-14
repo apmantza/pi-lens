@@ -29,6 +29,7 @@
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import type { DecodedShellWord } from "./bash-file-access.js";
+import { bounded } from "./deadline-utils.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { applyInlineBlockerPolicy } from "./inline-blocker-dispositions.js";
 import { isPathIgnoredByProject } from "./file-utils.js";
@@ -365,7 +366,7 @@ export interface StagedDeltaDeps {
  * added lines of each file it carries. A degraded read is recorded once per reason and session
  * (`staged-delta-degraded`).
  */
-export async function judgeStagedDelta(
+async function judgeStagedDelta(
 	toolName: string,
 	input: unknown,
 	deps: StagedDeltaDeps,
@@ -612,4 +613,49 @@ export function stagedDeltaDecision(
 		block: true,
 		reason: `🔴 COMMIT BLOCKED (--lens-guard): the staged change adds blocking findings that HEAD does not have. Fix them, then commit again.\n${verdict.detail}`,
 	};
+}
+
+/**
+ * #5553: how long the commit gate waits for its staged-delta read (the git
+ * listing and the lanes over each file the commit carries). `tool_call` has no
+ * budget of its own (clients/hook-budgets.ts), so the read carries its own.
+ */
+export const STAGED_DELTA_BUDGET_MS = 20_000;
+
+/**
+ * The gate's one entry for the staged-delta read: the verdict for the commit
+ * command `input`, as the decision `tool_call` returns. A read that gives no
+ * answer inside `budgetMs` refuses as degraded, never allows.
+ */
+export async function gateStagedDelta(
+	toolName: string,
+	input: unknown,
+	deps: Omit<StagedDeltaDeps, "signal">,
+	signal: AbortSignal | undefined,
+	budgetMs: number = STAGED_DELTA_BUDGET_MS,
+): Promise<GuardDecision> {
+	const verdict = await bounded(
+		(workSignal) =>
+			judgeStagedDelta(toolName, input, { ...deps, signal: workSignal }),
+		{
+			ms: budgetMs,
+			signal,
+			hook: "tool_call",
+			label: "staged-delta-gate",
+		},
+	);
+	if (verdict === undefined)
+		recordDegradationOnce({
+			kind: "staged-delta-degraded",
+			subject: "lane_incomplete",
+			reason: "the staged-delta read gave no answer inside its bound",
+		});
+	return stagedDeltaDecision(
+		deps.cwd,
+		verdict ?? {
+			kind: "degraded",
+			reason: "lane_incomplete",
+			detail: "the staged-delta read gave no answer inside its bound",
+		},
+	);
 }
