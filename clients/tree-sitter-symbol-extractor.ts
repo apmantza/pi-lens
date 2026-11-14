@@ -762,7 +762,8 @@ const KOTLIN_ACCESS: AccessRule = {
 
 // C#: `public` exported; the default (internal or private), `internal`,
 // `protected` and `private` are not. Interface members are public unless
-// `private`.
+// `private`. No body boundary: C# has no local classes, and its local functions
+// are not in the defs query.
 const CSHARP_ACCESS: AccessRule = {
 	containers: new Set([
 		"class_declaration",
@@ -771,7 +772,7 @@ const CSHARP_ACCESS: AccessRule = {
 		"enum_declaration",
 		"record_declaration",
 	]),
-	bodies: new Set(["block"]),
+	bodies: NO_TYPES,
 	isPublic: (node) => {
 		const has = (keyword: string): boolean =>
 			(node.children ?? []).some(

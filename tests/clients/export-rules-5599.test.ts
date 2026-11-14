@@ -128,6 +128,9 @@ const CELLS: Record<string, Cell> = {
 			"  public enum E { X }",
 			"  static class N { public void n() {} }",
 			"  void loc() { class L { public void l() {} } }",
+			// An anonymous class has no enclosing class_declaration of its own, so
+			// only the function-body boundary keeps its public method local.
+			'  public Object anon() { return new Object() { public String toString() { return ""; } }; }',
 			"}",
 			"class P { public void p() {} }",
 			"public interface I { void im(); private void pm() {} }",
@@ -143,6 +146,8 @@ const CELLS: Record<string, Cell> = {
 			n: false,
 			L: false,
 			l: false,
+			anon: true,
+			toString: false,
 			P: false,
 			p: false,
 			I: true,
