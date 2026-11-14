@@ -786,10 +786,17 @@ function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
  * the pre-fix seam left it under the cwd.
  */
 function resolveCandidate(token: ShellOperand, cwd: string): string | null {
+	return isReadableSourceFile(token.text) ? operandPath(token, cwd) : null;
+}
+
+/**
+ * The absolute path an operand names, with no test of what the file is: a
+ * directory operand takes the same reading as a source file (see
+ * {@link resolveCandidate}, which adds the source-file test).
+ */
+function operandPath(token: ShellOperand, cwd: string): string | null {
 	const cleaned = token.text;
-	if (!cleaned || cleaned.startsWith("-") || !isReadableSourceFile(cleaned)) {
-		return null;
-	}
+	if (!cleaned || cleaned.startsWith("-")) return null;
 	// `\~/x` survives the lexer backslash-first (it keeps native Windows
 	// path separators), and bash reads that tilde literally: drop the escape
 	// instead of crediting the phantom `<cwd>/\~/x`.
@@ -1001,6 +1008,271 @@ function moveDestinations(move: MoveOperands): ShellOperand[] {
 		text: dir + separator + basenameForOperand(source.text),
 		tildeExpands: targetDir.tildeExpands,
 	}));
+}
+
+/** What the filesystem says the operand is right now, undefined when it names nothing readable. */
+function operandStats(
+	token: ShellOperand,
+	cwd: string,
+): nodeFs.Stats | undefined {
+	const abs = operandPath(token, cwd);
+	if (abs === null) return undefined;
+	try {
+		return nodeFs.statSync(abs);
+	} catch {
+		// none: an absent or unreadable path is neither a directory nor a file,
+		// and the callers read exactly that answer.
+		return undefined;
+	}
+}
+
+/** Whether the operand names a directory: a trailing separator, or the filesystem says so. */
+function isDirectoryOperand(token: ShellOperand, cwd: string): boolean {
+	if (operandPath(token, cwd) === null) return false;
+	// A trailing separator names a directory whether or not it exists yet.
+	return (
+		/[\\/]$/.test(token.text) ||
+		operandStats(token, cwd)?.isDirectory() === true
+	);
+}
+
+/** Whether the filesystem says the operand names a regular file right now. */
+function isFileOperand(token: ShellOperand, cwd: string): boolean {
+	return operandStats(token, cwd)?.isFile() === true;
+}
+
+/**
+ * Whether the scan cannot tell which path an operand names: bash expands a `$`
+ * or a backtick even inside double quotes, and the word model gives an empty
+ * text for a word it cannot read at all.
+ */
+function isUnreadableOperand(token: ShellOperand): boolean {
+	return token.text === "" || /[$`]/.test(token.text);
+}
+
+/**
+ * The directory a write scope names. An operand the scan cannot read
+ * statically (`"$D"`) falls back to the working directory: a scope that may be
+ * the wrong tree still recovers the common case, where silence recovers none.
+ */
+function scopeDirectory(token: ShellOperand, cwd: string): string {
+	return isUnreadableOperand(token) ? cwd : (operandPath(token, cwd) ?? cwd);
+}
+
+/** What one command writes: files it names, and directories it fills. */
+interface ShellWrites {
+	files: ShellOperand[];
+	/** Absolute directories whose contents the command may have changed. */
+	dirs: string[];
+	/** A directory is the working directory standing in for one the scan could not read. */
+	guessed?: true;
+}
+
+/**
+ * What a `cp` / `mv` / `install` / `git mv` writes (#5552). The destination is
+ * a directory in the `-t DIR` order, and in the plain order when its last
+ * operand ends in a separator or the filesystem says it is one: the writes are
+ * then `DIR/<basename>` of each source, as {@link moveDestinations} names them.
+ * A joined path that is not a regular file is a directory the command filled
+ * (`mv dirA dirB/`, `cp -r in newdir`) or a write that never landed, so the
+ * directory is a scope either way, and a recovery that cannot list its files
+ * still reaches them. The filesystem answers the same read before the command
+ * as after it: a directory stays one, and what a move created is a file or a
+ * directory by what it moved.
+ */
+function copyWrites(move: MoveOperands, cwd: string): ShellWrites {
+	const dir =
+		move.destinationDir ??
+		(move.destination && isDirectoryOperand(move.destination, cwd)
+			? move.destination
+			: null);
+	if (!dir) return { files: moveDestinations(move), dirs: [] };
+	const files = moveDestinations({
+		sources: move.sources,
+		destination: null,
+		destinationDir: dir,
+	});
+	if (!files.some((file) => !isFileOperand(file, cwd)))
+		return { files, dirs: [] };
+	return {
+		files,
+		dirs: [scopeDirectory(dir, cwd)],
+		...(isUnreadableOperand(dir) ? { guessed: true as const } : {}),
+	};
+}
+
+/**
+ * The long `rsync` options that take their value as the NEXT word (`--opt=V`
+ * carries its own), read from `rsync --help` of 3.4.1, with its `(aka ...)`
+ * spellings (`--cc`, `--zc`, `--zl`) and the obsolete `--log-format`. An option this list does
+ * not know is read as valueless: placed after the operands with a separate
+ * value it would be read as the destination, which then names a path no
+ * recovery lists, and the mtime rule stays.
+ */
+const RSYNC_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+	"address",
+	"backup-dir",
+	"block-size",
+	"bwlimit",
+	"cc",
+	"checksum-choice",
+	"checksum-seed",
+	"chmod",
+	"chown",
+	"compare-dest",
+	"compress-choice",
+	"compress-level",
+	"contimeout",
+	"copy-as",
+	"copy-dest",
+	"debug",
+	"early-input",
+	"exclude",
+	"exclude-from",
+	"files-from",
+	"filter",
+	"groupmap",
+	"iconv",
+	"include",
+	"include-from",
+	"info",
+	"link-dest",
+	"log-file",
+	"log-file-format",
+	"log-format",
+	"max-alloc",
+	"max-delete",
+	"max-size",
+	"min-size",
+	"modify-window",
+	"only-write-batch",
+	"out-format",
+	"outbuf",
+	"partial-dir",
+	"password-file",
+	"port",
+	"protocol",
+	"read-batch",
+	"remote-option",
+	"rsh",
+	"rsync-path",
+	"skip-compress",
+	"sockopts",
+	"stderr",
+	"stop-after",
+	"stop-at",
+	"suffix",
+	"temp-dir",
+	"timeout",
+	"usermap",
+	"write-batch",
+	"zc",
+	"zl",
+]);
+/** The short `rsync` options that take a value: `-e`, `-B`, `-T`, `-f`, `-M`, `-@`. */
+const RSYNC_VALUE_LETTERS = new Set("eBTfM@");
+
+/** The operands of `rsync [OPTION...] SRC... DEST`: every word that is no option or option value. */
+function rsyncOperands(args: ShellOperand[]): ShellOperand[] {
+	const operands: ShellOperand[] = [];
+	let options = true;
+	for (let i = 0; i < args.length; i += 1) {
+		const arg = args[i];
+		if (!arg) continue;
+		if (!options || !arg.text.startsWith("-")) {
+			operands.push(arg);
+		} else if (arg.text === "--") {
+			options = false;
+		} else if (arg.text.startsWith("--")) {
+			if (!arg.text.includes("=") && RSYNC_VALUE_OPTIONS.has(arg.text.slice(2)))
+				i += 1;
+		} else {
+			// A short cluster ends at its first valued letter: that letter takes
+			// the rest of the word, or the next word when nothing follows it.
+			const letters = arg.text.slice(1).split("");
+			const valued = letters.findIndex((letter) =>
+				RSYNC_VALUE_LETTERS.has(letter),
+			);
+			if (valued === letters.length - 1) i += 1;
+		}
+	}
+	return operands;
+}
+
+/** An `rsync` operand on another host: `host:path` or `rsync://host/path`. */
+function isRemoteRsyncOperand(text: string): boolean {
+	return text.startsWith("rsync://") || /^[^/\\:]{2,}:/.test(text);
+}
+
+/**
+ * What `rsync SRC... DEST` writes locally (#5552). Whatever the sources and
+ * their trailing slashes (`src/` copies the contents, `src` the directory),
+ * the writes land under DEST, so a DEST that is a directory is the scope and a
+ * file DEST is the one named path. A DEST the scan cannot read (`"$D"`) is the
+ * working directory. A remote DEST writes nothing here, and with one operand
+ * rsync only lists.
+ */
+function rsyncWrites(args: ShellOperand[], cwd: string): ShellWrites {
+	const operands = rsyncOperands(args);
+	const dest = operands.length >= 2 ? operands[operands.length - 1] : undefined;
+	if (!dest || isRemoteRsyncOperand(dest.text)) return { files: [], dirs: [] };
+	if (isUnreadableOperand(dest))
+		return { files: [], dirs: [cwd], guessed: true };
+	return isDirectoryOperand(dest, cwd)
+		? { files: [], dirs: [scopeDirectory(dest, cwd)] }
+		: { files: [dest], dirs: [] };
+}
+
+/** The short `tar` options that take a value, so a cluster ends at the first of them. */
+const TAR_VALUE_LETTERS = new Set("bCfFgHIKLNTVX");
+
+/**
+ * The directories `tar` extracts into, or none when the command does not
+ * extract (#5552). The archive names the files, not argv, so the scope is the
+ * `-C DIR` (`-CDIR`, `--directory DIR`, `--directory=DIR`) operands, each
+ * relative to the one before it as tar reads them, and the working directory
+ * when none is given.
+ */
+function tarWrites(args: ShellOperand[], cwd: string): ShellWrites {
+	let extract = false;
+	let at = cwd;
+	const dirs: string[] = [];
+	let guessed = false;
+	const enter = (operand: ShellOperand | undefined) => {
+		if (!operand || isUnreadableOperand(operand)) guessed = true;
+		at = operand ? scopeDirectory(operand, at) : cwd;
+		dirs.push(at);
+	};
+	for (let i = 0; i < args.length; i += 1) {
+		const text = args[i]?.text ?? "";
+		if (text.startsWith("--")) {
+			if (text === "--extract" || text === "--get") extract = true;
+			else if (text === "--directory") enter(args[++i]);
+			else if (text.startsWith("--directory="))
+				enter({ text: text.slice("--directory=".length), tildeExpands: false });
+			continue;
+		}
+		// The first word may be an option cluster with no dash (`tar xzf A`), and
+		// then every valued letter takes its own following word.
+		const oldStyle = i === 0 && !text.startsWith("-");
+		if (!oldStyle && !(text.startsWith("-") && text.length > 1)) continue;
+		const letters = [...(oldStyle ? text : text.slice(1))];
+		for (const [index, letter] of letters.entries()) {
+			if (letter === "x") extract = true;
+			if (!TAR_VALUE_LETTERS.has(letter)) continue;
+			const rest = oldStyle ? "" : letters.slice(index + 1).join("");
+			const value: ShellOperand | undefined =
+				rest === "" ? args[++i] : { text: rest, tildeExpands: false };
+			if (letter === "C") enter(value);
+			if (!oldStyle) break;
+		}
+	}
+	if (!extract) return { files: [], dirs: [] };
+	return {
+		files: [],
+		dirs: dirs.length > 0 ? dirs : [cwd],
+		...(guessed ? { guessed: true as const } : {}),
+	};
 }
 
 /**
@@ -1567,6 +1839,18 @@ export interface ShellWriteScan {
 	/** Absolute paths the command writes or creates, in command order. */
 	written: string[];
 	/**
+	 * Absolute directories the command fills with files argv does not name one
+	 * by one: `rsync` into a tree, `tar x`, a move or copy of a directory
+	 * (#5552). A file under one that git reports changed was written by it.
+	 */
+	writtenDirs: string[];
+	/**
+	 * A directory in `writtenDirs` is the working directory standing in for one
+	 * the scan could not read (`"$D"`, `-C "$(mktemp -d)"`): the credit it
+	 * grants rests on a guess (#5552).
+	 */
+	scopeGuessed: boolean;
+	/**
 	 * Absolute directories the command's `cd`/`pushd` names, in command order,
 	 * read from the words `directoryEffect` reads (#4713 R8-1). #2050: opaque recovery takes its baseline in each of these
 	 * that is a checkout of the session's own repository, so a write in a
@@ -1582,6 +1866,9 @@ export interface ShellWriteScan {
  *   redirects: `> FILE`, `>> FILE`, `N> FILE`, `&> FILE` (with or without space)
  *   tee [-a] FILE..., sed -i ... FILE, cp/mv/install ... DEST, touch FILE...,
  *   and common in-place formatter/fixer invocations with explicit file targets.
+ *   A directory DEST of cp/mv/install names each source inside it, and
+ *   `rsync` and `tar x`, which write files argv does not name, name the
+ *   directory they fill in `writtenDirs` (#5552).
  *
  * Every operand resolves against the working directory in effect for ITS
  * segment, so `cd <dir> && echo x > f.ts` names `<dir>/f.ts` (#2050 AC4).
@@ -1600,6 +1887,8 @@ export function scanShellWriteScopes(
 	cwd: string,
 ): ShellWriteScan {
 	const out = new Set<string>();
+	const outDirs = new Set<string>();
+	let scopeGuessed = false;
 	const cdTargets: string[] = [];
 	const seenCdTargets = new Set<string>();
 	// The working directory in effect for the segment being read, which a `cd`
@@ -1624,6 +1913,11 @@ export function scanShellWriteScopes(
 	const add = (token: ShellOperand) => {
 		const abs = resolveCandidate(token, effectiveCwd);
 		if (abs) out.add(abs);
+	};
+	const addWrites = (writes: ShellWrites) => {
+		for (const file of writes.files) add(file);
+		for (const dir of writes.dirs) outDirs.add(dir);
+		if (writes.guessed) scopeGuessed = true;
 	};
 	// Every directory a `cd`/`pushd` names is a candidate recovery root,
 	// whether or not the scan can certify that the shell stayed there.
@@ -1682,8 +1976,13 @@ export function scanShellWriteScopes(
 			for (const a of args) add(a);
 		} else if (verb === "cp" || verb === "mv" || verb === "install") {
 			// Both GNU orders name a destination: the plain form its trailing
-			// operand, `-t DIR` one destination per source (#5378).
-			for (const target of moveDestinations(moveOperands(args))) add(target);
+			// operand, `-t DIR` one destination per source (#5378); a directory
+			// destination takes each source's name inside it (#5552).
+			addWrites(copyWrites(moveOperands(args), effectiveCwd));
+		} else if (verb === "rsync") {
+			addWrites(rsyncWrites(args, effectiveCwd));
+		} else if (verb === "tar") {
+			addWrites(tarWrites(args, effectiveCwd));
 		} else if (verb === "biome") {
 			const sub = args[0]?.text;
 			if (
@@ -1809,8 +2108,7 @@ export function scanShellWriteScopes(
 				// above (#1668 review F2, both argument orders since #5378). The
 				// source side is a delete, handled by
 				// extractDeletedPathsFromCommand.
-				for (const target of moveDestinations(moveOperands(args.slice(1))))
-					add(target);
+				addWrites(copyWrites(moveOperands(args.slice(1)), effectiveCwd));
 			}
 		}
 		// A heredoc's substitution runs in a subshell and joins no list: it
@@ -1864,7 +2162,12 @@ export function scanShellWriteScopes(
 		if (chainMove && exit !== "and" && exit !== "pipe") fallBack();
 	}
 
-	return { written: Array.from(out), cdTargets };
+	return {
+		written: Array.from(out),
+		writtenDirs: Array.from(outDirs),
+		scopeGuessed,
+		cdTargets,
+	};
 }
 
 /** Bash reserved words: a command starting with one opens or closes a construct. */
@@ -2120,8 +2423,7 @@ export function isEditClassToolResult(
 	}
 	if (appliedFilesOfOwnTool(event).length > 0) return true;
 	const command = event?.input?.command;
-	return (
-		typeof command === "string" &&
-		extractWrittenPathsFromCommand(command, cwd).length > 0
-	);
+	if (typeof command !== "string") return false;
+	const scan = scanShellWriteScopes(command, cwd);
+	return scan.written.length > 0 || scan.writtenDirs.length > 0;
 }

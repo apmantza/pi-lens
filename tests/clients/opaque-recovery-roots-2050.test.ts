@@ -122,6 +122,25 @@ describe("resolveOpaqueRecoveryRoots (#2050)", () => {
 		expect(keys(scopes.roots)).toEqual(keys([repo, worktree]));
 	});
 
+	// #5552: `rsync -a src/ <linked worktree>/` and `tar x -C <worktree>` fill a
+	// tree argv names only as a directory, so the root candidates take the
+	// scope's own checkout, and the scopes ride the result to the recovery.
+	it("admits a linked worktree named only as an rsync or tar directory (#5552)", () => {
+		const repo = initRepo(path.join(env.tmpDir, "scope-repo"));
+		const worktree = initLinkedWorktree(
+			path.join(env.tmpDir, "scope-linked"),
+			repo,
+		);
+		for (const command of [
+			`rsync -a in/ ${worktree}/`,
+			`tar -xf a.tar -C ${worktree}`,
+		]) {
+			const scopes = rootsOf(command, repo);
+			expect(keys(scopes.roots), command).toEqual(keys([repo, worktree]));
+			expect(keys(scopes.writtenDirs), command).toEqual(keys([worktree]));
+		}
+	});
+
 	it("names the session checkout itself once, however many ways the command reaches it", () => {
 		const repo = initRepo(path.join(env.tmpDir, "same-repo"));
 		fs.mkdirSync(path.join(repo, "pkg"), { recursive: true });
