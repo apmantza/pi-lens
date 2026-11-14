@@ -3317,8 +3317,11 @@ describe("PR body lint (#1844)", () => {
 				});
 				// Total on both paths: an unhandled child `error` event is a
 				// host-fatal throw, and a spawn that never started still answers
-				// with the verdict the caller reads.
-				child.on("error", () => settled({ code: null, stderr }));
+				// with the verdict the caller reads. Its error text goes to stderr,
+				// so the assertion names the cause, not only `code: null`.
+				child.on("error", (error) =>
+					settled({ code: null, stderr: stderr + String(error) }),
+				);
 				child.on("close", (code) => settled({ code, stderr }));
 			});
 		const acceptedForms: [string, string[]][] = [
@@ -3380,22 +3383,33 @@ describe("PR body lint (#1844)", () => {
 				Promise.all(acceptedForms.map(([, args]) => runCli(args))),
 				Promise.all(rejectedForms.map(([, args]) => runCli(args))),
 			]);
+			// The last column carries the stderr of a form that failed its check, so a
+			// spawn that never started names its cause (`Error: spawn ... ENOENT`)
+			// in the assertion message. A passing form leaves it empty.
 			expect(
-				acceptedForms.map(([label], index) => [label, accepted[index].code]),
-			).toEqual([
-				["--lint-local <body>", 0],
-				["--lint-local <body> --title <refs title>", 0],
-				["--body <body file> --title <title file>", 0],
-			]);
-			expect(
-				rejectedForms.map(([label, , needle], index) => [
+				acceptedForms.map(([label], index) => [
 					label,
-					rejected[index].code === 0 ? "accepted" : "rejected",
-					rejected[index].stderr.includes(needle),
+					accepted[index].code,
+					accepted[index].code === 0 ? "" : accepted[index].stderr.trim(),
 				]),
 			).toEqual([
-				["--lint-local <body> --title <closes title>", "rejected", true],
-				["--lint-local <body> --ref HEAD", "rejected", true],
+				["--lint-local <body>", 0, ""],
+				["--lint-local <body> --title <refs title>", 0, ""],
+				["--body <body file> --title <title file>", 0, ""],
+			]);
+			expect(
+				rejectedForms.map(([label, , needle], index) => {
+					const matched = rejected[index].stderr.includes(needle);
+					return [
+						label,
+						rejected[index].code === 0 ? "accepted" : "rejected",
+						matched,
+						matched ? "" : rejected[index].stderr.trim(),
+					];
+				}),
+			).toEqual([
+				["--lint-local <body> --title <closes title>", "rejected", true, ""],
+				["--lint-local <body> --ref HEAD", "rejected", true, ""],
 			]);
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
