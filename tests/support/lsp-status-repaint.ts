@@ -30,8 +30,9 @@ export function aliveServerHolder(initialAliveIds: string[] = ["typescript"]) {
 }
 
 /**
- * Identity-theme `ctx.ui` double that records every `setStatus` call, plus a
- * `lspStatuses()` reader for the `pi-lens-lsp` writes only.
+ * Identity-theme `ctx.ui` double that records every `setStatus` call, plus
+ * `statusesFor(id)` for the writes to one key. `lspStatuses()` is the
+ * `pi-lens-lsp` shorthand.
  */
 export function lspStatusRecorder() {
 	const statusUpdates: Array<[string, string | undefined]> = [];
@@ -41,7 +42,8 @@ export function lspStatusRecorder() {
 			statusUpdates.push([id, text]),
 		theme: { fg: (_color: string, text: string) => text },
 	};
-	const lspStatuses = () =>
-		statusUpdates.flatMap(([id, text]) => (id === "pi-lens-lsp" ? [text] : []));
-	return { ui, lspStatuses };
+	const statusesFor = (id: string) =>
+		statusUpdates.flatMap(([key, text]) => (key === id ? [text] : []));
+	const lspStatuses = () => statusesFor("pi-lens-lsp");
+	return { ui, lspStatuses, statusesFor };
 }

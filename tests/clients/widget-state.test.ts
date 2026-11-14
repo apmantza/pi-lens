@@ -10,6 +10,7 @@ import {
 } from "../../clients/dispatch/types.js";
 import {
 	__testing,
+	clearWidgetChangeCallback,
 	clearWidgetState,
 	drainRenderedDependencyDriftFilePaths,
 	exportWidgetState,
@@ -17,6 +18,7 @@ import {
 	getFileDiagnostics,
 	getFileDiagnosticSummaries,
 	getSessionLanguages,
+	getWidgetSummary,
 	importWidgetState,
 	incrementWidgetDependencyDriftDelivery,
 	isBlocking,
@@ -36,6 +38,7 @@ import {
 	renderWidget,
 	setRenderCallback,
 	setSessionLanguages,
+	setWidgetChangeCallback,
 	WIDGET_STATE_VERSION,
 } from "../../clients/widget-state.js";
 
@@ -3194,5 +3197,256 @@ describe("a file no check can ever cover (#5287)", () => {
 		delete older.files[0].uncheckedInapplicable;
 		expect(importWidgetState(older)).toBe(true);
 		expect(renderWidget(120, theme).join("\n")).toContain("1 unchecked");
+	});
+});
+
+// The widget header and the `pi-lens-issues` status come from one tally. These
+// cases pin the projection's fields to what the header actually draws, so a
+// future header change cannot leave the status counting on its own.
+describe("getWidgetSummary", () => {
+	it("reports the same counts the header draws for errors and warnings", () => {
+		recordDiagnostics("/repo/summary.ts", [
+			{
+				severity: "error",
+				semantic: "blocking",
+				message: "blocking",
+				line: 1,
+				rule: "typescript:1",
+			},
+			{
+				severity: "warning",
+				message: "warning",
+				line: 2,
+				rule: "ts-react-antipatterns",
+			},
+		]);
+
+		const bag = getWidgetSummary();
+		expect(bag).toMatchObject({
+			totalBlocking: 1,
+			totalErrors: 1,
+			totalWarnings: 1,
+			totalSuppressed: 0,
+			hasPendingAnalysis: false,
+			uncheckedCount: 0,
+			hasRenderableCheckedFile: true,
+			hasFiles: true,
+		});
+		const header = renderWidget(120, theme)[0] ?? "";
+		expect(header).toContain(`●${bag.totalErrors}E`);
+		expect(header).toContain(`!${bag.totalWarnings}W`);
+	});
+
+	it("reports clean only when the header draws ✓ clean", () => {
+		recordDiagnostics("/repo/clean.ts", []);
+
+		const bag = getWidgetSummary();
+		expect(bag.hasPendingAnalysis).toBe(false);
+		expect(bag.uncheckedCount).toBe(0);
+		expect(bag.hasRenderableCheckedFile).toBe(true);
+		expect(renderWidget(120, theme).join("\n")).toContain("✓ clean");
+	});
+
+	it("reports the unchecked count the header draws", () => {
+		recordDiagnostics("/repo/unchecked.ts", [], undefined, undefined, {
+			reason: "no primary checker is enabled for this kind",
+		});
+
+		const bag = getWidgetSummary();
+		expect(bag.uncheckedCount).toBe(1);
+		expect(renderWidget(120, theme).join("\n")).toContain("⚠ 1 unchecked");
+	});
+
+	it("reports no files and no clean claim on an empty store", () => {
+		const bag = getWidgetSummary();
+		expect(bag.hasFiles).toBe(false);
+		expect(bag.totalErrors).toBe(0);
+		expect(bag.totalWarnings).toBe(0);
+		// A record with no final snapshot is unfinished evidence, not clean.
+		recordFormatter("/repo/formatted.ts", "prettier", false, true);
+		expect(getWidgetSummary().hasPendingAnalysis).toBe(true);
+	});
+});
+
+describe("clearWidgetState notifies the activation listener (#5588)", () => {
+	it("publishes the reset emptiness even though the render callback is dropped", () => {
+		const listener = vi.fn();
+		setWidgetChangeCallback(listener);
+		try {
+			recordDiagnostics("/repo/reset.ts", [
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "blocking",
+					line: 1,
+					rule: "typescript:1",
+				},
+			]);
+			listener.mockClear();
+
+			clearWidgetState();
+
+			expect(listener).toHaveBeenCalledTimes(1);
+		} finally {
+			clearWidgetChangeCallback(listener);
+		}
+	});
+
+	it("a throwing store-change listener cannot break the write", () => {
+		const listener = vi.fn(() => {
+			throw new Error("projection failed");
+		});
+		setWidgetChangeCallback(listener);
+		try {
+			expect(() =>
+				recordDiagnostics("/repo/throwing-listener.ts", [
+					{
+						severity: "error",
+						semantic: "blocking",
+						message: "blocking",
+						line: 1,
+						rule: "typescript:1",
+					},
+				]),
+			).not.toThrow();
+			expect(listener).toHaveBeenCalled();
+			expect(getFileDiagnostics("/repo/throwing-listener.ts")).toHaveLength(1);
+		} finally {
+			clearWidgetChangeCallback(listener);
+		}
+	});
+});
+
+// #5588 review: four writers moved from the render callback to
+// `requestRender()` had no test. Swapping any one of them back to
+// `requestRenderFn?.()` stayed green, so the store-change feed that the
+// `pi-lens-issues` footer relies on could silently stop for that writer. One
+// listener-call test per writer, through the real store, pins each move.
+describe("every store writer notifies the activation listener (#5588)", () => {
+	it("importWidgetState notifies the listener when it imports a snapshot", () => {
+		recordDiagnostics("/repo/import-listener.ts", [
+			{
+				severity: "error",
+				semantic: "blocking",
+				message: "blocking",
+				line: 1,
+				rule: "typescript:1",
+			},
+		]);
+		const snapshot = exportWidgetState();
+		clearWidgetState();
+		const listener = vi.fn();
+		setWidgetChangeCallback(listener);
+		try {
+			expect(importWidgetState(snapshot)).toBe(true);
+			expect(getFileDiagnostics("/repo/import-listener.ts")).toHaveLength(1);
+			expect(listener).toHaveBeenCalledTimes(1);
+		} finally {
+			clearWidgetChangeCallback(listener);
+		}
+	});
+
+	it("reconcileStaleWidgetDependencyBlockers notifies the listener when a dependency drift demotes a finding", async () => {
+		const tmpDir = await fs.mkdtemp(
+			path.join(os.tmpdir(), "pi-lens-listener-reconcile-"),
+		);
+		try {
+			const consumer = path.join(tmpDir, "consumer.ts");
+			const dep = path.join(tmpDir, "dep.ts");
+			await fs.writeFile(dep, "export const x = 1;\n");
+			await fs.writeFile(
+				consumer,
+				'import { x } from "./dep.js";\nexport const y = x;\n',
+			);
+			recordDiagnostics(
+				consumer,
+				[
+					{
+						severity: "error",
+						semantic: "blocking",
+						message: "type error",
+						tool: "lsp",
+					},
+				],
+				1,
+				Date.now() - 60_000,
+			);
+			const future = new Date(Date.now() + 60_000);
+			await fs.utimes(dep, future, future);
+
+			const listener = vi.fn();
+			setWidgetChangeCallback(listener);
+			try {
+				const { demoted } =
+					await reconcileStaleWidgetDependencyBlockers(tmpDir);
+				expect(demoted).toBe(1);
+				expect(listener).toHaveBeenCalledTimes(1);
+			} finally {
+				clearWidgetChangeCallback(listener);
+			}
+		} finally {
+			await fs.rm(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("markWidgetFileBlockersStale notifies the listener when it marks a file's blockers stale", () => {
+		recordDiagnostics(
+			"/repo/mark-listener.ts",
+			[
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "type error",
+					tool: "lsp",
+				},
+			],
+			1,
+			Date.now() - 60_000,
+		);
+		const listener = vi.fn();
+		setWidgetChangeCallback(listener);
+		try {
+			expect(
+				markWidgetFileBlockersStale(
+					"/repo/mark-listener.ts",
+					"dependency-drift",
+				),
+			).toBe(true);
+			expect(listener).toHaveBeenCalledTimes(1);
+		} finally {
+			clearWidgetChangeCallback(listener);
+		}
+	});
+
+	it("retireWidgetDependencyDriftBlockers notifies the listener when it retires a demoted finding", () => {
+		recordDiagnostics(
+			"/repo/retire-listener.ts",
+			[
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "type error",
+					tool: "lsp",
+				},
+			],
+			1,
+			Date.now() - 60_000,
+		);
+		expect(
+			markWidgetFileBlockersStale(
+				"/repo/retire-listener.ts",
+				"dependency-drift",
+			),
+		).toBe(true);
+		const listener = vi.fn();
+		setWidgetChangeCallback(listener);
+		try {
+			expect(
+				retireWidgetDependencyDriftBlockers("/repo/retire-listener.ts"),
+			).toBe(true);
+			expect(listener).toHaveBeenCalledTimes(1);
+		} finally {
+			clearWidgetChangeCallback(listener);
+		}
 	});
 });
