@@ -207,6 +207,13 @@ export type DegradationKind =
 	| "availability-probe-overrun"
 	| "bash-view-clipped"
 	/**
+	 * `bash-write-scope-guessed`: A bash command filled a directory the scan could not read (`rsync ... "$D"`,
+	 * `tar x -C "$(mktemp -d)"`, #5552), so the working directory stood in for
+	 * it and the files git lists as changed there are credited as the
+	 * command's writes. Subject: the normalized root; once per session.
+	 */
+	| "bash-write-scope-guessed"
+	/**
 	 * `biome-explain-unavailable`: `biome-check.ts`'s `resolveBiomeFixKinds` (#1810) couldn't get a real
 	 * fix-tier verdict for a rule from `biome explain <rule>` — either the
 	 * spawn itself failed/exited nonzero, or it succeeded but the output
@@ -1481,6 +1488,14 @@ export type DegradationKind =
 	 * session, the path and the error in the reason.
 	 */
 	| "mutation-bridge-stage-failed"
+	/**
+	 * `named-write-credit-withheld`: A bash call started with at least `SAME_HEAD_DIRTY_SET_CAP` dirty working-tree
+	 * paths (#5552), so the baseline's dirty set was cut and no path can be
+	 * shown clean before the command. A file or directory the command names is
+	 * then not credited by content, and a write that keeps an old mtime stays
+	 * on the mtime rule. Subject: the normalized root; once per session.
+	 */
+	| "named-write-credit-withheld"
 	| "native-read-clipped"
 	/**
 	 * `native-read-raced-writer`: #3524: the file moved between a native read's tool_call and its
