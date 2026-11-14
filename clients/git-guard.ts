@@ -123,7 +123,7 @@ export interface BlockerPartition {
 	blockerWrittenAt?: number | undefined;
 }
 
-type GuardDecision = {
+export type GuardDecision = {
 	block: boolean;
 	unknown?: boolean;
 	reason?: string;
@@ -667,6 +667,23 @@ const GIT_GLOBAL_OPTIONS_WITH_INLINE_VALUE = [
  * Shared by the direct and indirect paths so both ask the same question about
  * the same position (#2007).
  */
+/** #5553: the commit half of {@link COMMIT_PUSH_MATCHER}, for the staged-delta read. */
+const COMMIT_ONLY_MATCHER: GitVerbMatcher = {
+	id: "commit",
+	matchesVerb: (verb) => verb === "commit",
+	indirectAlwaysMatches: true,
+	suppressPostVerbHelp: false,
+};
+
+/**
+ * #5553: whether the command may run `git commit`, in any form the gate's
+ * matcher reads (indirect launchers included). A push alone stages and
+ * commits nothing.
+ */
+export function mayRunGitCommit(toolName: string, input: unknown): boolean {
+	return detectGuardedGitVerb(toolName, input, COMMIT_ONLY_MATCHER);
+}
+
 function gitVerbIndex(gitTokens: string[]): number | undefined {
 	let i = 1;
 	while (i < gitTokens.length && gitTokens[i].startsWith("-")) {
@@ -1061,6 +1078,17 @@ export interface CommitScope {
 	contains(target: string): boolean;
 }
 
+/** Git verbs that read and never write the index or the working files. */
+const READ_ONLY_GIT_VERBS: readonly string[] = [
+	"status",
+	"diff",
+	"log",
+	"show",
+	"rev-parse",
+	"ls-files",
+	"push",
+];
+
 /**
  * Commands that cannot move a later `git`'s directory or environment: the
  * only words besides `git` itself a scoped command may contain. `cd`,
@@ -1120,20 +1148,38 @@ function isExistingDirectory(directory: string): boolean {
 }
 
 /**
- * The trees a bash `git commit`/`git push` command targets, or `undefined`
- * when it is not a form this reads, in which case the gate judges every
- * blocker. Admitted: segments that are a plain `git` (no assignment,
+ * The commit/push segments of a bash command, where each runs, and whether any
+ * other git segment can change the index, or `undefined` when it is not a form
+ * this reads. Admitted: segments that are a plain `git` (no assignment,
  * wrapper or substitution that runs git, and only a {@link SCOPE_GIT_HEADS}
  * spelling of it) or a {@link SCOPE_NEUTRAL_COMMANDS} word, with at least one
  * commit/push segment whose only global options are `-C <readable existing
- * directory>` and whose directory is inside a git checkout, in a process
- * whose environment does not retarget git ({@link GIT_RETARGETING_ENV}).
+ * directory>`, in a process whose environment does not retarget git
+ * ({@link GIT_RETARGETING_ENV}). Whether that directory is inside a checkout
+ * is the caller's question: the scope below needs it, the staged-delta read
+ * asks git.
  */
-export function resolveCommitScope(
+export function readGuardedSegments(
 	toolName: string,
 	input: unknown,
 	cwd: string,
-): CommitScope | undefined {
+):
+	| {
+			guarded: ReadonlyArray<{
+				directory: string;
+				commit: boolean;
+				/** #5553: the shell words after the verb. */
+				args: readonly DecodedShellWord[];
+			}>;
+			/**
+			 * #5553: a `git` segment of another verb than commit, push or a
+			 * read-only one (`add`, `rm`, `mv`, `reset`, `checkout`, ...) can change
+			 * the index the commit reads, so the staged set is not the one on disk
+			 * now.
+			 */
+			indexMayChange: boolean;
+	  }
+	| undefined {
 	if (toolName !== "bash") return undefined;
 	if (GIT_RETARGETING_ENV.some((name) => process.env[name])) return undefined;
 	const command = getShellCommand(input);
@@ -1142,7 +1188,12 @@ export function resolveCommitScope(
 	if (containsGuardedSubstitution(canonical, 0, COMMIT_PUSH_MATCHER)) {
 		return undefined;
 	}
-	const trees: GitCheckout[] = [];
+	const guarded: Array<{
+		directory: string;
+		commit: boolean;
+		args: readonly DecodedShellWord[];
+	}> = [];
+	let indexMayChange = false;
 	for (const segment of decodeShellWords(canonical)) {
 		const words = segment.words;
 		const head = words[0]?.text;
@@ -1152,7 +1203,16 @@ export function resolveCommitScope(
 			continue;
 		}
 		const tokens = words.map((word) => word.text);
-		if (!matchGitVerbAtCommandPosition(tokens, COMMIT_PUSH_MATCHER)) continue;
+		if (!matchGitVerbAtCommandPosition(tokens, COMMIT_PUSH_MATCHER)) {
+			const otherVerbAt = gitVerbIndex(tokens);
+			if (
+				otherVerbAt === undefined ||
+				!READ_ONLY_GIT_VERBS.includes(tokens[otherVerbAt] ?? "")
+			) {
+				indexMayChange = true;
+			}
+			continue;
+		}
 		const verbAt = gitVerbIndex(tokens);
 		if (verbAt === undefined) return undefined;
 		for (let i = 1; i < verbAt; i += 2) {
@@ -1168,11 +1228,33 @@ export function resolveCommitScope(
 		}
 		const directory = resolveGitTargetDirectory(tokens, cwd);
 		if (!isExistingDirectory(directory)) return undefined;
+		guarded.push({
+			directory,
+			commit: matchGitVerbAtCommandPosition(tokens, COMMIT_ONLY_MATCHER),
+			args: words.slice(verbAt + 1),
+		});
+	}
+	return guarded.length === 0 ? undefined : { guarded, indexMayChange };
+}
+
+/**
+ * The trees a bash `git commit`/`git push` command targets, or `undefined`
+ * when it is not a form {@link readGuardedSegments} reads or a target lies in
+ * no git checkout, in which case the gate judges every blocker.
+ */
+export function resolveCommitScope(
+	toolName: string,
+	input: unknown,
+	cwd: string,
+): CommitScope | undefined {
+	const segments = readGuardedSegments(toolName, input, cwd);
+	if (!segments) return undefined;
+	const trees: GitCheckout[] = [];
+	for (const { directory } of segments.guarded) {
 		const checkout = resolveGitCheckout(directory);
 		if (!checkout) return undefined;
 		trees.push(checkout);
 	}
-	if (trees.length === 0) return undefined;
 	return {
 		// The target's own checkout, or one nested inside a committed tree: the
 		// parent's commit stages a tracked file under it (#4941 r2 F2). A linked
@@ -1868,7 +1950,7 @@ export function writeGitGuardRecord(
 	}
 }
 
-function logDecision(
+export function logDecision(
 	cwd: string,
 	decision: "blocked" | "allowed" | "unknown",
 	reasonCategory: string,
@@ -2002,7 +2084,7 @@ function unconfirmedRecordRemedy(
 	return parts.length > 0 ? `${parts.join(" ")} Then retry.` : undefined;
 }
 
-function unknown(
+export function unknown(
 	cwd: string,
 	reasonCategory: string,
 	metadata = {},

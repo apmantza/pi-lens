@@ -85,6 +85,10 @@ const spawnRouter = vi.hoisted(() => {
 		failure?: "spawn";
 		spawnFailure?: { kind: "tool-not-found" };
 	} {
+		// The fixture's `.git` is an empty directory, which real git answers with
+		// "not a git repository" (the commit gate's staged-delta read, #5553).
+		if (command === "git")
+			return { stdout: "", stderr: "fatal: not a git repository", status: 128 };
 		calls.push({ command, args: [...args] });
 		if (isMypy(command))
 			return args.includes("--show-column-numbers")

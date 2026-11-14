@@ -7,6 +7,7 @@ import { recordDegradationOnce } from "./degradation-ledger.js";
 import { CODE_KINDS, detectFileKind } from "./file-kinds.js";
 import { isPathIgnoredByProject } from "./file-utils.js";
 import { evaluateGitGuard, isGitCommitOrPushAttempt } from "./git-guard.js";
+import { judgeStagedDelta, stagedDeltaDecision } from "./staged-delta.js";
 import { dropHashlineAnchorMemo } from "./hashline-anchor.js";
 import { evaluateSharedCheckoutGuard } from "./shared-checkout-guard.js";
 import { logLatency } from "./latency-logger.js";
@@ -871,6 +872,36 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				block: true,
 				reason: guard.reason,
 			};
+		}
+		// #5553: the record above holds what pi-lens saw written; this reads the
+		// staged delta itself, so bytes nobody authored are judged too. A read
+		// that gave no answer inside its bound refuses, never allows.
+		const gateCwd = ctx.cwd ?? runtime.projectRoot;
+		const staged = await bounded(
+			(signal) =>
+				judgeStagedDelta(toolName, event.input, {
+					cwd: gateCwd,
+					projectRoot: runtime.projectRoot || gateCwd,
+					getFlag,
+					signal,
+				}),
+			{
+				ms: STAGED_DELTA_BUDGET_MS,
+				signal: ctx.signal,
+				hook: "tool_call",
+				label: "staged-delta-gate",
+			},
+		);
+		const stagedGuard = stagedDeltaDecision(
+			gateCwd,
+			staged ?? {
+				kind: "degraded",
+				reason: "lane_incomplete",
+				detail: "the staged-delta read gave no answer inside its bound",
+			},
+		);
+		if (stagedGuard.block) {
+			return { block: true, reason: stagedGuard.reason };
 		}
 	}
 
@@ -1992,6 +2023,14 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
  * is the per-await bound. Measured in PR #4483's body.
  */
 export const PRE_EDIT_CAPTURE_BUDGET_MS = 500;
+
+/**
+ * #5553: how long the commit gate waits for its staged-delta read (the git
+ * listing and the lanes over each file the commit carries). `tool_call` has no
+ * budget of its own; a read that gives no answer in this time refuses the
+ * commit as degraded. Measured in the PR.
+ */
+export const STAGED_DELTA_BUDGET_MS = 20_000;
 
 /**
  * #5553: the bound for a writer's capture that also seeds the tree-sitter and
