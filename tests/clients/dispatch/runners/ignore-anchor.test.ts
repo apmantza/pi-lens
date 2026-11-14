@@ -242,7 +242,7 @@ describe("anchorPhpstanConfig", () => {
 	});
 	const config = "/work/.claude/worktrees/lane1/phpstan.neon";
 
-	it("anchors the wildcard entries, keeps the paths, and includes the project's config", () => {
+	it("anchors the wildcard entries, marks a path that does not exist, and includes the project's config", () => {
 		const result = anchorPhpstanConfig(
 			dump({
 				analyseAndScan: [`${ROOT}/vendor`, "**/.claude/**"],
@@ -269,6 +269,32 @@ describe("anchorPhpstanConfig", () => {
 				"",
 			].join("\n"),
 		});
+	});
+
+	// #5606 F1: phpstan reads a ` (?)` after a path that EXISTS as part of the
+	// path and stops excluding it, so only a missing path carries the marker.
+	it("keeps a path that exists as written, and marks only the one that does not", () => {
+		const env = setupTestEnvironment("pi-lens-5594-phpstan-exists-");
+		try {
+			const present = path.join(env.tmpDir, "src/gen");
+			fs.mkdirSync(present, { recursive: true });
+			const result = anchorPhpstanConfig(
+				dump({
+					analyseAndScan: [present, `${env.tmpDir}/not-yet`, "**/.claude/**"],
+					analyse: [],
+				}),
+				config,
+				env.tmpDir,
+			);
+			expect(result.kind === "rewritten" && result.text).toContain(
+				`- "${present}"\n`,
+			);
+			expect(result.kind === "rewritten" && result.text).toContain(
+				`- "${env.tmpDir}/not-yet (?)"`,
+			);
+		} finally {
+			env.cleanup();
+		}
 	});
 
 	it("writes an empty list as one, and doubles a percent sign", () => {
@@ -302,6 +328,84 @@ describe("anchorPhpstanConfig", () => {
 		).toEqual({ kind: "unchanged" });
 	});
 
+	describe("ignoreErrors (#5606 Q1)", () => {
+		const withIgnore = (ignoreErrors: unknown) => ({
+			status: 0,
+			stdout: JSON.stringify({
+				excludePaths: { analyse: [], analyseAndScan: [] },
+				ignoreErrors,
+			}),
+		});
+
+		it("anchors a wildcard in paths, keeps the entry's other keys, and leaves excludePaths alone", () => {
+			const result = anchorPhpstanConfig(
+				withIgnore([
+					"#a message#",
+					{
+						message: "#100%#",
+						paths: ["**/.claude/**", `${ROOT}/src/gen/*`],
+						count: 2,
+						identifier: "variable.undefined",
+					},
+				]),
+				config,
+				ROOT,
+			);
+			expect(result).toEqual({
+				kind: "rewritten",
+				text: [
+					"includes:",
+					`\t- "${config}"`,
+					"parameters:",
+					"\tignoreErrors!:",
+					`\t\t- "#a message#"`,
+					`\t\t- {"message": "#100%%#", "paths": ["${ROOT}/.claude/**", "${ROOT}/*/.claude/**", "${ROOT}/src/gen/*"], "count": 2, "identifier": "variable.undefined"}`,
+					"",
+				].join("\n"),
+			});
+		});
+
+		it("moves a wildcard path into paths", () => {
+			const result = anchorPhpstanConfig(
+				withIgnore([{ message: "#m#", path: "*/legacy/*" }]),
+				config,
+				ROOT,
+			);
+			expect(result.kind === "rewritten" && result.text).toContain(
+				`{"message": "#m#", "paths": ["${ROOT}/legacy/*", "${ROOT}/*/legacy/*"]}`,
+			);
+		});
+
+		it("has nothing to rewrite when no entry carries a wildcard", () => {
+			expect(
+				anchorPhpstanConfig(
+					withIgnore(["#m#", { message: "#m#", path: `${ROOT}/a.php` }]),
+					config,
+					ROOT,
+				),
+			).toEqual({ kind: "unchanged" });
+		});
+
+		it.each([
+			["ignoreErrors that is not a list", { a: 1 }, "not a list"],
+			["a path that is not a string", [{ path: 3 }], "path is not a string"],
+			["a paths that is not a list", [{ paths: "x" }], "paths is not a list"],
+			[
+				"a wildcard form it cannot anchor",
+				[{ paths: ["src/*"] }],
+				"not a form",
+			],
+		])("refuses %s", (_name, ignoreErrors, reason) => {
+			const result = anchorPhpstanConfig(
+				withIgnore(ignoreErrors),
+				config,
+				ROOT,
+			);
+			expect(result.kind).toBe("unapplied");
+			expect(result.kind === "unapplied" && result.reason).toContain(reason);
+		});
+	});
+
 	it.each([
 		["a failed dump", { status: 1, stdout: "" }, "exited 1"],
 		["no status", { status: null, stdout: "" }, "without a status"],
@@ -327,6 +431,9 @@ describe("anchorPhpstanConfig", () => {
 			phpstanConfigMayExclude("parameters:\n  excludePaths:\n    - x\n"),
 		).toBe(true);
 		expect(phpstanConfigMayExclude("includes:\n  - base.neon\n")).toBe(true);
+		expect(
+			phpstanConfigMayExclude("parameters:\n  ignoreErrors:\n    - '#x#'\n"),
+		).toBe(true);
 		expect(
 			phpstanConfigMayExclude("parameters:\n  excludes_analyse:\n    - x\n"),
 		).toBe(true);
@@ -725,6 +832,10 @@ describe("phpstan runner", () => {
 	});
 });
 
+/** What credo 1.7.19 prints when the overlay raises (measured, exit 129). */
+const REFUSAL_STDERR =
+	'warning: Execution halted during Elixir.Credo.Execution.Task.ConvertCLIOptionsToConfig! Unrecognized error: {:badconfig, "/tmp/x/anchor.exs", %RuntimeError{message: "pi-lens-ignore-unanchored: the file is outside the project root"}}\n  (credo 1.7.19) lib/credo/execution/task.ex:138: Credo.Execution.Task.do_run/3\n';
+
 describe("credo runner", () => {
 	beforeEach(() => {
 		vi.resetModules();
@@ -776,8 +887,7 @@ describe("credo runner", () => {
 					if (refuse) {
 						return {
 							stdout: "",
-							stderr:
-								'warning: Execution halted ... %RuntimeError{message: "pi-lens-ignore-unanchored: the file is outside the project root"}\n',
+							stderr: REFUSAL_STDERR,
 							status: 129,
 						};
 					}
@@ -839,4 +949,63 @@ describe("credo runner", () => {
 			env.cleanup();
 		}
 	});
+
+	// #5606 F4: a finding message quotes the file's own text, so a source line
+	// that holds the marker must not read as the overlay's refusal and discard
+	// the anchored run's findings.
+	it.each([
+		[
+			"a finding in stdout",
+			{
+				stdout: JSON.stringify({
+					issues: [
+						{
+							check: "Credo.Check.Design.TagTODO",
+							message:
+								"Found a TODO tag in a comment: # TODO: pi-lens-ignore-unanchored: boom",
+							filename: "lib/a.ex",
+							line_no: 3,
+							priority: 1,
+						},
+					],
+				}),
+				stderr: "",
+				status: 2,
+			},
+		],
+		[
+			"a quoted line in stderr that is not credo's halt line",
+			{
+				stdout: JSON.stringify({ issues: [] }),
+				stderr:
+					'compiler said: %RuntimeError{message: "pi-lens-ignore-unanchored: boom"}\n',
+				status: 0,
+			},
+		],
+	])(
+		"keeps the anchored run when the marker is only %s",
+		async (_name, answer) => {
+			const env = setupTestEnvironment("pi-lens-5594-credo-lookalike-");
+			try {
+				plant(env.tmpDir);
+				const runs: string[][] = [];
+				safeSpawnAsync.mockImplementation(
+					async (_cmd: string, args: string[] = []) => {
+						if (args.includes("--version"))
+							return { stdout: "Credo 1.7.19", stderr: "", status: 0 };
+						runs.push(args);
+						return answer;
+					},
+				);
+
+				const result = await runCredo(env.tmpDir);
+
+				expect(runs).toHaveLength(1);
+				expect(runs[0]).toContain("--config-file");
+				expect(result.inconclusive).toBeUndefined();
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
 });

@@ -132,6 +132,15 @@ export type AnchoredConfig =
 	| { kind: "unapplied"; reason: string };
 
 /**
+ * Does `entry` name a file or directory that exists? phpstan keeps a path that
+ * exists as written and needs a trailing ` (?)` only on one that does not; the
+ * read is here so a runner stays off the filesystem.
+ */
+export function pathExists(entry: string): boolean {
+	return fs.existsSync(entry);
+}
+
+/**
  * The text of the project config the seam found, or the reason it cannot be
  * read. The read lives here, not in a runner, so a runner stays a caller of the
  * config seam; an unreadable config is `unapplied`, which {@link markUnanchored}

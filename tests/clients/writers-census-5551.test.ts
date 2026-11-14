@@ -423,6 +423,11 @@ const WRITE_SITES: Record<string, SiteRow> = {
 		cls: "scratch",
 		why: "removes its temporary XML report",
 	},
+	"clients/dispatch/runners/utils/ignore-anchor.ts": {
+		sites: 3,
+		cls: "scratch",
+		why: "a temporary config copy in a scratch directory, removed on every exit path (#5594)",
+	},
 	"clients/durable-store.ts": {
 		sites: 2,
 		cls: "primitive",

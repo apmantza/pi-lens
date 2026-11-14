@@ -85,20 +85,24 @@ function plantDetekt(project: string, config?: string): void {
 	fs.writeFileSync(path.join(project, ".claude/B.kt"), KOTLIN);
 }
 
-function plantPhpstan(project: string): void {
+const PHPSTAN_EXCLUDE =
+	"parameters:\n  level: 5\n  excludePaths:\n    - '**/.claude/**'\n";
+
+function plantPhpstan(project: string, config: string = PHPSTAN_EXCLUDE): void {
 	fs.mkdirSync(path.join(project, ".claude"), { recursive: true });
-	fs.writeFileSync(
-		path.join(project, "phpstan.neon"),
-		"parameters:\n  level: 5\n  excludePaths:\n    - '**/.claude/**'\n",
-	);
-	fs.writeFileSync(path.join(project, "a.php"), "<?php\necho $undefinedVar;\n");
-	fs.writeFileSync(
-		path.join(project, ".claude/b.php"),
-		"<?php\necho $undefinedVar;\n",
-	);
+	fs.mkdirSync(path.join(project, "src/gen"), { recursive: true });
+	fs.writeFileSync(path.join(project, "phpstan.neon"), config);
+	const source = "<?php\necho $undefinedVar;\n";
+	fs.writeFileSync(path.join(project, "a.php"), source);
+	fs.writeFileSync(path.join(project, ".claude/b.php"), source);
+	fs.writeFileSync(path.join(project, "src/gen/g.php"), source);
 }
 
-function plantCredo(project: string): void {
+/** The `files.excluded` regex at the top level of a credo config. */
+const CREDO_TOP_LEVEL =
+	'%{configs: [%{name: "default", files: %{included: ["lib/", ".claude/"], excluded: [~r"/\\.claude/"]}, strict: true}]}\n';
+
+function plantCredo(project: string, config: string = CREDO_TOP_LEVEL): void {
 	fs.mkdirSync(path.join(project, "lib"), { recursive: true });
 	fs.mkdirSync(path.join(project, ".claude"), { recursive: true });
 	for (const name of ["mix.exs", "mix.lock"]) {
@@ -122,10 +126,7 @@ function plantCredo(project: string): void {
 	fs.writeFileSync(path.join(project, ".claude/b.ex"), module("B"));
 	// The regex tests the absolute path: it names the project's own `.claude/`
 	// directory, and also the ancestor of a project under `.claude/worktrees`.
-	fs.writeFileSync(
-		path.join(project, ".credo.exs"),
-		'%{configs: [%{name: "default", files: %{included: ["lib/", ".claude/"], excluded: [~r"/\\.claude/"]}, strict: true}]}\n',
-	);
+	fs.writeFileSync(path.join(project, ".credo.exs"), config);
 }
 
 /** Is the binary on the PATH the runner's lookup walks? */
@@ -308,5 +309,127 @@ describe.skipIf(!toolAvailable("detekt"))(
 			},
 			REAL_RUN_TIMEOUT_MS,
 		);
+	},
+);
+
+// Ignore-bearing fields beyond the one the cases above plant. A recognised list
+// inside a larger set of ignore fields is the same defect once the OTHER fields
+// are left as they were (#5606 review r1: F1, F2, Q1), so each field gets the
+// two-layout equality and the file in the project's own `.claude/` stays ignored.
+const VARIANTS: ReadonlyArray<{
+	name: string;
+	runnerId: string;
+	available: () => boolean;
+	kind: FileKind;
+	runner: { run: (ctx: never) => Promise<RunnerResult> };
+	plant: (project: string) => void;
+	file: string;
+	controlRules: string[];
+	ignoredFiles: string[];
+}> = [
+	{
+		// A plain entry beside the wildcard: it must stay excluded (F1), not be
+		// re-included by the overlay's rewrite of the list.
+		name: "phpstan excludePaths with a plain entry beside the wildcard",
+		runnerId: "phpstan",
+		available: () => toolAvailable("phpstan"),
+		kind: "php",
+		runner: phpstanRunner,
+		plant: (project) =>
+			plantPhpstan(
+				project,
+				"parameters:\n  level: 5\n  excludePaths:\n    - src/gen\n    - '**/.claude/**'\n",
+			),
+		file: "a.php",
+		controlRules: ["variable.undefined"],
+		ignoredFiles: [".claude/b.php", "src/gen/g.php"],
+	},
+	{
+		name: "phpstan ignoreErrors with a wildcard path",
+		runnerId: "phpstan",
+		available: () => toolAvailable("phpstan"),
+		kind: "php",
+		runner: phpstanRunner,
+		plant: (project) =>
+			plantPhpstan(
+				project,
+				"parameters:\n  level: 5\n  ignoreErrors:\n    -\n      message: '#might not be defined#'\n      paths:\n        - '**/.claude/**'\n        - src/gen/*\n",
+			),
+		file: "a.php",
+		controlRules: ["variable.undefined"],
+		ignoredFiles: [".claude/b.php", "src/gen/g.php"],
+	},
+	{
+		name: "credo check params with a files.excluded regex",
+		runnerId: "credo",
+		available: credoAvailable,
+		kind: "elixir",
+		runner: credoRunner,
+		plant: (project) =>
+			plantCredo(
+				project,
+				'%{configs: [%{name: "default", files: %{included: ["lib/", ".claude/"], excluded: []}, strict: true, checks: %{extra: [{Credo.Check.Design.TagTODO, [files: %{excluded: [~r"/\\.claude/"]}]}]}}]}\n',
+			),
+		file: "lib/a.ex",
+		controlRules: ["Credo.Check.Design.TagTODO"],
+		ignoredFiles: [".claude/b.ex"],
+	},
+];
+
+describe.each(VARIANTS)(
+	"$name",
+	({
+		available,
+		kind,
+		runner,
+		plant,
+		file,
+		controlRules,
+		ignoredFiles,
+		name,
+	}) => {
+		const control = path.join(ROOT, "variants", name, "ctrl/lane1");
+		const scratch = path.join(
+			ROOT,
+			"variants",
+			name,
+			".claude/worktrees/lane1",
+		);
+		const run = async (project: string, target: string) =>
+			summary(
+				await runner.run(
+					makeRunnerCtx(path.join(project, target), project, { kind }) as never,
+				),
+			);
+
+		describe.skipIf(!available())("tool available", () => {
+			beforeAll(() => {
+				plant(control);
+				plant(scratch);
+			});
+
+			it(
+				"reports under the ignored ancestor what the control layout reports",
+				async () => {
+					const neutral = await run(control, file);
+					const ancestor = await run(scratch, file);
+					expect(neutral.rules).toEqual(controlRules);
+					expect(ancestor.rules).toEqual(controlRules);
+					expect(ancestor.inconclusive).toBe(false);
+				},
+				REAL_RUN_TIMEOUT_MS,
+			);
+
+			it(
+				"keeps what the project's own ignore names ignored, in both layouts",
+				async () => {
+					for (const target of ignoredFiles) {
+						expect((await run(control, target)).rules, target).toEqual([]);
+						expect((await run(scratch, target)).rules, target).toEqual([]);
+					}
+				},
+				REAL_RUN_TIMEOUT_MS,
+			);
+		});
 	},
 );

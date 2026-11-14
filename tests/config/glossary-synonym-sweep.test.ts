@@ -1132,9 +1132,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/mypy.ts": 3,
 		"clients/dispatch/runners/oxlint.ts": 5,
 		"clients/dispatch/runners/php-lint.ts": 4,
-		// 4 -> 5 (#5594): `path.resolve(cwd, ownConfig)` absolutizes the config file
-		// the overlay includes; the same sense as the file's other path operations.
-		"clients/dispatch/runners/phpstan.ts": 5,
+		// 4 -> 7 (#5594): `path.resolve(cwd, ownConfig)` absolutizes the config file
+		// the overlay includes, and the `ignoreErrors` anchoring reads and writes an
+		// entry's `path` key twice; the same sense as the file's other path uses.
+		"clients/dispatch/runners/phpstan.ts": 7,
 		"clients/dispatch/runners/prisma-validate.ts": 2,
 		"clients/dispatch/runners/psscriptanalyzer.ts": 3,
 		"clients/dispatch/runners/rubocop.ts": 6,

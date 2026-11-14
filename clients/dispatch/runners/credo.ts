@@ -136,12 +136,59 @@ try do
   excluded =
     if Enum.any?(regexes, &Regex.match?(&1, rel)), do: others ++ [target], else: others
 
+  fix_params = fn params ->
+    if Keyword.keyword?(params) do
+      Enum.map(params, fn
+        {key, files} when key in [:files, :__files__] and (is_map(files) or is_list(files)) ->
+          case files[:excluded] do
+            nil ->
+              {key, files}
+
+            listed ->
+              kept =
+                if Credo.Sources.filename_matches?(rel, List.wrap(listed)), do: [target], else: []
+
+              {key,
+               if(is_map(files),
+                 do: Map.put(files, :excluded, kept),
+                 else: Keyword.put(files, :excluded, kept)
+               )}
+          end
+
+        other ->
+          other
+      end)
+    else
+      params
+    end
+  end
+
+  fix_check = fn
+    {check, params} when is_list(params) -> {check, fix_params.(params)}
+    other -> other
+  end
+
+  checks =
+    case config.checks do
+      %{} = grouped ->
+        Map.new(grouped, fn
+          {group, list} when is_list(list) -> {group, Enum.map(list, fix_check)}
+          other -> other
+        end)
+
+      list when is_list(list) ->
+        Enum.map(list, fix_check)
+
+      other ->
+        other
+    end
+
   %{
     configs: [
       %{
         name: name || "default",
         files: %{included: config.files.included, excluded: excluded},
-        checks: config.checks,
+        checks: checks,
         color: config.color,
         parse_timeout: config.parse_timeout,
         plugins: config.plugins,
@@ -156,8 +203,14 @@ rescue
     refuse.(reason)
 end`;
 
-/** What the overlay raises, so the runner can tell a refusal from a finding. */
-const CREDO_UNANCHORED_REFUSAL = /pi-lens-ignore-unanchored: ([^\n"]*)/;
+/**
+ * What credo prints on stderr when the overlay raises, so the runner can tell a
+ * refusal from a finding: its own "Execution halted" line carrying the
+ * exception struct. The marker is looked for there only, never in stdout or in
+ * a line of the edited file's text that a finding message may quote (#5606 F4).
+ */
+const CREDO_UNANCHORED_REFUSAL =
+	/^warning: Execution halted during [^\n]*%RuntimeError\{message: "pi-lens-ignore-unanchored: ((?:[^"\\\n]|\\.)*)"/m;
 
 const credoRunner: RunnerDefinition = {
 	id: "credo",
@@ -200,9 +253,7 @@ const credoRunner: RunnerDefinition = {
 					PI_LENS_ANCHOR_TARGET: absPath,
 				}),
 		);
-		const refusal = CREDO_UNANCHORED_REFUSAL.exec(
-			`${anchoredRun.stdout ?? ""}${anchoredRun.stderr ?? ""}`,
-		);
+		const refusal = CREDO_UNANCHORED_REFUSAL.exec(anchoredRun.stderr ?? "");
 		const result = refusal ? await spawnCredo([]) : anchoredRun;
 		const finish = (verdict: RunnerResult): RunnerResult =>
 			refusal

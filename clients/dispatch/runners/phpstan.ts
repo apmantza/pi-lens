@@ -26,6 +26,7 @@ import {
 	type AnchoredConfig,
 	anchorIgnorePattern,
 	markUnanchored,
+	pathExists,
 	readConfigText,
 	withOverlayFile,
 } from "./utils/ignore-anchor.js";
@@ -144,14 +145,15 @@ async function resolvePhpstan(cwd: string): Promise<LocalBinLookup | null> {
 const PHPSTAN_DUMP_TIMEOUT_MS = 15_000;
 
 /**
- * Whether a phpstan config can set `excludePaths` at all: it names the key (or
- * its 1.x spelling `excludes_analyse`) or includes another file that might. A
- * config that does neither has no ignore glob to anchor, so the dump spawn is
- * skipped. A false positive costs one spawn; a false negative would need a
- * config that sets the parameter without writing its name or an include.
+ * Whether a phpstan config can set `excludePaths` or `ignoreErrors` at all: it
+ * names either key (or the 1.x spelling `excludes_analyse`) or includes another
+ * file that might. A config that does neither has no ignore glob to anchor, so
+ * the dump spawn is skipped. A false positive costs one spawn; a false negative
+ * would need a config that sets a parameter without writing its name or an
+ * include.
  */
 export function phpstanConfigMayExclude(text: string): boolean {
-	return /exclude|includes/i.test(text);
+	return /exclude|includes|ignoreErrors/i.test(text);
 }
 
 /** A neon string: JSON's double-quoted form, with `%` doubled so DI keeps it literal. */
@@ -159,22 +161,113 @@ function neonString(value: string): string {
 	return JSON.stringify(value).replace(/%/g, "%%");
 }
 
+/** A JSON value as neon's flow form; the dump holds nothing else. */
+function neonValue(value: unknown): string {
+	if (typeof value === "string") return neonString(value);
+	if (Array.isArray(value)) return `[${value.map(neonValue).join(", ")}]`;
+	if (typeof value === "object" && value !== null) {
+		return `{${Object.entries(value)
+			.map(([key, entry]) => `${neonString(key)}: ${neonValue(entry)}`)
+			.join(", ")}}`;
+	}
+	return JSON.stringify(value) ?? "null";
+}
+
+type Unanchorable = { unapplied: string };
+
 /**
- * phpstan matches an `excludePaths` entry that holds a wildcard against the
- * file's absolute path with `fnmatch`, so `**\/.claude/**` reaches the
- * ancestors of the project root too (#5594). `phpstan dump-parameters --json`
- * prints what phpstan resolved from the config and everything it includes: a
- * path entry already absolute, a wildcard entry as written, in the two lists
- * `analyse` and `analyseAndScan`. This anchors each wildcard entry at the root
- * and returns a neon config that includes the project's own and replaces the
- * lists (`excludePaths!`), so every other parameter is the project's.
- *
- * `(?)` is appended to each kept path entry: the dump drops the marker that
+ * A kept path as the overlay writes it. The dump drops the ` (?)` marker that
  * lets an entry name a path that does not exist yet, and phpstan refuses a
- * missing one without it.
+ * missing one without it; an EXISTING path must stay as written, because
+ * phpstan then reads the marker as part of the path and stops excluding it
+ * (#5606 F1).
+ */
+function keptPath(entry: string): string {
+	return /[*?[]/.test(entry) || pathExists(entry) ? entry : `${entry} (?)`;
+}
+
+/** One `excludePaths` list: every wildcard entry anchored, every path kept. */
+function anchorPathList(
+	name: string,
+	entries: readonly string[],
+	root: string,
+): { entries: string[]; touched: boolean } | Unanchorable {
+	const out: string[] = [];
+	let touched = false;
+	for (const entry of entries) {
+		const anchored = anchorIgnorePattern(entry, root, "fnmatch");
+		if (anchored === null) {
+			return {
+				unapplied: `${name} entry ${JSON.stringify(entry)} is not a form it can anchor`,
+			};
+		}
+		if (anchored.length === 1 && anchored[0] === entry) {
+			out.push(keptPath(entry));
+			continue;
+		}
+		touched = true;
+		out.push(...anchored);
+	}
+	return { entries: out, touched };
+}
+
+/**
+ * `ignoreErrors`: a string entry is a message and stays; a map entry's `path`
+ * and `paths` match the file's absolute path too (fnmatch for a wildcard), so
+ * each is anchored the same way and the entry's other keys are kept as dumped.
+ * A `path` that moves becomes a `paths` list.
+ */
+function anchorIgnoreErrors(
+	entries: readonly unknown[],
+	root: string,
+): { entries: unknown[]; touched: boolean } | Unanchorable {
+	const out: unknown[] = [];
+	let touched = false;
+	for (const entry of entries) {
+		if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+			out.push(entry);
+			continue;
+		}
+		const map: Record<string, unknown> = { ...entry };
+		const singular = map.path;
+		const plural = map.paths;
+		if (singular !== undefined && typeof singular !== "string") {
+			return { unapplied: "an ignoreErrors path is not a string" };
+		}
+		if (
+			plural !== undefined &&
+			!(Array.isArray(plural) && plural.every((p) => typeof p === "string"))
+		) {
+			return { unapplied: "an ignoreErrors paths is not a list of strings" };
+		}
+		const parts = [
+			...(typeof singular === "string" ? [singular] : []),
+			...((plural as string[] | undefined) ?? []),
+		];
+		const anchored = anchorPathList("ignoreErrors path", parts, root);
+		if ("unapplied" in anchored) return anchored;
+		if (anchored.touched) {
+			touched = true;
+			delete map.path;
+			map.paths = [...new Set(anchored.entries)];
+		}
+		out.push(map);
+	}
+	return { entries: out, touched };
+}
+
+/**
+ * phpstan matches a wildcard `excludePaths` entry, and a wildcard `path` or
+ * `paths` of an `ignoreErrors` entry, against the file's absolute path with
+ * `fnmatch`, so `**\/.claude/**` reaches the ancestors of the project root too
+ * (#5594). `phpstan dump-parameters --json` prints what phpstan resolved from
+ * the config and everything it includes: a path already absolute, a wildcard as
+ * written. This anchors each wildcard at the root and returns a neon config that
+ * includes the project's own and replaces the lists that moved (`excludePaths!`,
+ * `ignoreErrors!`), so every other parameter is the project's.
  *
  * Refused (`unapplied`): a dump that exited nonzero or is not the object this
- * reads, a list entry that is not a string, and a wildcard form
+ * reads, a list that is not the shape this reads, and a wildcard form
  * `anchorIgnorePattern` does not recognise.
  */
 export function anchorPhpstanConfig(
@@ -188,11 +281,9 @@ export function anchorPhpstanConfig(
 			reason: `phpstan dump-parameters exited ${dump.status ?? "without a status"}`,
 		};
 	}
-	let excludePaths: unknown;
+	let parameters: { excludePaths?: unknown; ignoreErrors?: unknown } | null;
 	try {
-		excludePaths = (
-			JSON.parse(dump.stdout ?? "") as { excludePaths?: unknown } | null
-		)?.excludePaths;
+		parameters = JSON.parse(dump.stdout ?? "") as typeof parameters;
 	} catch {
 		// none: the failure is returned as `unapplied`, and the runner's `markUnanchored` records it and withholds the clean verdict.
 		return {
@@ -200,6 +291,7 @@ export function anchorPhpstanConfig(
 			reason: "phpstan dump-parameters printed no JSON",
 		};
 	}
+	const excludePaths = parameters?.excludePaths;
 	if (
 		typeof excludePaths !== "object" ||
 		excludePaths === null ||
@@ -214,7 +306,7 @@ export function anchorPhpstanConfig(
 		analyse: [],
 		analyseAndScan: [],
 	};
-	let touched = false;
+	let excludeTouched = false;
 	for (const [name, entries] of Object.entries(excludePaths)) {
 		if (name !== "analyse" && name !== "analyseAndScan") {
 			return {
@@ -231,30 +323,44 @@ export function anchorPhpstanConfig(
 				reason: `phpstan excludePaths.${name} is not a list of strings`,
 			};
 		}
-		for (const entry of entries as string[]) {
-			const anchored = anchorIgnorePattern(entry, root, "fnmatch");
-			if (anchored === null) {
-				return {
-					kind: "unapplied",
-					reason: `excludePaths entry ${JSON.stringify(entry)} is not a form it can anchor`,
-				};
-			}
-			if (anchored.length === 1 && anchored[0] === entry) {
-				lists[name].push(/[*?[]/.test(entry) ? entry : `${entry} (?)`);
-				continue;
-			}
-			touched = true;
-			lists[name].push(...anchored);
+		const anchored = anchorPathList(
+			`excludePaths.${name}`,
+			entries as string[],
+			root,
+		);
+		if ("unapplied" in anchored) {
+			return { kind: "unapplied", reason: anchored.unapplied };
 		}
+		lists[name] = anchored.entries;
+		excludeTouched ||= anchored.touched;
 	}
-	if (!touched) return { kind: "unchanged" };
+	// A dump with no `ignoreErrors` key has none to anchor; one that is not a
+	// list is a dump this does not read.
+	const ignoreDumped = parameters?.ignoreErrors ?? [];
+	if (!Array.isArray(ignoreDumped)) {
+		return {
+			kind: "unapplied",
+			reason: "phpstan dump-parameters printed ignoreErrors that is not a list",
+		};
+	}
+	const ignored = anchorIgnoreErrors(ignoreDumped, root);
+	if ("unapplied" in ignored) {
+		return { kind: "unapplied", reason: ignored.unapplied };
+	}
+	if (!excludeTouched && !ignored.touched) return { kind: "unchanged" };
 	const block = (name: "analyse" | "analyseAndScan"): string =>
 		lists[name].length === 0
 			? `\t\t${name}: []\n`
 			: `\t\t${name}:\n${lists[name].map((entry) => `\t\t\t- ${neonString(entry)}\n`).join("")}`;
+	const excludeText = excludeTouched
+		? `\texcludePaths!:\n${block("analyse")}${block("analyseAndScan")}`
+		: "";
+	const ignoreText = ignored.touched
+		? `\tignoreErrors!:\n${ignored.entries.map((entry) => `\t\t- ${neonValue(entry)}\n`).join("")}`
+		: "";
 	return {
 		kind: "rewritten",
-		text: `includes:\n\t- ${neonString(userConfig)}\nparameters:\n\texcludePaths!:\n${block("analyse")}${block("analyseAndScan")}`,
+		text: `includes:\n\t- ${neonString(userConfig)}\nparameters:\n${excludeText}${ignoreText}`,
 	};
 }
 
