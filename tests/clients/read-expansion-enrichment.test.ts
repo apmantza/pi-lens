@@ -260,10 +260,14 @@ describe("read-expansion LSP enrichment cancels what it abandons (#5550)", () =>
 			getWarmClientForFileMock.mockResolvedValue(warmClient);
 			const controller = new AbortController();
 			let seen: AbortSignal | undefined;
+			let releaseRequest!: () => void;
 			documentSymbolMock.mockImplementation(() => {
 				seen = getAmbientAbortSignal();
-				setTimeout(() => controller.abort(), 20);
-				return new Promise(() => {});
+				// Esc lands while the request is pending.
+				queueMicrotask(() => controller.abort());
+				return new Promise<never[]>((resolve) => {
+					releaseRequest = () => resolve([]);
+				});
 			});
 			const filePath = createTempFile(env.tmpDir, "src/cancel.ts", SOURCE);
 			const deps = makeDeps(env.tmpDir, filePath);
@@ -271,6 +275,7 @@ describe("read-expansion LSP enrichment cancels what it abandons (#5550)", () =>
 			await runHandlerExpectingNoThrow(() => handleToolCall(deps));
 			expect(seen).toBeDefined();
 			expect(seen?.aborted).toBe(true);
+			releaseRequest();
 		} finally {
 			documentSymbolMock.mockReset();
 			env.cleanup();

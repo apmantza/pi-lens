@@ -729,8 +729,8 @@ describe("#5550 bounded() thunk form cancels the work it abandons", () => {
 					},
 				),
 			).resolves.toBeUndefined();
-			await new Promise((resolve) => setTimeout(resolve, 0));
-			await new Promise((resolve) => setTimeout(resolve, 0));
+			await new Promise((resolve) => setImmediate(resolve));
+			await new Promise((resolve) => setImmediate(resolve));
 			expect(unhandled).toEqual([]);
 		} finally {
 			process.off("unhandledRejection", onUnhandled);

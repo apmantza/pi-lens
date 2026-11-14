@@ -396,10 +396,13 @@ describe("persistent reverify (#3170)", () => {
 			});
 			const escape = new AbortController();
 			let seen: AbortSignal | undefined;
+			let releaseRequest!: () => void;
 			(service as unknown as Record<string, unknown>)[member] = vi.fn(() => {
 				seen = getAmbientAbortSignal();
-				if (cut === "escape") setTimeout(() => escape.abort(), 20);
-				return new Promise(() => {});
+				if (cut === "escape") queueMicrotask(() => escape.abort());
+				return new Promise<never[]>((resolve) => {
+					releaseRequest = () => resolve([]);
+				});
 			});
 			const result = await runPersistentReverify({
 				report: carried,
@@ -410,6 +413,7 @@ describe("persistent reverify (#3170)", () => {
 			});
 			expect(result.outcomes[0]?.outcome).toBe("unconfirmed");
 			expect(seen?.aborted).toBe(true);
+			releaseRequest();
 		},
 	);
 
