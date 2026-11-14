@@ -32,9 +32,8 @@ const wireHashes = [BLOCKING, BLOCKING_2].map((content) =>
 );
 
 function layout(name: string) {
-	const root = path.join(
-		fixture.root,
-		`${name}-${process.pid}-${Math.random().toString(36).slice(2)}`,
+	const root = fs.mkdtempSync(
+		path.join(fixture.root, `${name}-${process.pid}-`),
 	);
 	const proj = path.join(root, "proj");
 	const stage = path.join(root, "stage");
