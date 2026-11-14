@@ -337,8 +337,11 @@ describe("#2504 r2 F3 — per-round-trip bound on the deferred loop", () => {
 	// LSP request, the client held busy). The pull now runs under the bound's
 	// own signal, so a request that reads the ambient signal is cancelled when
 	// the per-trip budget lapses. Pre-fix `getAmbientAbortSignal()` is
-	// `undefined` here: nothing reaches the request.
-	it("cancels the abandoned pull's request when the per-trip budget lapses (#5550)", async () => {
+	// `undefined` here: nothing reaches the request. Proves the scope, not the
+	// real service: the fake reads the ambient signal itself, and the real
+	// `getDiagnostics` pull does not yet (it owns its `pullAbort`), so that
+	// cancel waits on the LSP request sender (#5097).
+	it("runs the pull in the bound's scope, aborted when the per-trip budget lapses (#5550)", async () => {
 		const { buildActionableWarningsReport, _awaitDeferredLspPullForTest } =
 			await loadWarnings();
 		const files = makeSources(2);

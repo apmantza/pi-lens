@@ -230,9 +230,13 @@ type BoundCause = "deadline" | "caller-abort" | "shutdown";
  * What {@link bounded} awaits (#5550).
  *
  * - A thunk `(signal) => work` is RUN by `bounded`, inside
- *   `spawnAbortScope.run(signal, ...)`, so every `safeSpawnAsync` and LSP
- *   request the work starts inherits `signal` with no threading, and `signal`
- *   aborts when a bound fires: the work is cancelled, not only abandoned.
+ *   `spawnAbortScope.run(signal, ...)`, so every `safeSpawnAsync` and every
+ *   request that reads `getAmbientAbortSignal()` (`navRequest`: document
+ *   symbols, code actions) inherits `signal` with no threading, and `signal`
+ *   aborts when a bound fires: what reads it is cancelled, not only
+ *   abandoned. A request that never reads it (`touchFile`, `getDiagnostics`
+ *   and `openFile` today) is only abandoned, until the LSP request sender
+ *   (#5097) wires them.
  * - An already-started promise is only abandoned (the pre-#5550 form). It is
  *   still admitted for work that is a pure read or that must outlive its hook,
  *   and the `work` column of `BOUNDED_CALL_SITES`
@@ -373,8 +377,11 @@ export interface BoundedOptions {
  * A promise is already running, so nothing here can cancel it: it is
  * abandoned, with the abandonment recorded. Pass a thunk, `bounded((signal) =>
  * work, opts)`, and `bounded` starts the work itself, inside `spawnAbortScope`,
- * so every `safeSpawnAsync` and LSP request under it inherits `signal` and the
- * bound's firing (deadline, shutdown or the caller's abort) aborts it. The
+ * so every `safeSpawnAsync` and every request that reads
+ * `getAmbientAbortSignal()` under it inherits `signal`, and the bound's firing
+ * (deadline, shutdown or the caller's abort) aborts it. The scope reaches only
+ * what reads it: `touchFile`, `getDiagnostics` and `openFile` do not yet
+ * (#5097), so a thunk over them is handed the signal but cancels nothing. The
  * thunk's signal is NOT aborted when the work settles in time. A site that
  * keeps the promise form says why in the `work` column of
  * `BOUNDED_CALL_SITES` (`pure-read`, `outlives:<owner>` or `migrate:#<n>`), so a

@@ -2856,8 +2856,10 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
  * what happens to the work when a bound fires.
  *
  * `work` is the closed vocabulary that replaces shape 91's judgment-only
- * status for a bound's work: `threaded` (the thunk form, so the bound's signal
- * reaches every spawn and request under it), `pure-read` (a read or a wait:
+ * status for a bound's work: `threaded` (the thunk form: the bound's signal is
+ * the scope its work runs in, so it reaches every spawn and every request that
+ * reads `getAmbientAbortSignal()`; `touchFile`, `getDiagnostics` and
+ * `openFile` do not read it yet, #5097), `pure-read` (a read or a wait:
  * nothing it holds or writes outlives the bound), `outlives:<owner>` (the work
  * must keep running and its owner writes the tail) or `migrate:#<n>` (a leak
  * known and filed). Checked by {@link auditBoundedWork} against the call's
@@ -2937,7 +2939,9 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, BoundedSite>> = {
 			"for the in-band loop, which passes `args.signal` — present on every " +
 			"turn_end path and absent only in a unit harness. Deadline half is live " +
 			"either way, and is itself the per-trip minimum of the loop's remaining " +
-			"budget and the per-pull timeout.",
+			"budget and the per-pull timeout. The thunk's scope aborts with the bound, " +
+			"but the real `getDiagnostics` pull does not read it yet, so that cancel " +
+			"waits on the LSP request sender (#5097).",
 	},
 	"call:clients/blocker-freshness.ts#detectSelfDrift:31ccd4b2~6f51ea0e": {
 		work: "pure-read",
@@ -3072,7 +3076,10 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, BoundedSite>> = {
 				"bound every call. The optionality is a written decision: the re-verify " +
 				"is best-effort by contract (an unconfirmed touch is kept verbatim and " +
 				"labeled, never a false clean), so a wall-clock-only run degrades " +
-				"honestly rather than blocking the hook.",
+				"honestly rather than blocking the hook. The thunk's scope aborts with " +
+				"the bound, but the real `touchFile` does not read it yet (it owns its " +
+				"`pullAbort`), so the touch's cancel waits on the LSP request sender " +
+				"(#5097).",
 		},
 	"call:clients/persistent-reverify.ts#runPersistentReverify:df18bffa~a607d75c":
 		{
