@@ -874,6 +874,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/session-state-store.ts": 1,
 		"clients/sgconfig.ts": 3,
 		"clients/situational-tool-telemetry.ts": 2,
+		// #5553: array `.filter` over the staged listing, the lane blockers and the
+		// commit segments (the shared helper name is not a retired term here).
+		"clients/staged-delta.ts": 7,
 		"clients/test-runner-client.ts": 8,
 		"clients/tool-cwd.ts": 1,
 		"clients/tool-policy.ts": 2,
@@ -1577,6 +1580,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// the target with `path.basename`, the same call every walker path uses.
 		"clients/source-walker.ts": 4,
 		"clients/spawn-timeout-cooldown.ts": 3,
+		"clients/staged-delta.ts": 13,
 		"clients/startup-scan.ts": 7,
 		// 61 -> 66: filesystem ownership/discovery operations plus the alias
 		// exception's physical policy-relative path (R4). These remain filesystem
@@ -1846,7 +1850,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/collect-later-tier.ts": 1,
 		// 34 -> 35 (#5413): the spawn-timeout cooldown skip in `runRunner`.
 		"clients/dispatch/dispatcher.ts": 36,
-		"clients/dispatch/integration.ts": 1,
+		// 1 -> 6 (#5553): the `status` of `collectStagedLaneBlockers`' ran/skipped
+		// answer, the same discriminant `capturePreEditLinterFindings` reports.
+		"clients/dispatch/integration.ts": 6,
 		"clients/dispatch/pending-runner-findings.ts": 1,
 		"clients/dispatch/runners/actionlint.ts": 1,
 		"clients/dispatch/runners/ast-grep-napi.ts": 11,
@@ -1989,6 +1995,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/skills-resolver.ts": 6,
 		"clients/spawn-timeout-cooldown.ts": 1,
 		// 15 -> 16 (#5257): the JSON parser reads the failed suite that explains an unsuccessful run.
+		"clients/staged-delta.ts": 24,
 		"clients/test-runner-client.ts": 16,
 		"clients/tree-sitter-logger.ts": 2,
 		// 1 -> 4 (#2678): the health-check record reads the resource status
