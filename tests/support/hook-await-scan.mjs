@@ -281,7 +281,8 @@ const DEADLINE_UTILS_SPECIFIER =
 /**
  * Every OTHER way a module that imports {@link DEFINITION_FILE} can reach
  * `bounded()`: an alias (`const b = bounded`, `import { bounded as b }`), a
- * value passed on (`run(bounded, p, o)`), a re-export, a namespace import
+ * value passed on (`run(bounded, p, o)`), a re-export (named, or
+ * `export * from`, which hands every name to a barrel's consumers), a namespace import
  * (`import * as du from ".../deadline-utils.js"`, whose `du.bounded(` the call
  * detector cannot see) and a dynamic `import(".../deadline-utils.js")`. The
  * call detector cannot see where such a reference ends up called, so the form
@@ -295,7 +296,7 @@ export function findBoundedReferenceLines(raw) {
 	const hits = new Set();
 	const rawWithStrings = stripSource(raw, { strings: "keep" });
 	for (const match of rawWithStrings.matchAll(
-		/(?:\*\s+as\s+[\w$]+\s+from\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)["'][^"'\n]*\/deadline-utils(?:\.js|\.ts)?["']/g,
+		/(?:\*\s+as\s+[\w$]+\s+from\s*|\bexport\s*(?:type\s+)?\*\s*from\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)["'][^"'\n]*\/deadline-utils(?:\.js|\.ts)?["']/g,
 	)) {
 		hits.add(lineOf(rawWithStrings, match.index));
 	}

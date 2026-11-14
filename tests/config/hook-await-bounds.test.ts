@@ -4208,6 +4208,17 @@ describe("#2523 AC1 every hook-path await is bounded, and no new hand-rolled rac
 				'const du = await import("./deadline-utils.js");\nawait du.bounded(p, o);',
 			),
 		).not.toEqual([]);
+		// Plant 3, a value reached through another binding: a barrel that
+		// re-exports everything, `export * from`, lets a consumer import
+		// `bounded` under another name from the barrel (the F2 plant of #5586,
+		// which passed the registry test). The barrel line itself is the hit.
+		for (const barrel of [
+			'export * from "./deadline-utils.js";',
+			'export*from"./deadline-utils";',
+			'export type * from "../clients/deadline-utils.ts";',
+		]) {
+			expect(findBoundedReferenceLines(barrel), barrel).toEqual([1]);
+		}
 		// The plain import, the call, a type-position `typeof`, a comment and a
 		// string are not references; nor is a module that never imports bounded.
 		expect(
