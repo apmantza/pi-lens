@@ -49,7 +49,10 @@ import {
 	isProviderReplayCall,
 	readMutationPathField,
 } from "./mutating-tool.js";
-import { isProvisionalLearnedAttribution } from "./mutation-attribution.js";
+import {
+	isProvisionalLearnedAttribution,
+	shouldArmObservationForTool,
+} from "./mutation-attribution.js";
 import { armObservedMutation } from "./observed-mutation.js";
 import { extractWrittenPathsFromCommand } from "./bash-file-access.js";
 import { getLSPService } from "./lsp/capabilities.js";
@@ -663,6 +666,21 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				hook: "tool_call",
 				label: "head-move-resync",
 			},
+		);
+	// #5553: every writer but a classified host `write` or `edit` that names a
+	// file it is about to change takes the pre-edit seed here, before the write
+	// and before the baselines below, so the files a capture may create (a
+	// rules cache) are not part of the diff those baselines are taken for.
+	// A provider's replay is a card for work already done (#5160): its file
+	// holds the post-write bytes, which no seed may describe.
+	const writerPaths = isProviderReplayCall(event)
+		? []
+		: namedWriterPaths(deps, toolName);
+	if (writerPaths.length > 0)
+		await captureWriterSeeds(
+			namedWriterTargets(writerPaths, runtime.projectRoot),
+			deps,
+			true,
 		);
 	// #2000 phase 2: opaque-command pre-snapshot. A bash command whose writes
 	// the extractor will not recognize gets a bounded stat snapshot of the
@@ -1957,28 +1975,14 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 		}
 	}
 
-	// #4483: last, so only a call every pi-lens guard allowed pays for it.
-	if (isWriteOrEdit && !isExternalOrVendor) {
-		const started = Date.now();
-		const controller = new AbortController();
-		const signal = deps.ctx.signal
-			? AbortSignal.any([deps.ctx.signal, controller.signal])
-			: controller.signal;
-		const outcome = await bounded(capturePreEditSeed(filePath, deps, signal), {
-			ms: PRE_EDIT_CAPTURE_BUDGET_MS,
-			signal: deps.ctx.signal,
-			hook: "tool_call",
-			label: "pre-edit-linter-capture",
-		});
-		controller.abort();
-		if (!outcome || outcome.outcome === "failed")
-			recordDegradationOnce({
-				kind: "pre-edit-capture-incomplete",
-				subject: "pre-edit",
-				reason: outcome?.outcome ?? "abandoned",
-			});
-		recordPreEditCapture(filePath, outcome, Date.now() - started);
-	}
+	// #4483: last, so only a call every pi-lens guard allowed pays for it. A
+	// tool pi-lens learned from one observation names no span either (#5553).
+	if (isWriteOrEdit && !isExternalOrVendor)
+		await captureWriterSeeds(
+			[filePath],
+			deps,
+			mutation.provenance === "learned",
+		);
 }
 
 /**
@@ -1987,6 +1991,129 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
  * is the per-await bound. Measured in PR #4483's body.
  */
 export const PRE_EDIT_CAPTURE_BUDGET_MS = 500;
+
+/**
+ * #5553: the bound for a writer's capture that also seeds the tree-sitter and
+ * ast-grep lanes. The first one in a process loads both engines (about 550 ms
+ * measured, ~100 ms once warm), which a 500 ms bound abandoned on the first
+ * writer of a session, so that writer's own blocker blocked its commit.
+ */
+export const PRE_EDIT_SPANLESS_CAPTURE_BUDGET_MS = 1500;
+
+function captureBudgetMs(spanless: boolean): number {
+	return spanless
+		? PRE_EDIT_SPANLESS_CAPTURE_BUDGET_MS
+		: PRE_EDIT_CAPTURE_BUDGET_MS;
+}
+
+/**
+ * #4483, #5553: the one entry for a writer that names the files it will
+ * change: the capture's bound, abort, degradation record and latency row, one
+ * file after another, each under its own bound (`captureBudgetMs`).
+ * `spanless` is a writer whose dispatch gets no edit span, so the edit-gated
+ * lanes read the whole file and are seeded too
+ * (`PRE_EDIT_SEED_SPANLESS_RUNNER_IDS`). Never rejects.
+ */
+async function captureWriterSeeds(
+	filePaths: readonly string[],
+	deps: ToolCallDeps,
+	spanless: boolean,
+): Promise<void> {
+	for (const filePath of filePaths) {
+		const started = Date.now();
+		const controller = new AbortController();
+		const signal = deps.ctx.signal
+			? AbortSignal.any([deps.ctx.signal, controller.signal])
+			: controller.signal;
+		const outcome = await bounded(
+			capturePreEditSeed(filePath, deps, signal, spanless),
+			{
+				ms: captureBudgetMs(spanless),
+				signal: deps.ctx.signal,
+				hook: "tool_call",
+				label: "pre-edit-linter-capture",
+			},
+		);
+		controller.abort();
+		if (!outcome || outcome.outcome === "failed")
+			recordDegradationOnce({
+				kind: "pre-edit-capture-incomplete",
+				subject: "pre-edit",
+				reason: outcome?.outcome ?? "abandoned",
+			});
+		recordPreEditCapture(filePath, outcome, Date.now() - started, spanless);
+	}
+}
+
+/**
+ * #5553: the files a writer other than a classified host `write` or `edit`
+ * names before it changes them, as absolute paths (they may not exist):
+ * a bash command's written paths; an applied `ast_grep_replace`'s `paths`; the
+ * file an applied LSP rename's symbol sits in (its importers are not named,
+ * an accepted residual); and the one path an unclassified tool names, when
+ * the observational net would arm for it (a tool not known to be read-only
+ * and not yet seen clean: a `read` or `grep` names a path too).
+ */
+function namedWriterPaths(deps: ToolCallDeps, toolName: string): string[] {
+	const { event, ctx, runtime } = deps;
+	const input = ((event as { input?: unknown }).input ?? {}) as Record<
+		string,
+		unknown
+	>;
+	const resolve = (raw: unknown): string[] => {
+		const resolved =
+			typeof raw === "string"
+				? resolveToolCallFilePath(raw, ctx.cwd, runtime.projectRoot)?.path
+				: undefined;
+		return resolved === undefined ? [] : [resolved];
+	};
+	if (toolName === "bash")
+		return typeof input.command === "string"
+			? extractWrittenPathsFromCommand(
+					input.command,
+					runtime.projectRoot || process.cwd(),
+				)
+			: [];
+	if (toolName === "ast_grep_replace")
+		return input.apply === true && Array.isArray(input.paths)
+			? input.paths.flatMap(resolve)
+			: [];
+	if (toolName === "lsp_navigation")
+		return input.operation === "rename" && input.apply === true
+			? resolve(getToolCallRawFilePath(toolName, event))
+			: [];
+	return shouldRunOpaqueRecovery(
+		toolName,
+		opaquePrescanRoot(ctx.cwd, runtime.projectRoot),
+	) && shouldArmObservationForTool(toolName)
+		? resolve(readMutationPathField(event))
+		: [];
+}
+
+/**
+ * #5553: the named paths a capture is worth running for: existing regular
+ * files, each once, without the ones dispatch never analyses (a gitignored
+ * file, a vendor path, a file outside the project), as the host-edit site
+ * skips them. A file the write creates has no bytes to seed, and a skipped
+ * capture would log a row for every `echo > new.ts`.
+ */
+function namedWriterTargets(
+	filePaths: readonly string[],
+	projectRoot: string,
+): string[] {
+	return [...new Set(filePaths)].filter((candidate) => {
+		try {
+			return (
+				nodeFs.statSync(candidate).isFile() &&
+				!isExternalOrVendorFile(candidate, projectRoot) &&
+				!isPathIgnoredByProject(candidate, projectRoot, false)
+			);
+		} catch {
+			// none: a path that cannot be stat'd has no bytes to seed.
+			return false;
+		}
+	});
+}
 
 type PreEditCaptureResult =
 	| Awaited<
@@ -2008,6 +2135,7 @@ function capturePreEditSeed(
 	filePath: string,
 	deps: ToolCallDeps,
 	signal: AbortSignal,
+	spanless: boolean,
 ): Promise<PreEditCaptureResult> {
 	const session = deps.runtime.captureSessionGeneration();
 	const workspaceRoot = deps.runtime.projectRoot || process.cwd();
@@ -2020,6 +2148,7 @@ function capturePreEditSeed(
 				pi,
 				session,
 				signal,
+				spanless,
 			),
 		)
 		.catch((cause: unknown): PreEditCaptureResult => {
@@ -2038,6 +2167,7 @@ function recordPreEditCapture(
 	filePath: string,
 	outcome: PreEditCaptureResult | undefined,
 	durationMs: number,
+	spanless: boolean,
 ): void {
 	if (
 		outcome?.outcome === "skipped" &&
@@ -2060,7 +2190,7 @@ function recordPreEditCapture(
 			...((outcome?.outcome === "skipped" ||
 				outcome?.outcome === "discarded") && { reason: outcome.reason }),
 			...(outcome?.outcome === "failed" && { failure: outcome.failure }),
-			budgetMs: PRE_EDIT_CAPTURE_BUDGET_MS,
+			budgetMs: captureBudgetMs(spanless),
 		},
 	});
 }
