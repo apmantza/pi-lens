@@ -8322,7 +8322,7 @@ export function isConnectionBusy(connection: MessageConnection): boolean {
  */
 interface RequestBound {
 	timeoutMs: number;
-	/** Send `$/cancelRequest` when the bound fires or the signal aborts. */
+	/** Send `$/cancelRequest` when the timer fires. A caller abort always cancels; a call that must never cancel passes no signal. */
 	cancel: boolean;
 	/**
 	 * The released request settled after a TIMEOUT: `answered` is true for a
