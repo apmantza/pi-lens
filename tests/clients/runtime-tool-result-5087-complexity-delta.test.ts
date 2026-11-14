@@ -197,13 +197,17 @@ describe("#5087 the tool_result complexity delta", () => {
 		const stored = runtime.complexityBaselines.get(key);
 		const client = getSharedTreeSitterClient();
 		if (client === null) throw new Error("no shared tree-sitter client");
-		const parses: Array<Promise<unknown>> = [];
+		let parse!: Promise<unknown>;
+		let parseStarted!: () => void;
+		const reachedParse = new Promise<void>((resolve) => {
+			parseStarted = resolve;
+		});
 		const withParsedTree = client.withParsedTree.bind(client);
 		vi.spyOn(client, "withParsedTree").mockImplementation(((
 			...args: Parameters<typeof withParsedTree>
 		) => {
-			const parse = withParsedTree(...args);
-			parses.push(parse);
+			parse = withParsedTree(...args);
+			parseStarted();
 			return parse;
 		}) as typeof client.withParsedTree);
 		const read = vi.spyOn(runtime.complexityBaselines, "get");
@@ -213,8 +217,8 @@ describe("#5087 the tool_result complexity delta", () => {
 
 		expect(text).not.toContain("complexity vs");
 		// The run is abandoned, not stopped: it still reaches its parse.
-		await vi.waitFor(() => expect(parses).toHaveLength(1));
-		await parses[0];
+		await reachedParse;
+		await parse;
 		expect(read).not.toHaveBeenCalled();
 		expect(set).not.toHaveBeenCalled();
 		expect(runtime.complexityBaselines.get(key)).toBe(stored);
