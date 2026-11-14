@@ -56,7 +56,7 @@ All notable changes to pi-lens will be documented in this file.
 
 - **`ast_grep_search` and `ast_grep_replace` stop answering "no matches" in some checkouts.** A rule-mode scan now runs inside the tree it scans, so the project's own ignore globs match paths relative to the scan root instead of an ancestor that happens to be named `.claude` or `build`; reported match paths stay absolute. The `npx` fallback keeps its isolated child cwd, while repository trees use native ignore handling and marker-less trees retain the project's own exclude globs. A glob or path you passed the tool yourself is still matched unchanged. (refs #5545)
 
-- **Runner flights include the first inline run through child settlement.** SpotBugs and Trivy Config now also declare their existing spawn timeouts. (refs #5547)
+- **A slow runner no longer piles up processes across edits.** A runner whose process outlives the dispatch budget, such as SpotBugs or Trivy Config, now holds its slot until that process exits, so the next edit joins the running check instead of starting another one. SpotBugs and Trivy Config also declare their existing spawn timeouts. (refs #5547)
 
 - **A file whose checks were all skipped now says why it was not checked.** The write notice names each runner's cause (`spellcheck: not installed`, `vale: not configured`, a managed install turned off by `PI_LENS_DISABLE_TOOL_INSTALL=1`, a version probe that timed out or was rejected, a project binary that pi trust refused, a missing Java runtime, a project policy that prefers another tool) instead of one sentence for a missing tool, a timeout and a failure alike. Nothing that was unchecked reads clean. (refs #5258)
 
@@ -90,7 +90,7 @@ All notable changes to pi-lens will be documented in this file.
 
 #### Tools and reports
 
-- **Esc now stops an `ast_grep_replace` apply's precheck.** The structural-rule precheck carries the call's abort signal, so a host with no tool scope stops it too. Once the `--update-all` write starts it still runs to completion, so an apply leaves 0 or all matched files rewritten. (refs #5097)
+- **Esc now stops an `ast_grep_replace` apply's precheck.** The structural-rule precheck carries the call's abort signal, so a host with no tool scope stops it too. Esc does not stop the `--update-all` write once it starts: the write runs to completion, so an Esc leaves 0 or all matched files rewritten. (refs #5097)
 
 - **pi-lens no longer calls a file clean when its check did not finish.**
   The `lens_diagnostics` header and its check line say "unconfirmed" when a
