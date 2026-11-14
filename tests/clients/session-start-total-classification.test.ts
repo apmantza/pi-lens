@@ -20,10 +20,12 @@ import {
 	getLatencyLogPath,
 } from "../../clients/latency-logger.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
-import { waitForProjectSnapshotPersistsForTests } from "../../clients/project-snapshot.js";
+import { getProjectSnapshotPersistStateForTests } from "../../clients/project-snapshot.js";
 import type { SessionStartRootTelemetry } from "../../clients/runtime-session.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 import { installLspServiceDouble } from "../support/lsp-service-seam.js";
+import { drainRegisteredBackgroundWritesForTests } from "../support/background-write-drains.js";
+import { waitFor } from "./interleaving-kit.js";
 
 import { handleSessionStart } from "../../clients/runtime-session.js";
 import { resetLSPConfigStateForTests } from "../../clients/lsp/config.js";
@@ -184,8 +186,8 @@ describe("session_start_total carries the classification decision (#2129)", () =
 		const env = setupTestEnvironment("pi-lens-session-start-total-full-");
 		const previousDataDir = process.env.PILENS_DATA_DIR;
 		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		const cwd = path.join(env.tmpDir, "project");
 		try {
-			const cwd = path.join(env.tmpDir, "project");
 			fs.mkdirSync(path.join(cwd, ".git"), { recursive: true });
 			createTempFile(env.tmpDir, "project/index.ts", "export const x = 1;\n");
 
@@ -202,15 +204,23 @@ describe("session_start_total carries the classification decision (#2129)", () =
 				sameRoot: "unknown",
 			});
 		} finally {
-			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
-			else process.env.PILENS_DATA_DIR = previousDataDir;
 			// #4591: full-mode session start reaches saveRuntimeProjectSnapshot,
 			// whose body persist runs off-thread (clients/project-snapshot.ts →
 			// gzip-stage worker) and recreates the fixture root with a recursive
-			// mkdir into $PILENS_DATA_DIR. Unawaited, that write landed after
-			// cleanup and left pi-lens-session-start-total-full-* at the tmp root
-			// (the #2912/#3186 shape). Drain it before removing the root.
-			await waitForProjectSnapshotPersistsForTests();
+			// mkdir into $PILENS_DATA_DIR. Order, as in
+			// runtime-session-stale-ctx-scans-4815 teardownFixture: wait for this
+			// fixture's persist to go idle, on a deadline that throws; drain the
+			// registered background writers, which reject while work remains;
+			// restore PILENS_DATA_DIR, only now, because the persist resolves its
+			// meta path from the live env; remove the root. A throw from either
+			// wait keeps the root, so the failure stays loud (the #2912/#3186 shape).
+			await waitFor(
+				() => getProjectSnapshotPersistStateForTests(cwd),
+				(state) => !state.active && !state.queued,
+			);
+			await drainRegisteredBackgroundWritesForTests();
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
 			env.cleanup();
 		}
 	});
