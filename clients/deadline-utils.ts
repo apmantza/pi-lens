@@ -435,8 +435,8 @@ export async function bounded<T>(
 		// session also happens to be tearing down is still a cancel.
 		const fire = (reason: BoundCause) => {
 			cause ??= reason;
-			// Resolve BEFORE aborting: the race below must see the bound, not
-			// the abort rejection the cancelled work may produce a tick later.
+			// The race below also reads `boxed`, which settles a tick after the
+			// work, so the abort rejection the cancel may cause cannot beat this.
 			resolve(BOUND_ABORTED);
 			workController?.abort();
 		};

@@ -681,6 +681,10 @@ describe("#5550 bounded() thunk form cancels the work it abandons", () => {
 	// Row 4. A throw before the first await is a rejection at the await, where
 	// the promise form's caller-side throw surfaced too, never an escape.
 	it("turns a synchronous throw from the thunk into a rejection, and propagates a rejection inside the bounds", async () => {
+		// The throw happens after the bounds are armed: the wrapper is what
+		// still reaches `finally`, so the ambient listener must be gone after.
+		const ambient = new AbortController();
+		setAmbientAbortSignal(ambient.signal);
 		await expect(
 			bounded(
 				() => {
@@ -694,6 +698,7 @@ describe("#5550 bounded() thunk form cancels the work it abandons", () => {
 				},
 			),
 		).rejects.toThrow("thunk threw");
+		expect(getEventListeners(ambient.signal, "abort")).toHaveLength(0);
 		await expect(
 			bounded(async () => Promise.reject(new Error("work rejected")), {
 				ms: 60_000,
@@ -774,6 +779,28 @@ describe("#5550 bounded() thunk form cancels the work it abandons", () => {
 			new Promise((resolve) => setTimeout(() => resolve("waiting"), 30)),
 		]);
 		expect(settled).toBe("waiting");
+	});
+
+	// Row 5, entry half. Recurrence prevented: a turn already cancelled when
+	// the bound is entered would start the thunk's spawns live, because only a
+	// LATER abort was forwarded.
+	it("starts the thunk aborted when the ambient signal was already aborted at entry", async () => {
+		const ambient = new AbortController();
+		ambient.abort();
+		setAmbientAbortSignal(ambient.signal);
+		const startedAborted: boolean[] = [];
+		await bounded(
+			async (signal) => {
+				startedAborted.push(signal.aborted);
+			},
+			{
+				ms: 60_000,
+				signal: undefined,
+				hook: "turn_end",
+				label: "thunk-ambient-pre-aborted",
+			},
+		);
+		expect(startedAborted).toEqual([true]);
 	});
 
 	// Invariant I2/I3 for the thunk form: the ambient listener is released on
