@@ -4,6 +4,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { FAKE_LSP_SERVER_PATH } from "./support/fake-lsp-server.js";
 import { execFileSync } from "./support/git-fixture-env.js";
@@ -96,9 +97,12 @@ async function run(
 	});
 	try {
 		await session.prompt("write the file");
-		return fs.existsSync(trace)
-			? fs.readFileSync(trace, "utf8").split("\n").filter(Boolean)
-			: [];
+		return {
+			layout: l,
+			lines: fs.existsSync(trace)
+				? fs.readFileSync(trace, "utf8").split("\n").filter(Boolean)
+				: [],
+		};
 	} finally {
 		await session.dispose();
 	}
@@ -106,13 +110,34 @@ async function run(
 
 describe("#5552 shell-write resync on the real LSP wire", () => {
 	it("sends new bytes after mv and cp -p shell writes", async () => {
-		const lines = await run("mv-and-cp-p", (l) => [
+		const { layout: l, lines } = await run("mv-and-cp-p", (l) => [
 			`cp -p ${l.stage}/a.ts src/a.ts`,
 			`mv ${l.stage}/b.ts src/`,
 		]);
+		const payloads = [
+			{
+				uri: pathToFileURL(l.target).href,
+				hash: wireHashes[0],
+			},
+			{
+				uri: pathToFileURL(path.join(l.proj, "src", "b.ts")).href,
+				hash: wireHashes[1],
+			},
+		];
 		expect(
 			lines.filter((line) => wireHashes.some((hash) => line.includes(hash))),
 			lines.join("\n"),
 		).toHaveLength(2);
-	});
+		for (const { uri, hash } of payloads) {
+			expect(
+				lines.some((line) =>
+					["textDocument/didChange", "textDocument/didOpen"].some(
+						(method) => line === `recv ${method} ${uri}`,
+					),
+				),
+				lines.join("\n"),
+			).toBe(true);
+			expect(lines, lines.join("\n")).toContain(`text ${uri} ${hash}`);
+		}
+	}, 60_000);
 });
