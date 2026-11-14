@@ -888,6 +888,9 @@ export const wallClockBudgetInclude = [
 	// #5108: a real bash write plus a handler held past the live 500 ms bound
 	// (flake-shape admission); the git children ride in the serialized lane.
 	"tests/index-5108-opaque-blocker-disclosure-witness.test.ts",
+	// #5552: real tool_result/dispatcher LSP wire traffic for mtime-preserving
+	// shell writes; serialized with the other child-process witnesses.
+	"tests/index-5552-lsp-resync-wire.test.ts",
 	// #5552: a real `mv`, `rsync` and `tar` write old-mtime files into a real git
 	// checkout behind a real pi session (flake-shape admission); the child
 	// processes ride in the serialized lane.
