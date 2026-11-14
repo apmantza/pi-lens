@@ -283,7 +283,8 @@ export const WRITERS: readonly WriterRoute[] = [
 			symbol: "recoverOpaqueChangesViaGit",
 		},
 		names: "the command",
-		writes: "the named destination, with its old mtime kept (mv, cp -p)",
+		writes:
+			"the named destination or directory, with its old mtime kept (mv, cp -p, rsync -a, tar x)",
 		authorship: "whole-file",
 		attribution: "disk-recovery",
 		recorders: ["tool-result"],
@@ -297,8 +298,8 @@ export const WRITERS: readonly WriterRoute[] = [
 			"change-log": unprobed(
 				"settle: read the change log after #5552's mv witness; the audit's SILENT predates #5581",
 			),
-			"commit-gate": unprobed(
-				"settle: a commit after #5552's mv witness; the audit's allowed(committed) predates #5581",
+			"commit-gate": reaches(
+				"[mv into a directory with a trailing slash reaches dispatch, the log and the gate]",
 			),
 			"pre-edit-baseline": unprobed(NOT_SEEDED),
 			"fix-run-capture": unprobed(FIX_RUN_UNPROBED),
