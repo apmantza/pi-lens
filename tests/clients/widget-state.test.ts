@@ -3316,3 +3316,137 @@ describe("clearWidgetState notifies the activation listener (#5588)", () => {
 		}
 	});
 });
+
+// #5588 review: four writers moved from the render callback to
+// `requestRender()` had no test. Swapping any one of them back to
+// `requestRenderFn?.()` stayed green, so the store-change feed that the
+// `pi-lens-issues` footer relies on could silently stop for that writer. One
+// listener-call test per writer, through the real store, pins each move.
+describe("every store writer notifies the activation listener (#5588)", () => {
+	it("importWidgetState notifies the listener when it imports a snapshot", () => {
+		recordDiagnostics("/repo/import-listener.ts", [
+			{
+				severity: "error",
+				semantic: "blocking",
+				message: "blocking",
+				line: 1,
+				rule: "typescript:1",
+			},
+		]);
+		const snapshot = exportWidgetState();
+		clearWidgetState();
+		const listener = vi.fn();
+		setWidgetChangeCallback(listener);
+		try {
+			expect(importWidgetState(snapshot)).toBe(true);
+			expect(getFileDiagnostics("/repo/import-listener.ts")).toHaveLength(1);
+			expect(listener).toHaveBeenCalledTimes(1);
+		} finally {
+			clearWidgetChangeCallback(listener);
+		}
+	});
+
+	it("reconcileStaleWidgetDependencyBlockers notifies the listener when a dependency drift demotes a finding", async () => {
+		const tmpDir = await fs.mkdtemp(
+			path.join(os.tmpdir(), "pi-lens-listener-reconcile-"),
+		);
+		try {
+			const consumer = path.join(tmpDir, "consumer.ts");
+			const dep = path.join(tmpDir, "dep.ts");
+			await fs.writeFile(dep, "export const x = 1;\n");
+			await fs.writeFile(
+				consumer,
+				'import { x } from "./dep.js";\nexport const y = x;\n',
+			);
+			recordDiagnostics(
+				consumer,
+				[
+					{
+						severity: "error",
+						semantic: "blocking",
+						message: "type error",
+						tool: "lsp",
+					},
+				],
+				1,
+				Date.now() - 60_000,
+			);
+			const future = new Date(Date.now() + 60_000);
+			await fs.utimes(dep, future, future);
+
+			const listener = vi.fn();
+			setWidgetChangeCallback(listener);
+			try {
+				const { demoted } =
+					await reconcileStaleWidgetDependencyBlockers(tmpDir);
+				expect(demoted).toBe(1);
+				expect(listener).toHaveBeenCalledTimes(1);
+			} finally {
+				clearWidgetChangeCallback(listener);
+			}
+		} finally {
+			await fs.rm(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("markWidgetFileBlockersStale notifies the listener when it marks a file's blockers stale", () => {
+		recordDiagnostics(
+			"/repo/mark-listener.ts",
+			[
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "type error",
+					tool: "lsp",
+				},
+			],
+			1,
+			Date.now() - 60_000,
+		);
+		const listener = vi.fn();
+		setWidgetChangeCallback(listener);
+		try {
+			expect(
+				markWidgetFileBlockersStale(
+					"/repo/mark-listener.ts",
+					"dependency-drift",
+				),
+			).toBe(true);
+			expect(listener).toHaveBeenCalledTimes(1);
+		} finally {
+			clearWidgetChangeCallback(listener);
+		}
+	});
+
+	it("retireWidgetDependencyDriftBlockers notifies the listener when it retires a demoted finding", () => {
+		recordDiagnostics(
+			"/repo/retire-listener.ts",
+			[
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "type error",
+					tool: "lsp",
+				},
+			],
+			1,
+			Date.now() - 60_000,
+		);
+		expect(
+			markWidgetFileBlockersStale(
+				"/repo/retire-listener.ts",
+				"dependency-drift",
+			),
+		).toBe(true);
+		const listener = vi.fn();
+		setWidgetChangeCallback(listener);
+		try {
+			expect(
+				retireWidgetDependencyDriftBlockers("/repo/retire-listener.ts"),
+			).toBe(true);
+			expect(listener).toHaveBeenCalledTimes(1);
+		} finally {
+			clearWidgetChangeCallback(listener);
+		}
+	});
+});
