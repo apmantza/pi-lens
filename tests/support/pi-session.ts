@@ -858,6 +858,10 @@ const PINNED_KEYS = [
 	"PI_LENS_TEST_SCANNER_HARNESS",
 	"PI_LENS_STARTUP_MODE",
 	"PI_LENS_COLD_START_QUICK",
+	// The slow-filesystem kill switch (`clients/slow-fs.ts`), read lazily at each
+	// `session_start`. The verdict it would reach is a property of the runner's
+	// disk, not of the case, so `startPiSession` pins it (#5602).
+	"PI_LENS_ALLOW_SLOW_FS_SCAN",
 	// The loaded copy's orphan-backstop arming opt-out, spelled by
 	// `armOrphanBackstopOptOut` below and pinned to the production constant in
 	// `pi-session.test.ts` (#5267).
@@ -1278,6 +1282,11 @@ export async function startPiSession(
 	process.env.PI_LENS_HOME = path.join(options.root, "home");
 	process.env.PILENS_DATA_DIR = path.join(options.root, "data");
 	process.env.PI_LENS_TEST_MODE = "0";
+	// The slow-filesystem probe posts a user notice and reduces its scans when
+	// the runner's stat latency clears its threshold, so a case's notification
+	// list would depend on the runner (#5602). The kill switch reads "not slow"
+	// for every case here; `PINNED_KEYS` restores the value in `afterAll`.
+	process.env.PI_LENS_ALLOW_SLOW_FS_SCAN = "1";
 	// Every background scanner's report directory (jscpd, the ast-grep exports
 	// pass, ...) is created under `scannerReportParentDir()` and removed in the
 	// scan's own `finally`. A `session_start` scan is fire-and-forget and the

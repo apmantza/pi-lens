@@ -708,8 +708,9 @@ const DRIVERS: Record<string, Driver> = {
 		file: "src/app.rb",
 		content: "puts 1\n",
 		status: "failed",
-		// The first spawn is the `--version` probe in
-		// resolveCommandArgsWithInstallFallback.
+		// The first spawn is the `--version` probe of the registry ladder
+		// (`resolveRubocopCommand`: `rubocop --version`, or `bundle --version` first
+		// for a Gemfile that names rubocop).
 		reply: ({ args, filePath }) =>
 			args.includes("--version")
 				? { status: 0, stdout: "1.66.0" }

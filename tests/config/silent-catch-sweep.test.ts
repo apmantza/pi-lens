@@ -538,9 +538,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :239
 	"clients/dispatch/runners/utils/runner-helpers.ts": {
 		silent: 7,
-		identities: "711a4b4207c2affe",
+		identities: "82100b8d3097c468",
 		reason: PRE_RULE,
-	}, // :334, :382, :506, :545, :698, :1328, :1638
+	}, // :416, :464, :588, :627, :841, :1518, :1880
 	"clients/dispatch/runners/vale.ts": {
 		silent: 1,
 		identities: "e8e154dc40dff426",
@@ -747,10 +747,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :62
 	"clients/lsp-mutation.ts": {
-		silent: 3,
-		identities: "717faab25bd5e210",
+		silent: 2,
+		identities: "b6057326211a2668",
 		reason: PRE_RULE,
-	}, // :404, :495, :540
+	}, // :546, :598
 	"clients/lsp/aggregation.ts": {
 		silent: 1,
 		identities: "6c214f59992042fc",
@@ -1291,10 +1291,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :196, :204, :228, :333, :572
 	"index.ts": {
-		silent: 49,
-		identities: "b48916790863d67b",
+		silent: 50,
+		identities: "23b249be99003620",
 		reason: SHARP_HOST,
-	}, // :522, :673, :779, :783, :1118, :1141, :1454, :1604, :1761, :1780, :1789, :1832, :1899, :2143, :2154, :2187, :2238, :2268, :2401, :2453, :2543, :2571, :2644, :2745, :2757, :2814, :2820, :2946, :2970, :3047, :3222, :3270, :3369, :3495, :3527, :3603, :3777, :3854, :3959, :3992, :4079, :4116, :4131, :4158, :4193, :4204, :4537, :4544, :4877
+	}, // :543, :704, :810, :814, :1097, :1207, :1230, :1549, :1699, :1856, :1875, :1884, :1925, :1992, :2247, :2258, :2292, :2343, :2387, :2534, :2586, :2702, :2730, :2803, :2908, :2920, :2977, :2983, :3114, :3170, :3247, :3486, :3537, :3643, :3792, :3827, :3908, :4086, :4170, :4275, :4308, :4395, :4432, :4447, :4474, :4513, :4524, :4859, :4866, :5231
 	"mcp/analyze-cli.ts": {
 		silent: 1,
 		identities: "e823b8d7883207bc",

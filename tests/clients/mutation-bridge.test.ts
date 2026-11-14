@@ -17,6 +17,7 @@ import {
 	MUTATION_BRIDGE_KEY,
 	getMutationBridge,
 	isValidMutationEntry,
+	recordMutationOutcome,
 	recordMutationThroughSeam,
 	registerMutationBridge,
 	type MutationBridgeDeps,
@@ -473,9 +474,100 @@ describe("mutation bridge bookkeeping", () => {
 			expect(() =>
 				recordMutationThroughSeam({ filePath, kind: "write" }, deps),
 			).not.toThrow();
+			// #5592 review r1 F1: a turn-state throw no longer costs the
+			// receipt, so the record is still taken.
 			expect(recordMutationThroughSeam({ filePath, kind: "write" }, deps)).toBe(
-				false,
+				true,
 			);
+			expect(runtime.getMutationsSince(0).length).toBe(2);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #5592 review r1 F1: the stamp and the deferral are stages too. A
+	// producer's read guard that throws, or a deferral queue that throws,
+	// must not cost the turn state or the receipt. Recurrence: a stage left
+	// outside `runStage`, so its throw ends the record again.
+	for (const stage of ["stamp", "deferral"] as const) {
+		it(`keeps the turn state and the receipt when the ${stage} stage throws`, () => {
+			const env = setupTestEnvironment(`pi-lens-5592-${stage}-throw-`);
+			try {
+				resetDegradationLedger();
+				const filePath = path.join(env.tmpDir, `${stage}.ts`);
+				fs.writeFileSync(filePath, SOURCE);
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				const boom = () => {
+					throw new Error(`${stage} exploded`);
+				};
+				if (stage === "stamp") runtime.readGuard.recordWritten = boom;
+				else runtime.deferMutation = boom;
+				const turnState: string[] = [];
+				const deps = makeDeps({
+					tmpDir: env.tmpDir,
+					runtime,
+					cacheManager: {
+						addModifiedRange: (file: string) => {
+							turnState.push(path.basename(file));
+						},
+					} as never,
+				});
+				const outcome = recordMutationOutcome(
+					{ filePath, kind: "write" },
+					deps,
+				);
+				expect({
+					recorded: outcome.recorded,
+					turnState,
+					receipts: runtime.getMutationsSince(0).length,
+					degraded: getDegradationSummary()
+						.filter((group) => group.kind === "mutation-bridge-stage-failed")
+						.flatMap((group) => group.latestReasons.map((r) => r.subject)),
+				}).toEqual({
+					recorded: true,
+					turnState: [`${stage}.ts`],
+					receipts: 1,
+					degraded: [stage],
+				});
+			} finally {
+				env.cleanup();
+			}
+		});
+	}
+
+	// #5592 review r1 F1: the stages before the receipt run on their own, and
+	// a receipt that did not land still reports the record as not taken.
+	// Recurrence: a stage isolation that also swallows the receipt's failure,
+	// so a producer counts a write the change log never saw and the handled
+	// mark hides it from the settled sweep.
+	it("reports a record whose change-log receipt threw as not taken, and still runs the turn state", () => {
+		const env = setupTestEnvironment("pi-lens-5592-receipt-throw-");
+		try {
+			const filePath = path.join(env.tmpDir, "receipt.ts");
+			fs.writeFileSync(filePath, SOURCE);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.recordProjectMutation = () => {
+				throw new Error("receipt exploded");
+			};
+			const turnState: string[] = [];
+			const deps = makeDeps({
+				tmpDir: env.tmpDir,
+				runtime,
+				cacheManager: {
+					addModifiedRange: (file: string) => {
+						turnState.push(path.basename(file));
+					},
+				} as never,
+			});
+			expect(
+				recordMutationOutcome({ filePath, kind: "write" }, deps),
+			).toMatchObject({
+				recorded: false,
+				reason: "bookkeeping-error",
+			});
+			expect(turnState).toEqual(["receipt.ts"]);
 		} finally {
 			env.cleanup();
 		}

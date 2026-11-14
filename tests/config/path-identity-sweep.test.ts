@@ -178,10 +178,10 @@ const PINS: Readonly<Record<string, Pin>> = {
 		reason: BIN_CONTAINMENT,
 	}, // :514, :519
 	"clients/dispatch/runners/utils/runner-helpers.ts#path-resolve-keyed": {
-		sites: 10,
-		identities: "f640b5350df01957",
+		sites: 11,
+		identities: "58a3b6b897193f90",
 		reason: SPELLING_MEMO,
-	}, // :1182, :1193, :1290, :1447, :1449, :1452, :1617, :1691, :1693, :1696
+	}, // :1356, :1363, :1465, :1483, :1669, :1671, :1674, :1859, :1933, :1935, :1938
 	"clients/file-time.ts#path-resolve-keyed": {
 		sites: 5,
 		identities: "90196aeba76b2323",

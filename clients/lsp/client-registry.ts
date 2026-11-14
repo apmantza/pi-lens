@@ -28,7 +28,7 @@ import {
 	findLocalBinUpwards,
 	isProjectLocalBinPath,
 } from "../package-manager.js";
-import { isWithinForm, normalizeMapKey } from "../path-utils.js";
+import { isWithinForm, normalizeMapKey, rootsOverlap } from "../path-utils.js";
 import {
 	assertInstallAllowed,
 	readAdoptedProjectTrust,
@@ -827,8 +827,6 @@ export class ClientRegistry {
 	 */
 	async restartPrimaryClientsUnder(root: string): Promise<string[]> {
 		const rootKey = normalizeMapKey(root);
-		const overlaps = (clientRoot: string) =>
-			isWithinForm(clientRoot, rootKey) || isWithinForm(rootKey, clientRoot);
 		return this.withClientSpawnGate(async () => {
 			if (this.isDestroyed) return [];
 			const victims: Array<[string, LSPClientInfo]> = [];
@@ -837,7 +835,7 @@ export class ClientRegistry {
 				if (
 					client.isAlive() &&
 					!isAuxiliary(getServerById(serverId)) &&
-					overlaps(clientRoot)
+					rootsOverlap(clientRoot, rootKey)
 				)
 					victims.push([key, client]);
 			}

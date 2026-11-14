@@ -361,6 +361,15 @@ interface LspRecord {
 const files = new Map<string, FileRecord>();
 let sessionLanguages: string[] = [];
 let requestRenderFn: (() => void) | null = null;
+/**
+ * Activation-scoped listener beside {@link requestRenderFn}. The render
+ * callback is session state (the TUI mount sets it and `clearWidgetState`
+ * drops it); a consumer that projects the store outside the TUI, such as the
+ * `pi-lens-issues` status, needs a feed that survives a session reset. This
+ * one is wired once per activation and deliberately NOT cleared with the
+ * store.
+ */
+let widgetChangeFn: (() => void) | null = null;
 
 /**
  * Guards `recordDiagnostics` writes against the same race class fixed for
@@ -432,6 +441,24 @@ function maybePruneInactiveFileRecords(): void {
 
 export function setRenderCallback(fn: () => void): void {
 	requestRenderFn = fn;
+}
+
+/**
+ * Register the activation-scoped store-change listener. Unlike
+ * {@link setRenderCallback}, {@link clearWidgetState} keeps it: it is
+ * activation wiring, not session state, and a reset still has to notify the
+ * projection that the old session's data is gone.
+ */
+export function setWidgetChangeCallback(fn: () => void): void {
+	widgetChangeFn = fn;
+}
+
+/**
+ * Release the activation-scoped store-change listener, but only when `fn` still
+ * holds the slot. A departed activation must not clear a successor's listener.
+ */
+export function clearWidgetChangeCallback(fn: () => void): void {
+	if (widgetChangeFn === fn) widgetChangeFn = null;
 }
 
 /** Reconcile a mark through the same apply/count/commit path as dispatch. */
@@ -714,6 +741,10 @@ export function clearWidgetState(): void {
 	diagnosticsWriteGuard.clear();
 	runnerWriteGuard.clear();
 	nextInactivePruneSize = MAX_INACTIVE_FILE_RECORDS + 1;
+	// `widgetChangeFn` survives the reset: it is activation wiring, and the
+	// reset's emptiness is itself a change the projection has to publish. The
+	// render callback is null by now, so only that listener fires.
+	requestRender();
 }
 
 // v1 → v2 (#1186): per-entry `WidgetDiagnostic.observedAt`. v2 is a SUPERSET of
@@ -913,7 +944,7 @@ export function importWidgetState(
 	}
 	pruneInactiveFileRecords();
 	sessionLanguages = state.sessionLanguages ?? [];
-	requestRenderFn?.();
+	requestRender();
 	return true;
 }
 
@@ -1124,13 +1155,10 @@ export function recordDiagnostics(
 	// `observedAt`) is observed now.
 	const observedTs = observedAt ?? Date.now();
 	const rec = getOrCreate(filePath, key);
-	commitDiagnostics(
-		rec,
-		filePath,
-		normalizeDiagnostics(filePath, diagnostics, observedTs),
-		observedTs,
-		key,
-	);
+	// Update the unchecked fields BEFORE `commitDiagnostics` notifies listeners:
+	// the store-change listener reads this record, and an empty snapshot with an
+	// unchecked reason must publish `⚠ N unchecked`, never the intermediate
+	// `✓ clean` the pre-update record would draw.
 	if (unchecked === undefined) {
 		delete rec.uncheckedReason;
 		delete rec.uncheckedInapplicable;
@@ -1139,6 +1167,13 @@ export function recordDiagnostics(
 		if (unchecked.inapplicable) rec.uncheckedInapplicable = true;
 		else delete rec.uncheckedInapplicable;
 	}
+	commitDiagnostics(
+		rec,
+		filePath,
+		normalizeDiagnostics(filePath, diagnostics, observedTs),
+		observedTs,
+		key,
+	);
 	return true;
 }
 
@@ -1809,7 +1844,7 @@ export async function reconcileStaleWidgetFiles(
 		rec.hasFinalDiagnosticsSnapshot = false;
 		rec.touchedAt = Math.max(Date.now(), v.mtimeMs);
 	}
-	if (changed > 0) requestRenderFn?.();
+	if (changed > 0) requestRender();
 	return changed;
 }
 
@@ -1909,7 +1944,7 @@ export async function reconcileStaleWidgetDependencyBlockers(
 			rec.diagnostics = capStoredDiagnostics(rec.allDiagnostics);
 		}
 	}
-	if (demoted > 0) requestRenderFn?.();
+	if (demoted > 0) requestRender();
 	return { demoted, truncatedImports };
 }
 
@@ -1994,7 +2029,7 @@ export function markWidgetFileBlockersStale(
 	if (changed) {
 		rec.diagnosticCounts = countDiagnostics(rec.allDiagnostics);
 		rec.diagnostics = capStoredDiagnostics(rec.allDiagnostics);
-		requestRenderFn?.();
+		requestRender();
 	}
 	return changed;
 }
@@ -2096,7 +2131,7 @@ export function retireWidgetDependencyDriftBlockers(filePath: string): boolean {
 	// drain — either way, defensive: it keeps a just-retired file from being
 	// double-drained (and double-charged) on the next pass.
 	renderedDependencyDriftFiles.delete(rec.filePath);
-	requestRenderFn?.();
+	requestRender();
 	return true;
 }
 
@@ -2387,6 +2422,54 @@ function fitCompactHeader(
 	return fitLine(` ${label}${langs}${tail}`, width);
 }
 
+/**
+ * The widget header's tallies, and the issue-status projection's only source.
+ * One store, one tally: the status line must never recount independently
+ * (#1892). `hasRenderableCheckedFile` mirrors the header's `✓ clean` gate —
+ * a drawn row for a file no check can cover is not a completed check (#5287).
+ */
+export interface WidgetSummary {
+	totalBlocking: number;
+	totalErrors: number;
+	totalWarnings: number;
+	totalSuppressed: number;
+	hasPendingAnalysis: boolean;
+	uncheckedCount: number;
+	hasRenderableCheckedFile: boolean;
+	hasFiles: boolean;
+}
+
+function summarizeWidget(
+	records: readonly FileRecord[],
+	renderable: readonly FileRecord[],
+	unchecked: readonly FileRecord[],
+): WidgetSummary {
+	return {
+		totalBlocking: countBlockingIn(records),
+		totalErrors: countTotalIn("error", records),
+		totalWarnings: countTotalIn("warning", records),
+		totalSuppressed: countSuppressedIn(records),
+		hasPendingAnalysis: records.some(isPendingAnalysis),
+		uncheckedCount: unchecked.length,
+		hasRenderableCheckedFile: renderable.some(
+			(rec) => rec.uncheckedInapplicable !== true,
+		),
+		hasFiles: records.length > 0,
+	};
+}
+
+/** The current store's tallies, without rendering a widget frame. */
+export function getWidgetSummary(): WidgetSummary {
+	const records = [...files.values()];
+	const renderable: FileRecord[] = [];
+	const unchecked: FileRecord[] = [];
+	for (const rec of records) {
+		if (shouldRenderFile(rec)) renderable.push(rec);
+		if (isUncheckedClean(rec)) unchecked.push(rec);
+	}
+	return summarizeWidget(records, renderable, unchecked);
+}
+
 export function renderWidget(
 	width: number,
 	theme: {
@@ -2421,27 +2504,28 @@ export function renderWidget(
 		.slice(0, 5)
 		.sort((a, b) => b.touchedAt - a.touchedAt);
 	const langStr = sessionLanguages.slice(0, 6).join(" ");
-	const totalBlocking = countBlockingIn(records);
-	const totalErrors = countTotalIn("error", records);
-	const totalWarnings = countTotalIn("warning", records);
-	const totalSuppressed = countSuppressedIn(records);
-	const hasPendingAnalysis = records.some(isPendingAnalysis);
 	const uncheckedFiles = records.filter(isUncheckedClean);
+	const summaryFacts = summarizeWidget(records, renderable, uncheckedFiles);
 	const errorChunk =
-		totalErrors > 0
-			? (totalBlocking > 0 ? red : yellow)(`●${totalErrors}E`)
+		summaryFacts.totalErrors > 0
+			? (summaryFacts.totalBlocking > 0 ? red : yellow)(
+					`●${summaryFacts.totalErrors}E`,
+				)
 			: "";
-	const warningChunk = totalWarnings > 0 ? yellow(`!${totalWarnings}W`) : "";
+	const warningChunk =
+		summaryFacts.totalWarnings > 0
+			? yellow(`!${summaryFacts.totalWarnings}W`)
+			: "";
 	const summary = errorChunk
 		? errorChunk + (warningChunk ? " " + warningChunk : "")
 		: warningChunk
 			? warningChunk
-			: uncheckedFiles.length > 0
-				? yellow(`⚠ ${uncheckedFiles.length} unchecked`)
+			: summaryFacts.uncheckedCount > 0
+				? yellow(`⚠ ${summaryFacts.uncheckedCount} unchecked`)
 				: // #5287: a formatter row for a file no check can cover (a generated
 					// file) is not a completed check; `✓ clean` needs one that is.
-					renderable.some((rec) => rec.uncheckedInapplicable !== true) &&
-					  !hasPendingAnalysis
+					summaryFacts.hasRenderableCheckedFile &&
+					  !summaryFacts.hasPendingAnalysis
 					? green("✓ clean")
 					: "";
 
@@ -2473,8 +2557,10 @@ export function renderWidget(
 
 	const header = ` ${cyan("pi-lens")}${langStr ? "  " + dim(langStr) : ""}${lspChip}${summary ? "  " + summary : ""}`;
 	lines.push(fitLine(header, w));
-	if (totalSuppressed > 0) {
-		lines.push(fitLine(` ${dim(`suppressed: ${totalSuppressed}`)}`, w));
+	if (summaryFacts.totalSuppressed > 0) {
+		lines.push(
+			fitLine(` ${dim(`suppressed: ${summaryFacts.totalSuppressed}`)}`, w),
+		);
 	}
 
 	const labelOf = (rec: FileRecord) => rowLabel(rec, records);
@@ -2890,7 +2976,7 @@ function capStoredDiagnostics(
 
 function countTotalIn(
 	severity: "error" | "warning",
-	recs: FileRecord[],
+	recs: readonly FileRecord[],
 ): number {
 	let n = 0;
 	for (const rec of recs) {
@@ -2900,7 +2986,7 @@ function countTotalIn(
 	return n;
 }
 
-function countSuppressedIn(recs: FileRecord[]): number {
+function countSuppressedIn(recs: readonly FileRecord[]): number {
 	let n = 0;
 	for (const rec of recs) {
 		for (const diagnostic of rec.allDiagnostics) {
@@ -2910,7 +2996,7 @@ function countSuppressedIn(recs: FileRecord[]): number {
 	return n;
 }
 
-function countBlockingIn(recs: FileRecord[]): number {
+function countBlockingIn(recs: readonly FileRecord[]): number {
 	let n = 0;
 	for (const rec of recs) n += rec.diagnosticCounts.blocking;
 	return n;
@@ -2918,6 +3004,17 @@ function countBlockingIn(recs: FileRecord[]): number {
 
 function requestRender(): void {
 	requestRenderFn?.();
+	// A projection listener is a consumer of the store, never part of the
+	// write. A throw here must not escape the writer that already committed.
+	try {
+		widgetChangeFn?.();
+	} catch (err) {
+		recordDegradationOnce({
+			kind: "widget-change-listener-failed",
+			subject: "widget-store",
+			reason: `store-change listener threw: ${err instanceof Error ? err.message : String(err)}`,
+		});
+	}
 }
 
 function osc8(uri: string, label: string): string {

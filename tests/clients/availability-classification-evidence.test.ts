@@ -173,6 +173,52 @@ describe("decision records say how they were classified (#1500)", () => {
 	});
 });
 
+describe("a superseded flight's record (#5595)", () => {
+	// Recurrence (#5595 B1): a trust change starts a second flight over the
+	// cwd's one entry. The replaced flight wrote nothing to the latch, but its
+	// row still said `latched: true`, so a reader of the log saw its failure as
+	// the durable state while the newer flight's success stood.
+	it("logs the replaced flight's verdict as not latched", async () => {
+		const { setProjectTrustState } =
+			await import("../../clients/project-trust.js");
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-superseded-"));
+		tempDirs.push(cwd);
+		let reached: () => void = () => {};
+		const olderSpawned = new Promise<void>((resolve) => {
+			reached = resolve;
+		});
+		let finishOlder: (result: unknown) => void = () => {};
+		safeSpawnAsync.mockImplementationOnce(() => {
+			reached();
+			return new Promise((resolve) => {
+				finishOlder = resolve;
+			});
+		});
+		safeSpawnAsync.mockResolvedValueOnce({
+			status: 0,
+			stdout: "1.0",
+			stderr: "",
+			error: null,
+		});
+		const checker = createAvailabilityChecker("faketool");
+
+		setProjectTrustState("untrusted");
+		const older = checker.isAvailableAsync(cwd);
+		await olderSpawned;
+		setProjectTrustState("trusted");
+		expect(await checker.isAvailableAsync(cwd)).toBe(true);
+		finishOlder({ status: 2, stdout: "", stderr: "bad flag", error: null });
+		await older;
+
+		expect(
+			decisions().map((row) => [row?.verdict, row?.outcome, row?.latched]),
+		).toEqual([
+			["available", "success", true],
+			["unavailable", "non-installable", false],
+		]);
+	});
+});
+
 describe("a failed install is a recorded assertion, not a silent latch (#1500)", () => {
 	it("records the install failure beside the missing verdict", async () => {
 		safeSpawnAsync.mockResolvedValue(notFoundResult);

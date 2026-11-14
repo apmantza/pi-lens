@@ -72,11 +72,6 @@ const FINDER_FILES: ReadonlyArray<readonly [string, FinderForm, string]> = [
 		"`which()` latches a per-command verdict and replays its cooldown",
 	],
 	[
-		"clients/lsp/jvm-runtime.ts",
-		"seam",
-		"`runJavaProbe` latches the java verdict",
-	],
-	[
 		"clients/package-manager.ts",
 		"seam",
 		"`probeAvailability` latches one verdict per package manager",

@@ -86,7 +86,7 @@ vi.mock(
 				await fixer.resolve();
 				return "fixer-cmd";
 			},
-			resolveCommandArgsWithInstallFallback: async () => {
+			resolveRubocopCommand: async () => {
 				await fixer.resolve();
 				return { cmd: "fixer-cmd", args: [] };
 			},

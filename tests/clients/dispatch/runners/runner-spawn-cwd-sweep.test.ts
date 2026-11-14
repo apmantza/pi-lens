@@ -148,7 +148,9 @@ const POPULATION_FILES = [
  * listGitHeadDelta (opaque-mutation-scan.ts, already counted).
  */
 // #5087: 79 -> 80, clients/metrics/complexity-baseline.ts (two git reads).
-const EXPECTED_FILES = 80;
+// #5410: 80 -> 79, clients/lsp/jvm-runtime.ts stopped spawning `which java`:
+// the registry's PATH-only checker probes it.
+const EXPECTED_FILES = 79;
 // 135 -> 134 (#4532 round 3): `findBinaryOnPath` stopped spawning
 // `which`/`where` — the bare-command probe resolved its own binary through the
 // path and cwd it was asked to judge, so a project-supplied `which` ran. It is
@@ -165,7 +167,10 @@ const EXPECTED_FILES = 80;
 // `probeAstGrepCommandAsync` direct `safeSpawnAsync` site goes with it.
 // 128 -> 130 (#5087): the complexity baseline's `git for-each-ref` and
 // `git show` reads of the default branch.
-const EXPECTED_DIRECT_SITES = 130;
+// 130 -> 127 (#5410): `runJavaProbe`, `verifyOrInstallCommand` and
+// `resolveCommandArgsWithInstallFallback` each held a private spawn; the
+// checker's one probe answers for all three now.
+const EXPECTED_DIRECT_SITES = 127;
 /**
  * Every same-file spawn-routing wrapper call site the scan discovers. Pinned
  * as a LIST, not a count, because the list is the part round 2 got wrong: it
@@ -200,7 +205,6 @@ const EXPECTED_WRAPPER_SITES = [
 	"clients/dispatch/runners/utils/lazy-installer.ts:performInstall",
 	"clients/dispatch/runners/utils/lazy-installer.ts:runLazyInstall",
 	"clients/dispatch/runners/utils/lazy-installer.ts:runLazyInstall",
-	"clients/dispatch/runners/utils/runner-helpers.ts:verifyOrInstallCommand",
 	"clients/git-tracked-ignore.ts:fetchUntrackedIgnoredIds",
 	"clients/git-tracked-ignore.ts:fetchTrackedFiles",
 	"clients/gitleaks-client.ts:runScan",
@@ -338,10 +342,6 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/knip-client.ts#KnipClient.analyze:a1223aae~98d0e4c5",
 		"the analysis root reaches runAnalyze as `key` (path.resolve(targetDir)); the name carries no `cwd`, so the wrapper rule reads it as unsupplied. Same #2894 verdict as dead-code-client: the input is a directory, and `resolveToolCwd` dirnames its `file` argument",
-	],
-	[
-		"clients/lsp/jvm-runtime.ts#runJavaProbe:41cf49b2",
-		"`which java` / `where java` PATH lookup for the JVM language servers",
 	],
 	[
 		"clients/lsp/server.ts#tryGoInstallGopls:a28791c7",
@@ -544,18 +544,6 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/dispatch/runners/utils/runner-helpers.ts#createAvailabilityChecker.isAvailableAsync:1fe0ada7~d99d2124",
 		"cwd is `resolvedCwd`, the availability checker's own cwd argument; the checker is the seam every runner probes through",
-	],
-	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#verifyOrInstallCommand:d8e8ec06~dbf27697",
-		"cwd is verifyOrInstallCommand's own `cwd` parameter; its one call site in this file is the checked one",
-	],
-	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandArgsWithInstallFallback:9c80ba48~20ebaba4",
-		"cwd is resolveCommandArgsWithInstallFallback's own `cwd` parameter, used for the `--version` verification spawn",
-	],
-	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandArgsWithInstallFallback:3cdfdce7~dbf27697",
-		"resolveCommandArgsWithInstallFallback forwards its own `cwd` parameter into verifyOrInstallCommand",
 	],
 	[
 		"clients/file-utils.ts#detectFileChangedAfterCommand:04d17168~dbf27697",

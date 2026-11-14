@@ -1522,7 +1522,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"see a caller's bound.",
 		owner: "#4476",
 	},
-	"clients/runtime-tool-result.ts#resyncHeadMove:53bad99d~539bb4dc": {
+	"clients/runtime-tool-result.ts#resyncHeadMove:8bb2e300~91bdc897": {
 		family: "hook-await",
 		site: "tool_result_read_only",
 		reason:
@@ -2394,7 +2394,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// splits the managed rungs into `findManagedRung` and routes the fall-through
 	// through `nextRung`; one more await, under the same probe budget and
 	// equally unbounded from the hook signal.
-	"clients/dispatch/runners/utils/runner-helpers.ts": 33,
+	// #5410 remainder: 33 -> 31 — `verifyOrInstallCommand` and
+	// `resolveCommandArgsWithInstallFallback` (five awaits) are deleted;
+	// `toolOnPath` and `resolveRubocopCommand` add three, each an await of the
+	// checker's own probe.
+	"clients/dispatch/runners/utils/runner-helpers.ts": 31,
 	// #5087: the edit's re-measure plus its one default-branch read (9 in
 	// all; 10 -> 9 when the first touch took its table from the analyzer's
 	// own measure, #5443 review F6). Its awaits are the shared parser (init,

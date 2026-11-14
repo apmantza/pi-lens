@@ -42,10 +42,13 @@ function flatten(entries: Entry[]): Entry[] {
 function allEntries(report: {
 	api: unknown[];
 	internal: unknown[];
+	unclassified?: unknown[];
 }): Array<Entry & { kind: string; signature?: string }> {
-	return flatten([...report.api, ...report.internal] as Entry[]) as Array<
-		Entry & { kind: string; signature?: string }
-	>;
+	return flatten([
+		...report.api,
+		...report.internal,
+		...(report.unclassified ?? []),
+	] as Entry[]) as Array<Entry & { kind: string; signature?: string }>;
 }
 
 const SERVICE = [
