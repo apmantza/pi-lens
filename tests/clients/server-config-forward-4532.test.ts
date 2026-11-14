@@ -393,6 +393,64 @@ describe.each(["Cargo.toml", "go.mod"])(
 	},
 );
 
+// Recurrence (#5501 r3, review F1): the first look walks every declaration
+// file, and only a below-root manifest may take the config path. Without the
+// `isBelowRootConfig` filter, a fresh `.d.ts` at a first look went out as a
+// config change with its paths unknown, refusing the diagnostics cache for the
+// whole root on a look that #4476 keeps silent (reviewer probe).
+describe("a fresh declaration file at the root's first look", () => {
+	it("publishes nothing for a fresh declaration file at the first look", async () => {
+		fs.mkdirSync(path.join(tmp, "types"));
+		fs.writeFileSync(path.join(tmp, "types", "x.d.ts"), "export {};\n");
+		const seen = recordPublishes();
+		await lookForOutOfBandChanges(tmp, "tool_result", runtime, {
+			since: Date.now() - 10_000,
+			walk: "interval",
+		});
+		expect(seen).toEqual([]);
+		expect(notified).toEqual([]);
+	});
+});
+
+// Recurrence (#5501 r3, review F1): the first look forwards a config fresher
+// than the client's epoch less the 1 s coarse-clock slack that
+// `firstLookSawInstall` also takes. Without the slack (`floor = since`), a root
+// manifest written 500 ms before the spawn is dropped, and the server keeps the
+// bytes it read at spawn. The 1500 ms case pins the other edge: a manifest past
+// the slack stays unforwarded.
+describe("a root Cargo.toml at the first look, against the 1 s slack", () => {
+	const config = () => path.join(tmp, "Cargo.toml");
+	const writeBeforeSpawn = (msBefore: number, since: number) => {
+		fs.writeFileSync(config(), "{}\n");
+		const at = new Date(since - msBefore);
+		fs.utimesSync(config(), at, at);
+	};
+
+	it("is forwarded as Changed when written 500 ms before the client spawned", async () => {
+		const since = Date.now() - 10_000;
+		writeBeforeSpawn(500, since);
+		const seen = recordPublishes();
+		await lookForOutOfBandChanges(tmp, "tool_result", runtime, {
+			since,
+			walk: "interval",
+		});
+		expect(seen).toHaveLength(1);
+		expect(notified).toEqual([{ filePath: config(), type: 2 }]);
+	});
+
+	it("is only recorded when written 1500 ms before the client spawned", async () => {
+		const since = Date.now() - 10_000;
+		writeBeforeSpawn(1500, since);
+		const seen = recordPublishes();
+		await lookForOutOfBandChanges(tmp, "tool_result", runtime, {
+			since,
+			walk: "interval",
+		});
+		expect(seen).toEqual([]);
+		expect(notified).toEqual([]);
+	});
+});
+
 describe("a Python stub (.pyi) changed outside pi-lens (#4532 gap 3b)", () => {
 	const stub = () => path.join(tmp, "stubs", "dep.pyi");
 
