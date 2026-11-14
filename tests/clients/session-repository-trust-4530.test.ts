@@ -30,6 +30,7 @@ import {
 } from "../../clients/degradation-ledger.js";
 import { truncateForLedger } from "../../clients/ledger-bounds.js";
 import { createAvailabilityLatch } from "../../clients/dispatch/runners/utils/availability-policy.js";
+import { resetDispatchAvailabilityState } from "../../clients/dispatch/runners/utils/runner-helpers.js";
 import {
 	clearFormatterCache,
 	getFormattersForFile,
@@ -984,6 +985,15 @@ describe.skipIf(!POSIX)("package-manager global lookups (#4530)", () => {
 				PATH: `${process.env.PATH}${path.delimiter}${path.join(layout.main, "bin")}`,
 			}),
 		);
+
+		// #5607: the first call loads its probe helpers lazily, and awaits that
+		// load before asking `java` anything. Cold, the flip below lands first
+		// and the "untrusted" call asks under trust, so no untrusted probe is in
+		// flight; the sibling case warmed it, which made the order matter. Warm
+		// it here, then drop the verdict that call latched so the probe is real.
+		await resolveJavaRuntimeEnv();
+		_resetJvmRuntimeCacheForTests();
+		resetDispatchAvailabilityState();
 
 		// The untrusted probe is in flight (its search path is already scoped)
 		// when pi trusts the project and a second caller asks.
