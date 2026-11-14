@@ -150,7 +150,11 @@ import {
 // v8 (#1070): call/reference evidence now records call-like vs type-only
 // references and tree-sitter query coverage, so call-graph consumers cannot
 // mistake incomplete extraction for a clean zero.
-export const REVIEW_GRAPH_VERSION = "v8";
+// v9 (#5599): per-language export rules. A v8 snapshot has no Rust enum/trait/
+// const/type/mod nodes and writes `exported:false` for every non-JS symbol, so
+// serving it under the new extractor would keep those answers for every
+// unchanged file; it is rebuilt instead.
+export const REVIEW_GRAPH_VERSION = "v9";
 const MAIN_KINDS = new Set([
 	"jsts",
 	"python",
@@ -6466,7 +6470,7 @@ export function extractSymbolsAndRefsFromGraph(graph: ReviewGraph): {
 			line: numberMetadata(node, "line") ?? 1,
 			endLine: numberMetadata(node, "endLine"),
 			column: numberMetadata(node, "column") ?? 1,
-			isExported: node.exported === true,
+			isExported: node.exported,
 		};
 		nodeSymbols.set(node.id, sym);
 		const list = allSymbols.get(node.filePath) ?? [];

@@ -155,7 +155,11 @@ describe("moduleReport — outline + structure", () => {
 
 		expect(report.available).toBe(true);
 		expect(report.language).toBe("python");
-		const names = [...report.api, ...report.internal].map((e) => e.name);
+		const names = [
+			...report.api,
+			...report.internal,
+			...(report.unclassified ?? []),
+		].map((e) => e.name);
 		expect(names).toContain("greet");
 		expect(names).toContain("Greeter");
 	});
@@ -468,7 +472,9 @@ describe("moduleReport — outline + structure", () => {
 			]);
 		const find = async (file: string, name: string) => {
 			const r = await moduleReport(file, env.tmpDir);
-			return flatten([...r.api, ...r.internal]).find((s) => s.name === name);
+			return flatten([...r.api, ...r.internal, ...(r.unclassified ?? [])]).find(
+				(s) => s.name === name,
+			);
 		};
 
 		// Python: multiple decorators as preceding siblings of a decorated_definition.
@@ -520,7 +526,7 @@ describe("moduleReport — outline + structure", () => {
 			]);
 		const isAsync = async (file: string, name: string) => {
 			const r = await moduleReport(file, env.tmpDir);
-			return flatten([...r.api, ...r.internal])
+			return flatten([...r.api, ...r.internal, ...(r.unclassified ?? [])])
 				.find((s) => s.name === name)
 				?.flags?.includes("async");
 		};
@@ -696,9 +702,11 @@ describe("moduleReport — doc-comment first line (#512)", () => {
 			].join("\n"),
 		);
 		const report = await moduleReport(file, env.tmpDir);
-		const greet = [...report.api, ...report.internal].find(
-			(e) => e.name === "greet",
-		);
+		const greet = [
+			...report.api,
+			...report.internal,
+			...(report.unclassified ?? []),
+		].find((e) => e.name === "greet");
 		expect(greet?.doc).toBe("Greets a person by name.");
 	});
 });

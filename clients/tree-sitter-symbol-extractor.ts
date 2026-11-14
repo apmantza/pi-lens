@@ -759,9 +759,10 @@ const KOTLIN_ACCESS: AccessRule = {
 };
 
 // C#: `public` exported; the default (internal or private), `internal`,
-// `protected` and `private` are not. Interface members are public unless
-// `private`. No body boundary: C# has no local classes, and its local functions
-// are not in the defs query.
+// `protected` and `private` are not. An interface member is public unless an
+// explicit `private`, `internal` or `protected` says otherwise (C# 8+). No body
+// boundary: C# has no local classes, and its local functions are not in the
+// defs query.
 const CSHARP_ACCESS: AccessRule = {
 	containers: [
 		"class_declaration",
@@ -777,7 +778,7 @@ const CSHARP_ACCESS: AccessRule = {
 				(c: ExportNode) => c?.type === "modifier" && c.text === keyword,
 			);
 		return node.parent?.parent?.type === "interface_declaration"
-			? !has("private")
+			? !has("private") && !has("internal") && !has("protected")
 			: has("public");
 	},
 };

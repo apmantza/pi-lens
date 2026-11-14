@@ -9,11 +9,23 @@
  * 1944 symbols exported and an edit to a `pub fn` never raised "exported symbol
  * changed".
  */
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { FactStore } from "../../clients/dispatch/fact-store.js";
+import { getProjectDataDir } from "../../clients/file-utils.js";
+import {
+	moduleReport,
+	renderCompactModuleReport,
+} from "../../clients/module-report.js";
 import {
 	buildOrUpdateGraph,
+	clearReviewGraphWorkspaceCache,
+	extractSymbolsAndRefsFromGraph,
 	flushReviewGraphPersistsForTests,
+	getCachedReviewGraph,
+	isReviewGraphMigrationNeeded,
+	REVIEW_GRAPH_VERSION,
 	waitForReviewGraphPersistsForTests,
 } from "../../clients/review-graph/builder.js";
 import { computeImpactCascade } from "../../clients/review-graph/query.js";
@@ -105,6 +117,10 @@ const CELLS: Record<string, Cell> = {
 			"type T struct{}",
 			"type t struct{}",
 			"func x() { type Loc struct{} }",
+			// Non-ASCII: go/ast.IsExported uses unicode.IsUpper, so `Éa` is exported
+			// and `éa` is not. An ASCII-only `[A-Z]` test answers false for both.
+			"func Éa() {}",
+			"func éa() {}",
 		].join("\n"),
 		exported: {
 			Foo: true,
@@ -115,6 +131,8 @@ const CELLS: Record<string, Cell> = {
 			t: false,
 			x: false,
 			Loc: false,
+			Éa: true,
+			éa: false,
 		},
 	},
 	java: {
@@ -134,6 +152,9 @@ const CELLS: Record<string, Cell> = {
 			"}",
 			"class P { public void p() {} }",
 			"public interface I { void im(); private void pm() {} }",
+			// A type nested in an annotation type is implicitly public, like an
+			// interface member (annotation elements themselves are not extracted).
+			"public @interface Ann { class AnnInner { public void am() {} } }",
 		].join("\n"),
 		exported: {
 			Outer: true,
@@ -153,6 +174,8 @@ const CELLS: Record<string, Cell> = {
 			I: true,
 			im: true,
 			pm: false,
+			AnnInner: true,
+			am: true,
 		},
 	},
 	kotlin: {
@@ -196,7 +219,7 @@ const CELLS: Record<string, Cell> = {
 			"    protected void e() {}",
 			"  }",
 			"  class P { public void p() {} }",
-			"  public interface I { void im(); }",
+			"  public interface I { void im(); internal void hid() {} protected void pro() {} private void pri() {} public void pub() {} }",
 			"  public struct S { public void sm() {} }",
 			"  public enum E { X }",
 			"}",
@@ -212,6 +235,12 @@ const CELLS: Record<string, Cell> = {
 			p: false,
 			I: true,
 			im: true,
+			// An explicit non-public modifier on an interface member is honoured;
+			// an unmodified member is public (C# 8+).
+			hid: false,
+			pro: false,
+			pri: false,
+			pub: true,
 			S: true,
 			sm: true,
 			E: true,
@@ -312,9 +341,120 @@ describe("the review graph carries the rule's answer to its readers (#5599)", ()
 			expect(flagsOf("alpha")).toContain("exported symbol changed");
 			expect(flagsOf("beta")).not.toContain("exported symbol changed");
 			expect(flagsOf("gamma")).not.toContain("exported symbol changed");
+			// The call-graph view of the node keeps unknown unknown too: reading it
+			// as `node.exported === true` made every no-rule symbol "not exported".
+			const gamma = extractSymbolsAndRefsFromGraph(graph)
+				.allSymbols.get(node("gamma")?.filePath as string)
+				?.find((s) => s.name === "gamma");
+			expect(gamma, "gamma in the call-graph symbols").toBeDefined();
+			expect(gamma?.isExported).toBeUndefined();
 		} finally {
 			flushReviewGraphPersistsForTests();
 			await waitForReviewGraphPersistsForTests();
+			env.cleanup();
+		}
+	});
+});
+
+describe("module_report keeps unknown visibility unknown (#5599)", () => {
+	// Recurrence: acceptance 2 held for the graph node only. module_report read
+	// `sym.isExported || node.exported` as a boolean, so a Python file rendered
+	// "N symbols, 0 exported" with every symbol under INTERNAL.
+	it("a no-rule language has no API/INTERNAL split and no export count", async () => {
+		const env = setupTestEnvironment("pi-lens-export-modreport-py-");
+		try {
+			const file = createTempFile(
+				env.tmpDir,
+				"sample.py",
+				"def public_api():\n    pass\n\ndef _private():\n    pass\n",
+			);
+			const report = await moduleReport(file, env.tmpDir);
+			expect(report.available).toBe(true);
+			expect(report.api).toEqual([]);
+			expect(report.internal).toEqual([]);
+			expect(report.unclassified?.map((e) => e.name).sort()).toEqual([
+				"_private",
+				"public_api",
+			]);
+			expect(report.unclassified?.every((e) => e.exported === undefined)).toBe(
+				true,
+			);
+			expect(report.summary.exports).toBeUndefined();
+			expect(report.summary.symbols).toBe(2);
+			const text = renderCompactModuleReport(report);
+			expect(text.split("\n")[0]).toContain("2 symbols");
+			expect(text.split("\n")[0]).not.toContain("exported");
+			expect(text).not.toContain("INTERNAL:");
+			expect(text).not.toContain("API:\n");
+			expect(text).toContain("SYMBOLS (visibility unknown):");
+			expect(text).toContain("public_api");
+		} finally {
+			clearReviewGraphWorkspaceCache();
+			env.cleanup();
+		}
+	});
+
+	it("a rule language still splits: pub fn is API, private fn is INTERNAL, count is real", async () => {
+		const env = setupTestEnvironment("pi-lens-export-modreport-rs-");
+		try {
+			const file = createTempFile(
+				env.tmpDir,
+				"lib.rs",
+				"pub fn open() {}\nfn hidden() {}\n",
+			);
+			const report = await moduleReport(file, env.tmpDir);
+			expect(report.api.map((e) => e.name)).toEqual(["open"]);
+			expect(report.internal.map((e) => e.name)).toEqual(["hidden"]);
+			expect(report.unclassified).toBeUndefined();
+			expect(report.summary.exports).toBe(1);
+			expect(renderCompactModuleReport(report).split("\n")[0]).toContain(
+				"1 exported",
+			);
+		} finally {
+			clearReviewGraphWorkspaceCache();
+			env.cleanup();
+		}
+	});
+});
+
+describe("a graph persisted before #5599 is not reused (#5599)", () => {
+	// Recurrence: a v8 snapshot written by the old extractor has no enum/trait
+	// nodes and every non-JS symbol `exported:false`. Loading it under the new
+	// extractor serves those stale answers for every unchanged file, so the
+	// version is bumped and the v8 snapshot must read as needing migration.
+	it("a v8 snapshot is stale and getCachedReviewGraph refuses it", async () => {
+		const env = setupTestEnvironment("pi-lens-export-v8-");
+		try {
+			expect(REVIEW_GRAPH_VERSION).not.toBe("v8");
+			const cacheDir = path.join(getProjectDataDir(env.tmpDir), "cache");
+			fs.mkdirSync(cacheDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(cacheDir, "review-graph.json"),
+				JSON.stringify({
+					version: "v8",
+					builtAt: "x",
+					signature: "s",
+					nodes: [
+						[
+							"a.rs:alpha:function:1",
+							{
+								id: "a.rs:alpha:function:1",
+								kind: "symbol",
+								language: "rust",
+								filePath: "a.rs",
+								symbolName: "alpha",
+								symbolKind: "function",
+								exported: false,
+							},
+						],
+					],
+					edges: [],
+				}),
+			);
+			expect(isReviewGraphMigrationNeeded(env.tmpDir)).toBe(true);
+			expect(getCachedReviewGraph(env.tmpDir)).toBeUndefined();
+		} finally {
+			clearReviewGraphWorkspaceCache();
 			env.cleanup();
 		}
 	});
