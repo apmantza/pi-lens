@@ -747,10 +747,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :62
 	"clients/lsp-mutation.ts": {
-		silent: 3,
-		identities: "717faab25bd5e210",
+		silent: 2,
+		identities: "b6057326211a2668",
 		reason: PRE_RULE,
-	}, // :404, :495, :540
+	}, // :546, :598
 	"clients/lsp/aggregation.ts": {
 		silent: 1,
 		identities: "6c214f59992042fc",

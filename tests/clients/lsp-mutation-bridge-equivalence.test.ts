@@ -26,13 +26,24 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../../clients/cache-manager.js";
 import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
+import {
 	type LspMutationContext,
 	recordLspMutation,
 } from "../../clients/lsp-mutation.js";
+import { getProjectDataDir } from "../../clients/file-utils.js";
+import { beginFixRun } from "../../clients/fix-run-restore.js";
 import { registerMutationBridge } from "../../clients/mutation-bridge.js";
+import {
+	_observedMutationStateForTests,
+	resetObservedMutationNet,
+} from "../../clients/observed-mutation.js";
 import { readChangesSince } from "../../clients/project-changes.js";
 import { countFileLines } from "../../clients/read-guard-tool-lines.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { retireScope } from "../../clients/session-scope.js";
 import { removeTempDirSync, setupTestEnvironment } from "./test-utils.js";
 
 const FIXTURE_LINES = [
@@ -594,5 +605,224 @@ describe("bookkeepLspMutation — direct path and bridge fallback are equivalent
 			{ receipt: true, fileSeq: 1, inTurnState: false, verdict: "block" },
 		]);
 		expect(stamp).not.toHaveBeenCalled();
+	});
+
+	// #5551: the writer table's G6 cell (`clients/writers.ts`, lsp-rename x
+	// fix-run-capture). Before the fold only the bridge branch protected an
+	// LSP edit from a running whole-package fixer (`noteAgentMutation`); the
+	// direct branch never did. The fold records both through one body, so the
+	// skip is now a dep the direct branch passes. Recurrence: a fold that
+	// drops the dep turns the cell from silent to reaches with no table edit
+	// and no maintainer decision.
+	it("skips noteAgentMutation for a direct LSP edit and reaches it through the bridge", async () => {
+		const directFile = writeFixture(dirDirect, "fixed.ts");
+		const bridgeFile = writeFixture(dirBridge, "fixed.ts");
+		const run = await beginFixRun({
+			tool: "g6-probe",
+			extension: ".ts",
+			candidates: [directFile, bridgeFile],
+		});
+		for (const filePath of [directFile, bridgeFile])
+			fs.appendFileSync(filePath, "const lspEdit = 9;\n");
+		recordLspMutation(
+			{
+				cwd: dirDirect,
+				correlationId: "g6-direct",
+				tool: "lsp_navigation:rename",
+				source: "lsp-rename",
+				runtime: runtimeDirect as never,
+				cacheManager: cacheManagerDirect,
+				readGuard: runtimeDirect.readGuard,
+				emitSummary: false,
+			},
+			{ results: resultsFor(directFile) },
+		);
+		recordLspMutation(
+			{
+				cwd: dirBridge,
+				correlationId: "g6-bridge",
+				tool: "lsp_navigation:rename",
+				source: "lsp-rename",
+				emitSummary: false,
+			},
+			{ results: resultsFor(bridgeFile) },
+		);
+		const finished = run.finish();
+		await finished.restore();
+		expect(finished.agentEdited).toEqual([bridgeFile]);
+	});
+
+	// #2504 review round 2 (F1), moved by #5551 into the direct branch's seam
+	// deps: `tools/lsp-navigation.ts` scopes `cwd` to a sub-package while the
+	// server's edit spans the monorepo, so the turn-state entry is judged
+	// against the project root, not the calling directory. Recurrence: the
+	// fold's cache-manager wrapper drops the root and a sibling package's
+	// renamed file leaves the turn_end worklist.
+	it("keeps a sibling package's edit in the turn state when the call's cwd is a sub-package", () => {
+		const callerDir = path.join(dirDirect, "pkg-a");
+		const siblingDir = path.join(dirDirect, "pkg-b");
+		fs.mkdirSync(callerDir);
+		fs.mkdirSync(siblingDir);
+		const sibling = writeFixture(siblingDir, "renamed.ts");
+		recordLspMutation(
+			{
+				cwd: callerDir,
+				correlationId: "root-direct",
+				tool: "lsp_navigation:rename",
+				source: "lsp-rename",
+				runtime: runtimeDirect as never,
+				cacheManager: cacheManagerDirect,
+				emitSummary: false,
+			},
+			{ results: resultsFor(sibling) },
+		);
+		expect(
+			Object.keys(cacheManagerDirect.readTurnState(callerDir).files ?? {}).some(
+				(key) => key.endsWith("renamed.ts"),
+			),
+		).toBe(true);
+	});
+
+	// #5592 review r1 F1: the direct branch caught each stage on its own, so
+	// a turn-state write that throws (the data dir cannot be created) still
+	// left the receipt, the handled mark and `acceptedFiles`. The fold put all
+	// stages under the seam's one catch and lost all three. Recurrence: a
+	// stage throw in `recordMutationOutcome` that ends the whole record, so
+	// the settled sweep reports the edit as drift (#2465) and its
+	// `appliedFiles` dispatch drops (#5248).
+	it("keeps the receipt, the handled mark and acceptedFiles when the turn-state write throws", () => {
+		resetObservedMutationNet();
+		resetDegradationLedger();
+		const filePath = writeFixture(dirDirect, "unusable.ts");
+		// Make the project's data directory a file, so the turn-state write's
+		// `mkdirSync` throws EEXIST.
+		const dataDir = getProjectDataDir(dirDirect);
+		fs.rmSync(dataDir, { recursive: true, force: true });
+		fs.mkdirSync(path.dirname(dataDir), { recursive: true });
+		fs.writeFileSync(dataDir, "not a directory");
+		const acceptedFiles: string[] = [];
+		const receiptsBefore = runtimeDirect.getMutationsSince(0).length;
+		recordLspMutation(
+			{
+				cwd: dirDirect,
+				correlationId: "eexist-direct",
+				tool: "lsp_navigation:rename",
+				source: "lsp-rename",
+				runtime: runtimeDirect as never,
+				cacheManager: cacheManagerDirect,
+				readGuard: runtimeDirect.readGuard,
+				acceptedFiles,
+				emitSummary: false,
+			},
+			{ results: resultsFor(filePath) },
+		);
+		expect({
+			accepted: acceptedFiles,
+			receipts: runtimeDirect.getMutationsSince(0).length - receiptsBefore,
+			handled: _observedMutationStateForTests().handled.some((key) =>
+				key.endsWith("unusable.ts"),
+			),
+			degraded: getDegradationSummary()
+				.filter((group) => group.kind === "mutation-bridge-stage-failed")
+				.flatMap((group) => group.latestReasons.map((r) => r.subject)),
+		}).toEqual({
+			accepted: [filePath],
+			receipts: 1,
+			handled: true,
+			degraded: ["turn-state"],
+		});
+	});
+
+	// #5592 verify r1 V1 (#3576): a replaced session's turn summary gets no
+	// autofix entry, whatever the seam's record did. The r2 direct branch read
+	// liveness from the seam's outcome, so a receipt that threw lost it and the
+	// dead session's summary was written. Recurrence: liveness for
+	// `recordAutofix` taken from the record's outcome, not from the session.
+	it("records no autofix for a replaced session when the direct branch's receipt throws", () => {
+		const filePath = writeFixture(dirDirect, "autofix.ts");
+		const session = runtimeDirect.captureSessionGeneration();
+		runtimeDirect.resetForSession();
+		runtimeDirect.recordProjectMutation = () => {
+			throw new Error("receipt exploded");
+		};
+		const autofixed: string[] = [];
+		recordLspMutation(
+			{
+				cwd: dirDirect,
+				correlationId: "autofix-dead",
+				tool: "lsp-quickfix",
+				source: "autofix",
+				runtime: runtimeDirect as never,
+				cacheManager: cacheManagerDirect,
+				session,
+				recordAutofix: (file) => autofixed.push(path.basename(file)),
+				emitSummary: false,
+			},
+			{ results: resultsFor(filePath) },
+		);
+		expect(autofixed).toEqual([]);
+	});
+
+	// #5592 review r1 F4: the fold checked the session twice per file, once
+	// in `bookkeepLspMutation` and once in the seam, so a dead session counted
+	// two stale writes for one dropped write. Recurrence: a second liveness
+	// probe on the direct branch that doubles `generation-guard-stale-write`.
+	it("counts one stale write per file for a direct LSP edit after the session is replaced", () => {
+		resetDegradationLedger();
+		const filePath = writeFixture(dirDirect, "stale.ts");
+		const session = runtimeDirect.captureSessionGeneration();
+		runtimeDirect.resetForSession();
+		recordLspMutation(
+			{
+				cwd: dirDirect,
+				correlationId: "stale-direct",
+				tool: "lsp_navigation:rename",
+				source: "lsp-rename",
+				runtime: runtimeDirect as never,
+				cacheManager: cacheManagerDirect,
+				session,
+				emitSummary: false,
+			},
+			{ results: resultsFor(filePath) },
+		);
+		expect(
+			getDegradationSummary()
+				.filter((group) => group.kind === "generation-guard-stale-write")
+				.reduce((total, group) => total + group.count, 0),
+		).toBe(1);
+	});
+
+	// #5551: the fold sends the direct branch through the seam's dead-session
+	// fence, which counts a dropped read-guard stamp (#3609 F1). A caller that
+	// threads no read guard was never owed a stamp, so it counts nothing, as
+	// the seam's own no-read-guard case does. Recurrence: the fold's
+	// `shouldStampReadGuard` dropped, so every direct LSP edit from a
+	// guard-less caller after /reload counts a false block.
+	it("counts a dropped read for a direct LSP edit only when its caller threads a read guard", () => {
+		const dropped = (withGuard: boolean) => {
+			resetDegradationLedger();
+			const filePath = writeFixture(dirDirect, `dropped-${withGuard}.ts`);
+			const session = runtimeDirect.captureSessionGeneration();
+			retireScope(runtimeDirect.sessionScope, "reload");
+			runtimeDirect.resetForSession();
+			recordLspMutation(
+				{
+					cwd: dirDirect,
+					correlationId: `dropped-${withGuard}`,
+					tool: "lsp_navigation:rename",
+					source: "lsp-rename",
+					runtime: runtimeDirect as never,
+					cacheManager: cacheManagerDirect,
+					...(withGuard && { readGuard: { recordWritten: vi.fn() } }),
+					session,
+					emitSummary: false,
+				},
+				{ results: resultsFor(filePath) },
+			);
+			return getDegradationSummary()
+				.filter((group) => group.kind === "session-scope-read-dropped")
+				.flatMap((group) => group.latestReasons.map((r) => r.subject));
+		};
+		expect([dropped(true), dropped(false)]).toEqual([["reload:observed"], []]);
 	});
 });
