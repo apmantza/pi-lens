@@ -15,15 +15,12 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import {
-	createAvailabilityChecker,
-	resolveAvailableOrInstall,
 	resolveToolCommandWithInstallFallback,
 	toolAbsentSkip,
 } from "./utils/runner-helpers.js";
 
 // SpotBugs is a JVM tool installed via the archive strategy (#133); java gates
 // it (no JRE → skip). It analyzes the *bytecode tree*, not the edited source.
-const spotbugs = createAvailabilityChecker("spotbugs", ".bat", ["-version"]);
 
 const MAX_DIAGNOSTICS = 50;
 const MAX_XML_BYTES = 4 * 1024 * 1024;
@@ -247,8 +244,8 @@ const spotbugsRunner: RunnerDefinition = {
 			};
 		}
 
-		const cmd = await resolveAvailableOrInstall(spotbugs, "spotbugs", cwd);
-		if (!cmd) return toolAbsentSkip(cwd, { id: "spotbugs", checker: spotbugs });
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "spotbugs");
+		if (!cmd) return toolAbsentSkip(cwd, { id: "spotbugs" });
 
 		// One file per RUN: pid and millisecond are shared by two cold starts of
 		// one process, and a shared file lets one run read or delete the other's.

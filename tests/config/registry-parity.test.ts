@@ -359,6 +359,8 @@ const COMMAND_SPEC_INSTALL_REASONS: Record<string, string> = {
 	"detekt->detekt":
 		"Standalone detekt-cli the user installs (Homebrew, SDKMAN or the release archive); the installer registry has no detekt entry and the runner skips without it.",
 	"java->java": HOST_TOOLCHAIN,
+	// Rubocop's bundler form asks whether bundler runs; pi-lens never installs it.
+	"bundle->bundle": HOST_TOOLCHAIN,
 };
 
 describe("Runner CLI scanner (#5418)", () => {

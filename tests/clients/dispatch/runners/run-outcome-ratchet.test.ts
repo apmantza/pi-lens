@@ -1760,8 +1760,6 @@ function migratedSpawnRows(
 export const OUT_OF_TREE_SPAWN_BASELINE: Record<string, string> = {
 	"clients/lsp/client.ts":
 		"spawn reads close,error on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
-	"clients/lsp/jvm-runtime.ts":
-		"safeSpawnAsync reads error,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
 	"clients/lsp/launch.ts":
 		"safeSpawn, spawn reads close,error,exit,exitCode,killed,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:4]",
 	"clients/lsp/server.ts":

@@ -22,7 +22,13 @@ vi.mock("../../../clients/latency-logger.js", async (importActual) => ({
 	>()),
 	logLatency,
 }));
-vi.mock("../../../clients/installer/index.js", () => ({
+vi.mock("../../../clients/installer/index.js", async (importOriginal) => ({
+	// The spread keeps every other installer export real. A host with no java
+	// reaches resetPathWalkMemo through toolOnPath's tool-not-found branch, and a
+	// partial factory throws on that access (#5595 verify V1).
+	...(await importOriginal<
+		typeof import("../../../clients/installer/index.js")
+	>()),
 	ensureTool: vi.fn(async () => null),
 	getToolEnvironment: () => ({}),
 	findManagedToolBinary: vi.fn(async () => undefined),

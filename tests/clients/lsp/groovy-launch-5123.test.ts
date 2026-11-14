@@ -27,6 +27,7 @@ import {
 	it,
 	vi,
 } from "vitest";
+import { resetDispatchAvailabilityState } from "../../../clients/dispatch/runners/utils/runner-helpers.js";
 import { _resetJvmRuntimeCacheForTests } from "../../../clients/lsp/jvm-runtime.js";
 import {
 	GROOVY_LANGUAGE_SERVER_JAR_ENV,
@@ -52,13 +53,16 @@ const jdkHome = path.join(home, ".jdks", "jdk-99");
 const jar = path.join(base, "groovy-language-server-all.jar");
 const STUB_OUT = path.join(base, "stub-out");
 /** An executable that records how it was started and then idles like a server. */
-function writeStub(dir: string, name: string): void {
+function writeStub(dir: string, name: string, versionExit = 0): void {
 	fs.mkdirSync(dir, { recursive: true });
 	const file = path.join(dir, name);
 	fs.writeFileSync(
 		file,
 		[
 			`#!${process.execPath}`,
+			// The availability probe (`java -version`) answers and leaves no
+			// record, as a JVM does; `versionExit: 1` is a JVM that cannot run.
+			`if (process.argv[2] === "-version") process.exit(${versionExit});`,
 			`import("node:fs").then((fs) => {`,
 			`  fs.writeFileSync(process.env.STUB_OUT + "." + ${JSON.stringify(name)}, JSON.stringify({ argv: process.argv.slice(2), javaHome: process.env.JAVA_HOME ?? null }));`,
 			`  process.stdin.resume();`,
@@ -140,12 +144,14 @@ describe.skipIf(process.platform === "win32")(
 			vi.stubEnv("PI_LENS_TEST_MODE", "0");
 			vi.stubEnv(GROOVY_LANGUAGE_SERVER_JAR_ENV, undefined);
 			_resetJvmRuntimeCacheForTests();
+			resetDispatchAvailabilityState();
 		});
 		afterEach(async () => {
 			await stop();
 			stop = async () => {};
 			vi.unstubAllEnvs();
 			_resetJvmRuntimeCacheForTests();
+			resetDispatchAvailabilityState();
 		});
 		afterAll(async () => {
 			await cleanupTestEnvironmentsDrained(TMP_PREFIX);
@@ -216,6 +222,24 @@ describe.skipIf(process.platform === "win32")(
 
 		it("gives the PATH launcher the same JVM env overlay", async () => {
 			writeStub(shimDir, "groovy-language-server");
+			writeStub(path.join(jdkHome, "bin"), "java");
+
+			const run = await spawnRow();
+			stop = run.stop;
+
+			expect(await recorded("groovy-language-server")).toEqual({
+				argv: [],
+				javaHome: jdkHome,
+			});
+		}, 30_000);
+
+		// Recurrence (#5410): the java probe was a bare `which java`, so a `java`
+		// that is on PATH but cannot run (the macOS /usr/bin/java stub with no
+		// JDK behind it) read as "java is on PATH" and the discovered JDK's
+		// overlay was never applied: the server launched without a JVM.
+		it("applies the JVM env overlay when the java on PATH fails its version probe", async () => {
+			writeStub(shimDir, "groovy-language-server");
+			writeStub(shimDir, "java", 1);
 			writeStub(path.join(jdkHome, "bin"), "java");
 
 			const run = await spawnRow();

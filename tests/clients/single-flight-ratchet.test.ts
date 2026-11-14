@@ -50,7 +50,6 @@ const EXEMPTIONS: Record<string, string> = {
 	"dispatch/runners/utils/runner-helpers.ts:resolveInstallInFlightByCwd":
 		"backlog: #1674's per-cwd install map, #1753",
 	"lsp/config.ts:configInFlight": "backlog: per-workspace config load, #1753",
-	"lsp/jvm-runtime.ts:inFlightJavaProbe": "backlog: single JVM probe, #1753",
 	"mcp/session.ts:inFlightIpcTurnEnds":
 		"backlog: per-cwd Stop-hook pass (#1274), #1753",
 	"installer/index.ts:_probeCacheWriteInFlight":

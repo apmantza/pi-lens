@@ -22,15 +22,13 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: () => ({
-			isAvailableAsync: async () => true,
-			getCommand: () => null,
-		}),
 		resolveToolCommandWithInstallFallback: async (
 			_cwd: string,
 			toolId: string,
-		) => (toolId === "java" && runtime.javaPresent ? "java" : null),
-		resolveAvailableOrInstall: async () => "spotbugs-stub",
+		) => {
+			if (toolId === "java") return runtime.javaPresent ? "java" : null;
+			return toolId === "spotbugs" ? "spotbugs-stub" : null;
+		},
 	}),
 );
 
