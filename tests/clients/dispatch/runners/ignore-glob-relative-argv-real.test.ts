@@ -1,5 +1,5 @@
-// flake-shape: real-process-spawn — the defect is yamllint's, markdownlint-cli2's
-// and oxlint's OWN ignore-glob matching against the path string they are
+// flake-shape: real-process-spawn — the defect is yamllint's, markdownlint-cli2's,
+// oxlint's and vale's OWN ignore-glob matching against the path string they are
 // handed, so a double has no matcher to model and a shim would not reproduce the
 // tool's ignore either.
 // lane: a case runs where its binary is on the PATH the runner's lookup walks —
@@ -45,6 +45,7 @@ import {
 
 import markdownlintRunner from "../../../../clients/dispatch/runners/markdownlint.js";
 import oxlintRunner from "../../../../clients/dispatch/runners/oxlint.js";
+import valeRunner from "../../../../clients/dispatch/runners/vale.js";
 import yamllintRunner from "../../../../clients/dispatch/runners/yamllint.js";
 import type { RunnerResult } from "../../../../clients/dispatch/types.js";
 import { runAutofix } from "../../../../clients/pipeline.js";
@@ -113,6 +114,20 @@ function plant(project: string): void {
 		`${JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/oxlint": { version: "1.0.0" } } })}\n`,
 	);
 	fs.writeFileSync(path.join(project, "src/bad.ts"), "debugger;\n");
+	// #5556: vale has no ignore key; a `.vale.ini` section glob that matches the
+	// path it is handed switches a rule off. The `[**/.claude/**]` section is
+	// that ignore here: it fires only when the matched string holds the
+	// project's own ancestor.
+	fs.mkdirSync(path.join(project, "styles/Test"), { recursive: true });
+	fs.writeFileSync(
+		path.join(project, "styles/Test/Foo.yml"),
+		'extends: existence\nmessage: "avoid %s"\nlevel: error\nignorecase: true\ntokens:\n  - foo\n',
+	);
+	fs.writeFileSync(
+		path.join(project, ".vale.ini"),
+		"StylesPath = styles\nMinAlertLevel = suggestion\n[*.md]\nBasedOnStyles = Test\n[**/.claude/**]\nTest.Foo = NO\n",
+	);
+	fs.writeFileSync(path.join(project, "src/v.md"), "This has foo in it.\n");
 	if (OXLINT_BIN) {
 		fs.mkdirSync(path.join(project, "node_modules/.bin"), { recursive: true });
 		fs.symlinkSync(OXLINT_BIN, path.join(project, "node_modules/.bin/oxlint"));
@@ -215,6 +230,20 @@ const RUNNERS = [
 		run: (filePath: string, project: string) =>
 			oxlintRunner.run(
 				makeRunnerCtx(filePath, project, { kind: "jsts" }) as never,
+			),
+	},
+	{
+		// #5556: vale matches its `.vale.ini` section globs against the argument.
+		runnerId: "vale",
+		binary: "vale",
+		file: "src/v.md",
+		controlRules: ["Test.Foo"],
+		// A vale file outside every project has no `.vale.ini`, so the runner
+		// never spawns for it: nothing to pin for the absolute fallback.
+		outsideReachable: false,
+		run: (filePath: string, project: string) =>
+			valeRunner.run(
+				makeRunnerCtx(filePath, project, { kind: "markdown" }) as never,
 			),
 	},
 ];
@@ -338,6 +367,23 @@ const LEADING_NAME_CASES = [
 				makeRunnerCtx(filePath, project, { kind: "jsts" }) as never,
 			),
 	},
+	// #5556: vale parses `-a.md` as the `-a` shorthand flag (`unknown shorthand
+	// flag: 'a' in -a.md`), so a bare project-relative name turned a lintable
+	// file into a failed run; `./-a.md` is a path.
+	{
+		runnerId: "vale",
+		binary: "vale",
+		name: "-a.md",
+		sibling: "plain-v.md",
+		content: "This has foo in it.\n",
+		expectedRules: ["Test.Foo"],
+		expectedTarget: "./-a.md",
+		separator: undefined,
+		run: (filePath: string, project: string) =>
+			valeRunner.run(
+				makeRunnerCtx(filePath, project, { kind: "markdown" }) as never,
+			),
+	},
 	// `:` is not a legal Windows file-name character, so this cell is POSIX only.
 	...(process.platform === "win32"
 		? []
@@ -406,7 +452,7 @@ describe.each(LEADING_NAME_CASES)(
 	},
 );
 
-describe.each(RUNNERS)(
+describe.each(RUNNERS.filter((runner) => runner.outsideReachable !== false))(
 	"$runnerId keeps the absolute argument for a file outside the project",
 	({ binary, file, run }) => {
 		describe.skipIf(!toolAvailable(binary))(`${binary} available`, () => {
