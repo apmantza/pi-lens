@@ -77,11 +77,11 @@ export type WriterCell =
 /**
  * Where a route's post-write record runs. `recordMutationOutcome`
  * (`clients/mutation-bridge.ts`) is the one body; the others are the
- * hand-copied recorders #5551 has not folded yet.
+ * hand-copied recorders still to fold onto it (the direct LSP branch folded
+ * in #5551).
  */
 export type WriterRecorder =
 	| "recordMutationOutcome"
-	| "lsp-direct"
 	| "tool-result"
 	| "agent-end-drain"
 	| "none";
@@ -140,8 +140,10 @@ const UNAUTHORED =
 	"by design: unauthored bytes create no authorship (#4131), and blockers are withheld for them (#3226)";
 const G2_GATE =
 	"the gate judges authorship, not the staged delta, so unauthored bytes commit (G2, an owner decision)";
+const G6_PROBE =
+	"[skips noteAgentMutation for a direct LSP edit and reaches it through the bridge]";
 const G6_SKIP =
-	"settle: the direct LSP branch skips noteAgentMutation by reading (G6); building it needs the maintainer's buy-in";
+	"the direct LSP branch passes recordMutationOutcome a no-op noteAgentMutation, as it never called it before #5551 (G6); reaching it needs the maintainer's buy-in";
 
 /** The cells every route leaves unprobed today, for the consumers no probe read. */
 function unread(settle: string): Record<WriterConsumer, WriterCell> {
@@ -460,7 +462,7 @@ export const WRITERS: readonly WriterRoute[] = [
 		writes: "the file and every importer the server edits",
 		authorship: "range",
 		attribution: "own-details",
-		recorders: ["lsp-direct"],
+		recorders: ["recordMutationOutcome"],
 		cells: {
 			dispatch: reaches("lsp-rename-apply: both files"),
 			"inline-stop": silent("lsp-rename-apply", G4_NO_INLINE),
@@ -469,7 +471,7 @@ export const WRITERS: readonly WriterRoute[] = [
 			"pre-edit-baseline": reaches(
 				"[commits an unrelated change to a file whose blocker is already in HEAD] (an LSP rename)",
 			),
-			"fix-run-capture": unprobed(G6_SKIP),
+			"fix-run-capture": silent(G6_PROBE, G6_SKIP),
 			"lsp-documents": reaches("lsp-rename-apply: didChange on both"),
 			"read-guard": reaches("lsp-rename-apply: written=[a.ts,b.ts]"),
 			"word-index": unprobed(WORD_INDEX_UNPROBED),
@@ -482,14 +484,14 @@ export const WRITERS: readonly WriterRoute[] = [
 		writes: "the renamed file and every importer the server edits",
 		authorship: "unknown",
 		attribution: "own-details",
-		recorders: ["lsp-direct"],
+		recorders: ["recordMutationOutcome"],
 		cells: {
 			dispatch: reaches("lsp-rename-file: c.ts"),
 			"inline-stop": silent("lsp-rename-file", G4_NO_INLINE),
 			"change-log": reaches("lsp-rename-file: row present"),
 			"commit-gate": reaches("lsp-rename-file"),
 			"pre-edit-baseline": unprobed(NOT_SEEDED),
-			"fix-run-capture": unprobed(G6_SKIP),
+			"fix-run-capture": silent(G6_PROBE, G6_SKIP),
 			"lsp-documents": reaches(
 				"lsp-rename-file: didClose, didOpen and watched-files",
 			),
@@ -504,14 +506,14 @@ export const WRITERS: readonly WriterRoute[] = [
 		writes: "any file the server edits inside the command's window",
 		authorship: "range",
 		attribution: "own-details",
-		recorders: ["lsp-direct"],
+		recorders: ["recordMutationOutcome"],
 		cells: {
 			dispatch: reaches("lsp-executecommand"),
 			"inline-stop": silent("lsp-executecommand", G4_NO_INLINE),
 			"change-log": reaches("lsp-executecommand: lsp-execute-command"),
 			"commit-gate": reaches("lsp-executecommand"),
 			"pre-edit-baseline": unprobed(NOT_SEEDED),
-			"fix-run-capture": unprobed(G6_SKIP),
+			"fix-run-capture": silent(G6_PROBE, G6_SKIP),
 			"lsp-documents": reaches("lsp-executecommand: didChange"),
 			"read-guard": reaches("lsp-executecommand: written=[a.ts]"),
 			"word-index": unprobed(WORD_INDEX_UNPROBED),
@@ -529,9 +531,7 @@ export const WRITERS: readonly WriterRoute[] = [
 			...unread(
 				"settle: release a deferred applyEdit after executeCommand times out (G9, lsp-exec-deferred)",
 			),
-			"fix-run-capture": unprobed(
-				"the bridge fallback reaches noteAgentMutation by reading (runAdmittedMutation)",
-			),
+			"fix-run-capture": reaches(G6_PROBE),
 		},
 	},
 	{
@@ -590,7 +590,7 @@ export const WRITERS: readonly WriterRoute[] = [
 		writes: "the files an allowlisted quickfix edits",
 		authorship: "whole-file",
 		attribution: "none",
-		recorders: ["lsp-direct"],
+		recorders: ["recordMutationOutcome"],
 		cells: {
 			...unread(
 				"settle: an agent_end drain probe with an allowlisted quickfix",
@@ -599,7 +599,7 @@ export const WRITERS: readonly WriterRoute[] = [
 			"pre-edit-baseline": na(
 				"the drain runs after the turn's writes, with no call to seed",
 			),
-			"fix-run-capture": unprobed(G6_SKIP),
+			"fix-run-capture": silent(G6_PROBE, G6_SKIP),
 		},
 	},
 	{

@@ -719,6 +719,29 @@ describe("the writer table", () => {
 		}
 	});
 
+	// A cell that cites a merged test by its bracketed title stays true only
+	// while that test exists. Recurrence: a renamed or deleted witness leaves
+	// the cell claiming a probe nothing runs. Comments are blanked, so a quote
+	// of the title in prose does not count.
+	it("cites only test titles that a test declares", () => {
+		const declared = listTestFiles(path.join(repoRoot, "tests")).map((file) =>
+			stripSource(fs.readFileSync(file, "utf8"), { strings: "keep" }),
+		);
+		const missing = new Set<string>();
+		for (const route of WRITERS)
+			for (const consumer of WRITER_CONSUMERS) {
+				const cell = route.cells[consumer];
+				if (cell.cell !== "reaches" && cell.cell !== "silent") continue;
+				const title = /^\[([^\]]+)\]/.exec(cell.probe)?.[1];
+				if (title === undefined) continue;
+				const call = new RegExp(
+					`\\b(?:it|test)(?:\\.\\w+)*\\(\\s*["'\`]${escapeRegExp(title)}["'\`]`,
+				);
+				if (!declared.some((code) => call.test(code))) missing.add(title);
+			}
+		expect([...missing]).toEqual([]);
+	});
+
 	it("pins the routes no fold has reached and the unprobed cells", () => {
 		const byRecorder: Record<string, string[]> = {};
 		for (const route of WRITERS)
@@ -732,13 +755,11 @@ describe("the writer table", () => {
 				"foreign-bridge",
 				"mcp-attached-tool",
 				"ast-grep-apply",
-				"lsp-server-apply-edit",
-				"lens-diagnostic-mark",
-			],
-			"lsp-direct": [
 				"lsp-rename",
 				"lsp-rename-file",
 				"lsp-execute-command",
+				"lsp-server-apply-edit",
+				"lens-diagnostic-mark",
 				"agent-end-lsp-quickfix",
 			],
 			"tool-result": [
@@ -773,7 +794,7 @@ describe("the writer table", () => {
 			"change-log": 8,
 			"commit-gate": 8,
 			"pre-edit-baseline": 13,
-			"fix-run-capture": 19,
+			"fix-run-capture": 14,
 			"lsp-documents": 8,
 			"read-guard": 8,
 			"word-index": 22,
@@ -901,3 +922,12 @@ describe("the writer census", () => {
 			expect(scan(source), name).toEqual([]);
 	});
 });
+
+function listTestFiles(dir: string): string[] {
+	return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+		const full = path.join(dir, entry.name);
+		if (entry.isDirectory())
+			return entry.name === "fixtures" ? [] : listTestFiles(full);
+		return entry.name.endsWith(".test.ts") ? [full] : [];
+	});
+}

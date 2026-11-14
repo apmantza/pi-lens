@@ -172,6 +172,13 @@ export interface MutationBridgeDeps {
 	 * above, or turn-state/the receipt silently drop with it.
 	 */
 	shouldStampReadGuard?(): boolean;
+	/**
+	 * #3598: protect the write from a running whole-package fixer. Defaults to
+	 * `noteAgentMutation`. The direct LSP branch passes a no-op: it never
+	 * called it before #5551 folded it onto this body, and reaching it is the
+	 * writer table's G6 cell (`clients/writers.ts`), a maintainer decision.
+	 */
+	noteAgentMutation?: (filePath: string) => void;
 	dbg?: (msg: string) => void;
 	/** Test seam for the deferred-format event; defaults to the real publisher. */
 	publishFormatQueued?: typeof publishFormatQueued;
@@ -612,7 +619,7 @@ function runAdmittedMutation(
 ): MutationRecordOutcome {
 	// #3598: an observed or bridged producer's write is an agent mutation a
 	// running whole-package fixer must not erase. Read it before the bookkeeping.
-	noteAgentMutation(entry.filePath);
+	(deps.noteAgentMutation ?? noteAgentMutation)(entry.filePath);
 
 	const ctx: MutationBookkeepingContext = {
 		entry,
