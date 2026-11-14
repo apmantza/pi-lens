@@ -453,6 +453,14 @@ export function setWidgetChangeCallback(fn: () => void): void {
 	widgetChangeFn = fn;
 }
 
+/**
+ * Release the activation-scoped store-change listener, but only when `fn` still
+ * holds the slot. A departed activation must not clear a successor's listener.
+ */
+export function clearWidgetChangeCallback(fn: () => void): void {
+	if (widgetChangeFn === fn) widgetChangeFn = null;
+}
+
 /** Reconcile a mark through the same apply/count/commit path as dispatch. */
 export function reconcileWidgetDisposition(
 	cwd: string,
@@ -730,11 +738,13 @@ export function clearWidgetState(): void {
 	lspServers.clear();
 	sessionLanguages = [];
 	requestRenderFn = null;
-	// `widgetChangeFn` survives: it is activation wiring, and the reset's
-	// emptiness is itself a change the projection has to publish.
 	diagnosticsWriteGuard.clear();
 	runnerWriteGuard.clear();
 	nextInactivePruneSize = MAX_INACTIVE_FILE_RECORDS + 1;
+	// `widgetChangeFn` survives the reset: it is activation wiring, and the
+	// reset's emptiness is itself a change the projection has to publish. The
+	// render callback is null by now, so only that listener fires.
+	requestRender();
 }
 
 // v1 → v2 (#1186): per-entry `WidgetDiagnostic.observedAt`. v2 is a SUPERSET of
@@ -934,7 +944,7 @@ export function importWidgetState(
 	}
 	pruneInactiveFileRecords();
 	sessionLanguages = state.sessionLanguages ?? [];
-	requestRenderFn?.();
+	requestRender();
 	return true;
 }
 
@@ -1145,13 +1155,10 @@ export function recordDiagnostics(
 	// `observedAt`) is observed now.
 	const observedTs = observedAt ?? Date.now();
 	const rec = getOrCreate(filePath, key);
-	commitDiagnostics(
-		rec,
-		filePath,
-		normalizeDiagnostics(filePath, diagnostics, observedTs),
-		observedTs,
-		key,
-	);
+	// Update the unchecked fields BEFORE `commitDiagnostics` notifies listeners:
+	// the store-change listener reads this record, and an empty snapshot with an
+	// unchecked reason must publish `⚠ N unchecked`, never the intermediate
+	// `✓ clean` the pre-update record would draw.
 	if (unchecked === undefined) {
 		delete rec.uncheckedReason;
 		delete rec.uncheckedInapplicable;
@@ -1160,6 +1167,13 @@ export function recordDiagnostics(
 		if (unchecked.inapplicable) rec.uncheckedInapplicable = true;
 		else delete rec.uncheckedInapplicable;
 	}
+	commitDiagnostics(
+		rec,
+		filePath,
+		normalizeDiagnostics(filePath, diagnostics, observedTs),
+		observedTs,
+		key,
+	);
 	return true;
 }
 
@@ -1830,7 +1844,7 @@ export async function reconcileStaleWidgetFiles(
 		rec.hasFinalDiagnosticsSnapshot = false;
 		rec.touchedAt = Math.max(Date.now(), v.mtimeMs);
 	}
-	if (changed > 0) requestRenderFn?.();
+	if (changed > 0) requestRender();
 	return changed;
 }
 
@@ -1930,7 +1944,7 @@ export async function reconcileStaleWidgetDependencyBlockers(
 			rec.diagnostics = capStoredDiagnostics(rec.allDiagnostics);
 		}
 	}
-	if (demoted > 0) requestRenderFn?.();
+	if (demoted > 0) requestRender();
 	return { demoted, truncatedImports };
 }
 
@@ -2015,7 +2029,7 @@ export function markWidgetFileBlockersStale(
 	if (changed) {
 		rec.diagnosticCounts = countDiagnostics(rec.allDiagnostics);
 		rec.diagnostics = capStoredDiagnostics(rec.allDiagnostics);
-		requestRenderFn?.();
+		requestRender();
 	}
 	return changed;
 }
@@ -2117,7 +2131,7 @@ export function retireWidgetDependencyDriftBlockers(filePath: string): boolean {
 	// drain — either way, defensive: it keeps a just-retired file from being
 	// double-drained (and double-charged) on the next pass.
 	renderedDependencyDriftFiles.delete(rec.filePath);
-	requestRenderFn?.();
+	requestRender();
 	return true;
 }
 
@@ -2990,7 +3004,17 @@ function countBlockingIn(recs: readonly FileRecord[]): number {
 
 function requestRender(): void {
 	requestRenderFn?.();
-	widgetChangeFn?.();
+	// A projection listener is a consumer of the store, never part of the
+	// write. A throw here must not escape the writer that already committed.
+	try {
+		widgetChangeFn?.();
+	} catch (err) {
+		recordDegradationOnce({
+			kind: "widget-change-listener-failed",
+			subject: "widget-store",
+			reason: `store-change listener threw: ${err instanceof Error ? err.message : String(err)}`,
+		});
+	}
 }
 
 function osc8(uri: string, label: string): string {

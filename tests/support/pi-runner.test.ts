@@ -69,6 +69,7 @@ const DECLARED_FLAGS = [
 	"lens-compact-tool-line",
 	"lens-compact-lsp-status",
 	"lens-hide-lsp-status",
+	"lens-issues-status",
 	"lens-compact-widget",
 	"no-lazy-tools",
 	"lens-turn-end-madge",

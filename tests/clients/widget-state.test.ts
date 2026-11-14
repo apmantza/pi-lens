@@ -10,6 +10,7 @@ import {
 } from "../../clients/dispatch/types.js";
 import {
 	__testing,
+	clearWidgetChangeCallback,
 	clearWidgetState,
 	drainRenderedDependencyDriftFilePaths,
 	exportWidgetState,
@@ -37,6 +38,7 @@ import {
 	renderWidget,
 	setRenderCallback,
 	setSessionLanguages,
+	setWidgetChangeCallback,
 	WIDGET_STATE_VERSION,
 } from "../../clients/widget-state.js";
 
@@ -3263,5 +3265,30 @@ describe("getWidgetSummary", () => {
 		// A record with no final snapshot is unfinished evidence, not clean.
 		recordFormatter("/repo/formatted.ts", "prettier", false, true);
 		expect(getWidgetSummary().hasPendingAnalysis).toBe(true);
+	});
+});
+
+describe("clearWidgetState notifies the activation listener (#5588)", () => {
+	it("publishes the reset emptiness even though the render callback is dropped", () => {
+		const listener = vi.fn();
+		setWidgetChangeCallback(listener);
+		try {
+			recordDiagnostics("/repo/reset.ts", [
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "blocking",
+					line: 1,
+					rule: "typescript:1",
+				},
+			]);
+			listener.mockClear();
+
+			clearWidgetState();
+
+			expect(listener).toHaveBeenCalledTimes(1);
+		} finally {
+			clearWidgetChangeCallback(listener);
+		}
 	});
 });
