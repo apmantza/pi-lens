@@ -344,7 +344,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// on the same per-cwd availability entry as the rest of the verdict
 		// (`rejectedOutput`); the entry is the checker's own state, not a cache of
 		// a derived answer.
-		"clients/dispatch/runners/utils/runner-helpers.ts": 22,
+		// 22 -> 17 (#5595 r2): the flight's seven `noteDecision(cache, ...)` calls
+		// go through one `note`, and its two command writes ride the verdict.
+		"clients/dispatch/runners/utils/runner-helpers.ts": 17,
 		"clients/dispatch/runners/yaml-rule-parser.ts": 6,
 		"clients/installer/index.ts": 8,
 		"clients/lsp/inferred-project.ts": 4,

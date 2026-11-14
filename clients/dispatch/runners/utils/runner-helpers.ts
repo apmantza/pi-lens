@@ -763,6 +763,22 @@ export async function resolveManagedToolClient<T>(options: {
  * next read; the checker keeps only the command the verdict resolved and the
  * probe's elapsed time for the unavailable message.
  */
+/** A verdict a probe flight hands `noteDecision` (#1500, #5595). */
+type AvailabilityVerdictNote = {
+	available: boolean;
+	/** The command that answered, written to the entry on an available verdict. */
+	command?: string;
+	outcome: AvailabilityOutcome;
+	cause: AvailabilityCause;
+	elapsedMs: number;
+	hostStallMs?: number;
+	/** How the outcome was reached, and the facts behind it (#1500). */
+	classifiedBy?: "probe" | "caller" | "joined";
+	evidence?: ProbeEvidence;
+	/** Probe output of a present binary that failed its version check. */
+	rejectedOutput?: string;
+};
+
 type AvailabilityCache = {
 	latch: AvailabilityLatch;
 	command: string | null;
@@ -1133,10 +1149,10 @@ function resolvedTagForAttempt(
  * every time.
  *
  * `latchKeys` are every name a latched `unavailable` row for this pair could
- * carry. A row that clears one of them is a genuine correction and burns the
- * correction memo; a row with nothing to correct dedupes in its own scope, so
- * it cannot silence the genuine latch-then-recover that follows it for the
- * same pair (#1657).
+ * carry. The one caller (`resolveAvailableOrInstallUnshared`) records that
+ * latched row for the pair just before it calls, so the row is a genuine
+ * correction: it burns the correction memo and clears every key (#1657). The
+ * `correctsLatchedRow` evidence still reads the ledger rather than assuming it.
  */
 function emitCompensatingAvailableRow(
 	cwd: string,
@@ -1348,47 +1364,57 @@ export function createAvailabilityChecker(
 		return created;
 	}
 
-	/** Record a verdict on the cache and emit exactly one decision record. */
+	/**
+	 * Record a verdict on the cache and emit exactly one decision record.
+	 *
+	 * `publishes` is whether the flight that reached the verdict is still the
+	 * current one for its key. A trust change starts a second flight for the
+	 * same cwd while the first is in flight (#4776), and both write the one
+	 * entry: the older, settling after the newer, would overwrite a newer
+	 * success with an older failure (or the reverse), leaving `getCommand` and
+	 * the latch disagreeing (#5595 B1). A superseded flight still writes its
+	 * row, but as not latched, and touches neither the entry, the latch nor the
+	 * latched-row memo.
+	 */
 	function noteDecision(
 		cache: AvailabilityCache,
 		resolvedCwd: string,
-		verdict: {
-			available: boolean;
-			outcome: AvailabilityOutcome;
-			cause: AvailabilityCause;
-			elapsedMs: number;
-			hostStallMs?: number;
-			/** How the outcome was reached, and the facts behind it (#1500). */
-			classifiedBy?: "probe" | "caller" | "joined";
-			evidence?: ProbeEvidence;
-			/** Probe output of a present binary that failed its version check. */
-			rejectedOutput?: string;
-		},
+		verdict: AvailabilityVerdictNote,
+		publishes: boolean,
 	): void {
-		cache.elapsedMs = verdict.elapsedMs;
-		cache.rejectedOutput = verdict.available
-			? undefined
-			: verdict.rejectedOutput;
 		let retryAfterMs: number | undefined;
-		if (verdict.available) {
-			cache.latch.noteAvailable(verdict.cause);
-		} else {
-			cache.command = null;
-			const delay = cache.latch.noteUnavailable(verdict.outcome, verdict.cause);
-			if (delay > 0) retryAfterMs = delay;
+		if (publishes) {
+			cache.elapsedMs = verdict.elapsedMs;
+			cache.rejectedOutput = verdict.available
+				? undefined
+				: verdict.rejectedOutput;
+			if (verdict.available) {
+				if (verdict.command !== undefined) cache.command = verdict.command;
+				cache.latch.noteAvailable(verdict.cause);
+			} else {
+				cache.command = null;
+				const delay = cache.latch.noteUnavailable(
+					verdict.outcome,
+					verdict.cause,
+				);
+				if (delay > 0) retryAfterMs = delay;
+			}
 		}
-		const latched = verdict.available || isLatchingOutcome(verdict.outcome);
+		const latched =
+			publishes && (verdict.available || isLatchingOutcome(verdict.outcome));
 		// Remember the pair whose durable row now says "unavailable and staying
 		// that way" — that is the row a later compensating `available` row
 		// corrects, and the only thing that makes such a row a correction
 		// (#1657).
-		if (!verdict.available && latched) {
-			noteLatchedUnavailable(resolvedCwd, command);
-		} else if (verdict.available) {
-			// The latched row this pair carried no longer stands: THIS row says
-			// the tool is back. Dropping the record here keeps a stale latch from
-			// backing a later "correction" that corrects nothing (#1674 F3).
-			clearLatchedUnavailable(resolvedCwd, ...latchKeysFor(command));
+		if (publishes) {
+			if (!verdict.available && latched) {
+				noteLatchedUnavailable(resolvedCwd, command);
+			} else if (verdict.available) {
+				// The latched row this pair carried no longer stands: THIS row says
+				// the tool is back. Dropping the record here keeps a stale latch from
+				// backing a later "correction" that corrects nothing (#1674 F3).
+				clearLatchedUnavailable(resolvedCwd, ...latchKeysFor(command));
+			}
 		}
 		logAvailabilityDecision(
 			{
@@ -1438,15 +1464,30 @@ export function createAvailabilityChecker(
 		const trustGeneration = getProjectTrustGeneration();
 		const existing = inFlightByCwd.get(key);
 		if (existing?.trustGeneration === trustGeneration) return existing.promise;
+		// A flight for another trust is still out. Its read left the latch owing a
+		// verdict stamped with that trust, so this flight's note would take the
+		// old stamp and read as stale at the next read (#5595 B1). It stops
+		// publishing once this flight replaces it below.
+		if (existing) cache.latch.reset();
 
 		const promiseGeneration = checkerGeneration;
 		let promise: Promise<boolean>;
+		// Whether this flight is still the current one for its key. A trust
+		// change replaces it in the table with a newer flight (#4776); once
+		// replaced, nothing it settles may reach the shared entry (#5595 B1).
+		const note = (verdict: AvailabilityVerdictNote): void =>
+			noteDecision(
+				cache,
+				resolvedCwd,
+				verdict,
+				inFlightByCwd.get(key)?.promise === promise,
+			);
 		promise = (async () => {
 			const fastPath = await options.fastPath?.();
 			if (fastPath) {
-				cache.command = fastPath;
-				noteDecision(cache, resolvedCwd, {
+				note({
 					available: true,
+					command: fastPath,
 					outcome: "success",
 					cause: "fast-path",
 					elapsedMs: 0,
@@ -1463,7 +1504,7 @@ export function createAvailabilityChecker(
 			try {
 				const cwdStat = await fs.promises.stat(resolvedCwd);
 				if (!cwdStat.isDirectory()) {
-					noteDecision(cache, resolvedCwd, {
+					note({
 						available: false,
 						outcome: "non-installable",
 						cause: "bad-cwd",
@@ -1475,7 +1516,7 @@ export function createAvailabilityChecker(
 					return false;
 				}
 			} catch {
-				noteDecision(cache, resolvedCwd, {
+				note({
 					available: false,
 					outcome: "non-installable",
 					cause: "bad-cwd",
@@ -1513,7 +1554,7 @@ export function createAvailabilityChecker(
 				// and session-long suppression from it would contradict the
 				// #1494 retry ladder this classification exists for.
 				if (isInSpawnTimeoutCooldown(cmd)) {
-					noteDecision(cache, resolvedCwd, {
+					note({
 						available: false,
 						outcome: "transient",
 						cause: "probe-timeout",
@@ -1569,9 +1610,9 @@ export function createAvailabilityChecker(
 				);
 
 				if (!result.error && result.status === 0) {
-					cache.command = cmd;
-					noteDecision(cache, resolvedCwd, {
+					note({
 						available: true,
+						command: cmd,
 						outcome: "success",
 						cause: "ok",
 						elapsedMs,
@@ -1603,7 +1644,7 @@ export function createAvailabilityChecker(
 				// `unclassifiedFailureOutcome: "missing"` compatibility verdict is a
 				// guess, not evidence that PATH changed.
 				if (result.spawnFailure?.kind === "tool-not-found") resetPathWalkMemo();
-				noteDecision(cache, resolvedCwd, {
+				note({
 					available: false,
 					outcome,
 					cause,
@@ -2003,6 +2044,9 @@ function toolBinaryChecker(
 		spec.versionArgs ?? ["--version"],
 		{
 			projectBinDirs: [...VENV_BIN_DIRS, ...NODE_MODULES_BIN_DIRS],
+			...(spec.probeTimeoutMs !== undefined && {
+				probeTimeout: spec.probeTimeoutMs,
+			}),
 			...(order === "path-only" ? { pathOnly: true } : { order }),
 		},
 	);
@@ -2039,13 +2083,20 @@ export async function resolveToolCommandWithInstallFallback(
  * `java`. `true` and `false` are durable (the version probe passed, or the
  * command is absent or rejects it); `undefined` is a probe that never got a
  * fair hearing (timeout, abort, host stall), so the caller must not treat the
- * call as proof the tool is absent. The verdict, its cooldown and the trust
- * stamp are the shared checker's.
+ * call as proof the tool is absent; so is a call across a trust change, whose
+ * answer is not the trust it asked under. The verdict, its cooldown and the
+ * trust stamp are the shared checker's.
  */
 export async function toolOnPath(toolId: string): Promise<boolean | undefined> {
 	const checker = toolBinaryChecker(toolId, "path-only");
 	if (!checker) return false;
-	if (await checker.isAvailableAsync()) return true;
+	const trustGeneration = getProjectTrustGeneration();
+	const onPath = await checker.isAvailableAsync();
+	// The flight resolves its rung, then spawns, and the spawn scopes the search
+	// path by the trust answer of that moment: a flip while it resolved makes
+	// the answer the NEW trust's, which is not what this caller asked (#4776).
+	if (getProjectTrustGeneration() !== trustGeneration) return undefined;
+	if (onPath) return true;
 	return checker.getOutcome() === "transient" ? undefined : false;
 }
 

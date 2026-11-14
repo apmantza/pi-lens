@@ -28,6 +28,7 @@ import type { RunnerDefinition } from "../../../../clients/dispatch/types.js";
 import {
 	createAvailabilityChecker,
 	resetDispatchAvailabilityState,
+	resolveRubocopCommand,
 	resolveToolCommandWithInstallFallback,
 	toolBinaryVerdict,
 	toolOnPath,
@@ -42,75 +43,85 @@ import { resetWorkspaceTopology } from "../../../../clients/workspace-topology.j
 import { RuffClient } from "../../../../clients/ruff-client.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
-const { safeSpawnAsync, spawnCalls, probeMode, probeGate } = vi.hoisted(() => {
-	const spawnCalls: Array<{
-		cmd: string;
-		args: readonly string[];
-		cwd: string | undefined;
-	}> = [];
-	const probeMode: Record<string, "ok" | "timeout" | "reject"> = {};
-	// When set, a version probe waits on it: the probe is in flight until released.
-	const probeGate: { current?: Promise<void> } = {};
-	const safeSpawnAsync = vi.fn(
-		async (
-			cmd: string,
-			args: readonly string[] = [],
-			opts: { cwd?: string } = {},
-		) => {
-			spawnCalls.push({ cmd: String(cmd), args, cwd: opts.cwd });
-			const fs = await import("node:fs");
-			const path = await import("node:path");
-			const onDisk = path.isAbsolute(cmd)
-				? fs.existsSync(cmd)
-				: (process.env.PATH ?? "")
-						.split(path.delimiter)
-						.some((dir) => dir && fs.existsSync(path.join(dir, cmd)));
-			if (!onDisk) {
-				return {
-					error: new Error(`spawn ${cmd} ENOENT`),
-					status: null,
-					stdout: "",
-					stderr: "",
-					spawnFailure: { kind: "tool-not-found" },
-				};
-			}
-			const isProbe =
-				args.includes("--version") ||
-				args.includes("-version") ||
-				(args[0] === "version" && args[1] === "--short");
-			if (isProbe) {
-				await probeGate.current;
-				const tool = path.basename(String(cmd)).replace(/\.(exe|bat)$/, "");
-				// helm 4 has no --version flag, an old JVM has no --version and the
-				// spotbugs launcher rejects it: each answers only its own spelling, so a registry row
-				// with the wrong versionArgs reads as a rejected binary (#4453).
-				const spelling =
-					tool === "helm"
-						? args[0] === "version"
-						: tool === "java" || tool === "spotbugs"
-							? args.includes("-version")
-							: true;
-				const mode = spelling ? (probeMode[tool] ?? "ok") : "reject";
-				if (mode === "timeout") {
+const { safeSpawnAsync, spawnCalls, probeMode, probeGate, probeGates } =
+	vi.hoisted(() => {
+		const spawnCalls: Array<{
+			cmd: string;
+			args: readonly string[];
+			cwd: string | undefined;
+			timeout: number | undefined;
+		}> = [];
+		const probeMode: Record<string, "ok" | "timeout" | "reject"> = {};
+		// When set, a version probe waits on it: the probe is in flight until released.
+		const probeGate: { current?: Promise<void> } = {};
+		// A gate per probe, taken in spawn order: the first probe waits on the first
+		// entry. A probe past the queue waits on `probeGate`, if set.
+		const probeGates: Array<Promise<void>> = [];
+		const safeSpawnAsync = vi.fn(
+			async (
+				cmd: string,
+				args: readonly string[] = [],
+				opts: { cwd?: string; timeout?: number } = {},
+			) => {
+				spawnCalls.push({
+					cmd: String(cmd),
+					args,
+					cwd: opts.cwd,
+					timeout: opts.timeout,
+				});
+				const fs = await import("node:fs");
+				const path = await import("node:path");
+				const onDisk = path.isAbsolute(cmd)
+					? fs.existsSync(cmd)
+					: (process.env.PATH ?? "")
+							.split(path.delimiter)
+							.some((dir) => dir && fs.existsSync(path.join(dir, cmd)));
+				if (!onDisk) {
 					return {
-						error: new Error("timed out"),
+						error: new Error(`spawn ${cmd} ENOENT`),
 						status: null,
 						stdout: "",
 						stderr: "",
-						failure: "timeout",
-						spawnFailure: { kind: "timeout" },
+						spawnFailure: { kind: "tool-not-found" },
 					};
 				}
-				if (mode === "reject") {
-					return { error: null, status: 2, stdout: "", stderr: "bad flag" };
+				const isProbe =
+					args.includes("--version") ||
+					args.includes("-version") ||
+					(args[0] === "version" && args[1] === "--short");
+				if (isProbe) {
+					await (probeGates.shift() ?? probeGate.current);
+					const tool = path.basename(String(cmd)).replace(/\.(exe|bat)$/, "");
+					// helm 4 has no --version flag, an old JVM has no --version and the
+					// spotbugs launcher rejects it: each answers only its own spelling, so a registry row
+					// with the wrong versionArgs reads as a rejected binary (#4453).
+					const spelling =
+						tool === "helm"
+							? args[0] === "version"
+							: tool === "java" || tool === "spotbugs"
+								? args.includes("-version")
+								: true;
+					const mode = spelling ? (probeMode[tool] ?? "ok") : "reject";
+					if (mode === "timeout") {
+						return {
+							error: new Error("timed out"),
+							status: null,
+							stdout: "",
+							stderr: "",
+							failure: "timeout",
+							spawnFailure: { kind: "timeout" },
+						};
+					}
+					if (mode === "reject") {
+						return { error: null, status: 2, stdout: "", stderr: "bad flag" };
+					}
+					return { error: null, status: 0, stdout: "1.0.0\n", stderr: "" };
 				}
-				return { error: null, status: 0, stdout: "1.0.0\n", stderr: "" };
-			}
-			return { error: null, status: 0, stdout: "", stderr: "" };
-		},
-	);
-	return { safeSpawnAsync, spawnCalls, probeMode, probeGate };
-});
+				return { error: null, status: 0, stdout: "", stderr: "" };
+			},
+		);
+		return { safeSpawnAsync, spawnCalls, probeMode, probeGate, probeGates };
+	});
 vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
 	...(await importOriginal<
 		typeof import("../../../../clients/safe-spawn.js")
@@ -176,6 +187,7 @@ describe("one availability ladder per binary (#5410)", () => {
 		dbgLines.length = 0;
 		for (const key of Object.keys(probeMode)) delete probeMode[key];
 		probeGate.current = undefined;
+		probeGates.length = 0;
 		safeSpawnAsync.mockClear();
 	});
 	afterEach(() => {
@@ -324,10 +336,129 @@ describe("one availability ladder per binary (#5410)", () => {
 		});
 		setProjectTrustState("untrusted");
 		const before = checker.isAvailableAsync(workspace.tmpDir);
+		// The first probe is spawned, so it is in flight under the old answer.
+		await vi.waitFor(() => expect(probesOf("trivy")).toHaveLength(1));
 		setProjectTrustState("trusted");
 		const after = checker.isAvailableAsync(workspace.tmpDir);
 		release();
 		await Promise.all([before, after]);
+		expect(probesOf("trivy")).toHaveLength(2);
+	});
+
+	// Recurrence (#5595 B1, CodeRabbit): a trust change starts a second flight
+	// over the cwd's one cache entry, and whichever settled last wrote it. An
+	// older failure settling after a newer success left `getCommand` null while
+	// the latch read available (one wrong skip, one extra probe); an older
+	// success after a newer failure did the reverse. Each row is (older flight's
+	// verdict, newer flight's verdict, which settles first); the entry must read
+	// as the NEWER flight's verdict in every one, with no third probe.
+	describe("a superseded flight settles over a newer one's entry", () => {
+		type Mode = "ok" | "reject" | "timeout";
+		const AFTER: Record<
+			Mode,
+			{ command: "tool" | null; outcome: string; available: boolean }
+		> = {
+			ok: { command: "tool", outcome: "success", available: true },
+			reject: { command: null, outcome: "non-installable", available: false },
+			timeout: { command: null, outcome: "transient", available: false },
+		};
+		const MODES: Mode[] = ["ok", "reject", "timeout"];
+		const rows = MODES.flatMap((older) =>
+			MODES.flatMap((newer) =>
+				(["older", "newer"] as const).map(
+					(first) => [older, newer, first] as const,
+				),
+			),
+		);
+		it.each(rows)(
+			"older %s, newer %s, %s settles first",
+			async (older, newer, first) => {
+				const tool = path.join(
+					pathEnv.tmpDir,
+					process.platform === "win32" ? "trivy.exe" : "trivy",
+				);
+				fs.writeFileSync(tool, "#!/bin/sh\n");
+				fs.chmodSync(tool, 0o755);
+				const checker = createAvailabilityChecker("trivy", ".exe");
+				const cwd = workspace.tmpDir;
+				const releases: Record<"older" | "newer", () => void> = {
+					older: () => {},
+					newer: () => {},
+				};
+				for (const who of ["older", "newer"] as const) {
+					probeGates.push(
+						new Promise<void>((resolve) => {
+							releases[who] = resolve;
+						}),
+					);
+				}
+				setProjectTrustState("untrusted");
+				const calls = { older: checker.isAvailableAsync(cwd) } as Record<
+					"older" | "newer",
+					Promise<boolean>
+				>;
+				await vi.waitFor(() => expect(probesOf("trivy")).toHaveLength(1));
+				setProjectTrustState("trusted");
+				calls.newer = checker.isAvailableAsync(cwd);
+				await vi.waitFor(() => expect(probesOf("trivy")).toHaveLength(2));
+
+				const modeOf = { older, newer };
+				const order =
+					first === "older"
+						? (["older", "newer"] as const)
+						: (["newer", "older"] as const);
+				for (const who of order) {
+					probeMode.trivy = modeOf[who];
+					releases[who]();
+					await calls[who];
+				}
+
+				const want = AFTER[newer];
+				expect({
+					command: checker.getCommand(cwd) === null ? null : "tool",
+					outcome: checker.getOutcome(cwd),
+					available: await checker.isAvailableAsync(cwd),
+				}).toEqual(want);
+				expect(probesOf("trivy")).toHaveLength(2);
+			},
+		);
+	});
+
+	// Recurrence (#5595 F6): the settle-time `finally` removes the in-flight
+	// entry only if it is still its own. A trust change leaves two entries
+	// under one key (the newer replaced the older), and the older settling
+	// first deleted the newer's, so a third caller probed again instead of
+	// joining it.
+	it("a third caller joins the newer flight after the older one settled", async () => {
+		const tool = path.join(
+			pathEnv.tmpDir,
+			process.platform === "win32" ? "trivy.exe" : "trivy",
+		);
+		fs.writeFileSync(tool, "#!/bin/sh\n");
+		fs.chmodSync(tool, 0o755);
+		const checker = createAvailabilityChecker("trivy", ".exe");
+		const cwd = workspace.tmpDir;
+		let releaseOlder: () => void = () => {};
+		let releaseNewer: () => void = () => {};
+		probeGates.push(
+			new Promise<void>((resolve) => {
+				releaseOlder = resolve;
+			}),
+			new Promise<void>((resolve) => {
+				releaseNewer = resolve;
+			}),
+		);
+		setProjectTrustState("untrusted");
+		const older = checker.isAvailableAsync(cwd);
+		await vi.waitFor(() => expect(probesOf("trivy")).toHaveLength(1));
+		setProjectTrustState("trusted");
+		const newer = checker.isAvailableAsync(cwd);
+		await vi.waitFor(() => expect(probesOf("trivy")).toHaveLength(2));
+		releaseOlder();
+		await older;
+		const third = checker.isAvailableAsync(cwd);
+		releaseNewer();
+		await Promise.all([newer, third]);
 		expect(probesOf("trivy")).toHaveLength(2);
 	});
 
@@ -387,6 +518,22 @@ describe("one availability ladder per binary (#5410)", () => {
 					(c) => c.args.includes("exec") && c.args.includes("-a"),
 				),
 			).toHaveLength(1);
+		});
+
+		// Recurrence (#5595 B4): the removed bundler path probed with a 10000 ms
+		// budget; the registry checker's default 5000 ms read a slow Ruby start
+		// as a timed-out probe.
+		it("gives the bundle and rubocop probes the 10000 ms budget the removed path had", async () => {
+			// Bundler absent: its probe is spawned and fails, then rubocop's runs.
+			putOnPath("rubocop");
+			const { root } = setup();
+			const resolved = await resolveRubocopCommand(
+				{ cmd: "bundle", args: ["exec", "rubocop"] },
+				root,
+			);
+			expect(resolved?.cmd).toContain("rubocop");
+			expect(probesOf("bundle").map((c) => c.timeout)).toEqual([10000]);
+			expect(probesOf("rubocop").map((c) => c.timeout)).toEqual([10000]);
 		});
 
 		it("runs rubocop itself when the Gemfile does not name it", async () => {

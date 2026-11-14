@@ -971,11 +971,30 @@ describe.skipIf(!POSIX)("package-manager global lookups (#4530)", () => {
 		expect(await resolveJavaRuntimeEnv()).toBeUndefined();
 	});
 
-	// #4776 review G2 (and the Java thread): the Java caller's own in-flight
-	// guard moved into the shared checker with the #5410 fold. Its survivors:
-	// "starts its own probe when trust changed under an in-flight one"
-	// (availability-fold-5410.test.ts) for the join, and the two A11 latch
-	// cells below for the stamp.
+	// #4776 review G2 (and the Java thread): a verdict written after a trust
+	// change by a probe that started before it answered for the OLD trust, and
+	// stamping it current kept a tool missing (or found) under the new trust.
+	it("F10/A11: a Java probe joined after a trust flip is not shared across it", async () => {
+		const jdk = path.join(layout.outside, "jdk");
+		writeStandIn(path.join(jdk, "bin"), "java", "exit 0");
+		writeStandIn(path.join(layout.main, "bin"), "java", "exit 0");
+		cleanups.push(
+			withEnv({
+				JAVA_HOME: jdk,
+				PATH: `${process.env.PATH}${path.delimiter}${path.join(layout.main, "bin")}`,
+			}),
+		);
+
+		// The untrusted probe is in flight (its search path is already scoped)
+		// when pi trusts the project and a second caller asks.
+		const untrusted = resolveJavaRuntimeEnv();
+		setProjectTrustState("trusted");
+		const trusted = resolveJavaRuntimeEnv();
+
+		expect((await untrusted)?.JAVA_HOME).toBe(jdk);
+		expect(await trusted).toBeUndefined();
+		expect(await resolveJavaRuntimeEnv()).toBeUndefined();
+	});
 
 	it("A11: a verdict whose probe straddled a trust change answers for the old trust", () => {
 		const latch = createAvailabilityLatch();

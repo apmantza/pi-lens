@@ -181,8 +181,9 @@ export async function resolveJavaRuntimeEnv(): Promise<
 	// fails its version probe (the macOS stub with no JDK behind it) falls
 	// through to discovery like an absent one (#5410). The helpers load
 	// lazily, as the static edge would close a client cycle through the LSP
-	// config; once loaded, nothing awaits before the probe starts, so the
-	// trust generation read here is the one the probe answers for (#4776).
+	// config; once loaded, nothing awaits before `toolOnPath` starts, so the
+	// trust generation read here is the one it asked under, and it answers
+	// `undefined` for a call a trust change crossed (#4776).
 	const { toolOnPath } = (probeModule ??=
 		await import("../dispatch/runners/utils/runner-helpers.js"));
 	const trustGeneration = getProjectTrustGeneration();
