@@ -967,59 +967,57 @@ describe("credo runner", () => {
 	// #5606 F4: a finding message quotes the file's own text, so a source line
 	// that holds the marker must not read as the overlay's refusal and discard
 	// the anchored run's findings.
-	it.each([
-		[
-			"a finding in stdout",
-			{
-				stdout: JSON.stringify({
-					issues: [
-						{
-							check: "Credo.Check.Design.TagTODO",
-							message:
-								"Found a TODO tag in a comment: # TODO: pi-lens-ignore-unanchored: boom",
-							filename: "lib/a.ex",
-							line_no: 3,
-							priority: 1,
-						},
-					],
-				}),
-				stderr: "",
-				status: 2,
-			},
-		],
-		[
-			"a quoted line in stderr that is not credo's halt line",
-			{
-				stdout: JSON.stringify({ issues: [] }),
-				stderr:
-					'compiler said: %RuntimeError{message: "pi-lens-ignore-unanchored: boom"}\n',
-				status: 0,
-			},
-		],
-	])(
-		"keeps the anchored run when the marker is only %s",
-		async (_name, answer) => {
-			const env = setupTestEnvironment("pi-lens-5594-credo-lookalike-");
-			try {
-				plant(env.tmpDir);
-				const runs: string[][] = [];
-				safeSpawnAsync.mockImplementation(
-					async (_cmd: string, args: string[] = []) => {
-						if (args.includes("--version"))
-							return { stdout: "Credo 1.7.19", stderr: "", status: 0 };
-						runs.push(args);
-						return answer;
+	const keptAnchoredRun = async (answer: {
+		stdout: string;
+		stderr: string;
+		status: number;
+	}) => {
+		const env = setupTestEnvironment("pi-lens-5594-credo-lookalike-");
+		try {
+			plant(env.tmpDir);
+			const runs: string[][] = [];
+			safeSpawnAsync.mockImplementation(
+				async (_cmd: string, args: string[] = []) => {
+					if (args.includes("--version"))
+						return { stdout: "Credo 1.7.19", stderr: "", status: 0 };
+					runs.push(args);
+					return answer;
+				},
+			);
+
+			const result = await runCredo(env.tmpDir);
+
+			expect(runs).toHaveLength(1);
+			expect(runs[0]).toContain("--config-file");
+			expect(result.inconclusive).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	};
+
+	it("keeps the anchored run when a finding quotes the marker", () =>
+		keptAnchoredRun({
+			stdout: JSON.stringify({
+				issues: [
+					{
+						check: "Credo.Check.Design.TagTODO",
+						message:
+							"Found a TODO tag in a comment: # TODO: pi-lens-ignore-unanchored: boom",
+						filename: "lib/a.ex",
+						line_no: 3,
+						priority: 1,
 					},
-				);
+				],
+			}),
+			stderr: "",
+			status: 2,
+		}));
 
-				const result = await runCredo(env.tmpDir);
-
-				expect(runs).toHaveLength(1);
-				expect(runs[0]).toContain("--config-file");
-				expect(result.inconclusive).toBeUndefined();
-			} finally {
-				env.cleanup();
-			}
-		},
-	);
+	it("keeps the anchored run when a stderr line quotes the marker", () =>
+		keptAnchoredRun({
+			stdout: JSON.stringify({ issues: [] }),
+			stderr:
+				'compiler said: %RuntimeError{message: "pi-lens-ignore-unanchored: boom"}\n',
+			status: 0,
+		}));
 });
