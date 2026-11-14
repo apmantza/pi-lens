@@ -753,6 +753,36 @@ describe("bookkeepLspMutation — direct path and bridge fallback are equivalent
 		});
 	});
 
+	// #5592 verify r1 V1 (#3576): a replaced session's turn summary gets no
+	// autofix entry, whatever the seam's record did. The r2 direct branch read
+	// liveness from the seam's outcome, so a receipt that threw lost it and the
+	// dead session's summary was written. Recurrence: liveness for
+	// `recordAutofix` taken from the record's outcome, not from the session.
+	it("records no autofix for a replaced session when the direct branch's receipt throws", () => {
+		const filePath = writeFixture(dirDirect, "autofix.ts");
+		const session = runtimeDirect.captureSessionGeneration();
+		runtimeDirect.resetForSession();
+		runtimeDirect.recordProjectMutation = () => {
+			throw new Error("receipt exploded");
+		};
+		const autofixed: string[] = [];
+		recordLspMutation(
+			{
+				cwd: dirDirect,
+				correlationId: "autofix-dead",
+				tool: "lsp-quickfix",
+				source: "autofix",
+				runtime: runtimeDirect as never,
+				cacheManager: cacheManagerDirect,
+				session,
+				recordAutofix: (file) => autofixed.push(path.basename(file)),
+				emitSummary: false,
+			},
+			{ results: resultsFor(filePath) },
+		);
+		expect(autofixed).toEqual([]);
+	});
+
 	// #5592 review r1 F4: the fold checked the session twice per file, once
 	// in `bookkeepLspMutation` and once in the seam, so a dead session counted
 	// two stale writes for one dropped write. Recurrence: a second liveness

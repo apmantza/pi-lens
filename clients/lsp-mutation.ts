@@ -469,19 +469,21 @@ function bookkeepLspMutation(
 		// #3576, narrowed by #3763 r2: once the caller's session is replaced its
 		// turn summary is dropped; the seam drops the read-guard stamp and the
 		// turn-state entry the same way and keeps the receipt, the file's seq and
-		// the handled mark, which are facts about the bytes. The direct branch
-		// takes liveness from the seam's own check, so a dead session counts
-		// one stale write per file, not two (#5592 review r1 F4).
+		// the handled mark, which are facts about the bytes.
 		let sessionLive: boolean;
 		// #5248: true once the seam took the record.
 		let accepted: boolean;
 		if (deps) {
-			const entry = lspMutationEntry(context, filePath, detail);
-			const outcome = recordMutationOutcome(entry, deps, {
-				rejectStaleLineage: true,
-			});
-			accepted = outcome.recorded;
-			sessionLive = outcome.reason !== "stale-lineage";
+			accepted = recordMutationOutcome(
+				lspMutationEntry(context, filePath, detail),
+				deps,
+			).recorded;
+			// The seam's `guardedWrite` already counted a dead session's dropped
+			// write, so this asks `isCurrent()`, the same question without the
+			// count (#5592 review r1 F4). It asks the session, not the record's
+			// outcome: a record that failed says nothing about liveness (verify
+			// r1 V1).
+			sessionLive = !context.session || context.session.isCurrent();
 		} else {
 			sessionLive =
 				!context.session ||
