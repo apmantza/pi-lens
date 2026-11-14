@@ -2,6 +2,66 @@
 	"_comment": "Governance baseline (#4865). Each row is a known member with the reason it stays. Regenerate with `npm run astgrep:governance:update-baseline`; a new row is written with an empty reason and the scan refuses it until the reason is filled in. Prefer fixing the member.",
 	"allowed": [
 		{
+			"signature": "turn-count-pure-flush::tests/clients/dispatch/runner-timeout.test.ts::8928d0ce41d6#0",
+			"head": "for (let i = 0; i < 10; i++) {",
+			"reason": "pure Promise.resolve flush loop; deterministic in-process work, retained as a named shape-86 admission until the owning test is next touched."
+		},
+		{
+			"signature": "turn-count-pure-flush::tests/clients/lsp/client-registry-direct.test.ts::14264f4b7a38#0",
+			"head": "for (let turn = 0; turn < 50; turn++) await Promise.resolve();",
+			"reason": "pure Promise.resolve flush loop; deterministic in-process work, retained as a named shape-86 admission until the owning test is next touched."
+		},
+		{
+			"signature": "turn-count-pure-flush::tests/clients/lsp/client-registry-direct.test.ts::14264f4b7a38#1",
+			"head": "for (let turn = 0; turn < 50; turn++) await Promise.resolve();",
+			"reason": "pure Promise.resolve flush loop; deterministic in-process work, retained as a named shape-86 admission until the owning test is next touched."
+		},
+		{
+			"signature": "turn-count-pure-flush::tests/clients/lsp/client-registry-direct.test.ts::14264f4b7a38#2",
+			"head": "for (let turn = 0; turn < 50; turn++) await Promise.resolve();",
+			"reason": "pure Promise.resolve flush loop; deterministic in-process work, retained as a named shape-86 admission until the owning test is next touched."
+		},
+		{
+			"signature": "turn-count-pure-flush::tests/clients/lsp/client-registry-direct.test.ts::14264f4b7a38#3",
+			"head": "for (let turn = 0; turn < 50; turn++) await Promise.resolve();",
+			"reason": "pure Promise.resolve flush loop; deterministic in-process work, retained as a named shape-86 admission until the owning test is next touched."
+		},
+		{
+			"signature": "turn-count-pure-flush::tests/clients/lsp/service-race.test.ts::f24fb38367a5#0",
+			"head": "for (let i = 0; i < turns; i++) await Promise.resolve();",
+			"reason": "pure Promise.resolve flush loop; deterministic in-process work, retained as a named shape-86 admission until the owning test is next touched."
+		},
+		{
+			"signature": "turn-count-pure-flush::tests/clients/runtime-session-sequence-read-budget.test.ts::83e96977f69d#0",
+			"head": "for (let i = 0; i < 20; i++) await Promise.resolve();",
+			"reason": "pure Promise.resolve flush loop; deterministic in-process work, retained as a named shape-86 admission until the owning test is next touched."
+		},
+		{
+			"signature": "turn-count-pure-flush::tests/clients/tree-sitter-cache.test.ts::69563e0ef817#0",
+			"head": "for (let i = 0; i < 6; i++) await Promise.resolve();",
+			"reason": "pure Promise.resolve flush loop; deterministic in-process work, retained as a named shape-86 admission until the owning test is next touched."
+		},
+		{
+			"signature": "turn-count-pure-flush::tests/clients/tree-sitter-client-init.test.ts::69563e0ef817#0",
+			"head": "for (let i = 0; i < 6; i++) await Promise.resolve();",
+			"reason": "pure Promise.resolve flush loop; deterministic in-process work, retained as a named shape-86 admission until the owning test is next touched."
+		},
+		{
+			"signature": "turn-count-pure-flush::tests/clients/tree-sitter-shared.test.ts::ea4a48aa9a48#0",
+			"head": "for (let i = 0; i < 8; i++) await Promise.resolve();",
+			"reason": "pure Promise.resolve flush loop; deterministic in-process work, retained as a named shape-86 admission until the owning test is next touched."
+		},
+		{
+			"signature": "turn-count-pure-flush::tests/index-5261-global-bin-prime.test.ts::0811a5973bf2#0",
+			"head": "for (let turn = 0; turn < 200; turn++) await Promise.resolve();",
+			"reason": "pure Promise.resolve flush loop; deterministic in-process work, retained as a named shape-86 admission until the owning test is next touched."
+		},
+		{
+			"signature": "turn-count-pure-flush::tests/tools/lens-diagnostics.test.ts::456efb3126e5#0",
+			"head": "for (let i = 0; i < 5; i++) await Promise.resolve();",
+			"reason": "pure Promise.resolve flush loop; deterministic in-process work, retained as a named shape-86 admission until the owning test is next touched."
+		},
+		{
 			"signature": "turn-count-wait-test-hook::clients/project-snapshot.ts::f99c92a435f9#0",
 			"head": "for (",
 			"reason": "#4969: waitForProjectSnapshotPersistsForTests ends after 200 x 10 ms with no signal. A 2 s throw would red its 16 caller files on a loaded runner, so the move to a real-clock deadline with a signal is its own change (recorded p3 on #4865)."

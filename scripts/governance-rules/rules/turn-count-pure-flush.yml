@@ -1,0 +1,44 @@
+id: turn-count-pure-flush
+language: TypeScript
+severity: error
+message: >-
+  Turn-count flush (shape 86): this loop awaits Promise.resolve a fixed number
+  of times. Use a real-clock deadline or waitFor instead of a turn count.
+files:
+  - "tests/**"
+rule:
+  all:
+    - any:
+        - kind: for_statement
+        - kind: while_statement
+        - kind: do_statement
+    - has:
+        kind: update_expression
+        stopBy: end
+    - has:
+        kind: binary_expression
+        stopBy: end
+        has: { field: operator, regex: '^[<>]=?$' }
+    - has:
+        kind: await_expression
+        stopBy: end
+        has: { pattern: Promise.resolve() }
+    - not:
+        has:
+          field: condition
+          any:
+            - kind: binary_expression
+              has: { field: operator, regex: '^(&&|\\|\\|)$' }
+            - has:
+                stopBy: end
+                kind: binary_expression
+                has: { field: operator, regex: '^(&&|\\|\\|)$' }
+    - not:
+        has:
+          pattern: Date.now()
+    - not:
+        has:
+          pattern: performance.now()
+    - not:
+        has:
+          pattern: process.hrtime()

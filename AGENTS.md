@@ -749,7 +749,9 @@ lanes, and durable fields must update their registered-or-fail coverage tests.
 Ast-grep rules live under `rules/ast-grep-rules/` and tree-sitter rules under
 `rules/tree-sitter-queries/`; shared user rules use the same layout under
 `<PI_LENS_HOME>/rules/`. The repo-only governance rules, which never ship,
-live under `scripts/governance-rules/rules/`. Precedence is project > user >
+live under `scripts/governance-rules/rules/`; shape 86's turn-count governance
+also has a narrow `turn-count-pure-flush` companion for counted
+`Promise.resolve()` flushes. Precedence is project > user >
 bundled, and a shadowed rule is excluded from execution. Use AST patterns over regex where
 possible. A rule with an unknown post-filter fails closed. Every shipped rule
 has a real behavioral fixture; Java/Kotlin rules use the real CLI path because

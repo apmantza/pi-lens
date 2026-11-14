@@ -1,0 +1,12 @@
+# A counted Promise.resolve flush is a turn-count wait even without a signal
+# exit. A real-clock deadline and non-flush awaited work remain outside this
+# narrow companion rule.
+id: turn-count-pure-flush
+valid:
+  - |
+    for (let i = 0; i < 20 && performance.now() < deadline; i++) await Promise.resolve();
+  - |
+    for (const item of items) await Promise.resolve(item);
+invalid:
+  - |
+    for (let i = 0; i < 20; i++) await Promise.resolve();

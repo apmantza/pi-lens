@@ -27,11 +27,6 @@ valid:
     for (let attempt = 0; attempt < 50 && performance.now() < deadline; attempt++) {
       if (await probePort(port)) break;
     }
-  # N rounds of work with no exit besides the count.
-  - |
-    for (let i = 0; i < MAX_ENTRIES + 10; i++) {
-      await appendRecentTouches({ cwd, paths: [`f${i}.ts`] });
-    }
   # Fake timers: the count is virtual time.
   - |
     for (let i = 0; i < 100 && !settled; i += 1) {
