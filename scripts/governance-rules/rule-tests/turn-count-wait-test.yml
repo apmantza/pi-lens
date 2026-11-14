@@ -1,12 +1,35 @@
 # Planted members (invalid) and admitted forms (valid) for turn-count-wait
 # (#4865). Recurrence: #4850 / #4830 (fixed by #4852), #4969, #4977 -- each a
-# count-bounded poll found by a flaky red or a bot review, never a detector.
+# count-bounded poll found by a flaky red or a bot review, never a detector --
+# and #5618, whose spelling-list companion let 21 of these 35 plants through.
+# p01-p35 are the #5618 review's plants, one verdict each. The rule admits
+# only a real-clock deadline or waitFor (utils/awaited-loop.yml); every other
+# awaited loop is a member, whatever it awaits and however it counts.
 id: turn-count-wait
 valid:
-  # waitFor with a real-clock deadline: the admitted form.
+  # p09 straight-line awaits: not a loop, outside the population.
+  - |
+    async function flush() { await Promise.resolve(); } await flush(); await flush(); await flush();
+  # p22 a comment and a string quoting a member: the rule reads code, not prose.
+  - |
+    // for (let i = 0; i < 20; i++) await Promise.resolve();
+    const s = "for (let i = 0; i < 20; i++) await Promise.resolve();";
+  # p35 nothing awaited: the loop never yields.
+  - |
+    for (let i = 0; i < 20; i++) void Promise.resolve();
+  # A count loop with no await is not a wait.
+  - |
+    for (let i = 0; i < 10; i++) {
+      if (seen.has(i)) break;
+      seen.add(i);
+    }
+  # An await inside a nested callback belongs to that callback.
+  - |
+    for (let i = 0; i < 5; i++) { queue.push(async () => { await Promise.resolve(); }); }
+  # waitFor with a real-clock deadline, outside any loop.
   - |
     await waitFor(() => fs.existsSync(file), Boolean, { timeoutMs: 4_000 });
-  # waitFor's own loop reads Date.now().
+  # waitFor's own loop: the deadline is its only bound.
   - |
     async function waitFor(read, ready) {
       const deadline = Date.now() + budgetMs;
@@ -16,42 +39,148 @@ valid:
         value = read();
       }
     }
-  # A count loop with no await is not a wait.
+  # A deadline in an exit branch, no count.
   - |
-    for (let i = 0; i < 10; i++) {
-      if (seen.has(i)) break;
-      seen.add(i);
+    for (;;) {
+      if (await predicate()) return;
+      if (Date.now() >= deadline) throw new Error(message);
+      await new Promise((resolve) => setTimeout(resolve, 20));
     }
-  # A loop awaiting real work, bounded by a deadline.
+  # A deadline on elapsed time: the clock sits inside the compared operand. The
+  # stepped `i` is never read by an exit.
   - |
-    for (let attempt = 0; attempt < 50 && performance.now() < deadline; attempt++) {
-      if (await probePort(port)) break;
+    for (let i = 0; !done && performance.now() - started < budgetMs; i++) await tick();
+  # A deadline with a request id stepped inside a call: not a count exit.
+  - |
+    while (!warm && Date.now() < until) {
+      const res = await harness.request(pollId++, "tools/call", {});
+      warm = res.ok;
     }
-  # N rounds of work with no exit besides the count.
+  # process.hrtime.bigint() as the clock.
+  - |
+    while (process.hrtime.bigint() < end) await sleep(1);
+  # Every await in the loop is the imported waitFor.
+  - |
+    import { waitFor } from "./interleaving-kit.js";
+    for (const file of files) {
+      await waitFor(() => fs.existsSync(file), Boolean);
+    }
+  # Recursion bounded by a deadline.
+  - |
+    async function poll() {
+      if (Date.now() > deadline) throw new Error("never ready");
+      await sleep(10);
+      if (!ready()) return poll();
+    }
+invalid:
+  # p01 the control flush.
+  - |
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+  # p02
+  - |
+    for (let i = 0; i < 20; i++) await null;
+  # p03
+  - |
+    for (let i = 0; i < 20; i++) await undefined;
+  # p04
+  - |
+    for (let i = 0; i < 20; i++) await Promise.resolve(undefined);
+  # p05
+  - |
+    for (let i = 0; i < 20; i++) await new Promise<void>((r) => queueMicrotask(r));
+  # p06
+  - |
+    const tick = promisify(setImmediate); for (let i = 0; i < 20; i++) await tick();
+  # p07
+  - |
+    for (let i = 0; i < 20; i++) await new Promise((r) => process.nextTick(r));
+  # p08
+  - |
+    let n = 0; while (n < 20) { await Promise.resolve(); n++; }
+  # p10
+  - |
+    const flush = () => Promise.resolve(); for (let i = 0; i < 20; i++) await flush();
+  # p11
+  - |
+    for await (const _ of gen()) {}
+  # p12
+  - |
+    for (const _ of Array.from({ length: 20 })) await Promise.resolve();
+  # p13
+  - |
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+  # p14
+  - |
+    for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 10));
+  # p15
+  - |
+    for (let i = 0; i < 20; i++) await flushMicrotasks();
+  # p16
+  - |
+    for (let i = 0; i < 20; i++) { await Promise.resolve(); }
+  # p17
+  - |
+    for (let i = 0; i < 20; i++) { await Promise.resolve().then(() => {}); }
+  # p18
+  - |
+    let t = 0; while (true) { await Promise.resolve(); t++; if (t >= 20) break; }
+  # p19 a deadline beside a count: twenty turns end before any deadline.
+  - |
+    for (let i = 0; i < 20; i++) { await Promise.resolve(); if (Date.now() > deadline) break; }
+  # p20
+  - |
+    for (let i = 0; i < 20 && !done; i++) await Promise.resolve();
+  # p21
+  - |
+    for (let i = 0; i < 20; i++) { await Promise.resolve(); if (done) break; }
+  # p23 a clock read that bounds nothing.
+  - |
+    for (let i = 0; i < 20; i++) { await Promise.resolve(); log(Date.now()); }
+  # p24
+  - |
+    const P = Promise; for (let i = 0; i < 20; i++) await P.resolve();
+  # p25
+  - |
+    for (let i = 0; i < 20; i++) await globalThis.Promise.resolve();
+  # p26
+  - |
+    for (let a = 0; a < 3; a++) { for (let i = 0; i < 20; i++) await Promise.resolve(); }
+  # p27
+  - |
+    for (let i = 0; i < 20; i++) { const p = Promise.resolve(); await p; }
+  # p28
+  - |
+    for (let i = 20; i > 0; i--) await Promise.resolve();
+  # p29
+  - |
+    let k = 20; while (k-- > 0) await Promise.resolve();
+  # p30
+  - |
+    for (let i = 0; i < 20; i++) await vi.advanceTimersByTimeAsync(0);
+  # p31 a deadline beside a count in the condition.
+  - |
+    for (let i = 0; i < 20 && performance.now() < d; i++) await Promise.resolve();
+  # p32
+  - |
+    for (let i = 0; i < 20; i++) await Promise.resolve(i);
+  # p33
+  - |
+    let i = 0; do { await Promise.resolve(); } while (++i < 20);
+  # p34
+  - |
+    for (let i = 0; i < 20; i++) await (Promise.resolve());
+  # N rounds of work with no exit besides the count: a member now (#4983
+  # admitted it; the rule cannot tell N rounds of work from N yields).
   - |
     for (let i = 0; i < MAX_ENTRIES + 10; i++) {
       await appendRecentTouches({ cwd, paths: [`f${i}.ts`] });
     }
-  # Fake timers: the count is virtual time.
+  # A loop with no exit at all.
   - |
-    for (let i = 0; i < 100 && !settled; i += 1) {
-      await vi.advanceTimersByTimeAsync(1);
-    }
-  # Iteration over a collection is not a count bound.
+    while (true) await tick();
+  # A poll with no count and no clock.
   - |
-    for (const file of files) {
-      if (stop) break;
-      await new Promise((resolve) => setImmediate(resolve));
-    }
-  # An await inside a nested callback belongs to that callback.
-  - |
-    for (let i = 0; i < 5 && !done; i++) {
-      queue.push(async () => { await tick(); });
-    }
-  # A deadline on elapsed time: the clock sits inside the compared operand.
-  - |
-    for (let i = 0; !done && performance.now() - started < budgetMs; i++) await tick();
-invalid:
+    while (!done) await new Promise((resolve) => setImmediate(resolve));
   # The #4830 cell (pre-#4852): a for loop of setImmediate turns.
   - |
     for (let i = 0; i < 5000 && !fs.existsSync(file); i++)
@@ -67,16 +196,6 @@ invalid:
       await new Promise((r) => setTimeout(r, 0));
       if (turns++ > 400) throw new Error("never ready");
     }
-  # A do-while with the counter in the test.
-  - |
-    let n = 0;
-    do {
-      await flushMicrotasks();
-    } while (pending.size > 0 && ++n < 200);
-  # An aliased yield helper.
-  - |
-    const pump = () => new Promise((resolve) => setImmediate(resolve));
-    for (let turn = 0; turn < 100 && accepted.length === 0; turn++) await pump();
   # An indirect call through a member.
   - |
     for (let i = 0; i < 20; i += 1) {
@@ -87,63 +206,90 @@ invalid:
   - |
     const settle = setImmediate;
     for (let i = 0; i < 50 && !done; i++) await new Promise((r) => settle(r));
-  # The counter read through another binding.
+  # Fake timers: whatever the loop awaits, a count is a count (#4983 admitted it).
   - |
-    let i = 0;
-    while (!done) {
-      const n = i;
-      await tick();
-      i += 1;
-      if (n > 50) break;
+    for (let i = 0; i < 100 && !settled; i += 1) {
+      await vi.advanceTimersByTimeAsync(1);
     }
-  # A plain-assignment step.
+  # A data loop whose iterable is a count through a binding.
   - |
-    let turns = 0;
-    while (!done && turns < 50) {
-      await tick();
-      turns = turns + 1;
-    }
-  # A constant bound and a return.
+    const turns = Array.from({ length: 20 });
+    for (const _ of turns) await tick();
+  # An await only in the condition.
   - |
-    async function waitForState() {
-      for (let turn = 0; turn < MAX_TURNS; turn += 1) {
-        const state = await loadSessionState(cwd, sessionId);
-        if (state !== undefined) return state;
-      }
-      return undefined;
-    }
-  # A sleep-count budget (200 x 10 ms) that ends without a signal (#4969).
-  - |
-    for (
-      let attempts = 0;
-      attempts < 200 && (requests.size > 0 || active.size > 0);
-      attempts++
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-  # Fake timers beside a real-I/O yield (#4977 dadeeff85): the advance does
-  # not admit the loop, the setImmediate wait is still counted.
-  - |
-    for (let i = 0; i < 400 && !settled; i++) {
-      await new Promise((resolve) => setImmediate(resolve));
-      if (spy.mock.calls.length > 0) {
-        await vi.advanceTimersByTimeAsync(HOOK_WALL_BUDGET_MS.session_start);
-      }
-    }
-  # An await in the loop condition.
-  - |
-    for (let i = 0; i < 5000 && (await rows(late)).length === 0; i += 1)
-      await new Promise<void>((resolve) => setImmediate(resolve));
-  # A clock read but never compared (#4983 r2, the drainedNudge shape): a
-  # timestamp in a payload or an elapsed-time log line does not bound the wait.
+    for (let i = 0; i < 5000 && (await rows(late)).length === 0; i += 1) {}
+  # A clock compared but not in an exit (#4983 r2, the drainedNudge shape).
   - |
     for (let i = 0; i < 5000; i += 1) {
       await emit([{ role: "user", timestamp: Date.now() }]);
-      log(`turn ${i} at ${Date.now() - started} ms`);
+      if (Date.now() - started > 100) log("slow");
       const [row] = await rows("agent_nudge");
       if (row) return row;
-      await new Promise<void>((resolve) => setImmediate(resolve));
     }
+  # A deadline reached through another binding.
+  - |
+    while (!done) {
+      await tick();
+      const late = Date.now() > deadline;
+      if (late) break;
+    }
+  # A deadline beside a count stepped in the exit test.
+  - |
+    while (Date.now() < deadline) {
+      await tick();
+      if (++polls === 50) break;
+    }
+  # A deadline beside a count stepped elsewhere and read through a member.
+  - |
+    while (Date.now() < deadline) {
+      await tick();
+      state.polls += 1;
+      if (state.polls > 50) return;
+    }
+  # A for-of with a deadline: the iteration is a second exit.
+  - |
+    for (const delayMs of [10, 50, 100]) {
+      if (Date.now() > deadline) break;
+      await sleep(delayMs);
+    }
+  # waitFor beside another await.
+  - |
+    import { waitFor } from "./interleaving-kit.js";
+    for (let i = 0; i < 3; i++) {
+      await waitFor(() => ready(i), Boolean);
+      await Promise.resolve();
+    }
+  # waitFor under another name.
+  - |
+    import { waitFor as wf } from "./interleaving-kit.js";
+    for (const file of files) await wf(() => fs.existsSync(file), Boolean);
+  # A waitFor that is not the interleaving-kit one.
+  - |
+    import { waitFor } from "./poll-helpers.js";
+    for (const file of files) await waitFor(() => fs.existsSync(file), Boolean);
+  # An interleaving-kit waitFor imported under another name beside a different
+  # waitFor: the awaited name is not the kit's.
+  - |
+    import { waitFor as kitWaitFor } from "./interleaving-kit.js";
+    import { waitFor } from "./poll-helpers.js";
+    for (const file of files) await waitFor(() => fs.existsSync(file), Boolean);
+  # A module whose name merely ends in interleaving-kit.
+  - |
+    import { waitFor } from "./not-interleaving-kit.js";
+    for (const file of files) await waitFor(() => fs.existsSync(file), Boolean);
+  # Recursion that counts.
+  - |
+    async function poll(n) {
+      if (n === 0) return;
+      await tick();
+      return poll(n - 1);
+    }
+  # Recursion through an arrow binding.
+  - |
+    const drain = async () => {
+      await Promise.resolve();
+      if (queue.length > 0) await drain();
+    };
   # An ignore with no reason does not exempt (the runner's reasoned-ignore check reds it).
   - |
     // ast-grep-ignore: some-other-rule

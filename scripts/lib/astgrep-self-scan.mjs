@@ -154,7 +154,14 @@ function spawnAstGrep(args, root) {
 			)
 			.join(path.delimiter);
 	}
-	return safeSpawn("ast-grep", args, { cwd: root, env });
+	// The JSON report carries each match's whole text. The governance suite
+	// reports every awaited test loop (#4865), about 1.5 MB on the tree, past
+	// spawnSync's 1 MB default, which fails the scan with ENOBUFS.
+	return safeSpawn("ast-grep", args, {
+		cwd: root,
+		env,
+		maxBuffer: 64 * 1024 * 1024,
+	});
 }
 
 /**

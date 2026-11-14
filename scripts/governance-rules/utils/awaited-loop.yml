@@ -1,0 +1,212 @@
+# An awaited loop that does not exit through a known-good wait (shape 86,
+# docs/defect-shapes.md; #4865). A loop that awaits may end only on a
+# real-clock deadline or by awaiting nothing but waitFor
+# (tests/clients/interleaving-kit.ts). The rule never reads what a loop awaits
+# or how it counts: a microtask flush, a setImmediate turn, a sleep, a helper,
+# a fake-timer advance and the call under test all look the same, and any
+# count (`++`, `+= 1`, `i = i + 1`, a for-of over a range, recursion) is a
+# count. It admits the two forms below and reports every other awaited loop.
+id: awaited-loop
+language: TypeScript
+utils:
+  fn-boundary:
+    any:
+      - kind: arrow_function
+      - kind: function_expression
+      - kind: function_declaration
+      - kind: generator_function_declaration
+      - kind: method_definition
+      - kind: class_declaration
+  loop:
+    any:
+      - kind: for_statement
+      - kind: for_in_statement
+      - kind: while_statement
+      - kind: do_statement
+  scope-edge:
+    any:
+      - kind: arrow_function
+      - kind: function_expression
+      - kind: function_declaration
+      - kind: generator_function_declaration
+      - kind: method_definition
+      - kind: class_declaration
+      - kind: for_statement
+      - kind: for_in_statement
+      - kind: while_statement
+      - kind: do_statement
+  # A loop with a for-await head awaits its iterator every round.
+  for-await:
+    kind: for_in_statement
+    regex: '^for\s+await\b'
+  # Await ownership: a callback owns its own awaits; a nested loop's awaits are
+  # the outer loop's too (it runs the inner loop every round). A for-of
+  # iterable is evaluated once, so only its body counts.
+  owns-await:
+    any:
+      - all:
+          - kind: for_in_statement
+          - regex: '^for\s+await\b'
+      - all:
+          - kind: for_in_statement
+          - has:
+              field: body
+              any:
+                - kind: await_expression
+                - has: { stopBy: { matches: fn-boundary }, kind: await_expression }
+      - all:
+          - any: [{ kind: for_statement }, { kind: while_statement }, { kind: do_statement }]
+          - has: { stopBy: { matches: fn-boundary }, kind: await_expression }
+  # The known-good clock reads.
+  clock-read:
+    kind: call_expression
+    has:
+      field: function
+      regex: '^(Date\.now|performance\.now|process\.hrtime|process\.hrtime\.bigint)$'
+  clock-compare:
+    kind: binary_expression
+    all:
+      - has: { field: operator, regex: '^[<>]=?$' }
+      - has: { stopBy: end, matches: clock-read }
+  exit-statement:
+    any:
+      - kind: break_statement
+      - kind: return_statement
+      - kind: throw_statement
+  # An `if` in the loop's own scope whose branch leaves the loop.
+  exit-if:
+    kind: if_statement
+    has: { stopBy: { matches: fn-boundary }, matches: exit-statement }
+  # A binding (or member) that the enclosing loop steps, read where it is.
+  stepped-read:
+    all:
+      - any: [{ kind: identifier }, { kind: member_expression }]
+      - pattern: $C
+      - inside:
+          stopBy: { matches: fn-boundary }
+          matches: loop
+          has:
+            stopBy: { matches: fn-boundary }
+            any:
+              - kind: update_expression
+                has: { field: argument, pattern: $C }
+              - kind: augmented_assignment_expression
+                has: { field: left, pattern: $C }
+              - kind: assignment_expression
+                all:
+                  - has: { field: left, pattern: $C }
+                  - has: { field: right, stopBy: end, pattern: $C }
+  # Admit A1, a real-clock deadline: a clock comparison in an exit position
+  # (the loop condition, or an exit-if's condition), and no exit position that
+  # reads a binding the loop steps. A count beside the deadline makes the
+  # count an exit too, and twenty quick turns end long before any deadline.
+  # A for-of or for-in always has its iteration as a second exit.
+  deadline-bounded:
+    all:
+      - any: [{ kind: for_statement }, { kind: while_statement }, { kind: do_statement }]
+      - any:
+          - has:
+              field: condition
+              any:
+                - matches: clock-compare
+                - has: { stopBy: end, matches: clock-compare }
+          - has:
+              stopBy: { matches: scope-edge }
+              matches: exit-if
+              has: { field: condition, stopBy: end, matches: clock-compare }
+      - not:
+          any:
+            - has:
+                field: condition
+                any:
+                  - matches: stepped-read
+                  - has: { stopBy: end, matches: stepped-read }
+            - has:
+                stopBy: { matches: scope-edge }
+                matches: exit-if
+                has: { field: condition, stopBy: end, matches: stepped-read }
+  # Admit A2: every await the loop owns is `await waitFor(...)`, the plain name
+  # the file imports from interleaving-kit. An alias, a local waitFor or a
+  # wrapper is unrecognized.
+  waitfor-await:
+    kind: await_expression
+    all:
+      - has:
+          kind: call_expression
+          has: { field: function, regex: '^waitFor$' }
+      - inside:
+          stopBy: end
+          kind: program
+          has:
+            kind: import_statement
+            all:
+              - has: { field: source, regex: '/interleaving-kit(\.[cm]?[jt]s)?["'']$' }
+              - has:
+                  stopBy: end
+                  kind: import_specifier
+                  all:
+                    - has: { field: name, regex: '^waitFor$' }
+                    - not: { has: { field: alias, kind: identifier } }
+  waits-only-through-waitfor:
+    all:
+      - any:
+          - kind: for_statement
+          - kind: for_in_statement
+          - kind: while_statement
+          - kind: do_statement
+          - kind: function_declaration
+          - kind: arrow_function
+          - kind: function_expression
+      - not: { matches: for-await }
+      - not:
+          has:
+            stopBy: { matches: fn-boundary }
+            kind: await_expression
+            not: { matches: waitfor-await }
+  # An async function that awaits and calls itself by name: a count spelled
+  # as recursion.
+  self-call:
+    kind: call_expression
+    has: { field: function, pattern: $F }
+  recursive-wait:
+    all:
+      - any:
+          - all:
+              - kind: function_declaration
+              - has: { field: name, pattern: $F }
+          - all:
+              - any: [{ kind: arrow_function }, { kind: function_expression }]
+              - inside:
+                  kind: variable_declarator
+                  has: { field: name, pattern: $F }
+      - has: { stopBy: { matches: fn-boundary }, kind: await_expression }
+      - has: { stopBy: { matches: fn-boundary }, matches: self-call }
+  recursion-deadline:
+    all:
+      - any:
+          - kind: function_declaration
+          - kind: arrow_function
+          - kind: function_expression
+      - has:
+          stopBy: { matches: fn-boundary }
+          matches: exit-if
+          has: { field: condition, stopBy: end, matches: clock-compare }
+rule:
+  any:
+    - all:
+        - any:
+            - kind: for_statement
+            - kind: for_in_statement
+            - kind: while_statement
+            - kind: do_statement
+        - matches: owns-await
+        - not: { matches: deadline-bounded }
+        - not: { matches: waits-only-through-waitfor }
+    - all:
+        - any:
+            - kind: function_declaration
+            - kind: arrow_function
+            - kind: function_expression
+        - matches: recursive-wait
+        - not: { matches: recursion-deadline }
+        - not: { matches: waits-only-through-waitfor }

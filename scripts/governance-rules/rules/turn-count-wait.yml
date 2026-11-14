@@ -2,14 +2,17 @@ id: turn-count-wait
 language: TypeScript
 severity: error
 message: >-
-  Turn-count wait (shape 86): this loop awaits a fixed number of turns or polls
-  and then reads its condition. The count holds on an idle host and runs out on
-  a loaded CI runner. Wait with waitFor (tests/clients/interleaving-kit.ts),
-  which reads a real-clock deadline scaled by PI_LENS_TEST_TIMEOUT_SCALE.
+  Awaited loop without a known-good exit (shape 86): a test loop that awaits
+  may end only on a real-clock deadline, or await nothing but waitFor
+  (tests/clients/interleaving-kit.ts), which reads a real-clock deadline scaled
+  by PI_LENS_TEST_TIMEOUT_SCALE. A count, a poll and a for-of all run out on a
+  loaded CI runner, whatever the loop awaits.
 note: >-
-  Exempt a loop only with `// ast-grep-ignore: turn-count-wait -- <reason>`,
-  or record it in scripts/governance-rules/baseline.json with a reason.
+  The rule cannot tell N rounds of the work under test from N yields. A loop
+  that is not a wait (a drive loop, an in-process flush) is exempted with
+  `// ast-grep-ignore: turn-count-wait -- <reason>`, or recorded in
+  scripts/governance-rules/baseline.json with its own reason.
 files:
   - "tests/**"
 rule:
-  matches: turn-count-loop
+  matches: awaited-loop
