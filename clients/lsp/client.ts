@@ -8418,23 +8418,15 @@ async function safeSendRequest<T>(
 					// unhandled, and tell the caller's hook about a late timeout answer.
 					const lateHook =
 						reply === RELEASED_ON_TIMEOUT ? bound?.onLateSettle : undefined;
-					const late = (answered: boolean) => {
-						try {
-							lateHook?.(answered);
-						} catch {
-							// A hook must never break the sender.
-						}
-					};
 					sent.then(
-						() => late(true),
-						() => late(false),
+						() => lateHook?.(true),
+						() => lateHook?.(false),
 					);
 					if (reply === RELEASED_ON_TIMEOUT) throw timeoutError;
 					return undefined;
 				}
 				return reply as T;
 			} catch (err) {
-				if (timeoutError !== undefined && err === timeoutError) throw err;
 				if (isCancellationError(err)) {
 					if (settlement) settlement.cancelled = true;
 					return undefined;
