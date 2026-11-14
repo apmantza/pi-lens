@@ -223,6 +223,7 @@ describe("tar x (#5552)", () => {
 		"tar -czf out.tgz -C src .",
 		"tar -tf a.tar",
 		"tar cf a.tar src",
+		"tar -cfx src",
 		"tar --list --file a.tar",
 		"tar --version",
 		"echo tar -xf a.tar",

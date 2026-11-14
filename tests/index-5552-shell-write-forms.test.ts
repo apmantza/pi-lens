@@ -343,8 +343,9 @@ describe("a bash write into a directory keeps its old mtime (#5552)", () => {
 		expect(dispatchedRules(read, l.target)).toEqual([]);
 	});
 
-	// Recurrence prevented: a file a scope credited joins the recognized set, and
-	// that set is the recordable one: a vendored tree is not dispatched.
+	// Recurrence prevented: a file a scope credited joins the recognized set,
+	// which the recognized-write path treats as project source: a vendored
+	// tree the extraction filled must still reach neither dispatch nor the log.
 	it("does not dispatch a vendored file a tar filled", LANE, async () => {
 		const run = await runThenCommit(
 			"tar-vendor",
@@ -354,6 +355,13 @@ describe("a bash write into a directory keeps its old mtime (#5552)", () => {
 		expect(fs.readFileSync(vendored, "utf8")).toBe(BLOCKING);
 		const read = await rows(run.session, run.scope);
 		expect(dispatchedRules(read, vendored)).toEqual([]);
+		expect(
+			read.filter(
+				(row) =>
+					row.phase === "disk_change_published" &&
+					row.metadata?.sources === "bash-write",
+			),
+		).toEqual([]);
 		expect(run.commit).toContain(RAN_MARKER);
 	});
 });

@@ -2878,9 +2878,7 @@ export async function handleToolResult(
 							root,
 							verdict: "observed",
 							keys,
-							credited: (recovery.namedCredited ?? []).filter((p) =>
-								keys.includes(p),
-							),
+							credited: recovery.namedCredited ?? [],
 							excluded: recovery.excludedIncomingCount ?? 0,
 							unknownPairs: recovery.unknownStatusCount ?? 0,
 						};

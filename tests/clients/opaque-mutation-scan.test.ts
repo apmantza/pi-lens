@@ -397,6 +397,7 @@ describe("recoverOpaqueChangesViaGit (real git repo)", () => {
 		const inside = path.join(repoDir, "src", "base.ts");
 		const added = path.join(repoDir, "src", "deep", "added.ts");
 		const outside = path.join(repoDir, "elsewhere.ts");
+		const windowed = path.join(repoDir, "fresh.ts");
 		const startedAt = Date.now();
 		fs.mkdirSync(path.dirname(added), { recursive: true });
 		for (const file of [inside, added, outside]) {
@@ -404,6 +405,9 @@ describe("recoverOpaqueChangesViaGit (real git repo)", () => {
 			const old = new Date(startedAt - 10_000);
 			fs.utimesSync(file, old, old);
 		}
+		// Outside the scope, so only the mtime window reports it, and it is no
+		// named write.
+		fs.writeFileSync(windowed, "fresh\n", "utf8");
 
 		const outcome = await recoverOpaqueChangesViaGit(repoDir, startedAt, {
 			namedPaths: [path.join(repoDir, "src")],
@@ -411,7 +415,7 @@ describe("recoverOpaqueChangesViaGit (real git repo)", () => {
 		});
 		expect(outcome.verdict).toBe("recovered");
 		expect([...outcome.paths].sort()).toEqual(
-			[inside, added].map(normalizeMapKey).sort(),
+			[inside, added, windowed].map(normalizeMapKey).sort(),
 		);
 		expect([...(outcome.namedCredited ?? [])].sort()).toEqual(
 			[inside, added].map(normalizeMapKey).sort(),
