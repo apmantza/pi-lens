@@ -6,7 +6,7 @@
  * option (`-a` lost in a cluster, `--only` after `--include`, a value taken
  * for a pathspec) names the wrong set of files, so a file the commit carries
  * is never judged. Only a listed form resolves; every other argv is `undefined`
- * and judged by the superset (AGENTS.md "Gates fail closed").
+ * and judged by the superset (a gate refuses what it does not recognise).
  */
 import * as fs from "node:fs";
 import * as path from "node:path";

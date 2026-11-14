@@ -19,7 +19,7 @@
  * match (`clients/dispatch/pre-edit-seed.ts`) is the finer rule for the writers
  * that have one; this is the floor for the rest.
  *
- * Fail closed (AGENTS.md "Gates fail closed"). A commit argv this does not
+ * Fail closed (the gate admits known-good forms and refuses the rest). A commit argv this does not
  * recognise is not a pass: the files are every one that differs from `HEAD` or
  * is untracked, each judged on its added lines. A git read that fails or is
  * cut, a file that cannot be read, a lane that times out, and a staged file
@@ -542,13 +542,15 @@ async function judgeFile(
 		.collectStagedLaneBlockers(abs, deps.projectRoot, {
 			getFlag: deps.getFlag,
 		})
-		.catch(
-			(cause: unknown) =>
-				({
-					status: "failed",
-					failure: cause instanceof Error ? cause.message : String(cause),
-				}) as const,
-		);
+		.catch((cause: unknown) => {
+			const failure = cause instanceof Error ? cause.message : String(cause);
+			recordDegradationOnce({
+				kind: "staged-delta-degraded",
+				subject: "lane_incomplete",
+				reason: `a lane run threw: ${failure}`,
+			});
+			return { status: "failed", failure } as const;
+		});
 	if (run.status === "failed")
 		return { degraded: "lane_incomplete", detail: `${file}: ${run.failure}` };
 	if (run.status === "skipped") {

@@ -337,6 +337,8 @@ const CENSUS_EXEMPT: Record<string, string> = {
 	"clients/runtime-tool-call.ts": "the duplicate-export blocker only",
 	"clients/shared-checkout-guard.ts":
 		"blocks a worktree mutation; its `clean` is git working-tree state",
+	"clients/staged-delta.ts":
+		"blocks a commit with the blockers it adds; an allowed commit is silent",
 	"clients/test-runner-delivery.ts": "test-failure findings only",
 	"mcp/server.ts":
 		"its analyze summary prints counts and the not-checked gap (#5287), never a clean word; ✓ marks a connection, a selection or a build",

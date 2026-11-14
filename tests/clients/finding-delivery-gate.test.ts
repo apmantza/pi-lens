@@ -113,6 +113,8 @@ const EXPECTED_SURFACE_IDS = [
 	// #2007: the shared-checkout refusal, the same live-preflight shape as
 	// `git-guard:commit-blocked`.
 	"shared-checkout-guard:worktree-mutation-blocked",
+	// #5553: the staged-delta read's refusal, the same live-preflight shape.
+	"staged-delta:commit-blocked",
 	// #1634 enumeration round: the sinks the census found outside the list.
 	"lsp-navigation:workspace-diagnostics-path",
 	"lsp-navigation:tracked-snapshot",
