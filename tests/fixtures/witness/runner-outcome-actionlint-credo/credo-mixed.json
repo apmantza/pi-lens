@@ -1,0 +1,28 @@
+{
+  "issues": [
+    {
+      "category": "design",
+      "check": "Credo.Check.Design.TagTODO",
+      "column": 3,
+      "column_end": 15,
+      "filename": "lib/a.ex",
+      "line_no": 3,
+      "message": "Found a TODO tag in a comment: # TODO later",
+      "priority": 2,
+      "scope": "A.f",
+      "trigger": "# TODO later"
+    },
+    {
+      "category": "readability",
+      "check": "Credo.Check.Readability.ModuleDoc",
+      "column": 11,
+      "column_end": 12,
+      "filename": "lib/a.ex",
+      "line_no": 1,
+      "message": "Modules should have a @moduledoc tag.",
+      "priority": 1,
+      "scope": "A",
+      "trigger": "A"
+    }
+  ]
+}
