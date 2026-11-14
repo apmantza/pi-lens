@@ -3291,4 +3291,28 @@ describe("clearWidgetState notifies the activation listener (#5588)", () => {
 			clearWidgetChangeCallback(listener);
 		}
 	});
+
+	it("a throwing store-change listener cannot break the write", () => {
+		const listener = vi.fn(() => {
+			throw new Error("projection failed");
+		});
+		setWidgetChangeCallback(listener);
+		try {
+			expect(() =>
+				recordDiagnostics("/repo/throwing-listener.ts", [
+					{
+						severity: "error",
+						semantic: "blocking",
+						message: "blocking",
+						line: 1,
+						rule: "typescript:1",
+					},
+				]),
+			).not.toThrow();
+			expect(listener).toHaveBeenCalled();
+			expect(getFileDiagnostics("/repo/throwing-listener.ts")).toHaveLength(1);
+		} finally {
+			clearWidgetChangeCallback(listener);
+		}
+	});
 });

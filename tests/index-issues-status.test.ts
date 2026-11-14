@@ -1,6 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../clients/degradation-ledger.js";
 import { _resetSessionLifecycleForTests } from "../clients/session-lifecycle.js";
 import {
 	clearWidgetState,
@@ -310,6 +314,7 @@ describe("pi-lens-issues status", () => {
 					{ cwd: tmpDir },
 				);
 				const filePath = path.join(tmpDir, "throwing.ts");
+				resetDegradationLedger();
 				const original = ctx.ui.setStatus;
 				ctx.ui.setStatus = () => {
 					throw new Error("stale extension ctx");
@@ -327,6 +332,11 @@ describe("pi-lens-issues status", () => {
 					]),
 				).not.toThrow();
 				expect(getFileDiagnostics(filePath)).toHaveLength(1);
+				// The publish seam handles its own host failure; the store-write
+				// listener guard must not see it as a broken projection.
+				expect(
+					getDegradationSummary().map((group) => group.kind),
+				).not.toContain("widget-change-listener-failed");
 
 				// The dedupe state did not advance on the failed call, so the next store
 				// change retries and reaches the host once it accepts the key again.
