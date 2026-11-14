@@ -26,6 +26,7 @@ import {
 import { FactStore } from "../../../../clients/dispatch/fact-store.js";
 import type { RunnerDefinition } from "../../../../clients/dispatch/types.js";
 import {
+	createAvailabilityChecker,
 	resetDispatchAvailabilityState,
 	resolveToolCommandWithInstallFallback,
 	toolBinaryVerdict,
@@ -40,13 +41,15 @@ import { resetWorkspaceTopology } from "../../../../clients/workspace-topology.j
 import { RuffClient } from "../../../../clients/ruff-client.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
-const { safeSpawnAsync, spawnCalls, probeMode } = vi.hoisted(() => {
+const { safeSpawnAsync, spawnCalls, probeMode, probeGate } = vi.hoisted(() => {
 	const spawnCalls: Array<{
 		cmd: string;
 		args: readonly string[];
 		cwd: string | undefined;
 	}> = [];
 	const probeMode: Record<string, "ok" | "timeout" | "reject"> = {};
+	// When set, a version probe waits on it: the probe is in flight until released.
+	const probeGate: { current?: Promise<void> } = {};
 	const safeSpawnAsync = vi.fn(
 		async (
 			cmd: string,
@@ -75,6 +78,7 @@ const { safeSpawnAsync, spawnCalls, probeMode } = vi.hoisted(() => {
 				args.includes("-version") ||
 				(args[0] === "version" && args[1] === "--short");
 			if (isProbe) {
+				await probeGate.current;
 				const tool = path.basename(String(cmd)).replace(/\.(exe|bat)$/, "");
 				// helm 4 has no --version flag, an old JVM has no --version and the
 				// spotbugs launcher rejects it: each answers only its own spelling, so a registry row
@@ -104,7 +108,7 @@ const { safeSpawnAsync, spawnCalls, probeMode } = vi.hoisted(() => {
 			return { error: null, status: 0, stdout: "", stderr: "" };
 		},
 	);
-	return { safeSpawnAsync, spawnCalls, probeMode };
+	return { safeSpawnAsync, spawnCalls, probeMode, probeGate };
 });
 vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
 	...(await importOriginal<
@@ -168,6 +172,7 @@ describe("one availability ladder per binary (#5410)", () => {
 		spawnCalls.length = 0;
 		dbgLines.length = 0;
 		for (const key of Object.keys(probeMode)) delete probeMode[key];
+		probeGate.current = undefined;
 		safeSpawnAsync.mockClear();
 	});
 	afterEach(() => {
@@ -294,6 +299,32 @@ describe("one availability ladder per binary (#5410)", () => {
 		);
 		expect(probesOf(shim)).toHaveLength(1);
 		expect(toolBinaryVerdict("spotbugs", root).outcome).toBe("success");
+	});
+
+	// Recurrence (#4776, moved from the java probe this fold deleted): a caller
+	// that arrives after pi's trust answer changed joined the probe a caller
+	// under the old answer had in flight, and took its answer for the new
+	// trust. The checker's own in-flight table now carries the trust it
+	// started under.
+	it("starts its own probe when trust changed under an in-flight one", async () => {
+		const tool = path.join(
+			pathEnv.tmpDir,
+			process.platform === "win32" ? "trivy.exe" : "trivy",
+		);
+		fs.writeFileSync(tool, "#!/bin/sh\n");
+		fs.chmodSync(tool, 0o755);
+		const checker = createAvailabilityChecker("trivy", ".exe");
+		let release: () => void = () => {};
+		probeGate.current = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		setProjectTrustState("untrusted");
+		const before = checker.isAvailableAsync(workspace.tmpDir);
+		setProjectTrustState("trusted");
+		const after = checker.isAvailableAsync(workspace.tmpDir);
+		release();
+		await Promise.all([before, after]);
+		expect(probesOf("trivy")).toHaveLength(2);
 	});
 
 	// Recurrence: helm-lint and helm-render each held a helm checker.

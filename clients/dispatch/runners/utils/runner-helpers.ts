@@ -16,7 +16,10 @@ import { logSessionStart } from "../../../sessionstart-logger.js";
 import { incrementDegradationCount } from "../../../degradation-ledger.js";
 import { isToolInstallDisabled } from "../../../env-utils.js";
 import { getGlobalPiLensDir } from "../../../file-utils.js";
-import { getProjectTrustState } from "../../../project-trust.js";
+import {
+	getProjectTrustGeneration,
+	getProjectTrustState,
+} from "../../../project-trust.js";
 import {
 	createGenerationSource,
 	type GenerationHandle,
@@ -1277,9 +1280,13 @@ export function createAvailabilityChecker(
 	const cacheByCwd = new PathKeyedMap<AvailabilityCache>(
 		normalizeEphemeralMapKey,
 	);
-	const inFlightByCwd = new PathKeyedMap<Promise<boolean>>(
-		normalizeEphemeralMapKey,
-	);
+	// The trust the probe started under rides with it: a caller that arrives
+	// after pi's trust answer changed starts its own probe instead of joining
+	// one whose search path was scoped for the old answer (#4776).
+	const inFlightByCwd = new PathKeyedMap<{
+		trustGeneration: number;
+		promise: Promise<boolean>;
+	}>(normalizeEphemeralMapKey);
 	let checkerGeneration = availabilityGeneration.current();
 	let checkerFlightGeneration = 0;
 
@@ -1446,8 +1453,9 @@ export function createAvailabilityChecker(
 		}
 
 		const key = path.resolve(resolvedCwd);
+		const trustGeneration = getProjectTrustGeneration();
 		const existing = inFlightByCwd.get(key);
-		if (existing) return existing;
+		if (existing?.trustGeneration === trustGeneration) return existing.promise;
 
 		const promiseGeneration = checkerGeneration;
 		let promise: Promise<boolean>;
@@ -1547,7 +1555,7 @@ export function createAvailabilityChecker(
 				let probeJoined = false;
 				try {
 					const shared = checkerProbeFlights.run(
-						`checker:${command}|${versionArgs.join("|")}|${key}|${checkerFlightGeneration}|${windowsExt}|${cmd}|${JSON.stringify(Object.entries(env ?? {}).sort(([a], [b]) => compareOrdinal(a, b)))}`,
+						`checker:${command}|${versionArgs.join("|")}|${key}|${trustGeneration}|${checkerFlightGeneration}|${windowsExt}|${cmd}|${JSON.stringify(Object.entries(env ?? {}).sort(([a], [b]) => compareOrdinal(a, b)))}`,
 						() =>
 							// A bare PATH-only probe goes through the cwd-less probe seam
 							// (#2894): nothing it answers is read out of a project.
@@ -1635,12 +1643,12 @@ export function createAvailabilityChecker(
 			// that newer-generation entry when it settles.
 			if (
 				checkerGeneration === promiseGeneration &&
-				inFlightByCwd.get(key) === promise
+				inFlightByCwd.get(key)?.promise === promise
 			) {
 				inFlightByCwd.delete(key);
 			}
 		});
-		inFlightByCwd.set(key, promise);
+		inFlightByCwd.set(key, { trustGeneration, promise });
 		return promise;
 	}
 
@@ -1985,7 +1993,13 @@ type AvailabilityChecker = ReturnType<typeof createAvailabilityChecker>;
  */
 const toolBinaryCheckers = new Map<string, AvailabilityChecker>();
 
-type ToolBinaryOrder = NonNullable<AvailabilityCheckerOptions["order"]>;
+/**
+ * `path-only` is not a ladder order: the bare command on PATH and nothing
+ * else, for a caller whose child spawns it by that name (`toolOnPath`).
+ */
+type ToolBinaryOrder =
+	| NonNullable<AvailabilityCheckerOptions["order"]>
+	| "path-only";
 
 /**
  * One checker per (tool id, order): a runner (managed before PATH) and a
@@ -2007,7 +2021,7 @@ function toolBinaryChecker(
 		spec.versionArgs ?? ["--version"],
 		{
 			projectBinDirs: [...VENV_BIN_DIRS, ...NODE_MODULES_BIN_DIRS],
-			order,
+			...(order === "path-only" ? { pathOnly: true } : { order }),
 		},
 	);
 	toolBinaryCheckers.set(key, checker);
@@ -2034,6 +2048,23 @@ export async function resolveToolCommandWithInstallFallback(
 		getToolCommandSpec(toolId)?.managedToolId ?? toolId,
 		cwd,
 	);
+}
+
+/**
+ * Does `toolId`'s bare command run on PATH right now (#5410)? For a caller
+ * that hands the name to a child it does not control, where a project or
+ * managed binary is no answer: the LSP launcher starting jdtls asks this of
+ * `java`. `true` and `false` are durable (the version probe passed, or the
+ * command is absent or rejects it); `undefined` is a probe that never got a
+ * fair hearing (timeout, abort, host stall), so the caller must not treat the
+ * call as proof the tool is absent. The verdict, its cooldown and the trust
+ * stamp are the shared checker's.
+ */
+export async function toolOnPath(toolId: string): Promise<boolean | undefined> {
+	const checker = toolBinaryChecker(toolId, "path-only");
+	if (!checker) return false;
+	if (await checker.isAvailableAsync()) return true;
+	return checker.getOutcome() === "transient" ? undefined : false;
 }
 
 /** What a ladder that never probed (or an id with no spec) reports. */
