@@ -66,6 +66,7 @@ import {
 import { probeToolAsync } from "../../../tool-probe.js";
 import { compareOrdinal } from "../../../string-utils.js";
 import {
+	getRubocopCommand,
 	getToolCommandSpec,
 	shouldAutoInstallTool,
 } from "../../../tool-policy.js";
@@ -875,22 +876,9 @@ const resolveInstallInFlightByCwd = new PathKeyedMap<
 // "available", even though only the first call actually ran an install.
 //
 // A correction is genuine only when a latched `unavailable` row for the same
-// pair stood before it. `verifyOrInstallCommand` also emits through this seam
-// with NO prior latch behind it (the bundler-form
-// `resolveCommandArgsWithInstallFallback` reaches it with no checker probe at
-// all), and burning this memo on such a row silences the
-// LATER genuine latch-then-recover for the same pair — the #1606 defect back
-// through the #1612 seam (#1657). Those rows dedupe against
-// `uncorrectedEmissionsByCwd` instead, so repeats stay suppressed without
-// pre-empting the real correction.
+// pair stood before it, and `resolveAvailableOrInstallUnshared` writes that
+// latch before it emits, so every emission through this seam is one (#1657).
 const correctedAvailabilityByCwd = new PathKeyedMap<Set<string>>(
-	normalizeMapKey,
-);
-// Which (cwd, toolId) pairs already emitted an `available` row that corrected
-// nothing (no latched `unavailable` stood before it). Same one-row-per-session
-// bound as the memo above, kept in a SEPARATE scope so it cannot answer for a
-// correction that has not happened yet (#1657).
-const uncorrectedEmissionsByCwd = new PathKeyedMap<Set<string>>(
 	normalizeMapKey,
 );
 // Which (cwd, tool) pairs currently stand latched `unavailable` in the durable
@@ -1134,9 +1122,8 @@ function resolvedTagForAttempt(
 /**
  * Emit the ONE compensating `available` row for a (cwd, toolId) correction,
  * after a latched unavailable probe recovers via `ensureTool`. This is the
- * SINGLE row constructor for every caller behind this seam —
- * `resolveAvailableOrInstallUnshared` (#1612) and `verifyOrInstallCommand`
- * (#1636) both call it rather than each hand-rolling their own, which is
+ * SINGLE row constructor behind this seam: `resolveAvailableOrInstallUnshared`
+ * (#1612) calls it rather than each caller hand-rolling its own, which is
  * exactly the drift #1610's own review caught the first time this shape
  * shipped twice.
  *
@@ -1167,9 +1154,6 @@ function emitCompensatingAvailableRow(
 		// checker records the row under its COMMAND, and a leftover entry would
 		// later back a "correction" with nothing behind it (#1674 review F3).
 		clearLatchedUnavailable(cwd, ...latchKeys);
-	} else {
-		if (hasId(uncorrectedEmissionsByCwd, cwd, toolId)) return;
-		addId(uncorrectedEmissionsByCwd, cwd, toolId);
 	}
 	// `installed`/`installedPath` can come back truthy WITHOUT ensureTool
 	// running an install this call — its in-memory cache, its on-disk probe
@@ -1224,7 +1208,6 @@ export function resetDispatchAvailabilityState(): void {
 	installAttemptsByCwd.clear();
 	resolveInstallInFlightByCwd.clear();
 	correctedAvailabilityByCwd.clear();
-	uncorrectedEmissionsByCwd.clear();
 	latchedUnavailableByCwd.clear();
 	managedBinaryVerdicts.clear();
 	managedVerifyInFlight.clear();
@@ -2129,103 +2112,23 @@ export async function resolveInstalledToolCommand(
 		: { command: null };
 }
 
-async function verifyOrInstallCommand(
-	command: string,
-	toolId: string,
-	cwd: string,
-	versionArgs: string[] = ["--version"],
-	timeout = 5000,
-	onUnusable: (verdict: ToolVerdict) => void = () => {},
-): Promise<string | null> {
-	// Skip the --version spawn when the command isn't even on disk — the ~μs
-	// stat/PATH walk beats a guaranteed-to-fail spawn round-trip.
-	const spawnable = await isSpawnableCommand(command);
-	if (spawnable) {
-		const versionCheck = await safeSpawnAsync(command, versionArgs, {
-			timeout,
-			cwd,
-			input: "",
-			cooldown: false,
-		});
-		if (!versionCheck.error && versionCheck.status === 0) {
-			return command;
-		}
-		// A command that was found but rejected its probe is not fixed by a
-		// reinstall. This also covers permissions and malformed shims; a probe
-		// that timed out or that trust refused is classified as what it is.
-		const { outcome, cause } = classifyProbeFailure(versionCheck, { command });
-		onUnusable({ outcome, cause });
-		return null;
-	}
-	if (!shouldAutoInstallTool(toolId)) return null;
-
-	const state = installStateFor(cwd, toolId);
-	if (state.suppressed) return null;
-	const installStartedAt = Date.now();
-	const installed = await ensureTool(toolId);
-	if (installed) {
-		noteInstallSuccess(toolId, cwd);
-		// A latched `unavailable` row MAY stand here, written by whatever probe
-		// the caller ran first — but not always. The on-disk pre-check above
-		// logs nothing, and the bundler form (rubocop's
-		// `resolveCommandArgsWithInstallFallback`) reaches this seam with no
-		// checker probe at all (#1657). So the row is
-		// emitted either way, and only a call that really clears a latched row is
-		// recorded as a correction. Without the row, the durable log keeps saying
-		// the tool is off after the installer just brought it back — the third
-		// seam of #1606/#1610/#1612 (#1636).
-		emitCompensatingAvailableRow(
-			cwd,
-			toolId,
-			installStartedAt,
-			installed,
-			latchKeysFor(toolId, command),
-		);
-		return installed;
-	}
-	noteInstallFailure(toolId, cwd);
-	return null;
-}
-
 /**
- * The bundler-form resolver (`bundle exec rubocop`): a `--version` spawn of the
- * argv, then the on-disk verify or install of its command. It holds no
- * checker, so a caller that must say why it got `null` reads `onUnusable`: it
- * is called with the verdict of a command that is on disk and failed its
- * probe, and not called for a command that is not on disk, an absence
- * (#5258).
+ * The command that runs rubocop in `cwd` (#5410): the bundler form
+ * (`bundle exec rubocop`) when the Gemfile names rubocop and the registry's
+ * `bundle` ladder answers, else the plain `rubocop` ladder, so a Gemfile on a
+ * host without bundler still reaches a working rubocop. One memoized verdict
+ * per binary; a caller reads why it got `null` from `toolBinaryVerdict`.
  */
-export async function resolveCommandArgsWithInstallFallback(
-	command: { cmd: string; args: string[] },
-	toolId: string,
+export async function resolveRubocopCommand(
 	cwd: string,
-	versionArgs: string[] = ["--version"],
-	timeout = 5000,
-	onUnusable?: (verdict: ToolVerdict) => void,
 ): Promise<{ cmd: string; args: string[] } | null> {
-	const versionCheck = await safeSpawnAsync(
-		command.cmd,
-		[...command.args, ...versionArgs],
-		{ timeout, cwd, input: "", cooldown: false },
-	);
-	if (!versionCheck.error && versionCheck.status === 0) {
-		return command;
+	const bundler = getRubocopCommand(cwd);
+	if (bundler.cmd === "bundle") {
+		const bundle = await resolveToolCommandWithInstallFallback(cwd, "bundle");
+		if (bundle) return { cmd: bundle, args: bundler.args };
 	}
-	const installed = await verifyOrInstallCommand(
-		command.cmd,
-		toolId,
-		cwd,
-		versionArgs,
-		timeout,
-		onUnusable,
-	);
-	if (!installed) {
-		return null;
-	}
-	if (installed === command.cmd) {
-		return command;
-	}
-	return { cmd: installed, args: [] };
+	const cmd = await resolveToolCommandWithInstallFallback(cwd, "rubocop");
+	return cmd ? { cmd, args: [] } : null;
 }
 
 async function resolveAvailableOrInstallUnshared(
@@ -2261,8 +2164,7 @@ async function resolveAvailableOrInstallUnshared(
 		// `checker.isAvailableAsync`. Without a compensating row here, the durable
 		// log keeps saying the tool is off after the installer just brought it
 		// back — the shape #1606/PR #1610 fixed in `ensureViaInstaller`, shared
-		// here by ~16 runners behind this helper (#1612), and by
-		// `verifyOrInstallCommand` for the third seam (#1636).
+		// here by ~16 runners behind this helper (#1612).
 		//
 		// `checker.reset()` above clears the checker's cache, so the NEXT call
 		// re-probes PATH from scratch — and for a managed-dir-only install that

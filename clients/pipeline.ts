@@ -69,7 +69,7 @@ import {
 	describeProbeEvidence,
 	logAvailabilityDecision,
 	startHostStallSampler,
-	resolveCommandArgsWithInstallFallback,
+	resolveRubocopCommand,
 	resolveToolCommand,
 	resolveToolCommandWithInstallFallback,
 } from "./dispatch/runners/utils/runner-helpers.js";
@@ -137,7 +137,6 @@ import { dropFindingsForMissingPaths } from "./advisory-provenance.js";
 import {
 	getAutofixPolicyForFile,
 	getPreferredAutofixTools,
-	getRubocopCommand,
 	hasKtfmtConfig,
 	hasKtlintConfig,
 	markdownlintConfigArgs,
@@ -730,13 +729,7 @@ async function tryRubocopFix(
 	cwd: string,
 	writeHold?: FileMutationHold,
 ): Promise<number> {
-	const resolved = await resolveCommandArgsWithInstallFallback(
-		getRubocopCommand(cwd),
-		"rubocop",
-		cwd,
-		["--version"],
-		10000,
-	);
+	const resolved = await resolveRubocopCommand(cwd);
 	if (!resolved) return 0;
 	if (writeHold) await writeHold.acquire();
 

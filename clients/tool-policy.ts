@@ -1297,6 +1297,16 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 		},
 	],
 	[
+		// Rubocop's bundler form (`bundle exec rubocop`) is available when
+		// bundler is. No managedToolId: pi-lens never installs bundler.
+		"bundle",
+		{
+			command: "bundle",
+			windowsExt: ".bat",
+			versionArgs: ["--version"],
+		},
+	],
+	[
 		// The archive launcher is `bin/spotbugs`, which prints its version under
 		// `-version` and rejects `--version` (installer entry, #133).
 		"spotbugs",

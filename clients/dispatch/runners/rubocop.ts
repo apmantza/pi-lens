@@ -8,7 +8,10 @@
  * Supports bundle exec (preferred in Bundler projects).
  */
 
-import { toolAbsentSkip, type ToolVerdict } from "./utils/runner-helpers.js";
+import {
+	resolveRubocopCommand,
+	toolAbsentSkip,
+} from "./utils/runner-helpers.js";
 import { skipped } from "../types.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
@@ -17,7 +20,6 @@ import { resolveRunnerCwd } from "../../tool-cwd.js";
 import {
 	getAutofixCapability,
 	getLinterPolicyForCwd,
-	getRubocopCommand,
 } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -26,7 +28,6 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { resolveCommandArgsWithInstallFallback } from "./utils/runner-helpers.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
 
@@ -114,22 +115,8 @@ const rubocopRunner: RunnerDefinition = {
 		if (policy && !policy.preferredRunners.includes("rubocop")) {
 			return skipped("not-preferred");
 		}
-		// #5258: rubocop resolves by its own spawn, not a checker, so its skip
-		// reads the verdict of that spawn and never another ladder's.
-		let verdict: ToolVerdict | null = null;
-		const resolved = await resolveCommandArgsWithInstallFallback(
-			getRubocopCommand(cwd),
-			"rubocop",
-			cwd,
-			["--version"],
-			10000,
-			(found) => {
-				verdict = found;
-			},
-		);
-		if (!resolved) {
-			return toolAbsentSkip(cwd, { id: "rubocop", verdict });
-		}
+		const resolved = await resolveRubocopCommand(cwd);
+		if (!resolved) return toolAbsentSkip(cwd, { id: "rubocop" });
 		const { cmd, args } = resolved;
 
 		// Lint only — no auto-correct (formatter handles that)

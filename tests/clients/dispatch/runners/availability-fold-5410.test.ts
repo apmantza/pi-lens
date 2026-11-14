@@ -126,6 +126,8 @@ const WINDOWS_EXT: Record<string, string> = {
 	java: ".exe",
 	spotbugs: ".bat",
 	ktfmt: "",
+	bundle: ".bat",
+	rubocop: "",
 };
 
 /**
@@ -344,6 +346,64 @@ describe("one availability ladder per binary (#5410)", () => {
 		fs.chmodSync(onPath, 0o755);
 		resetDispatchAvailabilityState();
 		expect(await toolOnPath("java")).toBe(true);
+	});
+
+	// Recurrence (#5410 remainder): rubocop's bundler form resolved by spawning
+	// `bundle exec rubocop --version` on every run and every fix, with no memo
+	// and no decision row, and by a verify that read `bundle` alone; a Gemfile
+	// that names rubocop on a host without bundler skipped the runner while a
+	// working rubocop sat on PATH.
+	describe("rubocop's bundler form", () => {
+		const putOnPath = (name: string) => {
+			const file = path.join(
+				pathEnv.tmpDir,
+				process.platform === "win32" ? `${name}.bat` : name,
+			);
+			fs.writeFileSync(file, "#!/bin/sh\n");
+			fs.chmodSync(file, 0o755);
+			return file;
+		};
+		const setup = () => {
+			const root = workspace.tmpDir;
+			fs.writeFileSync(path.join(root, "Gemfile"), "gem 'rubocop'\n");
+			fs.writeFileSync(path.join(root, ".rubocop.yml"), "AllCops: {}\n");
+			const file = path.join(root, "a.rb");
+			fs.writeFileSync(file, "x = 1\n");
+			return { root, file };
+		};
+
+		it("probes bundle once across the rubocop runner and the fix", async () => {
+			putOnPath("bundle");
+			const { root, file } = setup();
+			const runner = (
+				await import("../../../../clients/dispatch/runners/rubocop.js")
+			).default;
+			await dispatch(file, root, runner);
+			await dispatch(file, root, runner);
+			await autofix(file, root);
+			expect(probesOf("bundle")).toHaveLength(1);
+			expect(
+				spawnCalls.filter(
+					(c) => c.args.includes("exec") && c.args.includes("-a"),
+				),
+			).toHaveLength(1);
+		});
+
+		it("runs the rubocop on PATH when the Gemfile names it and bundler is absent", async () => {
+			putOnPath("rubocop");
+			const { root, file } = setup();
+			await dispatch(
+				file,
+				root,
+				(await import("../../../../clients/dispatch/runners/rubocop.js"))
+					.default,
+			);
+			expect(
+				spawnCalls.some(
+					(c) => c.cmd === "rubocop" && c.args.includes("--format"),
+				),
+			).toBe(true);
+		});
 	});
 
 	// Recurrence: helm-lint and helm-render each held a helm checker.
