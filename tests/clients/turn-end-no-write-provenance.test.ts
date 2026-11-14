@@ -1894,6 +1894,59 @@ describe.each([false, true])(
 			});
 		});
 
+		// #4617 review F5 (CodeRabbit thread 2, Qodo B4): a go.sum with no go.mod
+		// is no module evidence. The checksum list pins nothing without the module
+		// file it sums, so the module-only advisory has no subject and fails closed:
+		// the stamp has no file to read, so it reads the unknown generation.
+		it("labels a module-only Go CVE advisory historical when only go.sum is present", async () => {
+			await runTurnScenario({
+				id: `no-write-provenance-govulncheck-sum-only-${guard}`,
+				incident:
+					"A go.sum with no go.mod kept a module-level CVE labelled current",
+				issue: "#4617",
+				async run(h) {
+					h.write("go.sum", "example.com/module v1.2.0 h1:abc=\n");
+					seedModuleOnlyGoCve(h);
+					h.runtime.appendCascadeRun(silentRun(h.pathOf("src/clean.ts")));
+					h.runtime.beginTurn();
+					const view = await h.turnEnd({ flags });
+					expect(view.text).toContain("Go CVEs reachable from this code");
+					expect(view.text).toContain(HISTORICAL);
+					expect(view.text).toContain(UNKNOWN_STAMP);
+				},
+			});
+		});
+
+		// #4617 review F1: go.sum is a pinned subject of a module-only advisory, as
+		// go.mod is. A lane that narrowed its citation to go.mod alone reads this
+		// cell current, so the cell names the go.sum citation.
+		it("labels a module-only Go CVE advisory historical when go.sum changed after the turn end", async () => {
+			await runTurnScenario({
+				id: `no-write-provenance-govulncheck-module-sum-older-${guard}`,
+				incident: "A go.sum edit must supersede the cached module-level CVE",
+				issue: "#4617",
+				async run(h) {
+					h.write("go.mod", "module example.com/app\n");
+					const goSum = h.write(
+						"go.sum",
+						"example.com/module v1.2.0 h1:abc=\n",
+					);
+					seedModuleOnlyGoCve(h);
+					h.runtime.appendCascadeRun(silentRun(h.pathOf("src/clean.ts")));
+					h.runtime.beginTurn();
+					const view = await h.turnEnd({
+						flags,
+						beforeDelivery: () => {
+							fs.writeFileSync(goSum, "example.com/module v1.2.0 h1:def=\n");
+						},
+					});
+					expect(view.text).toContain("Go CVEs reachable from this code");
+					expect(view.text).toContain(HISTORICAL);
+					expect(view.text).not.toContain(UNKNOWN_STAMP);
+				},
+			});
+		});
+
 		// A section that mixes a call-site CVE with a module-only one reports both
 		// subjects: either file moving on supersedes it.
 		describe.each([

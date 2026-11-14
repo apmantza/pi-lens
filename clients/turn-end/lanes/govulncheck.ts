@@ -177,12 +177,15 @@ function render(
 /**
  * The Go module files a module-level CVE is pinned by: the one manifest probe
  * (`existingDependencyManifests`), narrowed to Go's two files so another
- * ecosystem's manifest moving on does not supersede a Go finding.
+ * ecosystem's manifest moving on does not supersede a Go finding. go.sum is
+ * the checksum list of go.mod and pins no module by itself, so with no go.mod
+ * the list is empty and the composer fails closed (#4617 review F5).
  */
 function goModuleFiles(cwd: string): string[] {
-	return existingDependencyManifests(cwd).flatMap((file) =>
-		/[\\/]go\.(?:mod|sum)$/.test(file) ? [file] : [],
+	const goFiles = existingDependencyManifests(cwd).filter((file) =>
+		/[\\/]go\.(?:mod|sum)$/.test(file),
 	);
+	return goFiles.some((file) => /[\\/]go\.mod$/.test(file)) ? goFiles : [];
 }
 
 /** The lane. Stateless — one object, no per-turn state to reset. */
