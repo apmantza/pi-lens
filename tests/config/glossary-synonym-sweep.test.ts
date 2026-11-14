@@ -644,8 +644,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// turn with one `Array.prototype.filter`.
 		"clients/dispatch/integration.ts": 21,
 		// #4483: the seed's runner and line selection, `Array.prototype.filter`
-		// calls, not a delivery filter.
-		"clients/dispatch/pre-edit-seed.ts": 4,
+		// calls, not a delivery filter. 4 -> 5 (#5553 r2): the seed entries of the
+		// edit-gated lanes a dispatch with an edit span leaves out.
+		"clients/dispatch/pre-edit-seed.ts": 5,
 		"clients/dispatch/rule-policy.ts": 1,
 		"clients/dispatch/rules/high-fan-out.ts": 1,
 		"clients/dispatch/rules/missing-error-propagation.ts": 3,
