@@ -2810,11 +2810,12 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/shared-checkout-guard.ts": 7,
 	"clients/source-filter.ts": 2,
 	// #5553: the commit gate's staged-delta read. `gateStagedDelta` is the one
-	// hook-path entry and holds every await below it (the git reads, the per-file
-	// lane runs) under one registered bounded() call with ctx.signal and a 20 s
-	// wall budget; a bound per git read would multiply that budget by the staged
-	// set's size.
-	"clients/staged-delta.ts": 12,
+	// hook-path entry and holds every await below it (the git replay and reads,
+	// the per-file lane runs) under one registered bounded() call with
+	// ctx.signal and a 20 s wall budget; a bound per git read would multiply
+	// that budget by the staged set's size. 12 -> 15 (round 2): the add replay,
+	// the repository read per replayed git and the lane module load.
+	"clients/staged-delta.ts": 15,
 	"clients/startup-scan.ts": 3,
 	"clients/test-runner-client.ts": 4,
 	// #2507. Unlike every other entry here, this one is unbounded ON PURPOSE
@@ -3389,7 +3390,7 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, BoundedSite>> = {
 			"work requeues before release (#2939 F6). Its budget is selected from the one hook " +
 			"registry, including the read-only versus edit tool_result split.",
 	},
-	"call:clients/staged-delta.ts#gateStagedDelta:6ec6083f~8ae70b5c": {
+	"call:clients/staged-delta.ts#gateStagedDelta:13ecf2f5~0ba92689": {
 		work: "threaded",
 		signal:
 			"The tool_call's `ctx.signal`, passed by `handleToolCallImpl`, absent " +
@@ -3397,7 +3398,8 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, BoundedSite>> = {
 			"always live. The thunk threads its own work signal into every git " +
 			"spawn, so a timeout or an abort cancels those; a per-file lane run does " +
 			"not read it yet and ends on its own runner timeouts. Either way the " +
-			"commit refuses and `staged-delta-degraded` is recorded.",
+			"commit refuses, and only `gateStagedDelta` records " +
+			"`staged-delta-degraded`, so abandoned work records nothing.",
 	},
 	"call:clients/turn-end/lanes/secrets.ts#blockingGitleaksFindings:c06d5cf4~67c7ff0d":
 		{

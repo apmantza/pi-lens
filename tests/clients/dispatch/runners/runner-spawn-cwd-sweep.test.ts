@@ -150,7 +150,8 @@ const POPULATION_FILES = [
 // #5087: 79 -> 80, clients/metrics/complexity-baseline.ts (two git reads).
 // #5410: 80 -> 79, clients/lsp/jvm-runtime.ts stopped spawning `which java`:
 // the registry's PATH-only checker probes it.
-const EXPECTED_FILES = 79;
+// #5553: 79 -> 80, clients/staged-delta.ts (the commit gate's git replay).
+const EXPECTED_FILES = 80;
 // 135 -> 134 (#4532 round 3): `findBinaryOnPath` stopped spawning
 // `which`/`where` — the bare-command probe resolved its own binary through the
 // path and cwd it was asked to judge, so a project-supplied `which` ran. It is
@@ -173,7 +174,9 @@ const EXPECTED_FILES = 79;
 // 127 -> 128 (#5594): `phpstan dump-parameters --json`, the one spawn that reads
 // the `excludePaths` phpstan resolved, so the runner can anchor them at the
 // project root; its cwd is the runner's `resolveRunnerCwd` binding.
-const EXPECTED_DIRECT_SITES = 128;
+// 128 -> 129 (#5553): the commit gate's git replay (`runGit` in
+// clients/staged-delta.ts), admitted by name in ORIGIN_ADMISSION_ROWS.
+const EXPECTED_DIRECT_SITES = 129;
 /**
  * Every same-file spawn-routing wrapper call site the scan discovers. Pinned
  * as a LIST, not a count, because the list is the part round 2 got wrong: it
@@ -420,6 +423,10 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 ];
 const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
+	[
+		"clients/staged-delta.ts#runGit:9ed1005b~b01c76f2",
+		"#5553: cwd is the directory the agent's own git command runs in (the session cwd after any literal `cd` the planner followed), so the replayed `git commit --dry-run` resolves the repository and the pathspecs exactly as the real command will; a tool-cwd root would change both",
+	],
 	[
 		"clients/safe-spawn.ts#safeSpawn:ad6fe3ed~be4673bc",
 		"the synchronous safe-spawn path derives its cwd from its own compatibility options, not the dispatch resolveToolCwd seam",

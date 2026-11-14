@@ -608,6 +608,11 @@ const WRITE_SITES: Record<string, SiteRow> = {
 		cls: "state",
 		why: "the merged ast-grep rule directory and sgconfig under the scanner report directory",
 	},
+	"clients/staged-delta.ts": {
+		sites: 7,
+		cls: "scratch",
+		why: "the commit gate's per-call scratch: a temporary directory under the OS temp dir with the index copies and the hook net, and an index blob written beside the carried file under a pi-lens-staged- name for one lane read, each removed before the call returns",
+	},
 	"clients/test-runner-client.ts": {
 		sites: 3,
 		cls: "scratch",

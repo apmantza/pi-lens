@@ -44,7 +44,11 @@ import {
 } from "./git-guard.js";
 import { applyInlineBlockerPolicy } from "./inline-blocker-dispositions.js";
 import { alignLines, lineHashesOf } from "./line-alignment.js";
-import { isExternalOrVendorFile, toProjectRelativePath } from "./path-utils.js";
+import {
+	isExternalOrVendorFile,
+	realpathOrResolve,
+	toProjectRelativePath,
+} from "./path-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { truncatedByOutputCap } from "./spawn-output-cap.js";
 
@@ -140,8 +144,8 @@ interface Carried {
 	/** git's X (the commit's index against the base) and Y (against the working file). */
 	x: string;
 	y: string;
-	/** Path from the top of the checkout. */
-	path: string;
+	/** The file, from the top of the checkout. */
+	file: string;
 	/** The rename or copy source. */
 	from?: string;
 }
@@ -159,7 +163,7 @@ function parseDryRun(stdout: string): Carried[] | undefined {
 		const moved = "RC".includes(x) || "RC".includes(y);
 		const from = moved ? tokens[++i] : undefined;
 		if (moved && !from) return undefined;
-		entries.push({ x, y, path: token.slice(3), ...(from && { from }) });
+		entries.push({ x, y, file: token.slice(3), ...(from && { from }) });
 	}
 	return entries;
 }
@@ -232,7 +236,7 @@ async function judgeStagedDelta(
 		const copies = new Map<string, string>();
 		const repoOf = async (
 			replay: ReplayedGit,
-		): Promise<Repo | StagedDeltaVerdict> => {
+		): Promise<Repo | StagedDeltaVerdict | "none"> => {
 			const out = await runGit(
 				replay,
 				{},
@@ -247,6 +251,14 @@ async function judgeStagedDelta(
 				],
 				deps.signal,
 			);
+			// The replay runs where the git command runs, with its options and
+			// env, so no repository there is that command's own failure: a
+			// commit that cannot land has nothing to judge.
+			if (
+				out.status === 128 &&
+				out.stderr.startsWith("fatal: not a git repository")
+			)
+				return "none";
 			const [top, index, mergeHead] = out.stdout.split("\n");
 			if (out.status !== 0 || !top || !index || !mergeHead)
 				return gitFailure(out, "finding the repository the commit runs in");
@@ -261,6 +273,11 @@ async function judgeStagedDelta(
 		};
 		for (const add of plan.adds) {
 			const repo = await repoOf(add);
+			if (repo === "none")
+				return degraded(
+					"git_failed",
+					"replaying git add: not a git repository",
+				);
 			if ("kind" in repo) return repo;
 			const out = await runGit(
 				add,
@@ -271,6 +288,7 @@ async function judgeStagedDelta(
 			if (out.status !== 0) return gitFailure(out, "replaying git add");
 		}
 		const repo = await repoOf(plan.commit);
+		if (repo === "none") return { kind: "clean", files: 0 };
 		if ("kind" in repo) return repo;
 		const dry = await runGit(
 			plan.commit,
@@ -313,20 +331,14 @@ async function judgeCarried(
 	deps: StagedDeltaDeps,
 ): Promise<StagedDeltaVerdict> {
 	if (
-		carried.some((entry) => `${entry.path}${entry.from ?? ""}`.includes("\n"))
+		carried.some((entry) => `${entry.file}${entry.from ?? ""}`.includes("\n"))
 	)
 		return degraded("git_failed", "a carried path holds a newline");
 	// git spells the top with symlinks resolved; the session root may not.
-	let top = repo.top;
-	try {
-		top = path.resolve(
-			deps.projectRoot,
-			path.relative(nodeFs.realpathSync(deps.projectRoot), repo.top),
-		);
-	} catch {
-		// none: a session root that cannot be resolved keeps git's spelling; a
-		// file outside the root is then skipped as any outside file is.
-	}
+	const top = path.resolve(
+		deps.projectRoot,
+		path.relative(realpathOrResolve(deps.projectRoot), repo.top),
+	);
 	let mergeHeads: string[] = [];
 	try {
 		mergeHeads = nodeFs
@@ -340,8 +352,10 @@ async function judgeCarried(
 	const judged = carried.filter((entry) => {
 		if (entry.y !== " ") return true;
 		try {
-			return nodeFs.lstatSync(path.resolve(top, entry.path)).isFile();
+			return nodeFs.lstatSync(path.resolve(top, entry.file)).isFile();
 		} catch {
+			// none: git reads the working file for this entry, so one gone
+			// since is no file the commit can carry either; git refuses it.
 			return false;
 		}
 	});
@@ -353,7 +367,7 @@ async function judgeCarried(
 			repo.replay,
 			{
 				...git,
-				input: `${fromWork.map((entry) => path.resolve(top, entry.path)).join("\n")}\n`,
+				input: `${fromWork.map((entry) => path.resolve(top, entry.file)).join("\n")}\n`,
 			},
 			["hash-object", "--stdin-paths"],
 			deps.signal,
@@ -364,8 +378,8 @@ async function judgeCarried(
 	}
 	const revs = ["HEAD", ...mergeHeads];
 	const names = judged.flatMap((entry) => [
-		...(entry.y === " " ? [] : [`:0:${entry.path}`]),
-		...revs.map((rev) => `${rev}:${entry.from ?? entry.path}`),
+		...(entry.y === " " ? [] : [`:0:${entry.file}`]),
+		...revs.map((rev) => `${rev}:${entry.from ?? entry.file}`),
 	]);
 	const blobs = new Map<string, string>();
 	if (names.length > 0) {
@@ -387,18 +401,18 @@ async function judgeCarried(
 	for (const entry of judged) {
 		const work = fromWork.indexOf(entry);
 		const committedId =
-			work >= 0 ? workIds[work] : blobs.get(`:0:${entry.path}`);
+			work >= 0 ? workIds[work] : blobs.get(`:0:${entry.file}`);
 		if (committedId === undefined)
-			return degraded("git_failed", `the index has no blob for ${entry.path}`);
+			return degraded("git_failed", `the index has no blob for ${entry.file}`);
 		const baseIds = revs.flatMap((rev) => {
-			const id = blobs.get(`${rev}:${entry.from ?? entry.path}`);
+			const id = blobs.get(`${rev}:${entry.from ?? entry.file}`);
 			return id === undefined ? [] : [id];
 		});
 		// Equal to a base: the commit adds nothing to this file (a file a merge
 		// brings in, a file `--amend` keeps as HEAD has it).
 		if (baseIds.includes(committedId)) continue;
 		candidates.push({
-			abs: path.resolve(top, entry.path),
+			abs: path.resolve(top, entry.file),
 			committedId,
 			fromWork: work >= 0,
 			baseIds,
@@ -457,6 +471,7 @@ async function judgeFile(
 		try {
 			committed = nodeFs.readFileSync(abs, "utf8");
 		} catch {
+			// none: the degraded verdict refuses, and gateStagedDelta records it once.
 			return degraded("file_unreadable", file);
 		}
 	} else committed = await blob(candidate.committedId);
@@ -581,6 +596,7 @@ export async function gateStagedDelta(
 			{ ms: budgetMs, signal, hook: "tool_call", label: "staged-delta-gate" },
 		);
 	} catch (cause) {
+		// none: the refusal below is recorded once, after this handler.
 		const failure = cause instanceof Error ? cause.message : String(cause);
 		verdict = degraded(
 			"lane_incomplete",

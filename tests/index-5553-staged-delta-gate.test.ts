@@ -83,8 +83,12 @@ const WITH_BLOCKER_PLUS_ONE_MORE = WITH_BLOCKER.replace(
 	"debugger;\n\treturn alpha;",
 );
 
-function git(proj: string, ...args: string[]): void {
-	execFileSync("git", args, { cwd: proj, stdio: "ignore" });
+function git(proj: string, ...args: string[]): string {
+	return execFileSync("git", args, {
+		cwd: proj,
+		encoding: "utf8",
+		stdio: "pipe",
+	}).trim();
 }
 
 /**
@@ -342,20 +346,16 @@ const A = "src/a.ts";
 const B = "src/b.ts";
 const B_EDITED = CLEAN.replace("return alpha;", "return alpha + 1;");
 
-function gitOut(proj: string, ...args: string[]): string {
-	return execFileSync("git", args, { cwd: proj, encoding: "utf8" }).trim();
-}
-
 function write(proj: string, file: string, bytes: string): void {
 	fs.mkdirSync(path.dirname(path.join(proj, file)), { recursive: true });
 	fs.writeFileSync(path.join(proj, file), bytes);
 }
 
-/** Staged-copy files the read writes beside a file; none outlives a call. */
-function stagedCopies(dir: string): string[] {
-	return fs
-		.readdirSync(dir)
-		.filter((name) => name.startsWith("pi-lens-staged-"));
+/** The read's staged copies left in the tree: none outlives a call. */
+function stagedCopies(proj: string): string[] {
+	return git(proj, "status", "--porcelain", "--untracked-files=all")
+		.split("\n")
+		.filter((line) => line.includes("pi-lens-staged-"));
 }
 
 let seeded = 0;
@@ -566,7 +566,7 @@ describe("#5553 git resolves what the commit carries", () => {
 			const proj = twoFileProject();
 			expectOutcome(await decide(proj, command), outcome);
 			// The replay leaves the real index as it found it.
-			expect(gitOut(proj, "diff", "--cached", "--name-only")).toBe(B);
+			expect(git(proj, "diff", "--cached", "--name-only")).toBe(B);
 		},
 	);
 
@@ -598,7 +598,7 @@ describe("#5553 git resolves what the commit carries", () => {
 		},
 		async () => {
 			const proj = twoFileProject();
-			const head = gitOut(proj, "rev-parse", "HEAD");
+			const head = git(proj, "rev-parse", "HEAD");
 			for (const extra of ["", " --no-verify"])
 				expectOutcome(
 					await decide(
@@ -607,7 +607,7 @@ describe("#5553 git resolves what the commit carries", () => {
 					),
 					"unknown git_failed",
 				);
-			expect(gitOut(proj, "rev-parse", "HEAD")).toBe(head);
+			expect(git(proj, "rev-parse", "HEAD")).toBe(head);
 		},
 	);
 });
@@ -629,7 +629,7 @@ describe("#5553 the bytes each carried file is judged on", () => {
 			git(proj, "add", A);
 			write(proj, A, CLEAN);
 			expectOutcome(await decide(proj, command), `refuses ${A}`);
-			expect(stagedCopies(path.join(proj, "src"))).toEqual([]);
+			expect(stagedCopies(proj)).toEqual([]);
 		},
 	);
 
@@ -646,7 +646,7 @@ describe("#5553 the bytes each carried file is judged on", () => {
 			git(proj, "add", A);
 			write(proj, A, ADDED);
 			expectOutcome(await decide(proj, 'git commit -m "x"'), "commits");
-			expect(stagedCopies(path.join(proj, "src"))).toEqual([]);
+			expect(stagedCopies(proj)).toEqual([]);
 		},
 	);
 
@@ -766,7 +766,7 @@ describe("#5553 a git add before the commit is replayed", () => {
 				"refuses scratch/probe.ts",
 			);
 			// The replay staged nothing for real.
-			expect(gitOut(proj, "diff", "--cached", "--name-only")).toBe("");
+			expect(git(proj, "diff", "--cached", "--name-only")).toBe("");
 		},
 	);
 
@@ -926,8 +926,9 @@ describe("#5553 a read that gives no answer refuses, recorded once", () => {
 			await decide(proj, 'git commit -m "x"', { budgetMs: 1 }),
 			"unknown lane_incomplete",
 		);
-		// Let the abandoned work settle before reading the ledger.
-		await new Promise((resolve) => setTimeout(resolve, 2_000));
+		// The same file read again inside the real bound refuses on its
+		// finding; by then the abandoned read's aborted git child has settled.
+		expectOutcome(await decide(proj, 'git commit -m "x"'), `refuses ${A}`);
 		expect(subjects()).toEqual(["lane_incomplete"]);
 	});
 
@@ -971,19 +972,23 @@ describe("#5553 a read that gives no answer refuses, recorded once", () => {
 		expect(subjects()).toEqual(["unresolved_command"]);
 	});
 
-	// A commit git runs outside any repository fails by itself; the read
-	// refuses it with git's own reason rather than read nothing as clean.
+	// A commit git runs outside any repository fails by itself, so the read
+	// has nothing to judge; an add there is not replayed and refuses.
+	// Recurrence prevented: a refusal here named a blocker state for a commit
+	// that cannot land, and blocked the record gate's witnesses run in a
+	// directory with an empty `.git`.
 	it(
-		"refuses a commit outside any repository with git's reason",
-		{
-			timeout: 120_000,
-		},
+		"lets git refuse a commit outside any repository, refuses an add there",
+		{ timeout: 120_000 },
 		async () => {
 			const bare = path.join(fixture.root, "norepo");
 			fs.mkdirSync(bare, { recursive: true });
-			const decision = await decide(bare, 'git commit -m "x"');
-			expectOutcome(decision, "unknown git_failed");
-			expect(decision.reason).toContain("not a git repository");
+			expectOutcome(await decide(bare, 'git commit -m "x"'), "commits");
+			const proj = stagedProject("add-norepo");
+			expectOutcome(
+				await decide(proj, `git -C ${bare} add -A; git commit -m "x"`),
+				"unknown git_failed",
+			);
 		},
 	);
 
