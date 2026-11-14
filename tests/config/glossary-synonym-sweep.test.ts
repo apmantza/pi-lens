@@ -1135,7 +1135,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 4 -> 7 (#5594): `path.resolve(cwd, ownConfig)` absolutizes the config file
 		// the overlay includes, and the `ignoreErrors` anchoring reads and writes an
 		// entry's `path` key twice; the same sense as the file's other path uses.
-		"clients/dispatch/runners/phpstan.ts": 7,
+		// 7 -> 11 (#5606 round 3): the shared-`path` count reads each entry's
+		// `path` key (two uses), and the dotted-config check joins each name to the
+		// working directory and names the config it found by its base name.
+		"clients/dispatch/runners/phpstan.ts": 11,
 		"clients/dispatch/runners/prisma-validate.ts": 2,
 		"clients/dispatch/runners/psscriptanalyzer.ts": 3,
 		"clients/dispatch/runners/rubocop.ts": 6,
