@@ -344,7 +344,11 @@ export function resyncHeadMove(args: HeadLook): Promise<void> {
 	oweDeclarationWalk(args.root, args.trigger);
 	return serializeHeadLook(args.key, async () => {
 		try {
-			await lookForOutOfBandChanges(args.root, args.trigger, args.runtime);
+			// #5501: a client may have spawned before this root's first look, so
+			// the look names the live clients' epoch for the config files it finds.
+			await lookForOutOfBandChanges(args.root, args.trigger, args.runtime, {
+				liveClients: () => peekLSPService()?.livePrimaryClientRoots?.() ?? [],
+			});
 		} finally {
 			await lookAtHead(args);
 		}

@@ -6,9 +6,11 @@
 (* (clients/disk-change-subscribers.ts), for several roots at once.        *)
 (*                                                                         *)
 (* One abstract disk per root: an install stamp `dInst` (lockfiles,        *)
-(* install markers, venv site-packages, server config files: a change that *)
-(* cannot be enumerated) and a declaration set `dDecl` (a change the walk  *)
-(* enumerates). An external change bumps one of them.                      *)
+(* install markers, venv site-packages: a change that cannot be            *)
+(* enumerated), the server config files `dCfg` (#5501: a root config or a  *)
+(* member manifest; also unenumerable, but forwarded without a restart)    *)
+(* and a declaration set `dDecl` (a change the walk enumerates). An        *)
+(* external change bumps one of them.                                      *)
 (*                                                                         *)
 (* Looks (lookForOutOfBandChanges): five callers, named by `Modes`.        *)
 (*   "call"    a tool_call look (runtime-tool-call.ts resyncHeadMove):     *)
@@ -20,11 +22,15 @@
 (*             walk "always", owes a walk                                  *)
 (*   "head"    a HEAD-move look on a tool_result: owes a walk at the call, *)
 (*             then looks later (serializeHeadLook), owing again           *)
+(* At a root with a live client, "client" names its epoch for installs and *)
+(* configs; the other four hand over the live clients (`liveClients`,      *)
+(* #5501), whose epoch judges configs only (SessionLookConfigEpoch), never *)
+(* an install (SessionLookInstallEpoch).                                   *)
 (* A look joins the root's running flight (single-flight, coalesceTrailing)*)
 (* or starts one. A joiner earns exactly one trailing pass, which runs the *)
 (* FIRST caller's closure: its `since` and runtime, not the joiner's. The *)
-(* epoch `since` names is captured at the call (`ep`): the trailing pass   *)
-(* reuses it even after the first pass restarted the clients.              *)
+(* epochs it names are captured at the call (`epI`, `epC`): the trailing *)
+(* pass reuses them even after the first pass restarted the clients.     *)
 (*                                                                         *)
 (* A pass (lookOnce) is: P1 take the owed walk, read the record, decide    *)
 (* walkDue (sync, atomic with the call or with the previous pass's end);   *)
@@ -34,16 +40,19 @@
 (*                                                                         *)
 (* The records and the owed-walk set are bounded FIFO maps (MAX_ROOTS):    *)
 (* RecCap and OwedCap. An evicted root's next look is a first look: it     *)
-(* records and publishes nothing, unless it names `since` and an install   *)
-(* is fresher than the live client's epoch (installs only: a first look    *)
-(* has no previous declaration map to diff).                               *)
+(* records and publishes nothing, unless it names an epoch and an install  *)
+(* or a config is fresher than the live client's (never a declaration: a   *)
+(* first look has no previous declaration map to diff).                    *)
 (*                                                                         *)
 (* `vInst`/`vDecl` are what the root's servers have been told: the         *)
 (* baseline of the root's first-ever look (by design, #4476), moved on by  *)
 (* every publish. NoLostChange is the module doc's promise that a record   *)
 (* "describes the disk": a record never gets ahead of what was published.  *)
-(* `ep` is another thing: the install version a "client" look read as its  *)
-(* epoch when it was called. A publish moves `vInst` but never `ep`.       *)
+(* `epI`/`epC` are another thing: the install and config versions a look   *)
+(* that names an epoch read as it when it was called. A publish moves      *)
+(* `vInst`/`vCfg` but never them. `vCfg` starts at the live client's view  *)
+(* and a first look leaves it there unless it publishes (#5501), so the    *)
+(* gap of a look that names no config epoch is visible to NoLostChange.    *)
 (*                                                                         *)
 (* Two sessions are two callers: they share every record, the owed set and *)
 (* the flights, as the process does.                                       *)
@@ -80,18 +89,23 @@ CONSTANTS
                          \* sequence and the change log only
     IsolateThrows,       \* TRUE as built (I5): a throwing subscriber does
                          \* not stop the others
-    RecordOnce           \* TRUE as built (I5): recordDegradationOnce, one
+    RecordOnce,          \* TRUE as built (I5): recordDegradationOnce, one
                          \* `disk-change-subscriber-failed` per
                          \* consumer:root
+    SessionLookConfigEpoch, \* TRUE as built (#5501): the session root's and
+                         \* the MCP cwd's looks name the live clients' epoch
+                         \* for config files; FALSE is the pre-#5501 gap
+    SessionLookInstallEpoch \* FALSE as built (#5501): that epoch never judges
+                         \* an install, so those first looks restart nothing
 
 NoVal == -1
-NoRec == [i |-> NoVal, d |-> NoVal]
+NoRec == [i |-> NoVal, d |-> NoVal, c |-> NoVal]
 Subs == <<"cache", "lsp">>
 NSubs == Len(Subs)
 SubIds == {"cache", "lsp"}
 
 VARIABLES
-    dInst, dDecl,   \* the disk, per root
+    dInst, dDecl, dCfg, \* the disk, per root
     extLeft,        \* external changes left
     calls,          \* look calls left
     headQ,          \* HEAD-move looks called and not yet looked
@@ -108,16 +122,18 @@ VARIABLES
     fails,          \* disk-change-subscriber-failed records, by consumer:root
     restarts,       \* install publishes, by root and install version
     fresh,          \* the same, for passes that started as a fresh flight
-    vInst, vDecl,   \* what the root's servers were told
+    sRestarts,      \* install publishes by a first look of a non-client caller
+    vInst, vDecl, vCfg, \* what the root's servers were told
     auth, edits,    \* authorship credits and agent edits
     throwsLeft
 
-diskV == <<dInst, dDecl, extLeft>>
+diskV == <<dInst, dDecl, dCfg, extLeft>>
 lookV == <<calls, headQ, due>>
 recV == <<recs, fifo, owed>>
 flightV == <<fl, floc, rr>>
-pubV == <<pp, nPub, projSeq, alloc, dlv, ran, fails, restarts, fresh>>
-viewV == <<vInst, vDecl>>
+pubV == <<pp, nPub, projSeq, alloc, dlv, ran, fails, restarts, fresh,
+          sRestarts>>
+viewV == <<vInst, vDecl, vCfg>>
 agentV == <<auth, edits, throwsLeft>>
 vars == <<diskV, lookV, recV, flightV, pubV, viewV, agentV>>
 
@@ -142,6 +158,7 @@ TypeOK ==
 Init ==
     /\ dInst = [r \in Roots |-> 0]
     /\ dDecl = [r \in Roots |-> 0]
+    /\ dCfg = [r \in Roots |-> 0]
     /\ extLeft = Changes
     /\ calls = Calls
     /\ headQ = {}
@@ -150,9 +167,11 @@ Init ==
     /\ fifo = <<>>
     /\ owed = <<>>
     /\ fl = [r \in Roots |-> "idle"]
-    /\ floc = [r \in Roots |-> [since |-> FALSE, ep |-> NoVal, tr |-> FALSE,
-                                rt |-> FALSE, prior |-> NoRec, walk |-> FALSE, oi |-> 0,
-                                od |-> 0, new |-> NoRec]]
+    /\ floc = [r \in Roots |-> [sinceI |-> FALSE, sinceC |-> FALSE,
+                                epI |-> NoVal, epC |-> NoVal, tr |-> FALSE,
+                                rt |-> FALSE, sl |-> FALSE, prior |-> NoRec,
+                                walk |-> FALSE, oi |-> 0, od |-> 0, oc |-> 0,
+                                new |-> NoRec]]
     /\ rr = [r \in Roots |-> FALSE]
     /\ pp = [r \in Roots |-> NoPub]
     /\ nPub = 0
@@ -163,8 +182,10 @@ Init ==
     /\ fails = [x \in SubIds \X Roots |-> 0]
     /\ restarts = [r \in Roots |-> [v \in 0..Changes |-> 0]]
     /\ fresh = restarts
+    /\ sRestarts = 0
     /\ vInst = [r \in Roots |-> IF r \in SinceRoots THEN 0 ELSE NoVal]
     /\ vDecl = [r \in Roots |-> NoVal]
+    /\ vCfg = [r \in Roots |-> IF r \in SinceRoots THEN 0 ELSE NoVal]
     /\ auth = 0
     /\ edits = 0
     /\ throwsLeft = Throws
@@ -176,14 +197,22 @@ ExtInst(r) ==
     /\ extLeft > 0
     /\ extLeft' = extLeft - 1
     /\ dInst' = [dInst EXCEPT ![r] = @ + 1]
-    /\ UNCHANGED <<dDecl, lookV, recV, flightV, pubV, viewV, agentV>>
+    /\ UNCHANGED <<dDecl, dCfg, lookV, recV, flightV, pubV, viewV, agentV>>
 
 ExtDecl(r) ==
     /\ "decl" \in Kinds
     /\ extLeft > 0
     /\ extLeft' = extLeft - 1
     /\ dDecl' = [dDecl EXCEPT ![r] = @ + 1]
-    /\ UNCHANGED <<dInst, lookV, recV, flightV, pubV, viewV, agentV>>
+    /\ UNCHANGED <<dInst, dCfg, lookV, recV, flightV, pubV, viewV, agentV>>
+
+\* A root config or member manifest edited outside pi-lens (#4532, #5501).
+ExtCfg(r) ==
+    /\ "cfg" \in Kinds
+    /\ extLeft > 0
+    /\ extLeft' = extLeft - 1
+    /\ dCfg' = [dCfg EXCEPT ![r] = @ + 1]
+    /\ UNCHANGED <<dInst, dDecl, lookV, recV, flightV, pubV, viewV, agentV>>
 
 \* An agent edit: the authorship credit and FileTime are the agent's alone
 \* (#4131, #3865).
@@ -197,22 +226,40 @@ AgentEdit ==
 \* P1 of lookOnce, sync: take the owed walk (owedWalks.delete), read the
 \* record, decide walkDue. A pass with no demand and a record walks only
 \* when the interval has passed, which the model leaves open.
-Begin(r, sinceB, epB, trB, rtB, owedIn, dueIn, recIn) ==
+Begin(r, L0, trB, owedIn, dueIn, recIn) ==
     \E w \in (IF r \in Range(owedIn) \/ recIn = NoRec THEN {TRUE} ELSE BOOLEAN) :
         /\ owed' = RemoveVal(owedIn, r)
         /\ due' = [dueIn EXCEPT ![r] = @ /\ ~w]
         /\ fl' = [fl EXCEPT ![r] = "Read"]
-        /\ floc' = [floc EXCEPT ![r] = [since |-> sinceB, ep |-> epB, tr |-> trB,
-                                        rt |-> rtB,
+        /\ floc' = [floc EXCEPT ![r] = [sinceI |-> L0.sinceI, sinceC |-> L0.sinceC,
+                                        epI |-> L0.epI, epC |-> L0.epC,
+                                        tr |-> trB, rt |-> L0.rt, sl |-> L0.sl,
                                         prior |-> recIn, walk |-> w,
-                                        oi |-> 0, od |-> 0, new |-> NoRec]]
+                                        oi |-> 0, od |-> 0, oc |-> 0,
+                                        new |-> NoRec]]
+
+\* What a caller's closure carries into its passes: which epochs it names
+\* (captured at the call, as `options` is), its runtime, and whether it is a
+\* session-side caller (every mode but "client"). A client root's look names
+\* its client's epoch for installs and configs (#4532, #5501 r3); a session-
+\* side look hands over the live clients, whose epoch judges configs only
+\* (#5501). Either names one only at a root with a live client.
+Closure(r, mode) ==
+    LET live == r \in SinceRoots
+        sl == mode /= "client"
+        sI == live /\ (~sl \/ SessionLookInstallEpoch)
+        sC == live /\ (~sl \/ SessionLookConfigEpoch)
+    IN [sinceI |-> sI, sinceC |-> sC,
+        epI |-> IF sI THEN vInst[r] ELSE NoVal,
+        epC |-> IF sC THEN vCfg[r] ELSE NoVal,
+        rt |-> sl, sl |-> sl]
 
 \* lookForOutOfBandChanges: oweDeclarationWalk, then looks.run(key, ...).
 \* A mid-flight call shares the flight and earns one trailing pass.
-Dispatch(r, sinceB, rtB, oweB) ==
+Dispatch(r, mode, oweB) ==
     LET dueIn == IF oweB THEN [due EXCEPT ![r] = TRUE] ELSE due IN
     IF fl[r] = "idle"
-    THEN /\ Begin(r, sinceB, IF sinceB THEN vInst[r] ELSE NoVal, FALSE, rtB,
+    THEN /\ Begin(r, Closure(r, mode), FALSE,
                   IF oweB THEN OweSeq(owed, r) ELSE owed, dueIn, recs[r])
          /\ UNCHANGED <<rr, recs, fifo>>
     ELSE /\ rr' = [rr EXCEPT ![r] = TRUE]
@@ -233,21 +280,22 @@ LookCall(r, mode) ==
             /\ due' = [due EXCEPT ![r] = TRUE]
             /\ headQ' = headQ \cup {r}
             /\ UNCHANGED <<flightV, recs, fifo>>
-       ELSE /\ Dispatch(r, mode = "client", mode /= "client", Owes(mode))
+       ELSE /\ Dispatch(r, mode, Owes(mode))
             /\ UNCHANGED headQ
     /\ UNCHANGED <<diskV, pubV, viewV, agentV>>
 
 HeadLook(r) ==
     /\ r \in headQ
     /\ headQ' = headQ \ {r}
-    /\ Dispatch(r, FALSE, TRUE, TRUE)
+    /\ Dispatch(r, "head", TRUE)
     /\ UNCHANGED <<diskV, calls, pubV, viewV, agentV>>
 
 \* The await of readInstallStamp and walkDeclarations: the disk as read.
 Read(r) ==
     /\ fl[r] = "Read"
     /\ fl' = [fl EXCEPT ![r] = "Commit"]
-    /\ floc' = [floc EXCEPT ![r].oi = dInst[r], ![r].od = dDecl[r]]
+    /\ floc' = [floc EXCEPT ![r].oi = dInst[r], ![r].od = dDecl[r],
+                             ![r].oc = dCfg[r]]
     /\ UNCHANGED <<diskV, lookV, recV, rr, pubV, viewV, agentV>>
 
 \* records.set: no reorder of a present key, evict the oldest past the cap.
@@ -263,18 +311,25 @@ CommitRec(r, rec) ==
 
 \* Sync after the await: commit the record (I1), diff, publish. A first look
 \* (no record) publishes an install fresher than the epoch the CALLER named
-\* (`firstLookSawInstall(install, options.since)`), `L.ep`, not what the
+\* (`firstLookSawInstall(install, options.since)`), `L.epI`, not what the
 \* servers hold now (`vInst`): a trailing pass reuses the first caller's epoch.
+\* A config fresher than the config epoch it named goes out as Changed
+\* (`firstLookFreshConfigs`, #5501 r3; from `liveClients` at a session-side
+\* look, #5501). A config publish restarts nothing.
 Commit(r) ==
     LET L == floc[r]
         prior == L.prior
         installed == IF prior = NoRec
-                        THEN L.since /\ L.oi > L.ep
+                        THEN L.sinceI /\ L.oi > L.epI
                         ELSE L.oi /= prior.i
+        cchg == IF prior = NoRec
+                   THEN L.sinceC /\ L.oc > L.epC
+                   ELSE L.oc /= prior.c
         dchg == L.walk /\ prior /= NoRec /\ L.od /= prior.d
         newRec == [i |-> L.oi,
-                   d |-> IF L.walk THEN L.od ELSE prior.d]
-        publishes == installed \/ dchg
+                   d |-> IF L.walk THEN L.od ELSE prior.d,
+                   c |-> L.oc]
+        publishes == installed \/ dchg \/ cchg
     IN
     /\ fl[r] = "Commit"
     /\ publishes => pp[r].st \in {"none", "done"}
@@ -288,17 +343,24 @@ Commit(r) ==
     /\ vInst' = [vInst EXCEPT ![r] = IF installed \/ vDecl[r] = NoVal
                                     THEN L.oi ELSE @]
     /\ vDecl' = [vDecl EXCEPT ![r] = IF dchg \/ @ = NoVal THEN L.od ELSE @]
+    \* #5501: a root with no live client takes its first look's configs as
+    \* what a later spawn reads; a live client keeps the view it read until a
+    \* publish tells it more.
+    /\ vCfg' = [vCfg EXCEPT ![r] = IF cchg \/ @ = NoVal THEN L.oc ELSE @]
     /\ restarts' = IF installed
                       THEN [restarts EXCEPT ![r][L.oi] = @ + 1]
                       ELSE restarts
     /\ fresh' = IF installed /\ ~L.tr
                   THEN [fresh EXCEPT ![r][L.oi] = @ + 1]
                   ELSE fresh
+    /\ sRestarts' = IF installed /\ prior = NoRec /\ L.sl
+                      THEN sRestarts + 1 ELSE sRestarts
     /\ IF publishes
        THEN /\ nPub' = nPub + 1
             /\ pp' = [pp EXCEPT ![r] = [st |-> "Fan", id |-> nPub + 1,
                                         idx |-> 1, al |-> FALSE, seq |-> 0,
-                                        enum |-> ~installed, rt |-> L.rt]]
+                                        enum |-> ~installed /\ ~cchg,
+                                        rt |-> L.rt]]
             /\ fl' = [fl EXCEPT ![r] = "Pub"]
        ELSE /\ fl' = [fl EXCEPT ![r] = "Next"]
             /\ UNCHANGED <<pp, nPub>>
@@ -318,7 +380,7 @@ Alloc(r) ==
     /\ alloc' = alloc \cup {[id |-> p.id, seq |-> n]}
     /\ auth' = IF PublishCredits THEN auth + 1 ELSE auth
     /\ UNCHANGED <<diskV, lookV, recV, flightV, viewV, nPub, dlv, ran, fails,
-                   restarts, fresh, edits, throwsLeft>>
+                   restarts, fresh, sRestarts, edits, throwsLeft>>
 
 \* fanOut: one registered consumer at a time, in registration order.
 FanOk(r) ==
@@ -332,7 +394,7 @@ FanOk(r) ==
     /\ pp' = [pp EXCEPT ![r].idx = p.idx + 1,
                         ![r].st = IF p.idx = NSubs THEN "done" ELSE "Fan"]
     /\ UNCHANGED <<diskV, lookV, recV, flightV, viewV, nPub, projSeq, alloc,
-                   fails, restarts, fresh, agentV>>
+                   fails, restarts, fresh, sRestarts, agentV>>
 
 FanThrow(r) ==
     LET p == pp[r]
@@ -349,7 +411,7 @@ FanThrow(r) ==
                         ![r].st = IF p.idx = NSubs \/ ~IsolateThrows
                                      THEN "done" ELSE "Fan"]
     /\ UNCHANGED <<diskV, lookV, recV, flightV, viewV, nPub, projSeq, alloc,
-                   dlv, restarts, fresh, auth, edits>>
+                   dlv, restarts, fresh, sRestarts, auth, edits>>
 
 \* lookOnce returns once publishDiskChange resolved, which is after the fan-out.
 \* Not awaited, the flight moves on while the fan-out is still running.
@@ -370,7 +432,7 @@ Next(r) ==
        THEN /\ rr' = [rr EXCEPT ![r] = FALSE]
             /\ \* the trailing pass runs the first caller's closure: its
                \* `since` and its runtime, not the joiner's
-               Begin(r, floc[r].since, floc[r].ep, TRUE, floc[r].rt, owed, due,
+               Begin(r, floc[r], TRUE, owed, due,
                      IF ~TrailingSeesFlightRecord THEN floc[r].prior
                      ELSE IF CommitBeforePublish THEN recs[r]
                      ELSE floc[r].new)
@@ -380,7 +442,7 @@ Next(r) ==
 
 -----------------------------------------------------------------------------
 Step ==
-    \/ \E r \in Roots : ExtInst(r) \/ ExtDecl(r)
+    \/ \E r \in Roots : ExtInst(r) \/ ExtDecl(r) \/ ExtCfg(r)
     \/ AgentEdit
     \/ \E r \in Roots, m \in Modes : LookCall(r, m)
     \/ \E r \in Roots : HeadLook(r) \/ Read(r) \/ Commit(r) \/ Alloc(r)
@@ -442,6 +504,11 @@ NextLookNamesEpoch(r) == r \in SinceRoots /\ Modes = {"client"}
 \* the root's servers hold a stale view of a stamp, the record still shows the
 \* difference, so a later look publishes it. B2a: the FIFO evicts the record,
 \* the next look is a first look, and the change is recorded as a baseline.
+\* The config conjunct (#5501) holds from the live client's spawn on: a
+\* record that says "the configs are current" while the client holds an older
+\* view is the gap a first look that names no config epoch leaves. With no
+\* record the next look is a first look, which the conjunct judges once it
+\* commits.
 NoLostChange ==
     \A r \in Roots :
         /\ (vDecl[r] /= NoVal /\ dInst[r] /= vInst[r]) =>
@@ -449,6 +516,14 @@ NoLostChange ==
               \/ recs[r] = NoRec /\ NextLookNamesEpoch(r)
         /\ (vDecl[r] /= NoVal /\ dDecl[r] /= vDecl[r]) =>
               (recs[r] /= NoRec /\ recs[r].d /= dDecl[r])
+        /\ (vCfg[r] /= NoVal /\ dCfg[r] /= vCfg[r] /\ recs[r] /= NoRec) =>
+              recs[r].c /= dCfg[r]
+
+\* #5501, the restart cell: the session root's and the MCP cwd's first looks
+\* restarted no client for an install before #5501, and still do not. A
+\* lockfile a server's own start writes (rust-analyzer's `cargo metadata`
+\* creates `Cargo.lock`, measured) would otherwise read as an install there.
+SessionFirstLookNoRestart == sRestarts = 0
 
 \* #4532 gap 6 ("a joined look gets the walk it demands"): once a root's
 \* flight has settled, no caller's walk demand is still unserved by a pass

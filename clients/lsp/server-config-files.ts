@@ -58,10 +58,12 @@
  * `build.gradle`, `composer.json`, `mix.exs`, `pubspec.yaml`, `Package.swift`,
  * `build.zig`, `stack.yaml`, `dune-project`, `Gemfile`, `deno.json`).
  *
- * Not forwarded: the session root's and the MCP cwd's own first look, which
- * names no client epoch (a config fixed between a client's spawn and that first
- * look stays unread until the next edit; the first look at any other live
- * client root does publish it).
+ * Epoch (#5501): a client root's first look judges its configs and its install
+ * against that client's own launch. The session root's and the MCP cwd's first
+ * look judges its configs against the earliest launch among the overlapping
+ * live primary clients. A manifest fixed after that launch reaches them. With
+ * no overlapping client, it forwards no config. Those looks name no `since`,
+ * so they publish no install.
  *
  * Imports nothing: `clients/out-of-band-changes.ts` (the detector) and the LSP
  * service (the delivery) both read it.
