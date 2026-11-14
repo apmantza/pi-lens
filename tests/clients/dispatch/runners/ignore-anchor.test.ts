@@ -84,6 +84,8 @@ describe("anchorIgnorePattern (java glob, detekt)", () => {
 		// ancestor matches it, so a layout where it does not exists (row D3).
 		["**/*en/**", [`${ROOT}/*en/**`, `${ROOT}/**/*en/**`]],
 		["**/?en/**", [`${ROOT}/?en/**`, `${ROOT}/**/?en/**`]],
+		// One segment without `**` never crosses a `/`: it only sees the file name.
+		["**/*", [`${ROOT}/*`, `${ROOT}/**/*`]],
 		["glob:**/gen/**", [`${ROOT}/gen/**`, `${ROOT}/**/gen/**`]],
 		// Already absolute: anchored by the user, kept.
 		["/abs/proj/**/gen/**", ["/abs/proj/**/gen/**"]],
