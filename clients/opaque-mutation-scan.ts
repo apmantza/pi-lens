@@ -55,6 +55,7 @@ import {
 } from "./degradation-ledger.js";
 import {
 	isAtOrAboveHomeDir,
+	isWithinForm,
 	normalizeMapKey,
 	realpathOrResolve,
 } from "./path-utils.js";
@@ -1304,13 +1305,10 @@ export async function recoverOpaqueChangesViaGit(
 		options.dirtyBefore === undefined
 			? undefined
 			: new Set(options.dirtyBefore);
-	const isNamed = (key: string): boolean => {
-		if (namedPaths.has(key)) return true;
-		for (const named of namedPaths)
-			if (key.startsWith(named.endsWith("/") ? named : `${named}/`))
-				return true;
-		return false;
-	};
+	// Both sides are one form (`normalizeMapKey` of a real path), so the
+	// containment test is the text one, with no second filesystem read.
+	const isNamed = (key: string): boolean =>
+		[...namedPaths].some((named) => isWithinForm(key, named));
 	// A named entry is listed by git status, so it differs from HEAD or the
 	// index: that is the write. Only a path that was clean before the command
 	// can be credited so (`cp -n` over a user edit wrote nothing).
