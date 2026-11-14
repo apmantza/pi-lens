@@ -403,9 +403,20 @@ describe("actionlint and credo shared runner outcome seam (#1816)", () => {
 		},
 	);
 
-	it("credo pins the complete category bitmask population", () => {
-		expect(credoBitmaskStatusCells).toHaveLength(127);
-	});
+	// A status dropped from the credo exit table reads as a rejected invocation
+	// (#5608), so each row drives the real runner and reds only its own case.
+	it.each(credoBitmaskStatusCells)(
+		"credo admits bitmask status $status as a completed analysis",
+		async ({ status }) => {
+			const observed = await dispatchOutcome("credo", {
+				error: null,
+				status,
+				stdout: findings.credo,
+				stderr: "",
+			});
+			expect(observed.status).toBe("failed");
+		},
+	);
 
 	it("credo rejects an invocation error status above the bitmask", async () => {
 		const observed = await dispatchOutcome("credo", {
