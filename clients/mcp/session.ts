@@ -49,8 +49,14 @@ import { handleSessionStart } from "../runtime-session.js";
 import { handleTurnEnd } from "../runtime-turn.js";
 import { createMcpHost } from "./host-shim.js";
 import { startSituationalToolTelemetrySession } from "../situational-tool-telemetry.js";
+import { createGenerationSource } from "../generation-guard.js";
 import { bounded } from "../deadline-utils.js";
 import { HOOK_WALL_BUDGET_MS } from "../hook-budgets.js";
+import {
+	logScopeTransition,
+	retireScope,
+	type SessionScope,
+} from "../session-scope.js";
 
 interface McpSessionContext {
 	runtime: RuntimeCoordinator;
@@ -61,42 +67,86 @@ interface McpSessionContext {
 
 let contextPromise: Promise<McpSessionContext> | undefined;
 let resolvedRuntime: RuntimeCoordinator | undefined;
+let pendingRuntime: RuntimeCoordinator | undefined;
+const bootstrapGeneration = createGenerationSource("mcp-session-bootstrap");
+
+function retireMcpScope(
+	scope: SessionScope,
+	reason: "mcp-session-reset" | "mcp-session-bootstrap-failed",
+): void {
+	const wasLive = scope.isLive();
+	retireScope(scope, reason);
+	if (wasLive) {
+		logScopeTransition(scope, { transition: "end", reason });
+	}
+}
 
 /**
  * Lazily build (once) the persistent session context shared across MCP
  * calls. A rejected build (e.g. `loadBootstrapClients` hitting a transient
  * fs error) must not poison every later MCP call for the rest of the
- * process — evict the memo on rejection so the next call retries (#1570).
+ * process -- evict the memo on rejection so the next call retries (#1570).
  */
 export function getMcpSessionContext(): Promise<McpSessionContext> {
-	contextPromise ??= (async () => {
+	if (contextPromise) return contextPromise;
+	const generation = bootstrapGeneration.capture();
+	const runtime = new RuntimeCoordinator();
+	pendingRuntime = runtime;
+	const promise = (async () => {
 		const context: McpSessionContext = {
-			runtime: new RuntimeCoordinator(),
+			runtime,
 			cacheManager: new CacheManager(),
 			astGrepClient: new AstGrepClient(),
 			clients: await loadBootstrapClients(),
 		};
-		resolvedRuntime = context.runtime;
-		return context;
+		const published = generation.guardedWrite("bootstrap", () => {
+			if (pendingRuntime === runtime) {
+				pendingRuntime = undefined;
+			}
+			resolvedRuntime = context.runtime;
+			return context;
+		});
+		if (!published) {
+			retireMcpScope(runtime.sessionScope, "mcp-session-reset");
+			throw new Error("MCP session context reset during bootstrap");
+		}
+		return published;
 	})().catch((err: unknown) => {
-		contextPromise = undefined;
+		if (pendingRuntime === runtime) {
+			pendingRuntime = undefined;
+		}
+		if (contextPromise === promise) {
+			contextPromise = undefined;
+		}
+		retireMcpScope(runtime.sessionScope, "mcp-session-bootstrap-failed");
 		throw err;
 	});
-	return contextPromise;
+	contextPromise = promise;
+	return promise;
 }
 
 /** Synchronous peek at the session runtime, for construction sites that cannot
  * await (e.g. the MCP server's tool wiring). Returns undefined until a session
- * context has actually been built — advisory validation then honestly skips
+ * context has actually been built -- advisory validation then honestly skips
  * the session-identity check instead of comparing against a phantom session. */
 export function peekMcpSessionRuntime(): RuntimeCoordinator | undefined {
 	return resolvedRuntime;
 }
 
-/** Test hook — drop the cached context so a fresh one is built next call. */
+/** Test hook -- drop the cached context so a fresh one is built next call. */
 export function _resetMcpSessionContext(): void {
+	bootstrapGeneration.bump();
+	const currentResolved = resolvedRuntime;
+	const currentPending = pendingRuntime;
 	contextPromise = undefined;
 	resolvedRuntime = undefined;
+	pendingRuntime = undefined;
+	if (currentResolved) {
+		retireMcpScope(currentResolved.sessionScope, "mcp-session-reset");
+	}
+	if (currentPending && currentPending !== currentResolved) {
+		retireMcpScope(currentPending.sessionScope, "mcp-session-reset");
+	}
 }
 
 const noop = (): void => {};
