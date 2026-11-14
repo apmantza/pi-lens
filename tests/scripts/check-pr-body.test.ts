@@ -3293,11 +3293,17 @@ describe("PR body lint (#1844)", () => {
 		// One subprocess per distinct input, and all five in flight at once.
 		// Every argv form below is a different input and the only witness for its
 		// command boundary, so the count is already minimal; what cost the case
-		// was running them serially (#5597: 5 spawns measured 941 ms idle and
-		// 5885 ms on two pinned CPUs with eight busy loops, over the 5000 ms
-		// default test timeout; CI shard 5/5 hit 8970 ms). The forms share only
-		// the read-only body file and the read-only fixture cwd, so the case now
-		// costs its slowest single spawn.
+		// was running them serially (#5597). Per-form wall time, measured inside
+		// this case with eight busy loops pinned to the same two CPUs the test
+		// runs on: `--lint-local <body>` 1019-1179 ms, `--body <body file>
+		// --title <title file>` 1016-1156 ms, `--lint-local <body> --ref HEAD`
+		// 1016-1180 ms, `--lint-local <body> --title <closes title>` 1331-1481 ms,
+		// and `--lint-local <body> --title <refs title>` 1468-1595 ms, the slowest
+		// form because a refs title adds the cross-reference lookups the other
+		// forms skip. Serial those summed past the 5000 ms test timeout (5885 ms
+		// measured here, 8970 ms on CI shard 5/5), while the case itself lands at
+		// 1289-2237 ms. The forms share only the read-only body file and the
+		// read-only fixture cwd, so concurrent the case costs its slowest spawn.
 		const runCli = (args: string[]) =>
 			new Promise<{ code: number | null; stderr: string }>((settled) => {
 				const child = spawn(process.execPath, [checker, ...args], {
