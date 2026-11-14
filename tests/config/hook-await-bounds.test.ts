@@ -1174,7 +1174,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 				"budget many times over.",
 			owner: "#2523 slice 2",
 		},
-	"clients/runtime-tool-call.ts#captureOpaqueBaseline:1b678fc6~6558e937": {
+	"clients/runtime-tool-call.ts#captureOpaqueBaseline:1b678fc6~ea7b1937": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
 		reason:

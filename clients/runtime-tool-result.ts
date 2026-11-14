@@ -2960,7 +2960,7 @@ export async function handleToolResult(
 								script: {
 									credited: [],
 									withheld: keys.map((key) => ({
-										path: key,
+										key,
 										cause: "no-dirty-set" as const,
 									})),
 								},
@@ -3071,7 +3071,7 @@ export async function handleToolResult(
 				if (outcome.verdict !== "observed") continue;
 				if (outcome.script) {
 					for (const key of outcome.script.credited) scriptCredited.add(key);
-					for (const { path: key, cause } of outcome.script.withheld)
+					for (const { key, cause } of outcome.script.withheld)
 						if (opaqueKeys.has(key))
 							recordScriptCreditWithheld(cause, outcome.root);
 				} else if (bashCommand !== undefined && outcome.keys.length > 0)
@@ -3127,9 +3127,8 @@ export async function handleToolResult(
 				const listed = [...keys];
 				listed.length = Math.min(listed.length, 5);
 				// #5616: the decision record of the credit, beside what it is about.
-				const credited = [...keys].filter((key) =>
-					scriptCredited.has(key),
-				).length;
+				let credited = 0;
+				for (const key of keys) if (scriptCredited.has(key)) credited += 1;
 				logLatency({
 					type: "phase",
 					phase: "opaque_mutation_recovered",

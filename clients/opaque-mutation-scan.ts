@@ -1035,7 +1035,7 @@ export type ScriptCreditCause =
 export interface ScriptCreditVerdicts {
 	/** Clean before, changed in the window, no other observed writer. */
 	credited: string[];
-	withheld: Array<{ path: string; cause: ScriptCreditCause }>;
+	withheld: Array<{ key: string; cause: ScriptCreditCause }>;
 }
 
 /**
@@ -1493,7 +1493,7 @@ export async function recoverOpaqueChangesViaGit(
 							? "other-writer"
 							: undefined;
 			if (cause === undefined) scriptCredit.credited.push(key);
-			else scriptCredit.withheld.push({ path: key, cause });
+			else scriptCredit.withheld.push({ key, cause });
 		}
 	}
 	return {
