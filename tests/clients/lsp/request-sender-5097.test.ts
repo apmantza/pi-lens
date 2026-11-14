@@ -61,6 +61,8 @@ async function withHangingServer(
 		client: LSPClientInfo;
 		file: string;
 		cancels: () => number;
+		/** Resolves once the server has read a request of this method. */
+		received: (method: string) => Promise<void>;
 		/** An answered request: the server reads stdio in order, so by the time
 		 *  it replies it has read every cancel sent before it. */
 		barrier: () => Promise<void>;
@@ -97,6 +99,19 @@ async function withHangingServer(
 			client,
 			file,
 			cancels,
+			received: async (method) => {
+				await vi.waitFor(
+					() => {
+						const lines = fs.existsSync(trace)
+							? fs.readFileSync(trace, "utf-8").split("\n")
+							: [];
+						expect(
+							lines.some((line) => line.startsWith(`recv ${method}`)),
+						).toBe(true);
+					},
+					{ timeout: 5000, interval: 10 },
+				);
+			},
 			barrier: async () => {
 				await client.hover(file, 0, 1);
 			},
@@ -156,6 +171,25 @@ describe("one request sender owns cancel and release (#5097)", () => {
 		});
 	}, 15_000);
 
+	it("Esc during a codeAction/resolve the server never answers returns the lightweight action within 500 ms", async () => {
+		await withHangingServer("codeAction/resolve", async (ctx) => {
+			const abort = new AbortController();
+			const call = spawnAbortScope.run(abort.signal, () =>
+				ctx.client.codeAction(ctx.file, 0, 0, 0, 5),
+			);
+			await ctx.received("codeAction/resolve");
+			const abortedAt = Date.now();
+			abort.abort();
+			const actions = await call;
+			expect(Date.now() - abortedAt).toBeLessThan(500);
+			expect(actions).toHaveLength(1);
+			expect(actions[0]?.edit).toBeUndefined();
+			expect(ctx.client.isBusy?.()).toBe(false);
+			await ctx.barrier();
+			expect(ctx.cancels()).toBe(1);
+		});
+	}, 15_000);
+
 	it("a timed-out navigation request is cancelled and released and still throws the timeout", async () => {
 		await withHangingServer("textDocument/documentSymbol", async (ctx) => {
 			await expect(ctx.client.documentSymbol(ctx.file)).rejects.toBeInstanceOf(
@@ -170,13 +204,14 @@ describe("one request sender owns cancel and release (#5097)", () => {
 	it("Esc returns a silent navigation call within 500 ms with one cancel and the busy count released", async () => {
 		await withHangingServer("textDocument/documentSymbol", async (ctx) => {
 			const abort = new AbortController();
-			const startedAt = Date.now();
 			const call = spawnAbortScope.run(abort.signal, () =>
 				ctx.client.documentSymbol(ctx.file),
 			);
-			setTimeout(() => abort.abort(), 100);
+			await ctx.received("textDocument/documentSymbol");
+			const abortedAt = Date.now();
+			abort.abort();
 			const result = await call;
-			const sinceAbort = Date.now() - startedAt - 100;
+			const sinceAbort = Date.now() - abortedAt;
 			expect(result).toEqual([]);
 			expect(sinceAbort).toBeLessThan(500);
 			expect(ctx.client.isBusy?.()).toBe(false);
@@ -200,10 +235,8 @@ describe("one request sender owns cancel and release (#5097)", () => {
 			);
 			installLspService(service);
 			const abort = new AbortController();
-			const startedAt = Date.now();
-			setTimeout(() => abort.abort(), 100);
 			// The registration loop (index.ts) puts the call's signal in this scope.
-			await spawnAbortScope.run(abort.signal, () =>
+			const call = spawnAbortScope.run(abort.signal, () =>
 				createLspNavigationTool((flag) => flag === "lens-lsp").execute(
 					"esc-on-silent-server",
 					{ operation: "documentSymbol", path: ctx.file, view: "json" },
@@ -212,7 +245,11 @@ describe("one request sender owns cancel and release (#5097)", () => {
 					{ cwd: path.dirname(ctx.file) },
 				),
 			);
-			expect(Date.now() - startedAt - 100).toBeLessThan(500);
+			await ctx.received("textDocument/documentSymbol");
+			const abortedAt = Date.now();
+			abort.abort();
+			await call;
+			expect(Date.now() - abortedAt).toBeLessThan(500);
 			expect(ctx.client.isBusy?.()).toBe(false);
 			await ctx.barrier();
 			expect(ctx.cancels()).toBe(1);
