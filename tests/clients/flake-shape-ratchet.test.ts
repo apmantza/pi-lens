@@ -1306,6 +1306,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the subject is what a real bash tool call writes into a real git checkout and what the model receives for it, detected by git's own status; a stubbed shell answers only what it was told",
 	},
+	// 2026-11-14 (#5553): the commit gate reads the staged delta itself, so the
+	// subject is a real `git` repository, the gate's own `git` children and the
+	// real lanes, behind a real pi session.
+	"real-process-spawn:index-5553-staged-delta-gate.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the subject is whether bytes nobody authored reach git's own commit judged on the staged delta, read by the gate's real git children and the real tree-sitter and ast-grep lanes; a stub answers only what it was told",
+	},
 	// 2026-11-14 (#5553): every writer that names a path must reach the commit
 	// gate with the inherited blocker already in its baseline; the writers are
 	// real `sed`, ast-grep and fake-LSP children and the gate reads a real repo.

@@ -7,6 +7,7 @@ import { recordDegradationOnce } from "./degradation-ledger.js";
 import { CODE_KINDS, detectFileKind } from "./file-kinds.js";
 import { isPathIgnoredByProject } from "./file-utils.js";
 import { evaluateGitGuard, isGitCommitOrPushAttempt } from "./git-guard.js";
+import { gateStagedDelta } from "./staged-delta.js";
 import { dropHashlineAnchorMemo } from "./hashline-anchor.js";
 import { evaluateSharedCheckoutGuard } from "./shared-checkout-guard.js";
 import { logLatency } from "./latency-logger.js";
@@ -870,6 +871,23 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			return {
 				block: true,
 				reason: guard.reason,
+			};
+		}
+		// #5553: the record above holds what pi-lens saw written; this reads the
+		// staged delta itself, so bytes nobody authored are judged too.
+		const gateCwd = ctx.cwd ?? runtime.projectRoot;
+		const stagedGuard = await gateStagedDelta(
+			toolName,
+			event.input,
+			{ cwd: gateCwd, projectRoot: runtime.projectRoot || gateCwd, getFlag },
+			ctx.signal,
+		);
+		if (stagedGuard.block) {
+			return {
+				block: true,
+				...(stagedGuard.reason === undefined
+					? {}
+					: { reason: stagedGuard.reason }),
 			};
 		}
 	}

@@ -888,6 +888,10 @@ export const wallClockBudgetInclude = [
 	// #5108: a real bash write plus a handler held past the live 500 ms bound
 	// (flake-shape admission); the git children ride in the serialized lane.
 	"tests/index-5108-opaque-blocker-disclosure-witness.test.ts",
+	// #5553: the commit gate's own `git` reads and the real tree-sitter and
+	// ast-grep lanes behind a real pi session (flake-shape admission); the git
+	// children ride in the serialized lane.
+	"tests/index-5553-staged-delta-gate.test.ts",
 	// #5553: real `sed`, ast-grep, git and fake-LSP children behind a real pi
 	// session; the gate reads the writers' baselines (flake-shape admission).
 	"tests/index-5553-writer-baselines.test.ts",

@@ -38,7 +38,11 @@ import {
 	recordDegradationOnce,
 } from "../degradation-ledger.js";
 import { FactStore, setFactStoreEvictionReporter } from "./fact-store.js";
-import { canWriteAnalysisRoot, resolveAnalysisRoot } from "../analysis-root.js";
+import {
+	canWriteAnalysisRoot,
+	resolveAnalysisRoot,
+	type AnalysisRootMode,
+} from "../analysis-root.js";
 import { resolveLanguageRootForFile } from "../language-profile.js";
 import { classifyObservedRunner } from "./collect-later-tier.js";
 import {
@@ -54,6 +58,7 @@ import {
 	unchecked,
 } from "./types.js";
 import type {
+	Diagnostic,
 	DispatchContext,
 	DispatchResult,
 	ModifiedRange,
@@ -253,6 +258,8 @@ const sessionFacts = new FactStore("dispatch");
 const preEditCaptureFacts = new FactStore("pre-edit-capture");
 /** #4543: retain live slots through teardown, including across session reset. */
 const preEditCapturesInFlight = new Map<string, AbortController>();
+/** #5553: the staged-delta read's own facts (`collectStagedLaneBlockers`). */
+const stagedDeltaFacts = new FactStore("staged-delta");
 const MAX_PRE_EDIT_CAPTURES = 4;
 
 // #2243 item 4: wire the fact-store's capacity-eviction telemetry to the
@@ -582,6 +589,7 @@ export function resetDispatchBaselines(cwd?: string): void {
 	// #4483: the pre-edit capture's file facts and availability go with them.
 	for (const controller of preEditCapturesInFlight.values()) controller.abort();
 	preEditCaptureFacts.clearAll();
+	stagedDeltaFacts.clearAll();
 	resetSessionSlopScore();
 	clearCoverageNoticeState();
 	clearReviewGraphWorkspaceCache();
@@ -3538,63 +3546,26 @@ export async function capturePreEditLinterFindings(
 		});
 		return { outcome: "skipped", reason: "capacity" };
 	}
-	const created = createDispatchContext(
+	const prepared = prepareSeedLaneRun(
 		filePath,
 		dispatchCwd,
-		pi,
-		preEditCaptureFacts,
-		true,
-		undefined,
 		projectRoot,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
 		analysisRootMode,
+		pi,
+		spanless,
+		preEditCaptureFacts,
 	);
-	const ctx: DispatchContext = {
-		...created,
-		deltaMode: false,
-		preEditCapture: true,
-		hasTool: (command) => checkToolAvailability(command),
-	};
-	const kind = ctx.kind;
-	if (!kind) return { outcome: "skipped", reason: "no-kind" };
-	if (ctx.fileRole === "generated")
-		return { outcome: "skipped", reason: "generated" };
-	const groups = withSpotbugsGroup(
-		kind,
-		getDispatchGroupsForKind(kind, pi),
-		ctx,
-	).flatMap((group) => {
-		const runnerIds = group.runnerIds.filter(
-			(id) =>
-				isPreEditSeedRunner(id, spanless) &&
-				classifyObservedRunner(projectRoot, id) === "inline",
-		);
-		return runnerIds.length > 0 ? [{ ...group, runnerIds }] : [];
-	});
-	if (groups.length === 0) return { outcome: "skipped", reason: "no-linter" };
-	let before: Buffer;
-	try {
-		before = nodeFs.readFileSync(ctx.filePath);
-	} catch {
-		return { outcome: "skipped", reason: "unreadable" };
-	}
-	const content = before.toString("utf8");
+	if ("skip" in prepared) return { outcome: "skipped", reason: prepared.skip };
+	const { run } = prepared;
+	const { ctx, before, content } = run;
 	const controller = new AbortController();
 	const captureSignal = signal
 		? AbortSignal.any([signal, controller.signal])
 		: controller.signal;
 	preEditCapturesInFlight.set(keyPath, controller);
-	preEditCaptureFacts.clearFileFactsFor(ctx.filePath);
-	preEditCaptureFacts.setFileFact(ctx.filePath, "file.content", content);
 	try {
 		const result = await spawnAbortScope.run(captureSignal, () =>
-			dispatchForFile(ctx, groups, sessionRunnerRegistry, undefined, {
-				dedupeCoverageNotice: false,
-			}),
+			dispatchSeedLanes(run, preEditCaptureFacts),
 		);
 		if (captureSignal.aborted)
 			return { outcome: "discarded", reason: "aborted" };
@@ -3615,12 +3586,138 @@ export async function capturePreEditLinterFindings(
 		return {
 			outcome: "seeded",
 			seeded: seed.length,
-			runners: groups.flatMap((g) => g.runnerIds),
+			runners: run.groups.flatMap((g) => g.runnerIds),
 		};
 	} finally {
 		preEditCapturesInFlight.delete(keyPath);
-		preEditCaptureFacts.endDispatchFor(ctx.filePath);
 	}
+}
+
+/** One file's run of the seeded lanes, built by {@link prepareSeedLaneRun}. */
+interface SeedLaneRun {
+	ctx: DispatchContext;
+	groups: ReturnType<typeof withSpotbugsGroup>;
+	/** The bytes the lanes read. */
+	before: Buffer;
+	content: string;
+}
+
+/**
+ * #4483, #5553: the lanes a capture runs over one file's bytes on disk, with
+ * the bytes read once. The pre-edit capture seeds with their blockers; the
+ * commit gate's staged-delta read (`collectStagedLaneBlockers`) judges them.
+ * `skip` is why no lane applies to the file.
+ */
+function prepareSeedLaneRun(
+	filePath: string,
+	dispatchCwd: string,
+	projectRoot: string,
+	analysisRootMode: AnalysisRootMode,
+	pi: PiAgentAPI,
+	spanless: boolean,
+	facts: FactStore,
+): { skip: PreEditCaptureSkip } | { run: SeedLaneRun } {
+	const created = createDispatchContext(
+		filePath,
+		dispatchCwd,
+		pi,
+		facts,
+		true,
+		undefined,
+		projectRoot,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		analysisRootMode,
+	);
+	const ctx: DispatchContext = {
+		...created,
+		deltaMode: false,
+		preEditCapture: true,
+		hasTool: (command) => checkToolAvailability(command),
+	};
+	const kind = ctx.kind;
+	if (!kind) return { skip: "no-kind" };
+	if (ctx.fileRole === "generated") return { skip: "generated" };
+	const groups = withSpotbugsGroup(
+		kind,
+		getDispatchGroupsForKind(kind, pi),
+		ctx,
+	).flatMap((group) => {
+		const runnerIds = group.runnerIds.filter(
+			(id) =>
+				isPreEditSeedRunner(id, spanless) &&
+				classifyObservedRunner(projectRoot, id) === "inline",
+		);
+		return runnerIds.length > 0 ? [{ ...group, runnerIds }] : [];
+	});
+	if (groups.length === 0) return { skip: "no-linter" };
+	let before: Buffer;
+	try {
+		before = nodeFs.readFileSync(ctx.filePath);
+	} catch {
+		return { skip: "unreadable" };
+	}
+	return { run: { ctx, groups, before, content: before.toString("utf8") } };
+}
+
+/** Dispatch the lanes of a prepared run, releasing the file's facts after. */
+async function dispatchSeedLanes(
+	{ ctx, groups, content }: SeedLaneRun,
+	facts: FactStore,
+): Promise<DispatchResult> {
+	facts.clearFileFactsFor(ctx.filePath);
+	facts.setFileFact(ctx.filePath, "file.content", content);
+	try {
+		return await dispatchForFile(
+			ctx,
+			groups,
+			sessionRunnerRegistry,
+			undefined,
+			{
+				dedupeCoverageNotice: false,
+			},
+		);
+	} finally {
+		facts.endDispatchFor(ctx.filePath);
+	}
+}
+
+/**
+ * #5553: the blocking findings of the seeded lanes (linters, and the
+ * edit-gated ast-grep and tree-sitter lanes read whole) over the bytes `filePath`
+ * holds now: the commit gate's own read of a file the commit carries, whoever
+ * wrote it. Read-only: it installs no seed and takes no delta baseline, and
+ * runs on a fact store of its own so a capture of the same file never shares
+ * its facts. Findings are the lanes' raw blockers; the caller places them on
+ * the lines the commit adds and applies the finding policy.
+ */
+export async function collectStagedLaneBlockers(
+	filePath: string,
+	workspaceRoot: string,
+	pi: PiAgentAPI,
+): Promise<
+	| { status: "ran"; blockers: Diagnostic[] }
+	| { status: "skipped"; reason: PreEditCaptureSkip }
+> {
+	const analysisRootMode = resolveAnalysisRoot(filePath, workspaceRoot);
+	if (analysisRootMode === "none" || analysisRootMode === "adopted")
+		return { status: "skipped", reason: "outside-session-root" };
+	const projectRoot = nodePath.resolve(workspaceRoot);
+	const prepared = prepareSeedLaneRun(
+		filePath,
+		resolveLanguageRootForFile(filePath, workspaceRoot),
+		projectRoot,
+		analysisRootMode,
+		pi,
+		true,
+		stagedDeltaFacts,
+	);
+	if ("skip" in prepared) return { status: "skipped", reason: prepared.skip };
+	const result = await dispatchSeedLanes(prepared.run, stagedDeltaFacts);
+	return { status: "ran", blockers: result.blockers };
 }
 
 /** Per-runner outcome captured while driving the real dispatch path. */
