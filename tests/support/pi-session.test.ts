@@ -916,6 +916,33 @@ describe("pi-session: the built extension in a real AgentSession (#4632)", () =>
 		]);
 	});
 
+	it("keeps the slow-filesystem notice out of a session whatever the runner's stat latency", async () => {
+		// #5602. The probe (`clients/slow-fs.ts`) times a few stats under the session
+		// root at `session_start` and posts a user notice when the median clears its
+		// threshold, so "no notifications" is a verdict on the runner's disk. The
+		// threshold is forced to a value every stat clears, which makes the REAL probe
+		// report slow on any machine; the harness pins the kill switch
+		// (`PI_LENS_ALLOW_SLOW_FS_SCAN=1`, the seam `slow-fs.test.ts` and
+		// `outside-root.test.ts` already use) and must keep the session quiet anyway.
+		// Recurrence: master run 43585279623 (Unit tests shard 2/5, 2026-11-14), where
+		// the case above reds on a slow runner with this probe's notice.
+		const priorThreshold = process.env.PI_LENS_SLOW_FS_THRESHOLD_US;
+		process.env.PI_LENS_SLOW_FS_THRESHOLD_US = "0.000001";
+		try {
+			const handle = await startPiSession({
+				root: fixture.root,
+				cwd: path.join(fixture.root, "slow-fs-pin", "proj"),
+				captureUi: true,
+				responses: [],
+			});
+			expect(handle.notifications).toEqual([]);
+		} finally {
+			if (priorThreshold === undefined)
+				delete process.env.PI_LENS_SLOW_FS_THRESHOLD_US;
+			else process.env.PI_LENS_SLOW_FS_THRESHOLD_US = priorThreshold;
+		}
+	});
+
 	describe("inline-factory mode (#4937 L6)", () => {
 		/**
 		 * A prototype spy is the discriminator: the path load builds its OWN copy of
