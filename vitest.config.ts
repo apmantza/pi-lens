@@ -406,9 +406,6 @@ const lspSpawnHeavyInclude = [
 	// pi AgentSession over a real fake-LSP child; the commit gate reads the
 	// verdicts the multi-file dispatch publishes.
 	"tests/index-5248-lsp-navigation-apply-dispatch.test.ts",
-	// #5552: the real tool_result/dispatcher path waits on a child LSP wire
-	// for mtime-preserving mv and cp -p writes.
-	"tests/index-5552-lsp-resync-wire.test.ts",
 	"tests/mcp/analyze-cli.test.ts",
 	// #5487: pilens_diagnostics through a real MCP child over a fake-LSP rust
 	// server that announces loading and a failed workspace load.
@@ -891,6 +888,9 @@ export const wallClockBudgetInclude = [
 	// #5108: a real bash write plus a handler held past the live 500 ms bound
 	// (flake-shape admission); the git children ride in the serialized lane.
 	"tests/index-5108-opaque-blocker-disclosure-witness.test.ts",
+	// #5552: real tool_result/dispatcher LSP wire traffic for mtime-preserving
+	// shell writes; serialized with the other child-process witnesses.
+	"tests/index-5552-lsp-resync-wire.test.ts",
 	// #5552: a real `mv`, `rsync` and `tar` write old-mtime files into a real git
 	// checkout behind a real pi session (flake-shape admission); the child
 	// processes ride in the serialized lane.

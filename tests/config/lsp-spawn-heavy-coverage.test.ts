@@ -190,6 +190,8 @@ const SPAWN_EXEMPTIONS: Readonly<Record<string, string>> = {
 		"real wedged child and CPU sampling run in the serialized wall-clock-budget phase; the lower-bound wedge assertion needs that quiet phase",
 	"tests/clients/head-move-resync-4476.test.ts":
 		"#4493: real git repositories plus fake-LSP children through the tool_call/tool_result seams; phased in the serialized wall-clock-budget lane (the flake-shape admission gate requires that lane), and its waits are the hooks' own returns and a request barrier, not a handshake-plus-diagnostics budget",
+	"tests/index-5552-lsp-resync-wire.test.ts":
+		"#5552: real tool_result/dispatcher and child-LSP wire traffic is phased in the serialized wall-clock-budget lane, which the flake-shape admission gate requires; its assertion is payload delivery, not a handshake-plus-diagnostics budget",
 	"tests/clients/lsp/managed-fallback-after-trust-refusal-4515.test.ts":
 		"#4515: the only launchLSP call that reaches a spawn is doubled; the project-local candidate it delegates to the real launchLSP is refused by project trust before any spawn (or, under trust, is absent), so no LSP child, handshake or diagnostics wait exists to starve",
 	"tests/clients/lsp/headless-tool-call-keepalive.test.ts":
