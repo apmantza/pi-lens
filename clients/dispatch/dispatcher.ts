@@ -1978,6 +1978,7 @@ export async function dispatchForFile(
 			new Set(
 				[...answeredRunnerIds].filter((id) => !inconclusiveRunnerIds.has(id)),
 			),
+			ctx.modifiedRanges,
 		);
 		if (classified.preExisting.length > 0) {
 			const held = new Set(classified.preExisting);

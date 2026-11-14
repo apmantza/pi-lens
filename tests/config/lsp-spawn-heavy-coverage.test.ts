@@ -136,6 +136,8 @@ function isLspSpawnHeavy(source: string): boolean {
  * reds any exemption whose file stops being a candidate (#1735).
  */
 const SPAWN_EXEMPTIONS: Readonly<Record<string, string>> = {
+	"tests/index-5553-writer-baselines.test.ts":
+		"#5553: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission (real git, sed, ast-grep); cannot run in two projects.",
 	"tests/tools/lsp-navigation-rename-first-open.test.ts":
 		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
 	["tests/support/fake-lsp-" + "server.test.ts"]:

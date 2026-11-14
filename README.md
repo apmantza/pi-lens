@@ -435,7 +435,12 @@ Thanks goes to these wonderful people:
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/ProphetOfDoom-PoD"><img src="https://avatars.githubusercontent.com/u/260035065?v=4" width="100px;" alt=""/><br /><sub><b>Prophet Of Doom</b></sub></a><br /><a href="#ideas-ProphetOfDoom-PoD" title="Ideas & Planning">🤔</a></td>
       <td align="center" valign="top" width="14.28%"><a href="http://www.apostolapostolov.com/"><img src="https://avatars.githubusercontent.com/u/4083812?v=4" width="100px;" alt=""/><br /><sub><b>Apostol Apostolov</b></sub></a><br /><a href="#bug-apoapostolov" title="Bug reports">🐛</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/spearmootz"><img src="https://avatars.githubusercontent.com/u/19737290?v=4" width="100px;" alt=""/><br /><sub><b>Ricardo Spear</b></sub></a><br /><a href="#bug-spearmootz" title="Bug reports">🐛</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/lluppi"><img src="https://avatars.githubusercontent.com/u/88203649?v=4" width="100px;" alt=""/><br /><sub><b>Lee Luppi</b></sub></a><br /><a href="#ideas-lluppi" title="Ideas & Planning">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/lluppi"><img src="https://avatars.githubusercontent.com/u/88203649?v=4" width="100px;" alt=""/><br /><sub><b>Lee Luppi</b></sub></a><br /><a href="#ideas-lluppi" title="Ideas & Planning">🤔</a> <a href="#code-lluppi" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/gezerui888"><img src="https://avatars.githubusercontent.com/u/17674876?v=4" width="100px;" alt=""/><br /><sub><b>Zerui Ge</b></sub></a><br /><a href="#code-gezerui888" title="Code">💻</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/HyeokjaeLee"><img src="https://avatars.githubusercontent.com/u/71566740?v=4" width="100px;" alt=""/><br /><sub><b>HyeokjaeLee</b></sub></a><br /><a href="#code-HyeokjaeLee" title="Code">💻</a> <a href="#bug-HyeokjaeLee" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/dmarchevsky"><img src="https://avatars.githubusercontent.com/u/32597866?v=4" width="100px;" alt=""/><br /><sub><b>Dima Marchevskyi</b></sub></a><br /><a href="#bug-dmarchevsky" title="Bug reports">🐛</a></td>
     </tr>
   </tbody>
 </table>

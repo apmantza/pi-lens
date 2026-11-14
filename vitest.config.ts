@@ -886,6 +886,9 @@ export const wallClockBudgetInclude = [
 	// #5108: a real bash write plus a handler held past the live 500 ms bound
 	// (flake-shape admission); the git children ride in the serialized lane.
 	"tests/index-5108-opaque-blocker-disclosure-witness.test.ts",
+	// #5553: real `sed`, ast-grep, git and fake-LSP children behind a real pi
+	// session; the gate reads the writers' baselines (flake-shape admission).
+	"tests/index-5553-writer-baselines.test.ts",
 	// #5150 R2: the parity smoke polls the real MCP child's background
 	// review-graph build on a scaled real-clock deadline (shape 86) before
 	// comparing the two surfaces' text (flake-shape admission); serializing it

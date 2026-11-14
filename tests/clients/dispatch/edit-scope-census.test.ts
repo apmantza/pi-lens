@@ -51,7 +51,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { AUXILIARY_LSP_PROFILES } from "../../../clients/dispatch/auxiliary-lsp.js";
 import { RunnerRegistry } from "../../../clients/dispatch/dispatcher.js";
-import { PRE_EDIT_SEED_RUNNER_IDS } from "../../../clients/dispatch/pre-edit-seed.js";
+import {
+	PRE_EDIT_SEED_RUNNER_IDS,
+	PRE_EDIT_SEED_SPANLESS_RUNNER_IDS,
+} from "../../../clients/dispatch/pre-edit-seed.js";
 import { registerDefaultRunners } from "../../../clients/dispatch/runners/index.js";
 import type { RunnerDefinition } from "../../../clients/dispatch/types.js";
 import {
@@ -235,6 +238,30 @@ describe("edit-scope census (#4481)", () => {
 			[...PRE_EDIT_SEED_RUNNER_IDS].sort(),
 			"PRE_EDIT_SEED_RUNNER_IDS (clients/dispatch/pre-edit-seed.ts) must equal the lanes classified LINTER here",
 		).toEqual(linters.sort());
+	});
+
+	it("seeds a spanless writer's baseline from the linter lanes plus the registry's span-gated lanes (#5553)", () => {
+		// Recurrence: `ast_grep_replace`, `sed -i`, an unclassified tool and an LSP
+		// rename give the dispatch no edit span, so the two span-gated registry
+		// lanes read the whole file and stopped the agent on a `debugger;` HEAD
+		// already held (#5553). A span-gated lane registered later without
+		// joining the set would repeat it; a language server or scanner added
+		// would hide its old errors, against the maintainer's scope (2026-10-15).
+		// `lsp/ast-grep` is an auxiliary profile of the `lsp` runner, not a
+		// registry runner, so it cannot be seeded by runner id.
+		const expected = Object.entries(CLASSIFICATION)
+			.filter(
+				([id, c]) =>
+					(c.scope === "unscoped" && c.kind === "linter") ||
+					(c.scope === "span-gated" && !id.includes("/")),
+			)
+			.map(([id]) => id)
+			.sort();
+		assertNonEmptyScan("spanless seed lanes", expected.length, 20);
+		expect(
+			[...PRE_EDIT_SEED_SPANLESS_RUNNER_IDS].sort(),
+			"PRE_EDIT_SEED_SPANLESS_RUNNER_IDS (clients/dispatch/pre-edit-seed.ts) must equal the LINTER lanes plus the span-gated registry lanes",
+		).toEqual(expected);
 	});
 
 	it("finds a runner source for every registered runner", async () => {

@@ -161,6 +161,21 @@
   seeded (maintainer scope, 2026-10-15). Collect-later linters and the MCP
   route have no seed. Proven by
   `tests/index-4483-first-write-seed-witness.test.ts`.
+- Every writer that names the files it will change takes the same seed before
+  it writes (#5553), through `captureWriterSeeds` in `clients/runtime-tool-call.ts`:
+  a bash command's written paths, an applied `ast_grep_replace`'s `paths`, an
+  applied LSP rename's file, an unclassified tool's one path while the
+  observational net still arms for it, and a tool learned from one observation.
+  These give the dispatch no edit span, so the two edit-gated lanes (ast-grep,
+  tree-sitter) read the whole file; their seed joins the linters'
+  (`PRE_EDIT_SEED_SPANLESS_RUNNER_IDS`, tied to the edit-scope census). Those
+  two lanes' entries classify only a dispatch that read the whole file: a
+  dispatch with an edit span (a host `edit`) reports the lines it touched, so it
+  neither classifies by them nor keeps them, and an identical blocker the edit
+  adds elsewhere blocks (`classifyPreExisting`, #5583 review F1). A
+  writer's written set wider than its named one (a rename's importers, a replace
+  over a folder, a rename_file's new path) is not seeded. Proven by
+  `tests/index-5553-writer-baselines.test.ts`.
 - `clients/dispatch/runners/runner-spawn-cwd-sweep.test.ts` is the population
   guard for child cwd derivation. Add a reasoned migration row instead of a
   pin-only update.

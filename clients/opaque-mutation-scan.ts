@@ -976,6 +976,20 @@ export interface GitRecoveryOptions {
 	 * worktree status and every unmerged path remain eligible.
 	 */
 	excludeIndexOnlyWhenUnmerged?: boolean;
+	/**
+	 * Destinations resolved by the bash prescan. A named path git lists as
+	 * changed is reported whatever its mtime, because `mv` and `cp -p` keep the
+	 * source's old one. Applies only with `dirtyBefore`.
+	 */
+	namedPaths?: readonly string[];
+	/**
+	 * The baseline's pre-command dirty set (`PendingOpaqueBaseline.dirtyPaths`).
+	 * A named path in it keeps the mtime rule: a recognized `cp -n` may have
+	 * written nothing over a file the user edited. `undefined` (git could not
+	 * answer, or the root took no dirty capture) leaves every named path on the
+	 * mtime rule.
+	 */
+	dirtyBefore?: readonly string[] | undefined;
 }
 
 interface GitStatusEntry {
@@ -1241,9 +1255,11 @@ export async function readSameHeadDiscards(
 
 /**
  * Files dirty in the working tree whose mtime falls inside
- * [startedAt - tolerance, now]. Porcelain -z parsing handles renames: the NEW
- * path is the one filtered, and the entry's source side (`renamedFrom`) is
- * ignored here.
+ * [startedAt - tolerance, now]. A destination named by the bash prescan that
+ * was clean before the command skips the window, so a preserved mtime does not
+ * hide a write.
+ * Porcelain -z parsing handles renames: the NEW path is the one filtered, and
+ * the entry's source side (`renamedFrom`) is ignored here.
  */
 export async function recoverOpaqueChangesViaGit(
 	root: string,
@@ -1263,14 +1279,32 @@ export async function recoverOpaqueChangesViaGit(
 
 	const hasUnmerged = entries.some((entry) => isUnmergedStatus(entry.status));
 	const floorMs = startedAt - OPAQUE_MTIME_TOLERANCE_MS;
+	const namedPaths = new Set(
+		(options.namedPaths ?? []).map((file) =>
+			normalizeMapKey(realpathOrResolve(file)),
+		),
+	);
+	const cleanBefore =
+		options.dirtyBefore === undefined
+			? undefined
+			: new Set(options.dirtyBefore);
 	// Kernel "stale" = modified AFTER the window floor - exactly the writes
 	// this command may have authored, so exactly the entries that would be
 	// dispatched absent any other filtering.
-	async function isInWindow(absPath: string): Promise<boolean> {
+	async function isChanged(entry: GitStatusEntry): Promise<boolean> {
+		const { absPath } = entry;
 		try {
 			const stat = await fs.promises.stat(absPath);
+			if (!stat.isFile()) return false;
+			// A named entry is listed by git status, so it differs from HEAD or the
+			// index: that is the write. Only a path that was clean before the
+			// command can be credited so (`cp -n` over a user edit wrote nothing).
+			if (
+				cleanBefore?.has(normalizeMapKey(absPath)) === false &&
+				namedPaths.has(normalizeMapKey(realpathOrResolve(absPath)))
+			)
+				return true;
 			return (
-				stat.isFile() &&
 				freshnessFromMtime({ mtimeMs: stat.mtimeMs, referenceMs: floorMs })
 					.verdict === "stale"
 			);
@@ -1305,13 +1339,13 @@ export async function recoverOpaqueChangesViaGit(
 			// #2081: only count entries the mtime window would otherwise have
 			// dispatched. A long-staged clean-index path outside the window was
 			// never going to be reported, so dropping it here is not suppression.
-			if (await isInWindow(entry.absPath)) excludedIncomingCount += 1;
+			if (await isChanged(entry)) excludedIncomingCount += 1;
 		}
 		candidates = kept;
 	}
 	const paths: string[] = [];
-	for (const { absPath } of candidates) {
-		if (await isInWindow(absPath)) paths.push(normalizeMapKey(absPath));
+	for (const entry of candidates) {
+		if (await isChanged(entry)) paths.push(normalizeMapKey(entry.absPath));
 	}
 	return {
 		verdict: "recovered",
