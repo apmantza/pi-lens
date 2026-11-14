@@ -633,6 +633,38 @@ describe("the session root's and the MCP cwd's first look (#5501)", () => {
 		expect(forwarded).toEqual([{ filePath: manifest, type: 2 }]);
 	});
 
+	// The cwd sits inside a crate whose server is rooted at the workspace above
+	// it: that client reads the cwd's manifest as a member's.
+	it("forwards the cwd's manifest when the client is rooted above the MCP cwd", async () => {
+		const workspace = path.join(env.tmpDir, "mcp-workspace");
+		const cwd = path.join(workspace, "crates", "a");
+		const manifest = writeManifest(cwd);
+		clientRoots = [{ root: workspace, spawnedAt: Date.now() - 10_000 }];
+		installService();
+
+		await diagnoseAt(cwd);
+
+		expect(forwarded).toEqual([{ filePath: manifest, type: 2 }]);
+	});
+
+	// A client that spawned after the fix read it; one that spawned before did
+	// not, and the event must reach it: the earliest launch decides.
+	it("names the earliest launch among the clients overlapping the MCP cwd", async () => {
+		const cwd = path.join(env.tmpDir, "mcp-cwd");
+		const manifest = writeManifest(cwd);
+		const past = new Date(Date.now() - 30_000);
+		fs.utimesSync(manifest, past, past);
+		clientRoots = [
+			{ root: cwd, spawnedAt: Date.now() - 10_000 },
+			{ root: path.join(cwd, "svc"), spawnedAt: Date.now() - 60_000 },
+		];
+		installService();
+
+		await diagnoseAt(cwd);
+
+		expect(forwarded).toEqual([{ filePath: manifest, type: 2 }]);
+	});
+
 	it("names no epoch from a client of an unrelated root", async () => {
 		const cwd = path.join(env.tmpDir, "mcp-cwd");
 		writeManifest(cwd);
