@@ -2924,7 +2924,7 @@
 		{
 			"signature": "turn-count-wait::tests/packaging-pack-manifest.test.ts::4b88f87ba041#0",
 			"head": "for (const name of [",
-			"reason": "drive (classified by shape, not read): for-of over [ \"project-snapshot-persist-worker\", \"review-grap…; each round awaits `new Promise<void>(...)` and `worker.terminate(...)`, with no exit besides the list."
+			"reason": "drive (classified by shape, not read): for-of over [ \"project-snapshot-persist-worker\", …; each round awaits `new Promise<void>(...)` and `worker.terminate(...)`, with no exit besides the list."
 		},
 		{
 			"signature": "turn-count-wait::tests/real-harness/child-exit.test.ts::90bd21ace4f1#0",
@@ -3039,7 +3039,7 @@
 		{
 			"signature": "turn-count-wait::tests/scripts/mutate.test.ts::d075c76b2efc#0",
 			"head": "for (const args of [",
-			"reason": "drive (classified by shape, not read): for-of over [ [cli, \"--restore\", \"--file\", builtTarget], buil…; each round awaits `run(...)`, with no exit besides the list."
+			"reason": "drive (classified by shape, not read): for-of over [ [cli, \"--restore\", \"--file\", builtTarget], …]; each round awaits `run(...)`, with no exit besides the list."
 		},
 		{
 			"signature": "turn-count-wait::tests/scripts/mutation-test-selection.test.ts::a9d8a49513c6#0",
