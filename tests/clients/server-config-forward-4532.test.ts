@@ -194,6 +194,263 @@ describe("a file that is not on the closed config list", () => {
 	});
 });
 
+// Recurrence (#5501 r3): a workspace member's `Cargo.toml` and a nested
+// `go.mod` were not looked for (the look stats the root's names only), so a
+// member manifest fixed after rust-analyzer's workspace failed to load stayed
+// unread: every touch read `server-load-failed` (5 of 5 touches, real
+// rust-analyzer 1.100.0), and a `go.mod` raised under a `go.work` left gopls's
+// finding in place through five touches. The walk that already finds the
+// declaration files carries the manifest names.
+describe.each(["Cargo.toml", "go.mod"])(
+	"a %s below the root changed outside pi-lens",
+	(name) => {
+		const member = () => path.join(tmp, "crates", "foo", name);
+		const seedMember = () => {
+			fs.mkdirSync(path.dirname(member()), { recursive: true });
+			fs.writeFileSync(member(), '{"a":1}\n');
+		};
+
+		it("is forwarded as Created when born after the baseline look", async () => {
+			fs.mkdirSync(path.dirname(member()), { recursive: true });
+			const seen = await lookAfter(() => fs.writeFileSync(member(), "{}\n"));
+			expect(seen).toHaveLength(1);
+			expect(seen[0].sources).toEqual(["config"]);
+			expect(seen[0].pathChanges).toEqual([
+				{ filePath: member(), type: "created" },
+			]);
+			expect(notified).toEqual([{ filePath: member(), type: 1 }]);
+			// A manifest changes the analysis of every file under the root.
+			expect(seen[0].paths).toBe("unknown");
+			expect(cacheRefusedAt()).toBe(seen[0].at);
+			expect(restarted).toEqual([]);
+		});
+
+		it("is forwarded as Changed when edited and as Deleted when removed", async () => {
+			seedMember();
+			await lookForOutOfBandChanges(tmp, "tool_result", runtime);
+			fs.writeFileSync(member(), '{"a":22}\n');
+			await lookForOutOfBandChanges(tmp, "tool_result", runtime);
+			fs.rmSync(member());
+			await lookForOutOfBandChanges(tmp, "tool_result", runtime);
+			expect(notified).toEqual([
+				{ filePath: member(), type: 2 },
+				{ filePath: member(), type: 3 },
+			]);
+		});
+
+		it("is only recorded, not forwarded, by the root's first look", async () => {
+			seedMember();
+			await lookForOutOfBandChanges(tmp, "tool_result", runtime);
+			expect(notified).toEqual([]);
+		});
+
+		it("is forwarded once beside the root's own manifest, and a declaration keeps its own source", async () => {
+			seedMember();
+			fs.writeFileSync(path.join(tmp, name), '{"a":1}\n');
+			fs.mkdirSync(path.join(tmp, "types"));
+			const seen = await lookAfter(() => {
+				fs.writeFileSync(member(), '{"a":22}\n');
+				fs.writeFileSync(path.join(tmp, name), '{"a":22}\n');
+				fs.writeFileSync(path.join(tmp, "types", "x.d.ts"), "export {};\n");
+			});
+			expect(seen).toHaveLength(1);
+			expect(seen[0].sources).toEqual(["declarations", "config"]);
+			expect(notified).toHaveLength(3);
+			expect(notified).toEqual(
+				expect.arrayContaining([
+					{ filePath: path.join(tmp, name), type: 2 },
+					{ filePath: member(), type: 2 },
+					{ filePath: path.join(tmp, "types", "x.d.ts"), type: 1 },
+				]),
+			);
+		});
+
+		it.each(["target", "node_modules", ".venv"])(
+			"is not forwarded from the excluded directory %s",
+			async (excluded) => {
+				const dir = path.join(tmp, excluded, "pkg");
+				fs.mkdirSync(dir, { recursive: true });
+				const seen = await lookAfter(() =>
+					fs.writeFileSync(path.join(dir, name), "{}\n"),
+				);
+				expect(seen).toEqual([]);
+				expect(notified).toEqual([]);
+			},
+		);
+	},
+);
+
+describe("a config name that servers read at the root only stays root-only", () => {
+	// Recurrence guard (#5501 r3): the walk's manifest names are measured ones.
+	// pyright reads `pyrightconfig.json` and `pyproject.toml` at the project
+	// root, so forwarding a nested one would refuse the diagnostics cache for
+	// the whole root on every edit of an unrelated tool's file. `go.work` below
+	// the root is unmeasured.
+	it.each(["pyrightconfig.json", "pyproject.toml", "go.work"])(
+		"%s below the root publishes nothing",
+		async (name) => {
+			fs.mkdirSync(path.join(tmp, "sub"));
+			const seen = await lookAfter(() =>
+				fs.writeFileSync(path.join(tmp, "sub", name), "{}\n"),
+			);
+			expect(seen).toEqual([]);
+			expect(notified).toEqual([]);
+		},
+	);
+});
+
+// Recurrence (#5501 r3, F3): a root's FIRST look recorded the config files it
+// found and published none, so a manifest fixed after the client spawned but
+// before the root's first look stayed unread for the server's life (real
+// rust-analyzer through the real service: 4 of 4 touches `server-load-failed`).
+// A first look that names the live client's spawn epoch already published an
+// install fresher than it; the config files take the same test.
+describe.each(["pyproject.toml", "Cargo.toml", "go.mod"])(
+	"a %s edited after the live client spawned, at the root's first look",
+	(name) => {
+		const config = () => path.join(tmp, name);
+		const age = (file: string, msAgo: number) => {
+			const past = new Date(Date.now() - msAgo);
+			fs.utimesSync(file, past, past);
+		};
+
+		it("is forwarded as Changed", async () => {
+			fs.writeFileSync(config(), "{}\n");
+			const seen = recordPublishes();
+			await lookForOutOfBandChanges(tmp, "tool_result", runtime, {
+				since: Date.now() - 10_000,
+				walk: "interval",
+			});
+			expect(seen).toHaveLength(1);
+			expect(seen[0].sources).toEqual(["config"]);
+			expect(seen[0].paths).toBe("unknown");
+			expect(notified).toEqual([{ filePath: config(), type: 2 }]);
+			expect(restarted).toEqual([]);
+		});
+
+		it("is only recorded when it predates the client's spawn", async () => {
+			fs.writeFileSync(config(), "{}\n");
+			age(config(), 60_000);
+			const seen = recordPublishes();
+			await lookForOutOfBandChanges(tmp, "tool_result", runtime, {
+				since: Date.now() - 10_000,
+				walk: "interval",
+			});
+			expect(seen).toEqual([]);
+			expect(notified).toEqual([]);
+		});
+
+		it("is only recorded when the client's epoch is absent (0)", async () => {
+			// An absent launch stamp reports 0, which a first look reads as "no
+			// epoch", never as "before every edit" (`livePrimaryClientRoots`).
+			fs.writeFileSync(config(), "{}\n");
+			const seen = recordPublishes();
+			await lookForOutOfBandChanges(tmp, "tool_result", runtime, {
+				since: 0,
+				walk: "interval",
+			});
+			expect(seen).toEqual([]);
+			expect(notified).toEqual([]);
+		});
+
+		it("is not forwarded when the look names no client epoch", async () => {
+			fs.writeFileSync(config(), "{}\n");
+			const seen = recordPublishes();
+			await lookForOutOfBandChanges(tmp, "tool_result", runtime);
+			expect(seen).toEqual([]);
+			expect(notified).toEqual([]);
+		});
+
+		it("is forwarded by the first look only, not again by a later one", async () => {
+			fs.writeFileSync(config(), "{}\n");
+			const options = { since: Date.now() - 10_000, walk: "interval" } as const;
+			await lookForOutOfBandChanges(tmp, "tool_result", runtime, options);
+			await lookForOutOfBandChanges(tmp, "tool_result", runtime, options);
+			expect(notified).toEqual([{ filePath: config(), type: 2 }]);
+		});
+	},
+);
+
+describe.each(["Cargo.toml", "go.mod"])(
+	"a %s below the root edited after the live client spawned, at the root's first look",
+	(name) => {
+		const nested = () => path.join(tmp, "crates", "foo", name);
+
+		it("is forwarded as Changed, past an older sibling", async () => {
+			fs.mkdirSync(path.dirname(nested()), { recursive: true });
+			fs.writeFileSync(nested(), "{}\n");
+			fs.mkdirSync(path.join(tmp, "crates", "old"), { recursive: true });
+			const older = path.join(tmp, "crates", "old", name);
+			fs.writeFileSync(older, "{}\n");
+			const past = new Date(Date.now() - 60_000);
+			fs.utimesSync(older, past, past);
+			await lookForOutOfBandChanges(tmp, "tool_result", runtime, {
+				since: Date.now() - 10_000,
+				walk: "interval",
+			});
+			expect(notified).toEqual([{ filePath: nested(), type: 2 }]);
+		});
+	},
+);
+
+// Recurrence (#5501 r3, review F1): the first look walks every declaration
+// file, and only a below-root manifest may take the config path. Without the
+// `isBelowRootConfig` filter, a fresh `.d.ts` at a first look went out as a
+// config change with its paths unknown, refusing the diagnostics cache for the
+// whole root on a look that #4476 keeps silent (reviewer probe).
+describe("a fresh declaration file at the root's first look", () => {
+	it("publishes nothing for a fresh declaration file at the first look", async () => {
+		fs.mkdirSync(path.join(tmp, "types"));
+		fs.writeFileSync(path.join(tmp, "types", "x.d.ts"), "export {};\n");
+		const seen = recordPublishes();
+		await lookForOutOfBandChanges(tmp, "tool_result", runtime, {
+			since: Date.now() - 10_000,
+			walk: "interval",
+		});
+		expect(seen).toEqual([]);
+		expect(notified).toEqual([]);
+	});
+});
+
+// Recurrence (#5501 r3, review F1): the first look forwards a config fresher
+// than the client's epoch less the 1 s coarse-clock slack that
+// `firstLookSawInstall` also takes. Without the slack (`floor = since`), a root
+// manifest written 500 ms before the spawn is dropped, and the server keeps the
+// bytes it read at spawn. The 1500 ms case pins the other edge: a manifest past
+// the slack stays unforwarded.
+describe("a root Cargo.toml at the first look, against the 1 s slack", () => {
+	const config = () => path.join(tmp, "Cargo.toml");
+	const writeBeforeSpawn = (msBefore: number, since: number) => {
+		fs.writeFileSync(config(), "{}\n");
+		const at = new Date(since - msBefore);
+		fs.utimesSync(config(), at, at);
+	};
+
+	it("is forwarded as Changed when written 500 ms before the client spawned", async () => {
+		const since = Date.now() - 10_000;
+		writeBeforeSpawn(500, since);
+		const seen = recordPublishes();
+		await lookForOutOfBandChanges(tmp, "tool_result", runtime, {
+			since,
+			walk: "interval",
+		});
+		expect(seen).toHaveLength(1);
+		expect(notified).toEqual([{ filePath: config(), type: 2 }]);
+	});
+
+	it("is only recorded when written 1500 ms before the client spawned", async () => {
+		const since = Date.now() - 10_000;
+		writeBeforeSpawn(1500, since);
+		const seen = recordPublishes();
+		await lookForOutOfBandChanges(tmp, "tool_result", runtime, {
+			since,
+			walk: "interval",
+		});
+		expect(seen).toEqual([]);
+		expect(notified).toEqual([]);
+	});
+});
+
 describe("a Python stub (.pyi) changed outside pi-lens (#4532 gap 3b)", () => {
 	const stub = () => path.join(tmp, "stubs", "dep.pyi");
 
@@ -465,6 +722,34 @@ describe("the look's record", () => {
 			expect(rows[0].metadata?.configs).toEqual([
 				"created:pyrightconfig.json",
 				"created:pyproject.toml",
+			]);
+		} finally {
+			if (saved === undefined) delete process.env.PI_LENS_TEST_MODE;
+			else process.env.PI_LENS_TEST_MODE = saved;
+		}
+	});
+
+	it("names a manifest below the root by its path from the root", async () => {
+		const saved = process.env.PI_LENS_TEST_MODE;
+		process.env.PI_LENS_TEST_MODE = "0";
+		try {
+			fs.mkdirSync(path.join(tmp, "crates", "foo"), { recursive: true });
+			await lookAfter(() =>
+				fs.writeFileSync(path.join(tmp, "crates", "foo", "Cargo.toml"), "\n"),
+			);
+			await flushLatencyLog();
+			const { rows: all, skipped } = readNdjsonRows<{
+				phase?: string;
+				filePath?: string;
+				metadata?: { configs?: string[] };
+			}>(getLatencyLogPath());
+			expect(skipped).toBe(0);
+			const rows = all.filter(
+				(row) => row.phase === "lsp_out_of_band_change" && row.filePath === tmp,
+			);
+			expect(rows).toHaveLength(1);
+			expect(rows[0].metadata?.configs).toEqual([
+				"created:crates/foo/Cargo.toml",
 			]);
 		} finally {
 			if (saved === undefined) delete process.env.PI_LENS_TEST_MODE;
