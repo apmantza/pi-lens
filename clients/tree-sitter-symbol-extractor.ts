@@ -98,9 +98,29 @@ const SYMBOL_QUERIES: Record<string, { defs: string; refs: string }> = {
         name: (identifier) @funcName
         parameters: (parameters) @funcParams) @funcDef
       
-      ;; Struct definitions: struct Foo { }
+      ;; Struct, enum, trait, type alias, const and mod items (#5599). Each
+      ;; reuses a SymbolKind the other languages already map to: struct and
+      ;; enum are classes, a trait is an interface, a mod is a module (class,
+      ;; as for ruby/elixir/ocaml), a const is a variable. struct_item
+      ;; was captured as @structName, which no branch read, so structs never
+      ;; reached the graph.
       (struct_item
-        name: (type_identifier) @structName) @structDef
+        name: (type_identifier) @className) @classDef
+
+      (enum_item
+        name: (type_identifier) @className) @classDef
+
+      (trait_item
+        name: (type_identifier) @interfaceName) @interfaceDef
+
+      (type_item
+        name: (type_identifier) @typeName) @typeDef
+
+      (const_item
+        name: (identifier) @constName) @constDef
+
+      (mod_item
+        name: (identifier) @moduleName) @moduleDef
       
       ;; Impl blocks: impl Foo { fn bar() { } }
       (impl_item
@@ -635,6 +655,150 @@ SYMBOL_QUERIES.javascript = {
     `,
 };
 
+// Per-language export rules (#5599), beside the query table they read. A rule
+// takes one definition node and answers true (exported), false (decided: not
+// exported) or undefined (this language's rule cannot decide). Each rule admits
+// one closed list of known-public forms and answers false for every other
+// spelling it can read; a language with no rule here and no entry in
+// JS_TS_EXPORT_LANGUAGES answers undefined, never false, so a reader cannot take
+// "no rule" for "private". Python, Ruby, C, C++, Swift, PHP, Dart, Elixir, Lua,
+// OCaml, Zig, Bash, Groovy and CUE are in that last group: their visibility is a
+// naming convention, a `private` section or a module signature, none of it
+// readable from the declaration node.
+//
+// The access rule is shared by the languages whose export is "this declaration
+// and every declaration enclosing it is public": the walk goes up from the
+// node, answers false on crossing a function body (a local is no export) and
+// recurses into the nearest enclosing container.
+// biome-ignore lint/suspicious/noExplicitAny: web-tree-sitter node
+type ExportNode = any;
+type ExportRule = (node: ExportNode) => boolean | undefined;
+
+interface AccessRule {
+	/** Declarations whose own access also gates every member nested in them. */
+	containers: ReadonlySet<string>;
+	/** Node types that make everything below them function-local. */
+	bodies: ReadonlySet<string>;
+	/** Whether the declaration is public by itself, ignoring its enclosers. */
+	isPublic: (node: ExportNode) => boolean;
+}
+
+function exportedByAccess(node: ExportNode, rule: AccessRule): boolean {
+	if (!rule.isPublic(node)) return false;
+	for (let up = node.parent; up; up = up.parent) {
+		if (rule.bodies.has(up.type)) return false;
+		if (rule.containers.has(up.type)) return exportedByAccess(up, rule);
+	}
+	return true;
+}
+
+const childOfType = (node: ExportNode, type: string): ExportNode =>
+	(node.children ?? []).find((c: ExportNode) => c?.type === type);
+
+const NO_TYPES: ReadonlySet<string> = new Set();
+
+// Rust: a plain `pub` is exported; `pub(crate)`, `pub(super)`, `pub(in ..)` and
+// no modifier are not. Members of a trait are as public as the trait, an item
+// nested in a `mod` needs every enclosing `mod` to be `pub` too, and an item in
+// a function body is local. A trait impl's members take the trait's visibility,
+// which this file cannot see, so they are undefined.
+const RUST_ACCESS: AccessRule = {
+	containers: new Set(["mod_item", "trait_item"]),
+	bodies: new Set(["block"]),
+	isPublic: (node) =>
+		node.parent?.parent?.type === "trait_item" ||
+		childOfType(node, "visibility_modifier")?.text === "pub",
+};
+const rustExportRule: ExportRule = (node) =>
+	node.parent?.parent?.type === "impl_item" &&
+	node.parent.parent.childForFieldName("trait")
+		? undefined
+		: exportedByAccess(node, RUST_ACCESS);
+
+// Go: a name starting with an upper-case letter is exported (go/ast.IsExported);
+// a type declared inside a function body is not.
+const GO_ACCESS: AccessRule = {
+	containers: NO_TYPES,
+	bodies: new Set(["block"]),
+	isPublic: (node) =>
+		/^\p{Lu}/u.test(String(node.childForFieldName("name")?.text ?? "")),
+};
+
+// Java: `public` exported; package-private, `protected` and `private` are not.
+// Interface members are public unless `private`.
+const JAVA_ACCESS: AccessRule = {
+	containers: new Set([
+		"class_declaration",
+		"interface_declaration",
+		"enum_declaration",
+		"record_declaration",
+		"annotation_type_declaration",
+	]),
+	bodies: new Set(["block", "constructor_body"]),
+	isPublic: (node) => {
+		const modifiers = childOfType(node, "modifiers");
+		const has = (keyword: string): boolean =>
+			!!modifiers && !!childOfType(modifiers, keyword);
+		return node.parent?.type === "interface_body" ||
+			node.parent?.type === "annotation_type_body"
+			? !has("private")
+			: has("public");
+	},
+};
+
+// Kotlin: public unless a `private`, `internal` or `protected` modifier says
+// otherwise.
+const KOTLIN_ACCESS: AccessRule = {
+	containers: new Set(["class_declaration", "object_declaration"]),
+	bodies: new Set(["function_body"]),
+	isPublic: (node) => {
+		const modifiers = childOfType(node, "modifiers");
+		const visibility = modifiers
+			? childOfType(modifiers, "visibility_modifier")?.text
+			: undefined;
+		return visibility === undefined || visibility === "public";
+	},
+};
+
+// C#: `public` exported; the default (internal or private), `internal`,
+// `protected` and `private` are not. Interface members are public unless
+// `private`.
+const CSHARP_ACCESS: AccessRule = {
+	containers: new Set([
+		"class_declaration",
+		"struct_declaration",
+		"interface_declaration",
+		"enum_declaration",
+		"record_declaration",
+	]),
+	bodies: new Set(["block"]),
+	isPublic: (node) => {
+		const has = (keyword: string): boolean =>
+			(node.children ?? []).some(
+				(c: ExportNode) => c?.type === "modifier" && c.text === keyword,
+			);
+		return node.parent?.parent?.type === "interface_declaration"
+			? !has("private")
+			: has("public");
+	},
+};
+
+const EXPORT_RULES: Record<string, ExportRule> = {
+	rust: rustExportRule,
+	go: (node) => exportedByAccess(node, GO_ACCESS),
+	java: (node) => exportedByAccess(node, JAVA_ACCESS),
+	kotlin: (node) => exportedByAccess(node, KOTLIN_ACCESS),
+	csharp: (node) => exportedByAccess(node, CSHARP_ACCESS),
+};
+
+// The pre-#5599 text-and-ancestor rule below reads `export` keywords, so it
+// applies to the JS/TS grammars only.
+const JS_TS_EXPORT_LANGUAGES: ReadonlySet<string> = new Set([
+	"typescript",
+	"tsx",
+	"javascript",
+]);
+
 /**
  * The grammar a KIND-keyed consumer (review-graph builder, module-report
  * outline) should extract `filePath` with, or undefined when this file is not
@@ -1079,6 +1243,12 @@ export class TreeSitterSymbolExtractor {
 			kind = "type";
 			// biome-ignore lint/suspicious/noExplicitAny: Node type
 			defNode = captures.typeDef?.node as any;
+		} else if (captures.constName) {
+			nameNode = captures.constName.node;
+			name = captures.constName.text;
+			kind = "variable";
+			// biome-ignore lint/suspicious/noExplicitAny: Node type
+			defNode = captures.constDef?.node as any;
 		} else if (captures.moduleName) {
 			nameNode = captures.moduleName.node;
 			name = captures.moduleName.text;
@@ -1110,7 +1280,7 @@ export class TreeSitterSymbolExtractor {
 
 		if (!name || !kind || !defNode) return null;
 
-		// Check if exported (basic heuristic: has export keyword before it)
+		// Exported per the language's rule (EXPORT_RULES); undefined when no rule applies
 		const isExported = this.isExported(defNode, lineAt);
 		const signature = params ? this.extractSignature(params, kind) : undefined;
 		// Scope/visibility signals (additive; the review graph ignores them).
@@ -1439,7 +1609,13 @@ export class TreeSitterSymbolExtractor {
 	}
 
 	// biome-ignore lint/suspicious/noExplicitAny: Node type
-	private isExported(node: any, lineAt: (row: number) => string): boolean {
+	private isExported(
+		node: any,
+		lineAt: (row: number) => string,
+	): boolean | undefined {
+		const rule = EXPORT_RULES[this.languageId];
+		if (rule) return rule(node);
+		if (!JS_TS_EXPORT_LANGUAGES.has(this.languageId)) return undefined;
 		// A symbol is exported only at module scope. Anchor the keyword at the
 		// START of the declaration line (so `const exportName = …`, or "export"
 		// inside a comment, doesn't count), and require the AST walk to reach an
