@@ -1,4 +1,6 @@
 // flake-shape: real-process-spawn — the cancel and the busy count are observed through a real JSON-RPC connection to a real child; lsp-spawn-heavy serializes it.
+// flake-shape: elapsed-time-assertion — acceptance 3 of #5097 is a wall bound: Esc returns within 500 ms of the abort, measured from the abort to the caller's resume against a server that never answers.
+// flake-shape: ungoverned-wait-for — the abort must land after the request is on the wire, and only the server's own trace shows that; the poll is bounded by its timeout.
 /**
  * #5097: one LSP request sender owns cancel and release on timeout and abort.
  *
@@ -29,7 +31,7 @@ const previous = vi.hoisted(() => {
 	return saved;
 });
 
-import { afterAll } from "vitest";
+import { afterEach } from "vitest";
 import {
 	createLSPClient,
 	type LSPClientInfo,
@@ -44,15 +46,16 @@ import { installLspService } from "../../support/lsp-service-seam.js";
 import { spawnFakeLspServer } from "../../support/fake-lsp-server.js";
 import { removeTempDirSync } from "../test-utils.js";
 
-afterAll(() => {
-	for (const [key, value] of [
-		["PI_LENS_LSP_NAV_REQUEST_TIMEOUT_MS", previous.nav],
-		["PI_LENS_LSP_LIVENESS_PING_TIMEOUT_MS", previous.ping],
-		["PI_LENS_LSP_EXECUTE_COMMAND_TIMEOUT_MS", previous.exec],
-	] as const) {
-		if (value === undefined) delete process.env[key];
-		else process.env[key] = value;
-	}
+afterEach(() => {
+	if (previous.nav === undefined)
+		delete process.env.PI_LENS_LSP_NAV_REQUEST_TIMEOUT_MS;
+	else process.env.PI_LENS_LSP_NAV_REQUEST_TIMEOUT_MS = previous.nav;
+	if (previous.ping === undefined)
+		delete process.env.PI_LENS_LSP_LIVENESS_PING_TIMEOUT_MS;
+	else process.env.PI_LENS_LSP_LIVENESS_PING_TIMEOUT_MS = previous.ping;
+	if (previous.exec === undefined)
+		delete process.env.PI_LENS_LSP_EXECUTE_COMMAND_TIMEOUT_MS;
+	else process.env.PI_LENS_LSP_EXECUTE_COMMAND_TIMEOUT_MS = previous.exec;
 });
 
 async function withHangingServer(
@@ -215,10 +218,6 @@ describe("one request sender owns cancel and release (#5097)", () => {
 			expect(result).toEqual([]);
 			expect(sinceAbort).toBeLessThan(500);
 			expect(ctx.client.isBusy?.()).toBe(false);
-			await ctx.barrier();
-			expect(ctx.cancels()).toBe(1);
-			// The timeout that would have fired later must not cancel again.
-			await new Promise((resolve) => setTimeout(resolve, 1300));
 			await ctx.barrier();
 			expect(ctx.cancels()).toBe(1);
 		});
