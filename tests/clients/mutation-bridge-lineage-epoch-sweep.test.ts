@@ -951,6 +951,8 @@ function localBridgeDeclarations(source: string): string[] {
  * stale one (a resolved form), so the list can only stay honest.
  */
 const ADMITTED_INDETERMINATE: Readonly<Record<string, string>> = {
+	"clients/lsp-mutation.ts::recordThroughBridge::recordMutation":
+		"#5551: the entry is the `entry` parameter, built by `lspMutationEntry` in the same file for both LSP branches; that builder names no `readGuardBranchEpoch`, and it sets `lineage` from `context.session` whenever the caller threads one",
 	"clients/observed-mutation-sources.ts::replayThroughMutationBridge::recordMutation":
 		"the generic replay seam forwards a caller-built entry; its two in-tree callers construct lineage at the call site",
 	"clients/runtime-tool-result.ts::handleToolResult::replayThroughMutationBridge":

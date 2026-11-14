@@ -148,7 +148,7 @@ const G6_SKIP =
 /** The cells every route leaves unprobed today, for the consumers no probe read. */
 function unread(settle: string): Record<WriterConsumer, WriterCell> {
 	return Object.fromEntries(
-		WRITER_CONSUMERS.map((consumer) => [consumer, unprobed(settle)]),
+		WRITER_CONSUMERS.map((id) => [id, unprobed(settle)]),
 	) as Record<WriterConsumer, WriterCell>;
 }
 

@@ -32,6 +32,7 @@ import {
 	listSourceFiles,
 	stripSource,
 } from "../support/sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 
@@ -723,24 +724,28 @@ describe("the writer table", () => {
 	// while that test exists. Recurrence: a renamed or deleted witness leaves
 	// the cell claiming a probe nothing runs. Comments are blanked, so a quote
 	// of the title in prose does not count.
-	it("cites only test titles that a test declares", () => {
-		const declared = listTestFiles(path.join(repoRoot, "tests")).map((file) =>
-			stripSource(fs.readFileSync(file, "utf8"), { strings: "keep" }),
-		);
-		const missing = new Set<string>();
-		for (const route of WRITERS)
-			for (const consumer of WRITER_CONSUMERS) {
-				const cell = route.cells[consumer];
-				if (cell.cell !== "reaches" && cell.cell !== "silent") continue;
-				const title = /^\[([^\]]+)\]/.exec(cell.probe)?.[1];
-				if (title === undefined) continue;
-				const call = new RegExp(
-					`\\b(?:it|test)(?:\\.\\w+)*\\(\\s*["'\`]${escapeRegExp(title)}["'\`]`,
-				);
-				if (!declared.some((code) => call.test(code))) missing.add(title);
-			}
-		expect([...missing]).toEqual([]);
-	});
+	it(
+		"cites only test titles that a test declares",
+		() => {
+			const declared = listTestFiles(path.join(repoRoot, "tests")).map((file) =>
+				stripSource(fs.readFileSync(file, "utf8"), { strings: "keep" }),
+			);
+			const missing = new Set<string>();
+			for (const route of WRITERS)
+				for (const consumer of WRITER_CONSUMERS) {
+					const cell = route.cells[consumer];
+					if (cell.cell !== "reaches" && cell.cell !== "silent") continue;
+					const title = /^\[([^\]]+)\]/.exec(cell.probe)?.[1];
+					if (title === undefined) continue;
+					const call = new RegExp(
+						`\\b(?:it|test)(?:\\.\\w+)*\\(\\s*["'\`]${escapeRegExp(title)}["'\`]`,
+					);
+					if (!declared.some((code) => call.test(code))) missing.add(title);
+				}
+			expect([...missing]).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("pins the routes no fold has reached and the unprobed cells", () => {
 		const byRecorder: Record<string, string[]> = {};
@@ -830,11 +835,15 @@ function censusMismatches(
 }
 
 describe("the writer census", () => {
-	it("admits every file-writing site in production through a row that pins its count", () => {
-		const census = censusOf();
-		assertNonEmptyScan("writer census files", census.size, 40);
-		expect(censusMismatches(census, WRITE_SITES)).toEqual([]);
-	});
+	it(
+		"admits every file-writing site in production through a row that pins its count",
+		() => {
+			const census = censusOf();
+			assertNonEmptyScan("writer census files", census.size, 40);
+			expect(censusMismatches(census, WRITE_SITES)).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("names a route for every user-source row and the exports of every primitive", () => {
 		const routes = new Set(WRITERS.map((route) => route.id));
@@ -855,15 +864,19 @@ describe("the writer census", () => {
 		}
 	});
 
-	it("fails on a planted file that writes and has no row", () => {
-		const planted = new Map(censusOf());
-		planted.set("clients/planted-writer.ts", [
-			{ line: 1, kind: "write", text: "fs.writeFileSync(p, d)" },
-		]);
-		expect(censusMismatches(planted, WRITE_SITES)).toEqual([
-			"clients/planted-writer.ts: 1 site(s), row admits none\n  1 write: fs.writeFileSync(p, d)",
-		]);
-	});
+	it(
+		"fails on a planted file that writes and has no row",
+		() => {
+			const planted = new Map(censusOf());
+			planted.set("clients/planted-writer.ts", [
+				{ line: 1, kind: "write", text: "fs.writeFileSync(p, d)" },
+			]);
+			expect(censusMismatches(planted, WRITE_SITES)).toEqual([
+				"clients/planted-writer.ts: 1 site(s), row admits none\n  1 write: fs.writeFileSync(p, d)",
+			]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// Recurrence: an enumerated gate admits the spellings its author thought of
 	// and passes the next one (shape 69). Each plant below writes a file in a
