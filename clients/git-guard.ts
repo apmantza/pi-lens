@@ -578,12 +578,24 @@ const COMMIT_PUSH_MATCHER: GitVerbMatcher = {
 	suppressPostVerbHelp: false,
 };
 
-function containsGuardedSubstitution(
+/** One command substitution's body (canonicalized) and its nesting depth. */
+interface CommandSubstitution {
+	body: string;
+	depth: number;
+}
+
+/**
+ * Every command substitution `command` runs (`$(…)`, `` `…` ``, `<(…)`,
+ * `>(…)`), nested ones included, in the order they open. A body at depth 4 is
+ * listed but not read further, and `complete` is then false.
+ */
+function commandSubstitutions(
 	command: string,
-	depth: number,
-	matcher: GitVerbMatcher,
-): boolean {
-	if (depth > 3) return false;
+	depth = 0,
+): { bodies: CommandSubstitution[]; complete: boolean } {
+	const bodies: CommandSubstitution[] = [];
+	if (depth > 3) return { bodies, complete: false };
+	let complete = true;
 	let quote: "single" | "double" | undefined;
 	let ansiC = false;
 	let escaped = false;
@@ -625,18 +637,26 @@ function containsGuardedSubstitution(
 						: undefined;
 		if (substitution && substitution.end >= 0) {
 			const nested = canonicalizeGuardCommand(substitution.body);
-			if (
-				containsGuardedSubstitution(nested, depth + 1, matcher) ||
-				decodeShellWords(nested).some((segment) =>
-					containsGuardedGitVerb(segment.words, depth + 1, matcher),
-				)
-			) {
-				return true;
-			}
+			bodies.push({ body: nested, depth: depth + 1 });
+			const inner = commandSubstitutions(nested, depth + 1);
+			bodies.push(...inner.bodies);
+			complete &&= inner.complete;
 			i = substitution.end;
 		}
 	}
-	return false;
+	return { bodies, complete };
+}
+
+function containsGuardedSubstitution(
+	command: string,
+	depth: number,
+	matcher: GitVerbMatcher,
+): boolean {
+	return commandSubstitutions(command, depth).bodies.some((substitution) =>
+		decodeShellWords(substitution.body).some((segment) =>
+			containsGuardedGitVerb(segment.words, substitution.depth, matcher),
+		),
+	);
 }
 
 /** Git global options that consume the following token as their value. */
