@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { beforeEach, describe, expect, it, afterEach, vi } from "vitest";
@@ -3285,11 +3285,81 @@ describe("PR body lint (#1844)", () => {
 		}
 	});
 
-	it("accepts the exact preflight --lint-local command and the title form", () => {
+	it("accepts the exact preflight --lint-local command and the title form", async () => {
 		const directory = mkdtempSync(join(tmpdir(), "pi-lens-pr-body-cli-"));
 		const bodyPath = join(directory, "PR_BODY.md");
 		const titlePath = join(directory, "COMMIT_MSG.txt");
 		const checker = resolve(repositoryRoot, "scripts/check-pr-body.mjs");
+		// One subprocess per distinct input, and all five in flight at once.
+		// Every argv form below is a different input and the only witness for its
+		// command boundary, so the count is already minimal; what cost the case
+		// was running them serially (#5597). Per-form wall time, measured inside
+		// this case with eight busy loops pinned to the same two CPUs the test
+		// runs on: `--lint-local <body>` 1019-1179 ms, `--body <body file>
+		// --title <title file>` 1016-1156 ms, `--lint-local <body> --ref HEAD`
+		// 1016-1180 ms, `--lint-local <body> --title <closes title>` 1331-1481 ms,
+		// and `--lint-local <body> --title <refs title>` 1468-1595 ms, the slowest
+		// form because a refs title adds the cross-reference lookups the other
+		// forms skip. Serial those summed past the 5000 ms test timeout (5885 ms
+		// measured here, 8970 ms on CI shard 5/5), while the case itself lands at
+		// 1289-2237 ms. The forms share only the read-only body file and the
+		// read-only fixture cwd, so concurrent the case costs its slowest spawn.
+		const runCli = (args: string[]) =>
+			new Promise<{ code: number | null; stderr: string }>((settled) => {
+				const child = spawn(process.execPath, [checker, ...args], {
+					cwd: fixtureCwd,
+					stdio: ["ignore", "ignore", "pipe"],
+				});
+				let stderr = "";
+				child.stderr.setEncoding("utf8");
+				child.stderr.on("data", (chunk: string) => {
+					stderr += chunk;
+				});
+				// Total on both paths: an unhandled child `error` event is a
+				// host-fatal throw, and a spawn that never started still answers
+				// with the verdict the caller reads. Its error text goes to stderr,
+				// so the assertion names the cause, not only `code: null`.
+				child.on("error", (error) =>
+					settled({ code: null, stderr: stderr + String(error) }),
+				);
+				child.on("close", (code) => settled({ code, stderr }));
+			});
+		const acceptedForms: [string, string[]][] = [
+			["--lint-local <body>", ["--lint-local", bodyPath]],
+			[
+				"--lint-local <body> --title <refs title>",
+				[
+					"--lint-local",
+					bodyPath,
+					"--title",
+					"ci(test): verify local body lint (refs #2807)",
+				],
+			],
+			[
+				"--body <body file> --title <title file>",
+				["--body", bodyPath, "--title", titlePath],
+			],
+		];
+		// Each rejection carries the rule text that must appear, so a child that
+		// died for an unrelated reason reds the case instead of reading as the
+		// expected refusal.
+		const rejectedForms: [string, string[], string][] = [
+			[
+				"--lint-local <body> --title <closes title>",
+				[
+					"--lint-local",
+					bodyPath,
+					"--title",
+					"ci(test): verify local body lint (closes #2807)",
+				],
+				"Invalid close-keyword placement",
+			],
+			[
+				"--lint-local <body> --ref HEAD",
+				["--lint-local", bodyPath, "--ref", "HEAD"],
+				"does not exist in revision HEAD",
+			],
+		];
 		try {
 			writeFileSync(
 				bodyPath,
@@ -3309,39 +3379,38 @@ describe("PR body lint (#1844)", () => {
 				bodyPath,
 				`${localBody}\n\nRemaining #2807: the fixture follow-up remains open.\n\n### Test assessment\nThe targeted test covers the local CLI.`,
 			);
-			for (const args of [
-				[checker, "--lint-local", bodyPath],
-				[
-					checker,
-					"--lint-local",
-					bodyPath,
-					"--title",
-					"ci(test): verify local body lint (refs #2807)",
-				],
-				[checker, "--body", bodyPath, "--title", titlePath],
-			]) {
-				execFileSync(process.execPath, args, { cwd: fixtureCwd });
-			}
-			expect(() =>
-				execFileSync(
-					process.execPath,
-					[
-						checker,
-						"--lint-local",
-						bodyPath,
-						"--title",
-						"ci(test): verify local body lint (closes #2807)",
-					],
-					{ cwd: fixtureCwd, stdio: "pipe" },
-				),
-			).toThrow();
-			expect(() =>
-				execFileSync(
-					process.execPath,
-					[checker, "--lint-local", bodyPath, "--ref", "HEAD"],
-					{ cwd: fixtureCwd, stdio: "pipe" },
-				),
-			).toThrow();
+			const [accepted, rejected] = await Promise.all([
+				Promise.all(acceptedForms.map(([, args]) => runCli(args))),
+				Promise.all(rejectedForms.map(([, args]) => runCli(args))),
+			]);
+			// The last column carries the stderr of a form that failed its check, so a
+			// spawn that never started names its cause (`Error: spawn ... ENOENT`)
+			// in the assertion message. A passing form leaves it empty.
+			expect(
+				acceptedForms.map(([label], index) => [
+					label,
+					accepted[index].code,
+					accepted[index].code === 0 ? "" : accepted[index].stderr.trim(),
+				]),
+			).toEqual([
+				["--lint-local <body>", 0, ""],
+				["--lint-local <body> --title <refs title>", 0, ""],
+				["--body <body file> --title <title file>", 0, ""],
+			]);
+			expect(
+				rejectedForms.map(([label, , needle], index) => {
+					const matched = rejected[index].stderr.includes(needle);
+					return [
+						label,
+						rejected[index].code === 0 ? "accepted" : "rejected",
+						matched,
+						matched ? "" : rejected[index].stderr.trim(),
+					];
+				}),
+			).toEqual([
+				["--lint-local <body> --title <closes title>", "rejected", true, ""],
+				["--lint-local <body> --ref HEAD", "rejected", true, ""],
+			]);
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}

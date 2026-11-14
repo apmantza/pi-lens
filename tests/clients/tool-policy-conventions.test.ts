@@ -7,10 +7,12 @@ import {
 } from "../../clients/tool-policy.js";
 import {
 	buildProjectSnapshotFromRuntime,
+	getProjectSnapshotPersistStateForTests,
 	saveProjectSnapshot,
-	waitForProjectSnapshotPersistsForTests,
 } from "../../clients/project-snapshot.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { drainRegisteredBackgroundWritesForTests } from "../support/background-write-drains.js";
+import { waitFor } from "./interleaving-kit.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 
 let env: { tmpDir: string; cleanup: () => void } | undefined;
@@ -23,21 +25,31 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-	if (previousDataDir === undefined) {
-		delete process.env.PILENS_DATA_DIR;
-	} else {
-		process.env.PILENS_DATA_DIR = previousDataDir;
-	}
 	// #3186: saveProjectSnapshot (called from saveSnapshotWithConventions below)
 	// dispatches its body persist to a worker thread/main-thread fallback the
 	// caller never awaits; that persist's write path recreates whatever
 	// ancestor directory env.cleanup() below is about to remove if it lands
 	// after cleanup (measured directly: ~10-50ms after removal, unforced).
-	// Draining through the seam every persist call already has
-	// (waitForProjectSnapshotPersistsForTests, clients/project-snapshot.ts)
-	// before cleanup closes the race at its source instead of admitting the
-	// resulting directory in the tmp-hygiene governance baseline.
-	await waitForProjectSnapshotPersistsForTests();
+	// Order, as in runtime-session-stale-ctx-scans-4815 teardownFixture: wait
+	// for this fixture's persist to go idle on a deadline that throws, drain the
+	// registered background writers, restore PILENS_DATA_DIR in its own finally,
+	// then remove the root. A throw keeps the root and fails the case.
+	try {
+		if (env) {
+			const cwd = path.join(env.tmpDir, "project");
+			await waitFor(
+				() => getProjectSnapshotPersistStateForTests(cwd),
+				(state) => !state.active && !state.queued,
+			);
+		}
+		await drainRegisteredBackgroundWritesForTests();
+	} finally {
+		if (previousDataDir === undefined) {
+			delete process.env.PILENS_DATA_DIR;
+		} else {
+			process.env.PILENS_DATA_DIR = previousDataDir;
+		}
+	}
 	env?.cleanup();
 	env = undefined;
 });

@@ -20,13 +20,20 @@ import {
 	getLatencyLogPath,
 } from "../../clients/latency-logger.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { getProjectSnapshotPersistStateForTests } from "../../clients/project-snapshot.js";
 import type { SessionStartRootTelemetry } from "../../clients/runtime-session.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 import { installLspServiceDouble } from "../support/lsp-service-seam.js";
+import { drainRegisteredBackgroundWritesForTests } from "../support/background-write-drains.js";
+import { waitFor } from "./interleaving-kit.js";
 
 import { handleSessionStart } from "../../clients/runtime-session.js";
 import { resetLSPConfigStateForTests } from "../../clients/lsp/config.js";
 import { pinFixtureHome } from "./test-utils.js";
+
+// Captured at load. The full-mode case restores this value in its teardown, and
+// the case after it checks that the restore happened (#4591).
+const dataDirAtFileStart = process.env.PILENS_DATA_DIR;
 
 function setStartupMode(mode: "full" | "quick"): () => void {
 	const prev = process.env.PI_LENS_STARTUP_MODE;
@@ -183,8 +190,8 @@ describe("session_start_total carries the classification decision (#2129)", () =
 		const env = setupTestEnvironment("pi-lens-session-start-total-full-");
 		const previousDataDir = process.env.PILENS_DATA_DIR;
 		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		const cwd = path.join(env.tmpDir, "project");
 		try {
-			const cwd = path.join(env.tmpDir, "project");
 			fs.mkdirSync(path.join(cwd, ".git"), { recursive: true });
 			createTempFile(env.tmpDir, "project/index.ts", "export const x = 1;\n");
 
@@ -201,14 +208,38 @@ describe("session_start_total carries the classification decision (#2129)", () =
 				sameRoot: "unknown",
 			});
 		} finally {
-			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
-			else process.env.PILENS_DATA_DIR = previousDataDir;
+			// #4591: full-mode session start reaches saveRuntimeProjectSnapshot,
+			// whose body persist runs off-thread (clients/project-snapshot.ts →
+			// gzip-stage worker) and recreates the fixture root with a recursive
+			// mkdir into $PILENS_DATA_DIR. Order, as in
+			// runtime-session-stale-ctx-scans-4815 teardownFixture: wait for this
+			// fixture's persist to go idle, on a deadline that throws; drain the
+			// registered background writers, which reject while work remains;
+			// restore PILENS_DATA_DIR, only now, because the persist resolves its
+			// meta path from the live env. The restore sits in its own finally, so a
+			// throw from either wait still restores it. Remove the root only after the
+			// drain succeeds: a throw keeps the root, so the failure stays loud
+			// (the #2912/#3186 shape).
+			try {
+				await waitFor(
+					() => getProjectSnapshotPersistStateForTests(cwd),
+					(state) => !state.active && !state.queued,
+				);
+				await drainRegisteredBackgroundWritesForTests();
+			} finally {
+				if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+				else process.env.PILENS_DATA_DIR = previousDataDir;
+			}
 			env.cleanup();
 		}
 	});
 
 	it("a caller that supplies no classification changes nothing (back-compat)", async () => {
 		restoreStartupMode = setStartupMode("quick");
+		// #4591: the full-mode case runs before this one. If its teardown wait
+		// throws, PILENS_DATA_DIR must still come back to its value at load, or
+		// this case inherits the kept root's data dir.
+		expect(process.env.PILENS_DATA_DIR).toBe(dataDirAtFileStart);
 		const env = setupTestEnvironment("pi-lens-session-start-total-omit-");
 		const globals = globalThis as unknown as {
 			__piLensWarmupScheduled?: boolean;
