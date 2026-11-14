@@ -16,7 +16,10 @@ import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwdWithReason } from "../../tool-cwd.js";
 import { truncatedByOutputCap } from "../../spawn-output-cap.js";
-import { getJstsLintPolicyForCwd } from "../../tool-policy.js";
+import {
+	getJstsLintPolicyForCwd,
+	optionSafeTargetArg,
+} from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -128,13 +131,16 @@ const oxlintRunner: RunnerDefinition = {
 		if (hasToolConfig("vitePlus", packageDir)) {
 			cmd = await resolveVitePlusCommand(packageDir, cwd);
 		}
+		// One spelling for lint and autofix (#5556): project-relative so the ignore
+		// globs see the project's own path, `./`-prefixed so a `-D.ts` is a path.
+		const target = optionSafeTargetArg(cwd, ctx.filePath);
 		if (cmd) {
-			args = ["lint", "--format", "json", ctx.filePath];
+			args = ["lint", "--format", "json", target];
 		} else {
 			// One resolver (#5410): project shim at the package, managed, then PATH,
 			// held in the shared latch, so a second PATH-only probe is not needed.
 			cmd = await resolveToolCommandWithInstallFallback(packageDir, "oxlint");
-			args = ["--format", "json", ctx.filePath];
+			args = ["--format", "json", target];
 		}
 		if (!cmd) {
 			return toolAbsentSkip(packageDir, { id: "oxlint" });

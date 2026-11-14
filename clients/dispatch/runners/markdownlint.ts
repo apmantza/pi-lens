@@ -7,7 +7,7 @@ import { resolveRunnerCwd } from "../../tool-cwd.js";
 import {
 	getLinterPolicyForCwd,
 	markdownlintConfigArgs,
-	markdownlintTargetArg,
+	optionSafeTargetArg,
 } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -149,7 +149,7 @@ const markdownlintRunner: RunnerDefinition = {
 		// whose first character is outside a known-safe class, so cli2 cannot read it
 		// as a modifier (#5544 rounds 2-3), and is shared with the autofix surface,
 		// so the two cannot drift.
-		const args = [...configArgs, markdownlintTargetArg(cwd, ctx.filePath)];
+		const args = [...configArgs, optionSafeTargetArg(cwd, ctx.filePath)];
 		// #5119: cli2's own `fix` option cannot be turned off from the CLI, and a
 		// project `"fix": true` rewrote the file on a diagnostics pass. Lint
 		// through its exported `main` with `optionsOverride: { fix: false }` in a

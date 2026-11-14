@@ -16,6 +16,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { truncateForLedger } from "../../../clients/ledger-bounds.js";
+import { normalizeMapKey } from "../../../clients/path-utils.js";
+
 const getServersForFileWithConfig = vi.fn();
 const createLSPClient = vi.fn();
 const loadReverseDependencyIndexFromSnapshot = vi.fn(() => null);
@@ -355,8 +358,17 @@ describe("LSPService disk-drift backstop (#1783)", () => {
 		const summary = getDegradationSummary();
 		const group = summary.find((entry) => entry.kind === "lsp-document-drift");
 		expect(group).toBeDefined();
+		// #5576: the drift pass stamps the row with the tracker's own key for the
+		// document (`filePath: key`, `clients/lsp/document-drift.ts`), and the
+		// ledger retains a subject only through `truncateForLedger`
+		// (`LEDGER_FIELD_MAX` = 200 characters plus the `…` marker). Matching the
+		// END of the row tied this cell to the host's temp-path length: at a
+		// 261-character `TMPDIR` the clipped subject no longer ends in `stdio.ts`.
+		// Both sides of the comparison now go through the owners: the identity
+		// through `normalizeMapKey`, the bound through `truncateForLedger`.
+		const expectedSubject = truncateForLedger(normalizeMapKey(file));
 		expect(
-			group?.latestReasons.some((e) => e.subject.endsWith("stdio.ts")),
+			group?.latestReasons.some((e) => e.subject === expectedSubject),
 		).toBe(true);
 		expect(
 			group?.latestReasons.some((e) => /untracked disk drift/.test(e.reason)),

@@ -155,6 +155,15 @@ export function holdFlight(
 }
 
 /**
+ * The run a new claim of the key goes after (#5549): the formatter lane reads
+ * it and claims the key with `holdFlight` in one synchronous step, then waits
+ * for it. Undefined when the key is free.
+ */
+export function flightTail(flightKey: string): Promise<unknown> | undefined {
+	return flights.get(flightKey)?.tail;
+}
+
+/**
  * A queued rerun's turn. A reset that dropped this flight answers it skipped
  * without starting it: its store entry was cleared at the same session_start,
  * and the key may belong to a new session's flight.

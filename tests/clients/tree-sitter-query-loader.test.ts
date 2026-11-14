@@ -54,6 +54,7 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
+import { truncateForLedger } from "../../clients/ledger-bounds.js";
 import {
 	_resetBundledQueriesRootHealthForTests,
 	BUNDLED_QUERIES_ROOT,
@@ -666,17 +667,37 @@ describe("malformed query files are recorded once per file (#3054 review F1)", (
 	beforeEach(() => resetDegradationLedger());
 	afterEach(() => resetDegradationLedger());
 
+	const BROKEN_RULE = "rules/tree-sitter-queries/typescript/broken-colon.yml";
+
 	function parseFailureGroup() {
 		return getDegradationSummary().find(
 			(g) => g.kind === "tree-sitter-query-parse-failed",
 		);
 	}
 
+	/**
+	 * The row the cells below select, spelled the way the producer spells it
+	 * (#5576). `loadQueries` (`clients/tree-sitter-query-loader.ts`) stamps the
+	 * record's subject with `path.join(path.resolve(root), "rules",
+	 * "tree-sitter-queries", lang, file)`, and the ledger retains a subject only
+	 * through `truncateForLedger` (`LEDGER_FIELD_MAX` = 200 characters plus the
+	 * `…` marker). An assertion on the END of that subject therefore passed or
+	 * failed with the host's temp-path length rather than with the record: at a
+	 * 261-character `TMPDIR` the clipped row no longer ends in
+	 * `broken-colon.yml`. Comparing against the producer's identity bound by
+	 * production's own `truncateForLedger` keeps the full path pinned wherever
+	 * the fixture stays inside the bound (a default-length root does), and stays
+	 * a comparison against the identity itself on a root that reaches it.
+	 */
+	function expectedParseFailureSubject(root: string): string {
+		return truncateForLedger(path.join(path.resolve(root), BROKEN_RULE));
+	}
+
 	it("records a degradation for a rule file yaml.load rejects, even with verbose:false (the production default)", async () => {
 		const root = makeTempRulesRoot();
 		writeRule(
 			root,
-			"rules/tree-sitter-queries/typescript/broken-colon.yml",
+			BROKEN_RULE,
 			`id: broken-colon
 name: Broken Colon
 severity: warning
@@ -695,7 +716,9 @@ query: |
 		const group = parseFailureGroup();
 		expect(group?.count).toBe(1);
 		expect(
-			group?.latestReasons.some((r) => r.subject.endsWith("broken-colon.yml")),
+			group?.latestReasons.some(
+				(r) => r.subject === expectedParseFailureSubject(root),
+			),
 		).toBe(true);
 	});
 
@@ -741,7 +764,7 @@ query:
 		const root = makeTempRulesRoot();
 		writeRule(
 			root,
-			"rules/tree-sitter-queries/typescript/broken-colon.yml",
+			BROKEN_RULE,
 			`id: broken-colon
 name: Broken Colon
 severity: warning
@@ -769,7 +792,9 @@ query: |
 		const group = parseFailureGroup();
 		expect(group?.count).toBe(1);
 		expect(
-			group?.latestReasons.some((r) => r.subject.endsWith("broken-colon.yml")),
+			group?.latestReasons.some(
+				(r) => r.subject === expectedParseFailureSubject(root),
+			),
 		).toBe(true);
 	});
 

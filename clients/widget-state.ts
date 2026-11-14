@@ -1021,6 +1021,10 @@ export function recordFormatter(
 	outcome?: FormatterOutcomeKind,
 ): void {
 	const rec = getOrCreate(filePath);
+	// #5549: a skipped run (a cooled formatter) did not look at the bytes, so
+	// it never clears that formatter's failure marker.
+	if (outcome === "skipped" && rec.formatters.get(formatter)?.success === false)
+		return;
 	rec.formatters.set(formatter, { changed, success, outcome });
 	rec.touchedAt = Date.now();
 	files.set(fileMapKey(filePath), rec);

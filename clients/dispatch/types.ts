@@ -173,8 +173,8 @@ export interface Diagnostic {
 /**
  * The output tier of a finding at this severity (#5412). Only `error` blocks.
  * `warning`, `info` and `hint` are advisory warnings: the tier every CLI runner
- * gives a non-error finding (#1777, #1802). The LSP converter keeps its raw
- * `none` for a `hint` (`convertLspDiagnostics`); the auxiliary profile raises it.
+ * gives a non-error finding (#1777, #1802). The LSP converter uses the same
+ * tier for information and hint diagnostics.
  */
 export function semanticFor(severity: Diagnostic["severity"]): OutputSemantic {
 	return severity === "error" ? "blocking" : "warning";

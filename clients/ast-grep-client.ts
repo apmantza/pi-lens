@@ -501,9 +501,10 @@ export class AstGrepClient {
 			if (apply) {
 				// Stale-preview check: dry-run first. Preserve CLI failures instead of
 				// treating an invalid rule as a stale, no-match preview.
-				// No explicit signal: the tool call's scope already kills it, and
-				// the count scan right after carries `sg` and refuses (#5097 F5).
-				const preCheck = await this.tempScanDetailed(scanPath, ruleYaml);
+				// The preview child carries the call signal like the count scan below,
+				// so Esc stops it in a host with no tool scope too (#5097). Only the
+				// `--update-all` write runs on to completion.
+				const preCheck = await this.tempScanDetailed(scanPath, ruleYaml, sg);
 				if (preCheck.failure || preCheck.error) {
 					return {
 						matches: allMatches,
