@@ -588,6 +588,19 @@ describe("#5553 git resolves what the commit carries", () => {
 		},
 	);
 
+	// Recurrence prevented: git's "nothing to commit" is the dry run's exit 1
+	// with nothing on stderr; read as a failure it would refuse a commit git
+	// refuses by itself with its own message.
+	it(
+		"lets git answer a commit that carries nothing",
+		{ timeout: 120_000 },
+		async () => {
+			const proj = seedProject(`nothing-${seeded++}`, { [A]: CLEAN });
+			write(proj, "notes/scratch.ts", ADDED);
+			expectOutcome(await decide(proj, 'git commit -m "wip"'), "commits");
+		},
+	);
+
 	// Recurrence prevented: `--no-dry-run` after the replay's own `--dry-run`
 	// turns the replay into a real commit; the hook net stops it before the
 	// commit exists, and its refusal must not read as "nothing to commit".
@@ -850,6 +863,28 @@ describe("#5553 a merge commit is judged against every parent", () => {
 			expectOutcome(await decide(proj, "git commit --no-edit"), `refuses ${B}`);
 		},
 	);
+
+	// Decision pinned: `--no-delta` judges a carried file whole, but a file
+	// equal to a parent's blob is not one the merge adds to, so it commits;
+	// judging it would refuse every merge of a branch with old debt.
+	it(
+		"commits an incoming file equal to the other parent's under --no-delta",
+		{ timeout: 120_000 },
+		async () => {
+			const proj = seedProject("merge-no-delta", { [A]: CLEAN, [B]: CLEAN });
+			git(proj, "checkout", "-qb", "topic");
+			write(proj, A, ADDED);
+			git(proj, "commit", "-qam", "topic");
+			git(proj, "checkout", "-q", "-");
+			write(proj, B, B_EDITED);
+			git(proj, "commit", "-qam", "main");
+			git(proj, "merge", "--no-commit", "--no-ff", "topic");
+			expectOutcome(
+				await decide(proj, "git commit --no-edit", { noDelta: true }),
+				"commits",
+			);
+		},
+	);
 });
 
 describe("#5553 a lane that gives no answer refuses", () => {
@@ -872,6 +907,22 @@ describe("#5553 a lane that gives no answer refuses", () => {
 			write(control, A, CLEAN);
 			git(control, "add", A);
 			expectOutcome(await decide(control, 'git commit -m "x"'), "commits");
+		},
+	);
+
+	// Decision pinned: a change that adds no line runs no lane, so a linter
+	// that would fail on its config cannot refuse a commit that only deletes.
+	it(
+		"commits a change that adds no line beside a broken linter config",
+		{ timeout: 120_000 },
+		async () => {
+			const proj = seedProject("deletes-only", {
+				"biome.json": "{ not json",
+				[A]: CLEAN,
+			});
+			write(proj, A, CLEAN.replace("\tvoid alpha;\n", ""));
+			git(proj, "add", A);
+			expectOutcome(await decide(proj, 'git commit -m "x"'), "commits");
 		},
 	);
 
