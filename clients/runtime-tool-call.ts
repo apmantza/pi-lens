@@ -437,10 +437,11 @@ async function captureOpaqueBaseline(
 	root: string,
 	sessionRoot: boolean,
 	startedAt: number,
+	projectSeq: number,
 	toolName: string,
 ): Promise<{ state: PendingOpaqueBaseline; note: string }> {
 	if (!sessionRoot)
-		return { state: { startedAt, strategy: "git" }, note: "git" };
+		return { state: { startedAt, projectSeq, strategy: "git" }, note: "git" };
 	if (await isGitWorktree(root)) {
 		// Git-first: the timestamp IS the baseline; git answers what changed, at
 		// any repo size, with no file-universe cap.
@@ -455,6 +456,7 @@ async function captureOpaqueBaseline(
 		return {
 			state: {
 				startedAt,
+				projectSeq,
 				strategy: "git",
 				...(dirtyPaths === undefined ? {} : { dirtyPaths }),
 			},
@@ -469,9 +471,15 @@ async function captureOpaqueBaseline(
 		recordOpaqueCaptureRefused("home-root", toolName);
 	return {
 		state: outcome.snapshot
-			? { startedAt, strategy: "stat-diff", stats: outcome.snapshot }
+			? {
+					startedAt,
+					projectSeq,
+					strategy: "stat-diff",
+					stats: outcome.snapshot,
+				}
 			: {
 					startedAt,
+					projectSeq,
 					strategy: "stat-diff",
 					statsUnknownReason: outcome.unknownReason ?? "walk-failed",
 				},
@@ -731,6 +739,9 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 	if (opaqueCommand !== undefined && !isProviderReplayCall(event)) {
 		if (scanRoot && shouldRunOpaqueRecovery(toolName, scanRoot)) {
 			const started = Date.now();
+			// #5616: taken with `started`, before any await, so a write pi-lens
+			// records once the command may run is newer than it.
+			const seqAtStart = runtime.projectSeq;
 			// #2050: the trees this command's writes must be recovered from. The
 			// session root is where the host ran it; any further root is a
 			// checkout the command itself named and that belongs to THIS
@@ -753,6 +764,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 					root,
 					index === 0,
 					started,
+					seqAtStart,
 					toolName,
 				);
 				if (index === 0) resultNote = baseline.note;

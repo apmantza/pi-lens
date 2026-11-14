@@ -134,6 +134,12 @@ export interface PendingOpaqueBaseline {
 	 * which is a different fact.
 	 */
 	dirtyPaths?: readonly string[];
+	/**
+	 * #5616: the coordinator's `projectSeq` when the command started. A file
+	 * pi-lens recorded a write to after it (`getFilesChangedSince`) had another
+	 * observed writer in the call's window, so the call is not credited with it.
+	 */
+	projectSeq: number;
 }
 
 /** A literal tool name of one member of pi's typed `tool_call` union. */
@@ -1003,6 +1009,64 @@ export interface GitRecoveryOutcome {
 	 * nonzero.
 	 */
 	namedCredited?: string[];
+	/**
+	 * #5616: the verdict on each recovered path no write form names, present
+	 * only when the caller asked for it ({@link GitRecoveryOptions.scriptCredit}).
+	 */
+	scriptCredit?: ScriptCreditVerdicts;
+}
+
+/**
+ * #5616: why a path a bash call changed without naming it is not credited to
+ * the call. `dirty-before`: the file was dirty when the call started.
+ * `other-writer`: pi-lens recorded another write to it in the call's window.
+ * `dirty-set-cut`: the baseline's dirty set was cut, so "clean before" is
+ * unknown. `no-dirty-set`: the root holds no dirty set (git could not answer,
+ * a linked worktree, a checkout with no git). `failed-command`: the call
+ * exited non-zero, as named writes are not credited then either (#2000).
+ */
+export type ScriptCreditCause =
+	| "dirty-before"
+	| "other-writer"
+	| "dirty-set-cut"
+	| "no-dirty-set"
+	| "failed-command";
+
+export interface ScriptCreditVerdicts {
+	/** Clean before, changed in the window, no other observed writer. */
+	credited: string[];
+	withheld: Array<{ path: string; cause: ScriptCreditCause }>;
+}
+
+/**
+ * #5616: one record per cause and root per session that a file a bash call
+ * changed without naming it was not credited to the call, so its blockers went
+ * out as the withheld line rather than a STOP.
+ */
+export function recordScriptCreditWithheld(
+	cause: ScriptCreditCause,
+	root: string,
+): void {
+	recordDegradationOnce({
+		kind: "script-write-credit-withheld",
+		subject: `${cause}:${normalizeMapKey(root)}`,
+		reason: scriptCreditWithheldReason(cause),
+	});
+}
+
+/** A function, not a table: the cap is declared further down this module. */
+function scriptCreditWithheldReason(cause: ScriptCreditCause): string {
+	return {
+		"dirty-before":
+			"a bash call changed a file that was already dirty when it started, so pi-lens cannot tell its bytes from the earlier ones; its blockers are disclosed, not stopped on",
+		"other-writer":
+			"pi-lens recorded another write to a file while a bash call ran, so the call is not credited with it; its blockers are disclosed, not stopped on",
+		"dirty-set-cut": `${SAME_HEAD_DIRTY_SET_CAP} or more working-tree paths were dirty before a bash call, so no file can be shown clean before it; a file the call changed without naming it is not credited`,
+		"no-dirty-set":
+			"a bash call changed a file in a root with no pre-call dirty set (git could not answer, a linked worktree, or no git), so the call is not credited with it",
+		"failed-command":
+			"a bash call that failed changed a file it does not name; a failed call's writes are not credited, so its blockers are disclosed, not stopped on",
+	}[cause];
 }
 
 /** Narrow failure-only policy for Git integration commands. */
@@ -1029,6 +1093,12 @@ export interface GitRecoveryOptions {
 	 * mtime rule, and so does a set cut at {@link SAME_HEAD_DIRTY_SET_CAP}.
 	 */
 	dirtyBefore?: readonly string[] | undefined;
+	/**
+	 * #5616: judge each changed path no write form names for credit to a
+	 * successful bash call. Set only for such a call; `observedWriters` holds
+	 * the map keys pi-lens recorded a write to since the call's baseline.
+	 */
+	scriptCredit?: { observedWriters: ReadonlySet<string> };
 }
 
 interface GitStatusEntry {
@@ -1400,11 +1470,33 @@ export async function recoverOpaqueChangesViaGit(
 	}
 	const paths: string[] = [];
 	const namedCredited: string[] = [];
+	const scriptCredit: ScriptCreditVerdicts | undefined = options.scriptCredit
+		? { credited: [], withheld: [] }
+		: undefined;
 	for (const entry of candidates) {
 		if (!(await isChanged(entry))) continue;
 		const key = normalizeMapKey(entry.absPath);
 		paths.push(key);
 		if (isNamedWrite(entry.absPath)) namedCredited.push(key);
+		// #5616: a path the command names is the named route's to credit.
+		else if (
+			scriptCredit &&
+			options.scriptCredit &&
+			!isNamed(normalizeMapKey(realpathOrResolve(entry.absPath)))
+		) {
+			const cause: ScriptCreditCause | undefined =
+				cleanBefore === undefined
+					? dirtySetCut
+						? "dirty-set-cut"
+						: "no-dirty-set"
+					: cleanBefore.has(key)
+						? "dirty-before"
+						: options.scriptCredit.observedWriters.has(key)
+							? "other-writer"
+							: undefined;
+			if (cause === undefined) scriptCredit.credited.push(key);
+			else scriptCredit.withheld.push({ path: key, cause });
+		}
 	}
 	return {
 		verdict: "recovered",
@@ -1414,5 +1506,6 @@ export async function recoverOpaqueChangesViaGit(
 		...(excludedIncomingCount > 0 ? { excludedIncomingCount } : {}),
 		...(unknownStatusCount > 0 ? { unknownStatusCount } : {}),
 		...(namedCredited.length > 0 ? { namedCredited } : {}),
+		...(scriptCredit ? { scriptCredit } : {}),
 	};
 }

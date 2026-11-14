@@ -236,8 +236,8 @@ describe("OpaqueBaselineStore", () => {
 	// call. Entries are per call now; only a host without ids shares the slot.
 	it("keeps one entry per tool-call id in a slot; take consumes", () => {
 		const store = new OpaqueBaselineStore();
-		store.record("/p:1", "a", { startedAt: 1, strategy: "git" });
-		store.record("/p:1", "b", { startedAt: 2, strategy: "git" });
+		store.record("/p:1", "a", { startedAt: 1, projectSeq: 0, strategy: "git" });
+		store.record("/p:1", "b", { startedAt: 2, projectSeq: 0, strategy: "git" });
 		expect(store.take("/p:1", "a")?.startedAt).toBe(1);
 		expect(store.take("/p:1", "a")).toBeUndefined();
 		expect(store.take("/p:1", "b")?.startedAt).toBe(2);
@@ -247,9 +247,21 @@ describe("OpaqueBaselineStore", () => {
 	it("falls back to the shared slot for a host with no tool-call ids, counting the overwrite", () => {
 		resetDegradationLedger();
 		const store = new OpaqueBaselineStore();
-		store.record("/p:1", undefined, { startedAt: 1, strategy: "git" });
-		store.record("/p:1", undefined, { startedAt: 2, strategy: "git" });
-		store.record("/p:1", undefined, { startedAt: 3, strategy: "git" });
+		store.record("/p:1", undefined, {
+			startedAt: 1,
+			projectSeq: 0,
+			strategy: "git",
+		});
+		store.record("/p:1", undefined, {
+			startedAt: 2,
+			projectSeq: 0,
+			strategy: "git",
+		});
+		store.record("/p:1", undefined, {
+			startedAt: 3,
+			projectSeq: 0,
+			strategy: "git",
+		});
 		expect(store.take("/p:1", undefined)?.startedAt).toBe(3);
 		expect(store.take("/p:1", undefined)).toBeUndefined();
 		expect(lostBaselines()).toEqual([
@@ -261,7 +273,11 @@ describe("OpaqueBaselineStore", () => {
 		resetDegradationLedger();
 		const store = new OpaqueBaselineStore();
 		for (let i = 0; i <= OPAQUE_BASELINE_PENDING_CAP; i++)
-			store.record("/p:1", `call-${i}`, { startedAt: i, strategy: "git" });
+			store.record("/p:1", `call-${i}`, {
+				startedAt: i,
+				projectSeq: 0,
+				strategy: "git",
+			});
 		expect(store.take("/p:1", "call-0")).toBeUndefined();
 		expect(store.take("/p:1", "call-1")?.startedAt).toBe(1);
 		expect(lostBaselines()).toEqual([
@@ -1729,9 +1745,11 @@ describe("parallel bash calls (#4137)", () => {
 	});
 
 	// A call with no recognized write keeps its own opaque recovery under
-	// parallelism. Its window also holds the recognized sibling's write, which it
-	// dispatches without authorship; the sibling's own dispatch of the same bytes
-	// still runs with authorship (the dedupe ranks authority).
+	// parallelism. #5616: both paths were clean before it and pi-lens recorded no
+	// other write to them before its result, so it is credited with both: its
+	// own file, and the sibling's write it cannot tell apart (both are the
+	// agent's calls). The sibling's claim on the same bytes then joins that
+	// authored analysis (the dedupe ranks authority).
 	it("an opaque sibling still recovers its own writes", async () => {
 		const runtime = new RuntimeCoordinator();
 		runtime.projectRoot = repoDir;
@@ -1764,10 +1782,10 @@ describe("parallel bash calls (#4137)", () => {
 			]);
 		// The opaque call's two paths come in git's listing order.
 		expect(dispatches.slice(0, 2).sort()).toEqual([
-			["opaque-out.ts", false],
-			["par-a.ts", false],
+			["opaque-out.ts", true],
+			["par-a.ts", true],
 		]);
-		expect(dispatches.slice(2)).toEqual([["par-a.ts", true]]);
+		expect(dispatches.slice(2)).toEqual([]);
 	});
 
 	// REVIEW_4159 F1: pi fires no tool_result for a call a tool_call handler
@@ -1788,8 +1806,10 @@ describe("parallel bash calls (#4137)", () => {
 			append("par-a.ts", `debugger; // ${id}\n`);
 			await handleToolResult(resultDeps(runtime, opaqueCommand(), id));
 		}
+		// #5616: the first opaque call found the file clean and is credited
+		// with it; each later one found it dirty already.
 		expect(await dispatchLog()).toEqual([
-			["par-a.ts", false],
+			["par-a.ts", true],
 			["par-a.ts", false],
 			["par-a.ts", false],
 		]);
@@ -1814,14 +1834,15 @@ describe("parallel bash calls (#4137)", () => {
 			sibling: "[ -f nope ] && echo 'x' >> par-a.ts; true",
 			siblingWrites: false,
 			siblingFails: false,
-			expected: [["par-a.ts", false]],
+			// #5616: the opaque call is the one writer of a clean file.
+			expected: [["par-a.ts", true]],
 		},
 		{
 			cell: "the sibling failed (P2e)",
 			sibling: "false && echo 'x' >> par-a.ts",
 			siblingWrites: false,
 			siblingFails: true,
-			expected: [["par-a.ts", false]],
+			expected: [["par-a.ts", true]],
 		},
 	])(
 		"dispatches an opaque write to a path a sibling named: $cell",
@@ -1850,6 +1871,8 @@ describe("parallel bash calls (#4137)", () => {
 	it("dispatches with authorship a recognized write of bytes an opaque run analysed", async () => {
 		await mockBlockingPipeline();
 		const runtime = newRuntime("opaque-first");
+		// #5616: dirty before the opaque call, so its run stays uncredited.
+		append("par-a.ts", "// dirty\n");
 		await runHandlerExpectingNoThrow(() =>
 			handleToolCall(callDeps(runtime, opaqueCommand(), "opaque")),
 		);
@@ -1923,6 +1946,8 @@ describe("parallel bash calls (#4137)", () => {
 			return NO_BLOCKERS;
 		});
 		const runtime = newRuntime("in-flight");
+		// #5616: dirty before the opaque call, so its run stays uncredited.
+		append("par-a.ts", "// dirty\n");
 		const recognized = "echo 'debugger;' >> par-a.ts";
 		await runHandlerExpectingNoThrow(() =>
 			handleToolCall(callDeps(runtime, opaqueCommand(), "opaque")),

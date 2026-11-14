@@ -22,6 +22,7 @@
  * read-only budget before it runs), the same seam
  * `tests/index-2939-tool-result-budget-witness.test.ts` uses.
  */
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Type } from "../clients/deps/typebox.js";
@@ -133,6 +134,8 @@ import {
 	flushLatencyLog,
 	getLatencyLogPath,
 } from "../clients/latency-logger.js";
+import { normalizeMapKey } from "../clients/path-utils.js";
+import { getProjectChangeLogPath } from "../clients/project-changes.js";
 import { execFileSync } from "./support/git-fixture-env.js";
 import { readNdjsonRows } from "./support/ndjson-rows.js";
 import {
@@ -148,6 +151,8 @@ import {
 } from "./support/pi-session-commit-gate.js";
 import {
 	type PiMessage,
+	fauxAssistantMessage,
+	fauxText,
 	fauxToolCall,
 	piSessionFixture,
 	startPiSession,
@@ -159,8 +164,13 @@ function git(args: string[], cwd: string): void {
 	execFileSync("git", args, { cwd, encoding: "utf8" });
 }
 
-/** A git checkout with one committed file, so the bash recovery has a base. */
-function initRepo(name: string): string {
+/**
+ * A git checkout with one committed file, so the bash recovery has a base.
+ * `dirty` names files left untracked after the commit. A script write to one
+ * of them is not credited to the call (#5616: dirty before it), so the
+ * withheld path is the one a case drives.
+ */
+function initRepo(name: string, dirty: readonly string[] = []): string {
 	const dir = path.join(fixture.root, name, "proj");
 	fs.mkdirSync(dir, { recursive: true });
 	fs.writeFileSync(path.join(dir, "seed.ts"), CLEAN_FILE);
@@ -169,6 +179,8 @@ function initRepo(name: string): string {
 	git(["config", "user.name", "t"], dir);
 	git(["add", "-A"], dir);
 	git(["commit", "-qm", "base"], dir);
+	for (const file of dirty)
+		fs.writeFileSync(path.join(dir, file), "// placeholder\n");
 	return fs.realpathSync.native(dir);
 }
 
@@ -216,6 +228,44 @@ async function crashLateRows(): Promise<number> {
 	).length;
 }
 
+/**
+ * #5616: the causes of the `script-write-credit-withheld` records the
+ * fixture's log holds for `repo` (subject `<cause>:<root>`), sorted.
+ */
+async function creditWithheldCauses(repo: string): Promise<string[]> {
+	await flushLatencyLog();
+	const read = readNdjsonRows(getLatencyLogPath());
+	expect(read.skipped).toBe(0);
+	const suffix = `:${normalizeMapKey(repo)}`;
+	return read.rows
+		.filter(
+			(row) =>
+				row.phase === "degradation_ledger" &&
+				(row.metadata as { kind?: string } | undefined)?.kind ===
+					"script-write-credit-withheld",
+		)
+		.map((row) => String((row.metadata as { subject?: unknown }).subject))
+		.filter((subject) => subject.endsWith(suffix))
+		.map((subject) => subject.slice(0, -suffix.length))
+		.sort();
+}
+
+/** #5616: the `credited` counts of `repo`'s `opaque_mutation_recovered` rows. */
+async function creditedCounts(repo: string): Promise<number[]> {
+	await flushLatencyLog();
+	const read = readNdjsonRows(getLatencyLogPath());
+	expect(read.skipped).toBe(0);
+	return read.rows
+		.filter(
+			(row) =>
+				row.phase === "opaque_mutation_recovered" &&
+				(row.metadata as { root?: unknown } | undefined)?.root === repo,
+		)
+		.map((row) =>
+			Number((row.metadata as { credited?: unknown }).credited ?? 0),
+		);
+}
+
 function everyText(requests: readonly (readonly PiMessage[])[]): string {
 	return requests
 		.flatMap((messages) => messages)
@@ -229,7 +279,7 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 		{ timeout: 60_000 },
 		async () => {
 			gate.results.length = 0;
-			const repo = initRepo("in-time");
+			const repo = initRepo("in-time", ["opaque.ts"]);
 			const handle = await startPiSession({
 				root: fixture.root,
 				cwd: repo,
@@ -261,6 +311,14 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 			expect(write?.text).toContain("withheld");
 			expect(write?.text).toContain("lens_diagnostics mode=all");
 			expect(write?.text).not.toMatch(/clean/);
+			// #5616 part 1: each blocker's line and rule, the one fact pi-lens holds
+			// (the file changed during this call), and a fix asked for if the call
+			// wrote it. Recurrence: pi session 01a1db69 (2026-11-14), where an agent
+			// read "cannot tell it was your edit" and left its script's blockers.
+			expect(write?.text).toContain("L3 debugger-statement");
+			expect(write?.text).toContain("the file changed while this call ran");
+			expect(write?.text).toContain("If this call wrote it, fix");
+			expect(await creditWithheldCauses(repo)).toEqual(["dirty-before"]);
 			// Unauthored bytes never latch the commit gate (#3226, #4137): the
 			// disclosure is not a blocker record.
 			expect(commit?.text).not.toContain(GATE_BLOCK);
@@ -350,7 +408,7 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 			gate.results.length = 0;
 			gate.holdMs = 700;
 			try {
-				const repo = initRepo("abandoned");
+				const repo = initRepo("abandoned", ["opaque.ts"]);
 				const rowsBefore = await lateAdvisoryRows();
 				const handle = await startPiSession({
 					root: fixture.root,
@@ -730,7 +788,7 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 			async () => {
 				hold("opaque.ts", 11_500);
 				try {
-					const repo = initRepo("slow-pipeline");
+					const repo = initRepo("slow-pipeline", ["opaque.ts"]);
 					const rowsBefore = await lateAdvisoryRows();
 					const handle = await startPiSession({
 						root: fixture.root,
@@ -788,7 +846,7 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 				// continuation); exactly one of them has the notice for a given call.
 				hold("opaque.ts", 2_000);
 				try {
-					const repo = initRepo("mid-pipeline");
+					const repo = initRepo("mid-pipeline", ["opaque.ts"]);
 					const rowsBefore = await lateAdvisoryRows();
 					const handle = await startPiSession({
 						root: fixture.root,
@@ -947,7 +1005,7 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 				});
 				hold("opaque.ts", 0);
 				try {
-					const repo = initRepo("slow-replaced");
+					const repo = initRepo("slow-replaced", ["opaque.ts"]);
 					const rowsBefore = await lateAdvisoryRows();
 					const boundRowsBefore = await innerBoundRows();
 					const first = await startPiSession({
@@ -992,4 +1050,226 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 			},
 		);
 	});
+});
+
+/**
+ * #5616 part 2: a successful bash call is credited with a file it changed
+ * without naming it when the file was clean before the call (or absent), git
+ * lists it changed in the call's window, and no other writer pi-lens recorded
+ * touched it since the call began. The file then gets the STOP and the gate.
+ * Every other case stays on the withheld line above, with one record per cause.
+ *
+ * Recurrence prevented: pi session 01a1db69 (pi-webaio, 2026-11-14, turn 81),
+ * where `python3 /tmp/fix_storage.py` rewrote the clean, committed
+ * `src/storage.ts` and its two biome blockers went out withheld; the agent
+ * moved on.
+ */
+describe("#5616: a script write the call is credited with", () => {
+	const havePython =
+		spawnSync("python3", ["--version"], { stdio: "ignore" }).status === 0;
+
+	/** One prompt, its pending handlers, then a second prompt that commits. */
+	async function writeThenCommit(
+		repo: string,
+		call: Record<string, unknown>,
+	): Promise<{ write: string; commit: string; requests: string }> {
+		gate.results.length = 0;
+		const handle = await startPiSession({
+			root: fixture.root,
+			cwd: repo,
+			flags: new Map(GUARDED_FLAGS),
+			inlineFactory: async () => (await import("../index.js")).default,
+			responses: [
+				step(call, "writing"),
+				endTurn("turn 1 done"),
+				step(commitAttempt(), "committing"),
+				endTurn("turn 2 done"),
+			],
+		});
+		await handle.prompt("change the file with a script");
+		await Promise.all(gate.pending);
+		await handle.prompt("commit it");
+		const commit = toolResults(handle.requests.at(-1) ?? [], "bash").at(-1);
+		expect(handle.errors).toEqual([]);
+		return {
+			write: gate.results.at(0)?.text ?? "",
+			commit: commit?.text ?? "",
+			requests: everyText(handle.requests),
+		};
+	}
+
+	it.skipIf(!havePython)(
+		"credits a python script that rewrites a clean tracked file: STOP, then the commit gate shuts",
+		{ timeout: 90_000 },
+		async () => {
+			// The trigger's own form: `cd`, a heredoc that writes the script
+			// outside the project, then `python3` running it.
+			const repo = initRepo("5616-python");
+			const script = path.join(path.dirname(repo), "fix.py");
+			const run = await writeThenCommit(
+				repo,
+				fauxToolCall("bash", {
+					command: `cd ${repo} && cat > ${script} <<'PY'\npath = 'seed.ts'\ns = open(path).read()\nopen(path, 'w').write(s.replace('\\treturn a;', '\\tdebugger;\\n\\treturn a;'))\nprint('ok')\nPY\npython3 ${script}`,
+				}),
+			);
+			expect(fs.readFileSync(path.join(repo, "seed.ts"), "utf8")).toBe(
+				BLOCKING_FILE,
+			);
+			expect(run.write).toContain("\u{1F534} STOP");
+			expect(run.write).toContain("debugger");
+			expect(run.write).not.toContain("withheld");
+			expect(run.commit).toContain(GATE_BLOCK);
+			expect(run.commit).not.toContain(RAN_MARKER);
+			expect(await creditedCounts(repo)).toEqual([1]);
+			expect(await creditWithheldCauses(repo)).toEqual([]);
+		},
+	);
+
+	it(
+		"credits a node script that creates a new file",
+		{ timeout: 90_000 },
+		async () => {
+			// Absent before the call is clean before it: no other bytes were there.
+			const repo = initRepo("5616-node-new");
+			const run = await writeThenCommit(
+				repo,
+				scriptWrite("made.ts", BLOCKING_FILE),
+			);
+			expect(run.write).toContain("\u{1F534} STOP");
+			expect(run.write).not.toContain("withheld");
+			expect(run.commit).toContain(GATE_BLOCK);
+			expect(await creditedCounts(repo)).toEqual([1]);
+		},
+	);
+
+	// Recurrence prevented (#5552 r1 F1's shape, for scripts): past the cap a
+	// user-dirty file may read as clean before the call, so nothing is credited.
+	it(
+		"does not credit a script write once the dirty set is cut",
+		{ timeout: 120_000 },
+		async () => {
+			const repo = initRepo("5616-cut");
+			const users = path.join(repo, "users");
+			fs.mkdirSync(users);
+			for (let i = 0; i < 600; i += 1)
+				fs.writeFileSync(path.join(users, `u${i}.txt`), "a\n");
+			git(["add", "-A"], repo);
+			git(["commit", "-qm", "users"], repo);
+			for (let i = 0; i < 600; i += 1)
+				fs.writeFileSync(path.join(users, `u${i}.txt`), "b\n");
+			const run = await writeThenCommit(
+				repo,
+				scriptWrite("seed.ts", BLOCKING_FILE),
+			);
+			expect(run.write).toContain("withheld");
+			expect(run.write).not.toContain("\u{1F534} STOP");
+			expect(run.commit).toContain(RAN_MARKER);
+			expect(await creditWithheldCauses(repo)).toEqual(["dirty-set-cut"]);
+		},
+	);
+
+	// Recurrence prevented: a failed call's writes are not credited, as its
+	// named writes are not (#2000, #5552).
+	it(
+		"does not credit a script write in a failed command",
+		{ timeout: 90_000 },
+		async () => {
+			const repo = initRepo("5616-failed");
+			const run = await writeThenCommit(
+				repo,
+				fauxToolCall("bash", {
+					command: `node -e 'require("node:fs").writeFileSync("seed.ts", ${JSON.stringify(BLOCKING_FILE)})'; exit 1`,
+				}),
+			);
+			expect(fs.readFileSync(path.join(repo, "seed.ts"), "utf8")).toBe(
+				BLOCKING_FILE,
+			);
+			expect(run.write).toContain("withheld");
+			expect(run.write).not.toContain("\u{1F534} STOP");
+			expect(run.commit).toContain(RAN_MARKER);
+			expect(await creditWithheldCauses(repo)).toEqual(["failed-command"]);
+		},
+	);
+
+	// Control (acceptance 4): a file another writer pi-lens observed changed in
+	// the call's window is not the call's. The other writer is a `write` call
+	// pi runs beside the bash call in one batch; the bash call writes nothing
+	// and waits until that write's change-log row exists.
+	it(
+		"does not credit a file another observed writer changed in the call's window",
+		{ timeout: 90_000 },
+		async () => {
+			gate.results.length = 0;
+			const repo = initRepo("5616-other-writer");
+			const other = path.join(repo, "other.ts");
+			const log = getProjectChangeLogPath(repo);
+			const wait = `const fs = require("node:fs"); const end = Date.now() + 20000; const pause = new Int32Array(new SharedArrayBuffer(4)); while (Date.now() < end) { try { if (fs.readFileSync(${JSON.stringify(log)}, "utf8").includes("other.ts")) break; } catch {} Atomics.wait(pause, 0, 0, 50); }`;
+			const handle = await startPiSession({
+				root: fixture.root,
+				cwd: repo,
+				flags: new Map(GUARDED_FLAGS),
+				inlineFactory: async () => (await import("../index.js")).default,
+				responses: [
+					fauxAssistantMessage([
+						fauxText("both"),
+						fauxToolCall("bash", { command: `node -e '${wait}'` }),
+						fauxToolCall("write", { path: other, content: BLOCKING_FILE }),
+					]),
+					endTurn("turn 1 done"),
+				],
+			});
+			await handle.prompt("write while the script runs");
+			await Promise.all(gate.pending);
+			const [written] = toolResults(handle.requests.at(-1) ?? [], "write");
+			const bash = gate.results.at(0)?.text ?? "";
+			// The writer's own result carries its STOP; the bash call's does not.
+			// Its claim on the same bytes joins the writer's analysis (#4137), so
+			// the decision shows in its records: no credit, one other-writer row.
+			expect(written?.text).toContain("\u{1F534} STOP");
+			expect(bash).not.toContain("\u{1F534} STOP");
+			expect(await creditWithheldCauses(repo)).toEqual(["other-writer"]);
+			expect(await creditedCounts(repo)).toEqual([0]);
+			expect(handle.errors).toEqual([]);
+		},
+	);
+
+	// #5616 part 1, the other evidence: a file the command names but did not
+	// change (here `touch`) is not said to have changed.
+	it(
+		"says the call names a file it did not confirm changing",
+		{ timeout: 90_000 },
+		async () => {
+			const repo = initRepo("5616-named");
+			fs.writeFileSync(path.join(repo, "held.ts"), BLOCKING_FILE);
+			git(["add", "-A"], repo);
+			git(["commit", "-qm", "held"], repo);
+			const run = await writeThenCommit(
+				repo,
+				fauxToolCall("bash", {
+					command: "touch held.ts && echo 'export const b = 1;' > b.ts",
+				}),
+			);
+			expect(run.write).toContain("in held.ts (L3 debugger-statement");
+			expect(run.write).toContain(
+				"this call names the file, but pi-lens could not confirm the call changed it",
+			);
+			expect(run.write).not.toContain("changed while this call ran");
+		},
+	);
+
+	it(
+		"bounds the withheld places at five and counts the rest",
+		{ timeout: 90_000 },
+		async () => {
+			const repo = initRepo("5616-places", ["many.ts"]);
+			const body = Array.from(
+				{ length: 7 },
+				(_, i) => `export function f${i}() {\n\tdebugger;\n}\n`,
+			).join("");
+			const run = await writeThenCommit(repo, scriptWrite("many.ts", body));
+			expect(run.write).toMatch(
+				/in many\.ts \(L\d+ [^)]*\+\d+ more\) withheld/,
+			);
+		},
+	);
 });

@@ -941,7 +941,6 @@
 			"`L${place.line} ${shortBlockerRule(place.rule)}`": 1,
 			"`; ${unplaced.movedLine} whose line could not be re-placed in these bytes`": 1,
 			"`🔴 Still unfixed: ${count} blocker${count === 1 ? \"\" : \"s\"} reported earlier${formatBlockerPlaces(blockers, filePath)}.`": 1,
-			"`\\u26a0 ${count} blocking finding${count === 1 ? \"\" : \"s\"} in ${display} withheld: the file was changed by a script, so pi-lens cannot tell it was your edit and shows no fix prompt.${pointer}`": 1,
 			"`ℹ Pre-existing: ${count} linter error${count === 1 ? \"\" : \"s\"} already in this file before its first edit this session${formatBlockerPlaces(findings, filePath)}; not blocking.`": 1,
 			"\"project tool agreement could not be established\"": 1,
 			"\"formatter-unavailable\"": 1,
@@ -970,7 +969,10 @@
 			"\"error\"": 2,
 			"\"review graph degraded — tree-sitter wasm runtime failure\"": 1,
 			"\"cascade computation failed\"": 1,
-			"\"blocking\"": 1
+			"\"blocking\"": 1,
+			"`\\u26a0 ${count} blocking finding${count === 1 ? \"\" : \"s\"} in ${display}${formatBlockerPlaces(blockers, filePath)} withheld: ${known}. If this call wrote it, fix ${them}.${pointer}`": 1,
+			"\"the file changed while this call ran, but pi-lens cannot confirm this call wrote it\"": 1,
+			"\"this call names the file, but pi-lens could not confirm the call changed it\"": 1
 		},
 		"neutral": {
 			"\"phase\"": 4,
@@ -1084,14 +1086,13 @@
 			"`${rule.slice(0, MAX_SHOWN_RULE_CHARS - 1)}\\u2026`": 1,
 			"\"pi\"": 1,
 			"\"lens_diagnostics\"": 1,
-			"` ${diagnosticsTool} mode=all lists ${count === 1 ? \"it\" : \"them\"}.`": 1,
 			"`${filePath}:format`": 1,
 			"\"format\"": 5,
 			"\"formatter executable not found\"": 1,
 			"`${f.name}:${path.basename(filePath)}`": 1,
 			"\"autoformat: \"": 2,
 			"\"(\"": 1,
-			"\"changed\"": 1,
+			"\"changed\"": 2,
 			"\"unchanged\"": 1,
 			"\")\"": 1,
 			"\", \"": 1,
@@ -1126,7 +1127,10 @@
 			"`\\n\\n${formatPreExistingLine(preExisting, filePath)}`": 1,
 			"` (${autofixTools.join(\", \")})`": 1,
 			"\"graph_degraded\"": 1,
-			"\"lsp\"": 1
+			"\"lsp\"": 1,
+			"` ${diagnosticsTool} mode=all lists ${them}.`": 1,
+			"\"it\"": 1,
+			"\"them\"": 1
 		}
 	},
 	"clients/runtime-turn.ts": {
@@ -1747,7 +1751,11 @@
 			"\"size-capped\"": 1,
 			"\"authoritative_content_attachment_decision\"": 1,
 			"\"autofix-attachment\"": 2,
-			"`${output ? `${output}\\n\\n` : \"\"}${renderPostAutofixNotice(notice, attachmentDecision)}`": 1
+			"`${output ? `${output}\\n\\n` : \"\"}${renderPostAutofixNotice(notice, attachmentDecision)}`": 1,
+			"\"no-dirty-set\"": 1,
+			"\"failed-command\"": 1,
+			"\"changed\"": 1,
+			"\"named\"": 1
 		}
 	}
 }

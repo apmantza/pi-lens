@@ -780,6 +780,7 @@ describe("the writer table", () => {
 				"bash-recognised",
 				"bash-mtime-preserving",
 				"bash-opaque",
+				"bash-script-credited",
 				"foreign-path-less",
 				"runner-format-autofix",
 			],
@@ -801,13 +802,13 @@ describe("the writer table", () => {
 		expect(unprobed).toEqual({
 			dispatch: 7,
 			"inline-stop": 3,
-			"change-log": 8,
+			"change-log": 9,
 			"commit-gate": 7,
-			"pre-edit-baseline": 13,
-			"fix-run-capture": 14,
-			"lsp-documents": 8,
-			"read-guard": 8,
-			"word-index": 22,
+			"pre-edit-baseline": 14,
+			"fix-run-capture": 15,
+			"lsp-documents": 9,
+			"read-guard": 9,
+			"word-index": 23,
 		});
 	});
 });

@@ -2003,7 +2003,9 @@ describe("Pipeline", () => {
 					{ allowAutonomousWriters: false },
 				),
 			).toEqual([
-				expect.stringMatching(/^⚠ 1 blocking finding in held\.ts withheld/),
+				expect.stringMatching(
+					/^⚠ 1 blocking finding in held\.ts \(L\d+ [^)]*\) withheld/,
+				),
 				false,
 			]);
 		});
@@ -2659,8 +2661,9 @@ describe("Pipeline", () => {
 					createMockDeps(),
 				);
 
+				// #5616: the place (line and rule) rides between the file and the verdict.
 				expect(result.output).toContain(
-					`1 blocking finding in ${name} withheld`,
+					`1 blocking finding in ${name} (L3 ${tool}) withheld`,
 				);
 				expect(result.output).not.toMatch(/clean|\u2713/);
 				expect(result.output).not.toContain("STOP");
@@ -2687,7 +2690,11 @@ describe("Pipeline", () => {
 				createMockDeps(),
 			);
 
-			expect(result.output).toContain("2 blocking findings in two.ts withheld");
+			// #5616: every place is named, bounded as the still-unfixed line is.
+			expect(result.output).toContain(
+				"2 blocking findings in two.ts (L1 lsp, L2 oxlint) withheld",
+			);
+			expect(result.output).toContain("If this call wrote it, fix them.");
 			expect(result.output).toContain("lens_diagnostics mode=all lists them");
 		});
 
