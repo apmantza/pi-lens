@@ -8,9 +8,9 @@ import {
 	_resetProjectDataDirMemoForTests,
 } from "../../clients/file-utils.js";
 import {
+	getProjectSnapshotPersistStateForTests,
 	PROJECT_SNAPSHOT_VERSION,
 	saveProjectSnapshot,
-	waitForProjectSnapshotPersistsForTests,
 } from "../../clients/project-snapshot.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import {
@@ -38,6 +38,7 @@ import {
 	useTrackedTempDirs,
 } from "./test-utils.js";
 import { waitFor as waitForCondition } from "./interleaving-kit.js";
+import { drainRegisteredBackgroundWritesForTests } from "../support/background-write-drains.js";
 import { dataDir444 } from "../support/data-dir-4-4-4.js";
 import { installLspServiceDouble } from "../support/lsp-service-seam.js";
 
@@ -958,10 +959,21 @@ describe(
 				expect(runtime.projectRulesScan.rules[0]?.name).toBe("AGENTS.md");
 			} finally {
 				restoreStartupMode();
-				if (previousDataDir === undefined) {
-					delete process.env.PILENS_DATA_DIR;
-				} else {
-					process.env.PILENS_DATA_DIR = previousDataDir;
+				// #4591: this case saves a snapshot and runs session start without
+				// draining its persist, so the off-thread write can land after the
+				// root is removed. Same order as the nested case below.
+				try {
+					await waitForCondition(
+						() => getProjectSnapshotPersistStateForTests(env.tmpDir),
+						(state) => !state.active && !state.queued,
+					);
+					await drainRegisteredBackgroundWritesForTests();
+				} finally {
+					if (previousDataDir === undefined) {
+						delete process.env.PILENS_DATA_DIR;
+					} else {
+						process.env.PILENS_DATA_DIR = previousDataDir;
+					}
 				}
 				env.cleanup();
 			}
@@ -1027,16 +1039,26 @@ describe(
 				expect(runtime.projectRulesScan.hasCustomRules).toBe(true);
 			} finally {
 				restoreStartupMode();
-				if (previousDataDir === undefined) {
-					delete process.env.PILENS_DATA_DIR;
-				} else {
-					process.env.PILENS_DATA_DIR = previousDataDir;
-				}
 				// #2912: saveProjectSnapshot's body persist runs off-thread and its
 				// write path recreates the root with a recursive mkdir. Unawaited,
 				// it landed after cleanup every run (6/6), leaking this root --
-				// the #3186 shape.
-				await waitForProjectSnapshotPersistsForTests();
+				// the #3186 shape. Order, as in runtime-session-stale-ctx-scans-4815:
+				// wait for the persist to go idle on a deadline that throws, drain the
+				// registered writers, restore PILENS_DATA_DIR in its own finally, then
+				// remove the root.
+				try {
+					await waitForCondition(
+						() => getProjectSnapshotPersistStateForTests(env.tmpDir),
+						(state) => !state.active && !state.queued,
+					);
+					await drainRegisteredBackgroundWritesForTests();
+				} finally {
+					if (previousDataDir === undefined) {
+						delete process.env.PILENS_DATA_DIR;
+					} else {
+						process.env.PILENS_DATA_DIR = previousDataDir;
+					}
+				}
 				env.cleanup();
 			}
 		});
