@@ -3062,22 +3062,19 @@ export async function handleToolResult(
 				}
 			}
 			hadOpaqueRecovery = opaquePaths.length > 0;
-			// #5616: the verdicts speak only for the paths still opaque here (a
-			// recordable path no write form names); each uncredited cause leaves one
-			// record per root per session.
+			// #5616: each uncredited cause leaves one record per root per session.
+			// The git scan judges only paths no write form names; a checkout with
+			// no git lists the named ones too, so a cause speaks only for a path
+			// still opaque here.
 			const opaqueKeys = new Set(opaquePaths);
 			for (const outcome of outcomes) {
 				if (outcome.verdict !== "observed") continue;
 				if (outcome.script) {
-					for (const key of outcome.script.credited)
-						if (opaqueKeys.has(key)) scriptCredited.add(key);
+					for (const key of outcome.script.credited) scriptCredited.add(key);
 					for (const { path: key, cause } of outcome.script.withheld)
 						if (opaqueKeys.has(key))
 							recordScriptCreditWithheld(cause, outcome.root);
-				} else if (
-					bashCommand !== undefined &&
-					outcome.keys.some((key) => opaqueKeys.has(key))
-				)
+				} else if (bashCommand !== undefined && outcome.keys.length > 0)
 					recordScriptCreditWithheld("failed-command", outcome.root);
 			}
 			if (recoveredByRoot.size > 0 || unknownRoots.size > 0) {

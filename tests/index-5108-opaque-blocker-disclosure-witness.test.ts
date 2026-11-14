@@ -146,8 +146,10 @@ import {
 	RAN_MARKER,
 	commitAttempt,
 	endTurn,
+	readTarget,
 	step,
 	toolResults,
+	writeTarget,
 } from "./support/pi-session-commit-gate.js";
 import {
 	type PiMessage,
@@ -1142,6 +1144,75 @@ describe("#5616: a script write the call is credited with", () => {
 		},
 	);
 
+	it(
+		"credits a script write to a file an earlier call of the session wrote",
+		{ timeout: 90_000 },
+		async () => {
+			// Recurrence prevented: "another observed writer" is a write pi-lens
+			// recorded since THIS call's baseline. Read from the session's start, an
+			// earlier edit of the file counts against every later script write to it.
+			const repo = initRepo("5616-earlier-write");
+			const handle = await startPiSession({
+				root: fixture.root,
+				cwd: repo,
+				flags: new Map(GUARDED_FLAGS),
+				inlineFactory: async () => (await import("../index.js")).default,
+				responses: [
+					step(readTarget("seed.ts"), "reading"),
+					step(writeTarget("seed.ts", CLEAN_FILE), "writing"),
+					step(scriptWrite("seed.ts", BLOCKING_FILE), "scripting"),
+					endTurn("turn 1 done"),
+				],
+			});
+			await handle.prompt("write the file, then change it with a script");
+			await Promise.all(gate.pending);
+			expect(await creditWithheldCauses(repo)).toEqual([]);
+			expect(await creditedCounts(repo)).toEqual([1]);
+			const bash = toolResults(handle.requests.at(-1) ?? [], "bash").at(-1);
+			expect(bash?.text ?? "").toContain("\u{1F534} STOP");
+			expect(handle.errors).toEqual([]);
+			await handle.dispose();
+		},
+	);
+
+	it(
+		"leaves a credited script write unread: an edit without a read is still refused",
+		{ timeout: 90_000 },
+		async () => {
+			// Recurrence prevented (shape 65): the credit is for the blockers and the
+			// gate only. Passing it to the read guard stamps bytes the agent never
+			// saw as its own, and its next blind edit goes through.
+			const repo = initRepo("5616-read-guard");
+			const handle = await startPiSession({
+				root: fixture.root,
+				cwd: repo,
+				flags: new Map(GUARDED_FLAGS),
+				inlineFactory: async () => (await import("../index.js")).default,
+				responses: [
+					step(scriptWrite("made.ts", CLEAN_FILE), "writing"),
+					step(
+						fauxToolCall("edit", {
+							path: "made.ts",
+							edits: [{ oldText: "return a;", newText: "return 2;" }],
+						}),
+						"editing",
+					),
+					endTurn("turn 1 done"),
+				],
+			});
+			await handle.prompt("write the file with a script, then edit it");
+			await Promise.all(gate.pending);
+			expect(await creditedCounts(repo)).toEqual([1]);
+			const edit = toolResults(handle.requests.at(-1) ?? [], "edit").at(-1);
+			expect(edit?.text ?? "").toContain("Edit without read");
+			expect(fs.readFileSync(path.join(repo, "made.ts"), "utf8")).toBe(
+				CLEAN_FILE,
+			);
+			expect(handle.errors).toEqual([]);
+			await handle.dispose();
+		},
+	);
+
 	// Recurrence prevented (#5552 r1 F1's shape, for scripts): past the cap a
 	// user-dirty file may read as clean before the call, so nothing is credited.
 	it(
@@ -1165,6 +1236,50 @@ describe("#5616: a script write the call is credited with", () => {
 			expect(run.write).not.toContain("\u{1F534} STOP");
 			expect(run.commit).toContain(RAN_MARKER);
 			expect(await creditWithheldCauses(repo)).toEqual(["dirty-set-cut"]);
+		},
+	);
+
+	// Recurrence prevented: a checkout with no git holds no dirty set, so no
+	// script write is credited there; and its file walk lists the files the
+	// command names too, which are the named route's, so they leave no cause.
+	it(
+		"does not credit a script write in a checkout with no git, and records no cause for a named one",
+		{ timeout: 90_000 },
+		async () => {
+			const runIn = async (name: string, call: Record<string, unknown>) => {
+				const dir = path.join(fixture.root, name, "proj");
+				fs.mkdirSync(dir, { recursive: true });
+				fs.writeFileSync(path.join(dir, "seed.ts"), CLEAN_FILE);
+				const root = fs.realpathSync.native(dir);
+				gate.results.length = 0;
+				const handle = await startPiSession({
+					root: fixture.root,
+					cwd: root,
+					flags: new Map(GUARDED_FLAGS),
+					inlineFactory: async () => (await import("../index.js")).default,
+					responses: [step(call, "writing"), endTurn("turn 1 done")],
+				});
+				await handle.prompt("write the file");
+				await Promise.all(gate.pending);
+				expect(handle.errors).toEqual([]);
+				await handle.dispose();
+				return { root, write: gate.results.at(0)?.text ?? "" };
+			};
+			const script = await runIn(
+				"5616-nogit-script",
+				scriptWrite("made.ts", BLOCKING_FILE),
+			);
+			expect(script.write).toContain("withheld");
+			expect(script.write).not.toContain("\u{1F534} STOP");
+			expect(await creditWithheldCauses(script.root)).toEqual(["no-dirty-set"]);
+			const named = await runIn(
+				"5616-nogit-named",
+				fauxToolCall("bash", {
+					command: `cat > made.ts <<'TS'\n${BLOCKING_FILE}TS`,
+				}),
+			);
+			expect(named.write).toContain("\u{1F534} STOP");
+			expect(await creditWithheldCauses(named.root)).toEqual([]);
 		},
 	);
 
