@@ -30,6 +30,7 @@ import {
 	resetDispatchAvailabilityState,
 	resolveToolCommandWithInstallFallback,
 	toolBinaryVerdict,
+	toolOnPath,
 } from "../../../../clients/dispatch/runners/utils/runner-helpers.js";
 import { resetProjectLensConfigCache } from "../../../../clients/project-lens-config.js";
 import { runAutofix } from "../../../../clients/pipeline.js";
@@ -183,6 +184,7 @@ describe("one availability ladder per binary (#5410)", () => {
 		resetWorkspaceTopology();
 		resetDispatchAvailabilityState();
 		vi.unstubAllEnvs();
+		vi.restoreAllMocks();
 	});
 
 	const autofix = (file: string, cwd: string) =>
@@ -325,6 +327,23 @@ describe("one availability ladder per binary (#5410)", () => {
 		release();
 		await Promise.all([before, after]);
 		expect(probesOf("trivy")).toHaveLength(2);
+	});
+
+	// Recurrence: the LSP launcher hands `java` to jdtls by its bare name, so a
+	// project's own `.venv/bin/java` is no answer to "does java run from PATH".
+	it("answers whether the bare command runs on PATH, not whether a project has it", async () => {
+		// The PATH probe keys on the process's directory; plant the shim there.
+		vi.spyOn(process, "cwd").mockReturnValue(workspace.tmpDir);
+		plantTool(workspace.tmpDir, "java");
+		expect(await toolOnPath("java")).toBe(false);
+		const onPath = path.join(
+			pathEnv.tmpDir,
+			process.platform === "win32" ? "java.exe" : "java",
+		);
+		fs.writeFileSync(onPath, "#!/bin/sh\n");
+		fs.chmodSync(onPath, 0o755);
+		resetDispatchAvailabilityState();
+		expect(await toolOnPath("java")).toBe(true);
 	});
 
 	// Recurrence: helm-lint and helm-render each held a helm checker.
