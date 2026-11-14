@@ -676,9 +676,9 @@ type ExportRule = (node: ExportNode) => boolean | undefined;
 
 interface AccessRule {
 	/** Declarations whose own access also gates every member nested in them. */
-	containers: ReadonlySet<string>;
+	containers: readonly string[];
 	/** Node types that make everything below them function-local. */
-	bodies: ReadonlySet<string>;
+	bodies: readonly string[];
 	/** Whether the declaration is public by itself, ignoring its enclosers. */
 	isPublic: (node: ExportNode) => boolean;
 }
@@ -686,8 +686,8 @@ interface AccessRule {
 function exportedByAccess(node: ExportNode, rule: AccessRule): boolean {
 	if (!rule.isPublic(node)) return false;
 	for (let up = node.parent; up; up = up.parent) {
-		if (rule.bodies.has(up.type)) return false;
-		if (rule.containers.has(up.type)) return exportedByAccess(up, rule);
+		if (rule.bodies.includes(up.type)) return false;
+		if (rule.containers.includes(up.type)) return exportedByAccess(up, rule);
 	}
 	return true;
 }
@@ -695,16 +695,14 @@ function exportedByAccess(node: ExportNode, rule: AccessRule): boolean {
 const childOfType = (node: ExportNode, type: string): ExportNode =>
 	(node.children ?? []).find((c: ExportNode) => c?.type === type);
 
-const NO_TYPES: ReadonlySet<string> = new Set();
-
 // Rust: a plain `pub` is exported; `pub(crate)`, `pub(super)`, `pub(in ..)` and
 // no modifier are not. Members of a trait are as public as the trait, an item
 // nested in a `mod` needs every enclosing `mod` to be `pub` too, and an item in
 // a function body is local. A trait impl's members take the trait's visibility,
 // which this file cannot see, so they are undefined.
 const RUST_ACCESS: AccessRule = {
-	containers: new Set(["mod_item", "trait_item"]),
-	bodies: new Set(["block"]),
+	containers: ["mod_item", "trait_item"],
+	bodies: ["block"],
 	isPublic: (node) =>
 		node.parent?.parent?.type === "trait_item" ||
 		childOfType(node, "visibility_modifier")?.text === "pub",
@@ -718,8 +716,8 @@ const rustExportRule: ExportRule = (node) =>
 // Go: a name starting with an upper-case letter is exported (go/ast.IsExported);
 // a type declared inside a function body is not.
 const GO_ACCESS: AccessRule = {
-	containers: NO_TYPES,
-	bodies: new Set(["block"]),
+	containers: [],
+	bodies: ["block"],
 	isPublic: (node) =>
 		/^\p{Lu}/u.test(String(node.childForFieldName("name")?.text ?? "")),
 };
@@ -727,14 +725,14 @@ const GO_ACCESS: AccessRule = {
 // Java: `public` exported; package-private, `protected` and `private` are not.
 // Interface members are public unless `private`.
 const JAVA_ACCESS: AccessRule = {
-	containers: new Set([
+	containers: [
 		"class_declaration",
 		"interface_declaration",
 		"enum_declaration",
 		"record_declaration",
 		"annotation_type_declaration",
-	]),
-	bodies: new Set(["block", "constructor_body"]),
+	],
+	bodies: ["block", "constructor_body"],
 	isPublic: (node) => {
 		const modifiers = childOfType(node, "modifiers");
 		const has = (keyword: string): boolean =>
@@ -749,8 +747,8 @@ const JAVA_ACCESS: AccessRule = {
 // Kotlin: public unless a `private`, `internal` or `protected` modifier says
 // otherwise.
 const KOTLIN_ACCESS: AccessRule = {
-	containers: new Set(["class_declaration", "object_declaration"]),
-	bodies: new Set(["function_body"]),
+	containers: ["class_declaration", "object_declaration"],
+	bodies: ["function_body"],
 	isPublic: (node) => {
 		const modifiers = childOfType(node, "modifiers");
 		const visibility = modifiers
@@ -765,14 +763,14 @@ const KOTLIN_ACCESS: AccessRule = {
 // `private`. No body boundary: C# has no local classes, and its local functions
 // are not in the defs query.
 const CSHARP_ACCESS: AccessRule = {
-	containers: new Set([
+	containers: [
 		"class_declaration",
 		"struct_declaration",
 		"interface_declaration",
 		"enum_declaration",
 		"record_declaration",
-	]),
-	bodies: NO_TYPES,
+	],
+	bodies: [],
 	isPublic: (node) => {
 		const has = (keyword: string): boolean =>
 			(node.children ?? []).some(
@@ -794,11 +792,11 @@ const EXPORT_RULES: Record<string, ExportRule> = {
 
 // The pre-#5599 text-and-ancestor rule below reads `export` keywords, so it
 // applies to the JS/TS grammars only.
-const JS_TS_EXPORT_LANGUAGES: ReadonlySet<string> = new Set([
+const JS_TS_EXPORT_LANGUAGES: readonly string[] = [
 	"typescript",
 	"tsx",
 	"javascript",
-]);
+];
 
 /**
  * The grammar a KIND-keyed consumer (review-graph builder, module-report
@@ -1616,7 +1614,7 @@ export class TreeSitterSymbolExtractor {
 	): boolean | undefined {
 		const rule = EXPORT_RULES[this.languageId];
 		if (rule) return rule(node);
-		if (!JS_TS_EXPORT_LANGUAGES.has(this.languageId)) return undefined;
+		if (!JS_TS_EXPORT_LANGUAGES.includes(this.languageId)) return undefined;
 		// A symbol is exported only at module scope. Anchor the keyword at the
 		// START of the declaration line (so `const exportName = …`, or "export"
 		// inside a comment, doesn't count), and require the AST walk to reach an

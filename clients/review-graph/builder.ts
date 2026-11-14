@@ -4430,7 +4430,9 @@ function addTreeSitterFile(
 			symbolName: symbol.name,
 			symbolKind: symbol.kind,
 			...(qualifiedName ? { qualifiedName } : {}),
-			exported: symbol.isExported,
+			...(symbol.isExported === undefined
+				? {}
+				: { exported: symbol.isExported }),
 			metadata: {
 				line: symbol.line,
 				endLine: symbol.endLine,
