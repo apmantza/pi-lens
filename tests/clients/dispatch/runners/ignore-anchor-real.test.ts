@@ -122,8 +122,12 @@ function plantCredo(project: string, config: string = CREDO_TOP_LEVEL): void {
 	// would be read as a rejected invocation and hide what this file proves.
 	const module = (name: string) =>
 		`defmodule ${name} do\n  @moduledoc "m"\n  # TODO: later\n  def f(x), do: x\nend\n`;
+	fs.mkdirSync(path.join(project, "lib/gen"), { recursive: true });
+	fs.mkdirSync(path.join(project, "lib/ok"), { recursive: true });
 	fs.writeFileSync(path.join(project, "lib/a.ex"), module("A"));
 	fs.writeFileSync(path.join(project, ".claude/b.ex"), module("B"));
+	fs.writeFileSync(path.join(project, "lib/gen/g.ex"), module("G"));
+	fs.writeFileSync(path.join(project, "lib/ok/o.ex"), module("O"));
 	// The regex tests the absolute path: it names the project's own `.claude/`
 	// directory, and also the ancestor of a project under `.claude/worktrees`.
 	fs.writeFileSync(path.join(project, ".credo.exs"), config);
@@ -374,7 +378,130 @@ const VARIANTS: ReadonlyArray<{
 		controlRules: ["Credo.Check.Design.TagTODO"],
 		ignoredFiles: [".claude/b.ex"],
 	},
+	{
+		// Row C12 (r1 F6): round 2 kept a check's regex verdict and dropped the
+		// check's string entries, so `lib/gen/` was analysed in both layouts.
+		name: "credo check params with string entries beside the regexes",
+		runnerId: "credo",
+		available: credoAvailable,
+		kind: "elixir",
+		runner: credoRunner,
+		plant: (project) =>
+			plantCredo(
+				project,
+				'%{configs: [%{name: "default", files: %{included: ["lib/", ".claude/"], excluded: []}, strict: true, checks: %{extra: [{Credo.Check.Design.TagTODO, [files: %{excluded: [~r"/\\.claude/", "lib/gen/", ~r"^/lib/"]}]}]}}]}\n',
+			),
+		file: "lib/a.ex",
+		controlRules: ["Credo.Check.Design.TagTODO"],
+		ignoredFiles: [".claude/b.ex", "lib/gen/g.ex"],
+	},
+	{
+		// Rows C3, C4: round 2 tested each regex on the path from the root
+		// (`/lib/gen/g.ex`), where `^/lib/gen/` matches and `[^/]/lib/ok/` does
+		// not; credo tests the absolute path, where each answers the other way.
+		name: "credo files.excluded regexes anchored at the path's start or reading the char before it",
+		runnerId: "credo",
+		available: credoAvailable,
+		kind: "elixir",
+		runner: credoRunner,
+		plant: (project) =>
+			plantCredo(
+				project,
+				'%{configs: [%{name: "default", files: %{included: ["lib/", ".claude/"], excluded: [~r"/\\.claude/", ~r"^/lib/gen/", ~r"[^/]/lib/ok/"]}, strict: true}]}\n',
+			),
+		file: "lib/gen/g.ex",
+		controlRules: ["Credo.Check.Design.TagTODO"],
+		ignoredFiles: [".claude/b.ex", "lib/ok/o.ex"],
+	},
 ];
+
+// Forms the rewrite must not change and cannot anchor: each runs as it stands,
+// so the answer equals the control layout's, and a clean one is withheld.
+const AS_IT_STANDS: ReadonlyArray<{
+	name: string;
+	available: () => boolean;
+	kind: FileKind;
+	runner: { run: (ctx: never) => Promise<RunnerResult> };
+	plant: (project: string) => void;
+	file: string;
+	expected: {
+		neutral: Partial<ReturnType<typeof summary>>;
+		ancestor: Partial<ReturnType<typeof summary>>;
+	};
+}> = [
+	{
+		// Row C13: the regex names the root's own name, so it excludes the file in
+		// every layout and no neutral root can stand in for it.
+		name: "credo files.excluded regex naming the project root",
+		available: credoAvailable,
+		kind: "elixir",
+		runner: credoRunner,
+		plant: (project) =>
+			plantCredo(
+				project,
+				'%{configs: [%{name: "default", files: %{included: ["lib/"], excluded: [~r"/lane1/lib/gen/"]}, strict: true}]}\n',
+			),
+		file: "lib/gen/g.ex",
+		expected: {
+			neutral: { rules: [], inconclusive: true },
+			ancestor: { rules: [], inconclusive: true },
+		},
+	},
+	{
+		// Row D20: round 2 copied the whole tree, so `threshold: 60.0` reached
+		// detekt as `60`, and a config detekt refuses for an Int ran and reported.
+		name: "detekt config holding a value detekt refuses",
+		available: () => toolAvailable("detekt"),
+		kind: "kotlin",
+		runner: detektRunner,
+		plant: (project) =>
+			plantDetekt(
+				project,
+				"complexity:\n  active: true\n  LongMethod:\n    active: true\n    threshold: 60.0\nstyle:\n  active: true\n  MagicNumber:\n    active: true\n    excludes: ['**/.claude/**']\n",
+			),
+		file: "src/A.kt",
+		// detekt's refusal is one tool-error diagnostic with no rule id.
+		expected: {
+			neutral: { status: "failed", rules: [""] },
+			ancestor: { status: "failed", rules: [""] },
+		},
+	},
+];
+
+describe.each(AS_IT_STANDS)(
+	"$name",
+	({ available, kind, runner, plant, file, expected, name }) => {
+		const control = path.join(ROOT, "as-it-stands", name, "ctrl/lane1");
+		const scratch = path.join(
+			ROOT,
+			"as-it-stands",
+			name,
+			".claude/worktrees/lane1",
+		);
+		const run = async (project: string) =>
+			summary(
+				await runner.run(
+					makeRunnerCtx(path.join(project, file), project, { kind }) as never,
+				),
+			);
+
+		describe.skipIf(!available())("tool available", () => {
+			it(
+				"answers under the ignored ancestor as in the control layout",
+				async () => {
+					plant(control);
+					plant(scratch);
+					const neutral = await run(control);
+					const ancestor = await run(scratch);
+					expect(neutral).toMatchObject(expected.neutral);
+					expect(ancestor).toMatchObject(expected.ancestor);
+					expect(ancestor.status).toBe(neutral.status);
+				},
+				REAL_RUN_TIMEOUT_MS,
+			);
+		});
+	},
+);
 
 describe.each(VARIANTS)(
 	"$name",

@@ -145,6 +145,18 @@ async function resolvePhpstan(cwd: string): Promise<LocalBinLookup | null> {
 const PHPSTAN_DUMP_TIMEOUT_MS = 15_000;
 
 /**
+ * Config names phpstan 2 discovers that pi-lens's config lookup does not: phpstan
+ * 2.3.5 reads `.phpstan.neon` before `phpstan.neon` (`findDiscoverableConfigFile`).
+ * With one beside the config pi-lens found, the overlay would include a file
+ * phpstan does not read (#5606 round 3, row P18), so the overlay is not applied.
+ */
+const PHPSTAN_DOTTED_CONFIGS = [
+	".phpstan.neon",
+	".phpstan.neon.dist",
+	".phpstan.dist.neon",
+] as const;
+
+/**
  * Whether a phpstan config can hold an ignore glob at all: it names
  * `excludePaths` (or the 1.x `excludes_analyse`), includes another file that
  * might, or has an `ignoreErrors` entry with a `path` or `paths` key (a key can
@@ -219,7 +231,12 @@ function anchorPathList(
  * `ignoreErrors`: a string entry is a message and stays; a map entry's `path`
  * and `paths` match the file's absolute path too (fnmatch for a wildcard), so
  * each is anchored the same way and the entry's other keys are kept as dumped.
- * A `path` that moves becomes a `paths` list.
+ *
+ * A `path` that moves becomes `paths`, which phpstan reads differently in two
+ * ways, so each is refused (#5606 round 3, rows P16 and P17): `count` needs
+ * `path` ("An ignoreErrors entry with count field must also contain path
+ * field"), and entries that share a `path` and a message are merged into one
+ * with a summed `count`, which `paths` entries never are.
  */
 function anchorIgnoreErrors(
 	entries: readonly unknown[],
@@ -227,6 +244,13 @@ function anchorIgnoreErrors(
 ): { entries: unknown[]; touched: boolean } | Unanchorable {
 	const out: unknown[] = [];
 	let touched = false;
+	const sharedPath = new Map<unknown, number>();
+	for (const entry of entries) {
+		const singular = (entry as { path?: unknown } | null)?.path;
+		if (singular !== undefined) {
+			sharedPath.set(singular, (sharedPath.get(singular) ?? 0) + 1);
+		}
+	}
 	for (const entry of entries) {
 		if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
 			out.push(entry);
@@ -252,6 +276,18 @@ function anchorIgnoreErrors(
 		if ("unapplied" in anchored) return anchored;
 		if (anchored.touched) {
 			touched = true;
+			if (typeof singular === "string") {
+				if (map.count !== undefined) {
+					return {
+						unapplied: `an ignoreErrors entry with count names the wildcard path ${JSON.stringify(singular)}`,
+					};
+				}
+				if ((sharedPath.get(singular) ?? 0) > 1) {
+					return {
+						unapplied: `two ignoreErrors entries share the wildcard path ${JSON.stringify(singular)}`,
+					};
+				}
+			}
 			delete map.path;
 			map.paths = [...new Set(anchored.entries)];
 		}
@@ -405,8 +441,17 @@ const phpstanRunner: RunnerDefinition = {
 		let anchored: AnchoredConfig = { kind: "unchanged" };
 		const ownConfig = findToolConfig("phpstan", cwd, { ceiling: cwd })?.file;
 		const read = ownConfig ? readConfigText("phpstan", ownConfig) : undefined;
-		if (read?.kind === "unapplied") anchored = read;
+		const dotted = ownConfig
+			? PHPSTAN_DOTTED_CONFIGS.find((name) => pathExists(path.join(cwd, name)))
+			: undefined;
+		if (dotted) {
+			anchored = {
+				kind: "unapplied",
+				reason: `phpstan may read ${dotted} in place of ${path.basename(ownConfig ?? "")}`,
+			};
+		} else if (read?.kind === "unapplied") anchored = read;
 		if (
+			!dotted &&
 			ownConfig &&
 			read?.kind === "read" &&
 			phpstanConfigMayExclude(read.text)

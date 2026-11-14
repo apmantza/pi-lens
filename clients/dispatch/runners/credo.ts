@@ -84,24 +84,34 @@ export function parseCredoJson(
  * #5594: credo tests each regex in `files.excluded` against the file's ABSOLUTE
  * path (`String.match?(path, regex)`), so `~r"/\.claude/"` also matches a project
  * checked out under `<root>/.claude/worktrees/<lane>`, and credo then reports
- * "No files found!" for a file it never read. A glob string is not affected: credo
- * expands it from the working directory.
+ * "No files found!" for a file it never read. A string entry is not affected:
+ * credo expands it from the working directory, the project root. That holds for
+ * the top-level `files` and for a check's own `files` param alike
+ * (`Sources.find_in_dir`).
  *
  * `mix credo --config-file` replaces the config chain credo would have found, so
  * this script, which credo evaluates as that config, rebuilds the chain with
  * credo's own `ConfigFile.read_or_default` (the same function, the same default
  * config, the same ancestor and `config/` search, over a fresh execution so the
  * script is not read twice) and hands the merged result back unchanged, except
- * for `files.excluded`: the regexes there are tested against the file's path
- * from the project root (`/lib/a.ex`), and a regex that matches is replaced by
- * the file's own path, which credo excludes literally. The glob and path
- * entries stay. The project root and the file come from the environment, so the
+ * for the regexes in each `excluded` list. String entries stay as written. Each
+ * regex is decided for this one file (#5606 round 3, rows C3-C13):
+ *
+ * - it gives the same answer on the real path and on the file's path under a
+ *   neutral root (`/pi-lens-anchor/pi-lens-root/lib/a.ex`): that answer;
+ * - it matches the real path and also the root alone (`<root>/`): only the
+ *   ancestors made it match, so the neutral answer, no;
+ * - anything else depends on the root's own path in a way this cannot read, and
+ *   the script refuses.
+ *
+ * A file excluded that way is listed by its absolute path, which credo excludes
+ * literally. The project root and the file come from the environment, so the
  * script is one constant and nothing is interpolated into Elixir source.
  *
  * It refuses by raising a message that starts `pi-lens-ignore-unanchored:`
- * (the file lies outside the root, the project's own config did not load, or
- * this credo lacks the API it calls); credo prints it, and the runner then runs
- * credo on the project's own config.
+ * (the file lies outside the root, the project's own config did not load, a
+ * regex it cannot decide, or this credo lacks the API it calls); credo prints
+ * it, and the runner then runs credo on the project's own config.
  */
 const CREDO_ANCHOR_OVERLAY = `refuse = fn why -> raise "pi-lens-ignore-unanchored: #{why}" end
 
@@ -131,10 +141,24 @@ try do
       {:error, _} -> refuse.("the project's credo config did not load")
     end
 
-  {regexes, others} = Enum.split_with(config.files.excluded, &match?(%Regex{}, &1))
+  neutral = "/pi-lens-anchor/pi-lens-root" <> rel
 
-  excluded =
-    if Enum.any?(regexes, &Regex.match?(&1, rel)), do: others ++ [target], else: others
+  decide = fn regex ->
+    here = Regex.match?(regex, target)
+
+    cond do
+      Regex.match?(regex, neutral) == here -> here
+      here and Regex.match?(regex, prefix) -> false
+      true -> refuse.("a files.excluded regex reads the project's own path")
+    end
+  end
+
+  anchor_excluded = fn listed ->
+    {regexes, others} = Enum.split_with(List.wrap(listed), &match?(%Regex{}, &1))
+    if Enum.any?(Enum.map(regexes, decide)), do: others ++ [target], else: others
+  end
+
+  excluded = anchor_excluded.(config.files.excluded)
 
   fix_params = fn params ->
     if Keyword.keyword?(params) do
@@ -145,8 +169,7 @@ try do
               {key, files}
 
             listed ->
-              kept =
-                if Credo.Sources.filename_matches?(rel, List.wrap(listed)), do: [target], else: []
+              kept = anchor_excluded.(listed)
 
               {key,
                if(is_map(files),

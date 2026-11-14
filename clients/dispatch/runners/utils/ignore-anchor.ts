@@ -65,11 +65,37 @@ function isAbsolutePattern(pattern: string): boolean {
 }
 
 /**
+ * Can the anchored pair stand for `tail`, the part after the leading `**\/`
+ * (java-glob) or `*` run (fnmatch)? Only when the tail cannot start matching in
+ * the ancestors of EVERY root: then a layout whose ancestors it does not reach
+ * exists, and there the pair matches exactly what the tool matched. A tail led
+ * by a wildcard fills the root's own name in every layout (`**\/*\/gen/**`
+ * excludes `<root>/gen`, and so does `*\/*\/gen/*`), so no anchored form keeps
+ * its meaning and the pattern is refused (#5606 round 3, rows D4, D5, P6, P8).
+ *
+ * - java-glob: a tail of one segment without `**` never reaches past a `/`, so
+ *   it only ever sees the file name. Otherwise its first segment, bracket and
+ *   brace groups removed, must keep a character that is not `*` or `?`, and no
+ *   brace or escape may be left.
+ * - fnmatch: `*`, `?` and `[` cross `/` here, and a tail led by `?` or `[`
+ *   matches the separator before the root's own entries, so it must start with
+ *   a literal character (not a separator either).
+ */
+function tailIsBounded(tail: string, dialect: IgnoreGlobDialect): boolean {
+	if (dialect === "fnmatch") return /^[^*?[\\/]/.test(tail);
+	if (tail === "") return false;
+	if (!tail.includes("/") && !tail.includes("**")) return true;
+	const head = (tail.split("/")[0] ?? "").replace(/\[[^\]]*\]|\{[^{}]*\}/g, "");
+	return !/[{}\\]/.test(head) && /[^*?]/.test(head);
+}
+
+/**
  * Root-anchored form of one ignore pattern, or `null` when this module does not
  * recognise the pattern. A gate that decides a verdict admits known forms and
  * refuses the rest, so an unknown spelling is `null`, never a pass-through:
  *
- * - `**\/X` (java-glob) and `*\/X`, `*X` (fnmatch): the anchored rewrite above.
+ * - `**\/X` (java-glob) and `*\/X`, `*X` (fnmatch): the anchored rewrite above,
+ *   when {@link tailIsBounded} admits `X`.
  * - an absolute pattern: already anchored, kept.
  * - a relative pattern that starts with a name character (`.claude/**`,
  *   `src/gen`): it cannot match an absolute path, so it never reached the
@@ -93,14 +119,16 @@ export function anchorIgnorePattern(
 	if (dialect === "java-glob") {
 		if (rest.startsWith("**/")) {
 			const tail = rest.slice(3);
-			if (tail.length === 0 || tail.startsWith("/")) return null;
+			if (!tailIsBounded(tail, dialect)) return null;
 			return [`${anchor}/${tail}`, `${anchor}/**/${tail}`];
 		}
 		return /^[A-Za-z0-9_.-]/.test(rest) ? [rest] : null;
 	}
 	if (rest.startsWith("*")) {
-		const lead = /^\*+\/(.+)$/.exec(rest);
-		if (lead) return [`${anchor}/${lead[1]}`, `${anchor}/*/${lead[1]}`];
+		const lead = /^\*+\/(.*)$/.exec(rest);
+		const tail = lead ? (lead[1] ?? "") : rest.replace(/^\*+/, "");
+		if (!tailIsBounded(tail, dialect)) return null;
+		if (lead) return [`${anchor}/${tail}`, `${anchor}/*/${tail}`];
 		return [`${anchor}/${rest}`];
 	}
 	return null;

@@ -174,33 +174,25 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 	);
 }
 
-/** Whether `value` survives a load and dump unchanged in meaning. */
-function isPlainYaml(value: unknown): boolean {
-	if (value === null) return true;
-	if (Array.isArray(value)) return value.every(isPlainYaml);
-	if (isPlainObject(value)) return Object.values(value).every(isPlainYaml);
-	return (
-		typeof value === "string" ||
-		typeof value === "number" ||
-		typeof value === "boolean"
-	);
-}
-
 /**
  * detekt reads `excludes` and `includes` at two depths of the config: on a rule
  * set (`style: excludes:`) and on a rule (`style: MagicNumber: excludes:`). The
  * value is a list of globs, or one string of comma-separated globs. Each glob is
  * matched against the file's absolute path, so a `**\/x/**` entry reaches the
- * ancestors of the project root too (#5594). This rewrites every such entry to
- * its root-anchored form and keeps all else (rule options, `active`, report
- * sections) as it was.
+ * ancestors of the project root too (#5594).
+ *
+ * The result is an overlay holding ONLY the lists this rewrote, at the place
+ * they sit; detekt reads it after the project's own file (`--config
+ * <project>,<overlay>`: the later file wins a key), so every other value is the
+ * one detekt reads from the project's file itself. A copy of the whole tree
+ * would re-spell values this does not model: `threshold: 60.0` came back as
+ * `60`, and a config detekt refuses ran (#5606 round 3, row D20).
  *
  * Refused (`unapplied`), because the rewrite cannot be shown to keep the
- * meaning: a YAML the loader cannot read, a tree holding anything but plain
- * scalars, lists and maps, a path-filter value of another type, a glob form
- * `anchorIgnorePattern` does not recognise, and a comma string holding braces
- * (the comma inside `{kt,kts}` and the comma between globs cannot be told
- * apart).
+ * meaning: a YAML the loader cannot read, a path-filter value of another type,
+ * a glob form `anchorIgnorePattern` does not recognise, and a comma string
+ * holding braces (the comma inside `{kt,kts}` and the comma between globs
+ * cannot be told apart).
  */
 export function anchorDetektConfig(text: string, root: string): AnchoredConfig {
 	// An empty file holds no glob, and js-yaml refuses a document with no content.
@@ -218,15 +210,19 @@ export function anchorDetektConfig(text: string, root: string): AnchoredConfig {
 		};
 	}
 	if (tree === null || tree === undefined) return { kind: "unchanged" };
-	if (!isPlainObject(tree) || !isPlainYaml(tree)) {
+	if (!isPlainObject(tree)) {
 		return {
 			kind: "unapplied",
-			reason: "its detekt config holds values the rewrite cannot reproduce",
+			reason: "its detekt config is not a map of rule sets",
 		};
 	}
-	let touched = false;
+	// Null-prototype maps: a rule set or rule named `__proto__` stays a key.
+	const overlay: Record<string, Record<string, unknown>> = Object.create(null);
 	let refused: string | undefined;
-	const rewrite = (holder: Record<string, unknown>): void => {
+	const rewrite = (
+		holder: Record<string, unknown>,
+		place: () => Record<string, unknown>,
+	): void => {
 		for (const key of DETEKT_PATH_FILTER_KEYS) {
 			const value = holder[key];
 			if (value === undefined || value === null) continue;
@@ -258,27 +254,35 @@ export function anchorDetektConfig(text: string, root: string): AnchoredConfig {
 				anchored.patterns.length !== entries.length ||
 				anchored.patterns.some((entry, index) => entry !== entries[index])
 			) {
-				touched = true;
+				place()[key] = anchored.patterns;
 			}
-			holder[key] = anchored.patterns;
 		}
 	};
 	for (const [name, ruleset] of Object.entries(tree)) {
 		if (DETEKT_NON_RULESET_KEYS.has(name) || !isPlainObject(ruleset)) continue;
-		rewrite(ruleset);
-		for (const rule of Object.values(ruleset)) {
+		const rulesetPlace = () => (overlay[name] ??= Object.create(null));
+		rewrite(ruleset, rulesetPlace);
+		for (const [ruleName, rule] of Object.entries(ruleset)) {
 			if (refused) break;
-			if (isPlainObject(rule)) rewrite(rule);
+			if (isPlainObject(rule)) {
+				rewrite(rule, () => {
+					const set = rulesetPlace();
+					return (set[ruleName] ??= Object.create(null)) as Record<
+						string,
+						unknown
+					>;
+				});
+			}
 		}
 		if (refused) break;
 	}
 	if (refused) {
 		return { kind: "unapplied", reason: `its detekt config: ${refused}` };
 	}
-	if (!touched) return { kind: "unchanged" };
+	if (Object.keys(overlay).length === 0) return { kind: "unchanged" };
 	return {
 		kind: "rewritten",
-		text: yaml.dump(tree, { lineWidth: -1, noRefs: true }),
+		text: yaml.dump(overlay, { lineWidth: -1, noRefs: true }),
 	};
 }
 
@@ -307,9 +311,10 @@ const detektRunner: RunnerDefinition = {
 		if (!cmd) return toolAbsentSkip(cwd, { id: "detekt" });
 
 		const absPath = path.resolve(cwd, ctx.filePath);
-		// #5594: the config detekt reads is the project's own with every glob
-		// anchored at the project root. A config the rewrite cannot be shown to
-		// keep runs as it stands, and `finish` withholds its clean answer.
+		// #5594: detekt reads the project's own config and then an overlay with
+		// every glob list anchored at the project root (the later file wins a
+		// key). A config the rewrite cannot be shown to keep runs as it stands,
+		// and `finish` withholds its clean answer.
 		const read = readConfigText("detekt", configPath);
 		const anchored: AnchoredConfig =
 			read.kind === "read" ? anchorDetektConfig(read.text, cwd) : read;
@@ -324,11 +329,8 @@ const detektRunner: RunnerDefinition = {
 			});
 		const result =
 			anchored.kind === "rewritten"
-				? await withOverlayFile(
-						"detekt",
-						"detekt.yml",
-						anchored.text,
-						spawnDetekt,
+				? await withOverlayFile("detekt", "detekt.yml", anchored.text, (file) =>
+						spawnDetekt(`${configPath},${file}`),
 					)
 				: await spawnDetekt(configPath);
 

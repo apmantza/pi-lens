@@ -80,6 +80,10 @@ describe("anchorIgnorePattern (java glob, detekt)", () => {
 		// The two forms `**/X` stands for: no directory below the root, or one or more.
 		["**/.claude/**", [`${ROOT}/.claude/**`, `${ROOT}/**/.claude/**`]],
 		["**/*.kt", [`${ROOT}/*.kt`, `${ROOT}/**/*.kt`]],
+		// A first segment that keeps a literal reaches an ancestor only where the
+		// ancestor matches it, so a layout where it does not exists (row D3).
+		["**/*en/**", [`${ROOT}/*en/**`, `${ROOT}/**/*en/**`]],
+		["**/?en/**", [`${ROOT}/?en/**`, `${ROOT}/**/?en/**`]],
 		["glob:**/gen/**", [`${ROOT}/gen/**`, `${ROOT}/**/gen/**`]],
 		// Already absolute: anchored by the user, kept.
 		["/abs/proj/**/gen/**", ["/abs/proj/**/gen/**"]],
@@ -102,6 +106,12 @@ describe("anchorIgnorePattern (java glob, detekt)", () => {
 		"**//x",
 		"[ab]/x",
 		"",
+		// #5606 round 3: the root's own name fills a leading wildcard segment in
+		// every layout, so the anchored pair drops `<root>/gen` and `<root>/X.kt`
+		// that detekt excluded (rows D4, D5); a brace group cannot be read (D6).
+		"**/*/gen/**",
+		"**/**/X.kt",
+		"**/{gen,out}/**",
 	])("refuses %j", (pattern) => {
 		expect(anchorIgnorePattern(pattern, ROOT, "java-glob")).toBeNull();
 	});
@@ -129,6 +139,17 @@ describe("anchorIgnorePattern (fnmatch, phpstan)", () => {
 	it("refuses a relative pattern with no leading wildcard", () => {
 		expect(anchorIgnorePattern("src/gen/*", ROOT, "fnmatch")).toBeNull();
 	});
+
+	// #5606 round 3: phpstan's `*`, `?` and `[` cross `/`, so a tail led by one
+	// of them matches through the root's own name or the separator before the
+	// root's entries in every layout: `*/*/gen/*` excludes `<root>/gen/h.php`
+	// and `*?h.php` excludes `<root>/h.php` (rows P6, P8).
+	it.each(["*/*/gen/*", "*?h.php", "*/?en/*", "*[a]x", "**//x"])(
+		"refuses %j",
+		(pattern) => {
+			expect(anchorIgnorePattern(pattern, ROOT, "fnmatch")).toBeNull();
+		},
+	);
 });
 
 describe("anchorIgnorePatterns", () => {
@@ -147,7 +168,7 @@ describe("anchorIgnorePatterns", () => {
 describe("anchorDetektConfig", () => {
 	const anchored = (text: string) => anchorDetektConfig(text, ROOT);
 
-	it("anchors a rule's and a rule set's excludes and keeps every other key", () => {
+	it("writes only the lists it anchored, where they sit", () => {
 		const result = anchored(
 			[
 				"build:",
@@ -165,20 +186,33 @@ describe("anchorDetektConfig", () => {
 		expect(result.kind).toBe("rewritten");
 		if (result.kind !== "rewritten") return;
 		// js-yaml's own reader, so the assertion reads the file the tool reads.
+		// detekt reads it after the project's own file, which keeps every other key.
 		expect(yaml.load(result.text)).toEqual({
-			build: { maxIssues: 0 },
 			style: {
-				active: true,
 				excludes: [`${ROOT}/gen/**`, `${ROOT}/**/gen/**`],
 				MagicNumber: {
-					active: true,
-					ignoreNumbers: ["-1", "0", "42"],
 					excludes: [
 						`${ROOT}/.claude/**`,
 						`${ROOT}/**/.claude/**`,
 						"src/legacy/**",
 					],
 				},
+			},
+		});
+	});
+
+	// Row D20: a copy of the whole tree spelled `threshold: 60.0` back as `60`,
+	// and detekt, which refuses 60.0 for an Int, then ran. The overlay carries no
+	// value it did not rewrite, so detekt reads that one from the project's file.
+	it("leaves every value it does not rewrite to the project's own file", () => {
+		const result = anchored(
+			"complexity:\n  LongMethod:\n    threshold: 60.0\n    excludes: ['**/gen/**']\n  since: 2024-01-01\n",
+		);
+		expect(result.kind).toBe("rewritten");
+		if (result.kind !== "rewritten") return;
+		expect(yaml.load(result.text)).toEqual({
+			complexity: {
+				LongMethod: { excludes: [`${ROOT}/gen/**`, `${ROOT}/**/gen/**`] },
 			},
 		});
 	});
@@ -219,10 +253,6 @@ describe("anchorDetektConfig", () => {
 		[
 			"a rule's unknown form",
 			"style:\n  MagicNumber:\n    includes: ['*/x']\n",
-		],
-		[
-			"a YAML type the dump would not reproduce",
-			"style:\n  flags: !!set {a, b}\n  excludes: ['**/a/**']\n",
 		],
 		["YAML the loader rejects", "style: [\n"],
 		["a non-mapping root", "- a\n- b\n"],
@@ -374,6 +404,29 @@ describe("anchorPhpstanConfig", () => {
 			expect(result.kind === "rewritten" && result.text).toContain(
 				`{"message": "#m#", "paths": ["${ROOT}/legacy/*", "${ROOT}/*/legacy/*"]}`,
 			);
+		});
+
+		// Rows P16, P17: a moved `path` becomes `paths`. phpstan refuses `count`
+		// without `path`, and merges entries that share a `path` and a message
+		// into one with a summed count, which `paths` entries never are.
+		it.each([
+			[
+				"a count",
+				[{ message: "#m#", count: 1, path: "*/gen/*" }],
+				"with count names the wildcard path",
+			],
+			[
+				"a path another entry shares",
+				[
+					{ message: "#m#", path: "*/gen/*" },
+					{ message: "#m#", path: "*/gen/*" },
+				],
+				"share the wildcard path",
+			],
+		])("refuses to move a wildcard path with %s", (_name, entries, reason) => {
+			const result = anchorPhpstanConfig(withIgnore(entries), config, ROOT);
+			expect(result.kind).toBe("unapplied");
+			expect(result.kind === "unapplied" && result.reason).toContain(reason);
 		});
 
 		it("has nothing to rewrite when no entry carries a wildcard", () => {
@@ -577,7 +630,11 @@ function ctx(kind: string, filePath: string, cwd: string) {
 	};
 }
 
-/** The `--config` file as the tool saw it, because the runner removes it after. */
+/**
+ * The config argument as the tool saw it, and the text of its last file (detekt
+ * takes a comma list and lets the later file win a key), read at spawn because
+ * the runner removes the overlay after.
+ */
 function recordConfigAtSpawn(
 	flag: string,
 	seen: { text?: string; file?: string },
@@ -586,7 +643,8 @@ function recordConfigAtSpawn(
 		const at = args.indexOf(flag);
 		if (at >= 0) {
 			seen.file = args[at + 1];
-			seen.text = fs.readFileSync(seen.file, "utf8");
+			const last = seen.file?.split(",").at(-1) ?? "";
+			seen.text = fs.readFileSync(last, "utf8");
 		}
 		return { stdout: "", stderr: "", status: 0 };
 	};
@@ -632,7 +690,13 @@ describe("detekt runner", () => {
 
 			expect(result.status).toBe("succeeded");
 			expect(result.inconclusive).toBeUndefined();
-			expect(seen.file).not.toBe(path.join(root, "detekt.yml"));
+			// The project's own file first, so every key the overlay does not
+			// carry keeps the value detekt read from it (row D20).
+			expect(seen.file?.split(",")).toEqual([
+				path.join(root, "detekt.yml"),
+				expect.stringContaining(scratch),
+			]);
+			expect(seen.text).not.toContain("active");
 			expect(seen.text).toContain(`${root}/.claude/**`);
 			expect(seen.text).toContain(`${root}/**/.claude/**`);
 			expect(seen.text).not.toContain("'**/.claude/**'");
@@ -802,6 +866,40 @@ describe("phpstan runner", () => {
 			expect(work(calls).map((args) => args[0])).toEqual(["analyse"]);
 			expect(work(calls)[0]).not.toContain("-c");
 			expect(result.inconclusive).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// Row P18: phpstan looks for `.phpstan.neon` before `phpstan.neon`, so an
+	// overlay that includes the second would hand phpstan a config it never read.
+	it("runs as it stands when a dotted config may be the one phpstan reads", async () => {
+		const env = setupTestEnvironment("pi-lens-5594-phpstan-dotted-");
+		try {
+			const summary = await ledger();
+			plant(env.tmpDir, "parameters:\n  excludePaths:\n    - '*/gen/*'\n");
+			fs.writeFileSync(
+				path.join(env.tmpDir, ".phpstan.neon"),
+				"parameters:\n  level: 1\n",
+			);
+			const calls: string[][] = [];
+			safeSpawnAsync.mockImplementation(
+				async (_cmd: string, args: string[] = []) => {
+					calls.push(args);
+					return CLEAN;
+				},
+			);
+
+			const result = await runPhpstan(env.tmpDir);
+
+			expect(work(calls).map((args) => args[0])).toEqual(["analyse"]);
+			expect(work(calls)[0]).not.toContain("-c");
+			expect(result.inconclusive).toBe(true);
+			expect(
+				unanchoredRows(summary)?.latestReasons.find(
+					(e) => e.subject === "phpstan",
+				)?.reason,
+			).toContain("may read .phpstan.neon in place of phpstan.neon");
 		} finally {
 			env.cleanup();
 		}
