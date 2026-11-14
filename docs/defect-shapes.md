@@ -353,7 +353,14 @@ file-scoped worklist and receives no project-wide scanner output.
     project-relative path, `./`-prefixed unless it starts with a letter, digit,
     `_` or `.`, because a bare `-D.ts` is an option and `--fix` then rewrites
     files nobody dispatched. The absolute dispatched path stays for attribution
-    and for files outside that cwd.
+    and for files outside that cwd. Probe a new runner's argv before it lands.
+    Enforcer: none: a per-runner census of argv verdicts would be prose the
+    test cannot observe. Tools that absolutize their own
+    config glob or regex before matching (detekt `excludes`, phpstan
+    `excludePaths`, credo `files.excluded`) stay silent under a relative
+    argument too: no argv fix exists, so the verdict is `residual`. Most tools
+    never apply an ignore to an explicit file (mypy, shfmt, typos, swiftlint,
+    trivy, dart), so their verdict is `cleared`.
     Screen: does the runner hand the tool the absolute dispatched path while
     the tool matches its ignore globs against the argument string (probe the
     same file under `<root>/.claude/worktrees/<lane>` and a neutral ancestor,

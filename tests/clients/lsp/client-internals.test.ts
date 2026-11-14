@@ -3057,15 +3057,21 @@ describe("navRequest — $/cancelRequest on abort (#238 Item 1)", () => {
 		expect(state.connection.sendRequest).not.toHaveBeenCalled();
 	});
 
-	it("passes a CancellationToken when a signal is provided, none otherwise", async () => {
+	it("passes a live CancellationToken with or without a signal (#5097: the timeout cancels too)", async () => {
 		const state = createMockState();
 		state.connection.sendRequest = vi.fn().mockResolvedValue([]);
 
 		await navRequest(state, "workspace/symbol", {}, undefined, 120);
-		// No ambient signal in tests → third arg (token) is undefined.
-		expect(
-			vi.mocked(state.connection.sendRequest).mock.calls[0]?.[2],
-		).toBeUndefined();
+		// No ambient signal in tests, but the sender's timeout cancels the
+		// request, so the token is always threaded and an answered request
+		// leaves it uncancelled.
+		const noSignalToken = vi.mocked(state.connection.sendRequest).mock
+			.calls[0]?.[2] as {
+			onCancellationRequested?: unknown;
+			isCancellationRequested?: boolean;
+		};
+		expect(noSignalToken?.onCancellationRequested).toBeTypeOf("function");
+		expect(noSignalToken?.isCancellationRequested).toBe(false);
 
 		await navRequest(
 			state,

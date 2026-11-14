@@ -116,6 +116,12 @@ let deferredApplyEdit = null;
 const HANG_PROJECT_INFO = ["1", "cancel"].includes(
 	process.env.FAKE_LSP_HANG_PROJECT_INFO ?? "",
 );
+// #5097: "FAKE_LSP_HANG_METHODS=a,b" accepts those request methods and never
+// answers them, and ignores a `$/cancelRequest` for them, like a wedged server.
+// The trace file shows what arrived. Empty by default.
+const HANG_METHODS = (process.env.FAKE_LSP_HANG_METHODS ?? "")
+	.split(",")
+	.filter(Boolean);
 const HANG_DEFINITION = process.env.FAKE_LSP_HANG_DEFINITION === "1";
 const HANG_DOCUMENT_SYMBOL = process.env.FAKE_LSP_HANG_DOCUMENT_SYMBOL === "1";
 let hungProjectInfoId = null;
@@ -982,6 +988,8 @@ function handle(raw) {
 		hungProjectInfoId = null;
 		return;
 	}
+
+	if (data.id !== undefined && HANG_METHODS.includes(data.method)) return;
 
 	// Initialize handshake. FAKE_LSP_IGNORE_INITIALIZE simulates a hung server
 	// that never completes the handshake, so createLSPClient's
