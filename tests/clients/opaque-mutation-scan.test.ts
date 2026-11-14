@@ -389,6 +389,77 @@ describe("recoverOpaqueChangesViaGit (real git repo)", () => {
 		});
 	});
 
+	// #5552: `rsync -a` and `tar x` write files argv never names, with the
+	// source's old mtime. The prescan names the DIRECTORY they fill, and a file
+	// git lists under it that was clean before the command is the command's
+	// write; one outside it, or already dirty, stays on the mtime rule.
+	it("recovers files under a named directory, whatever their mtime (#5552)", async () => {
+		const inside = path.join(repoDir, "src", "base.ts");
+		const added = path.join(repoDir, "src", "deep", "added.ts");
+		const outside = path.join(repoDir, "elsewhere.ts");
+		const startedAt = Date.now();
+		fs.mkdirSync(path.dirname(added), { recursive: true });
+		for (const file of [inside, added, outside]) {
+			fs.writeFileSync(file, "moved\n", "utf8");
+			const old = new Date(startedAt - 10_000);
+			fs.utimesSync(file, old, old);
+		}
+
+		const outcome = await recoverOpaqueChangesViaGit(repoDir, startedAt, {
+			namedPaths: [path.join(repoDir, "src")],
+			dirtyBefore: [],
+		});
+		expect(outcome.verdict).toBe("recovered");
+		expect([...outcome.paths].sort()).toEqual(
+			[inside, added].map(normalizeMapKey).sort(),
+		);
+		expect([...(outcome.namedCredited ?? [])].sort()).toEqual(
+			[inside, added].map(normalizeMapKey).sort(),
+		);
+	});
+
+	// Recurrence prevented: `src` named as a scope must not claim `src-old/`,
+	// whose path merely starts with the same letters.
+	it("does not read a sibling directory with a shared prefix as under the scope (#5552)", async () => {
+		const sibling = path.join(repoDir, "src-old", "moved.ts");
+		const startedAt = Date.now();
+		fs.mkdirSync(path.dirname(sibling), { recursive: true });
+		fs.writeFileSync(sibling, "moved\n", "utf8");
+		const old = new Date(startedAt - 10_000);
+		fs.utimesSync(sibling, old, old);
+
+		await expect(
+			recoverOpaqueChangesViaGit(repoDir, startedAt, {
+				namedPaths: [path.join(repoDir, "src")],
+				dirtyBefore: [],
+			}),
+		).resolves.toMatchObject({ verdict: "recovered", paths: [] });
+	});
+
+	// #5581 r2 F3, for a directory: `rsync --ignore-existing` is recognized and
+	// writes nothing over a file the user had already edited.
+	it.each([
+		{ name: "dirty before the command", dirtyBefore: "target" as const },
+		{ name: "no dirty set captured", dirtyBefore: undefined },
+	])(
+		"leaves an old-mtime file under a named directory on the mtime rule when $name (#5552)",
+		async ({ dirtyBefore }) => {
+			const target = path.join(repoDir, "src", "base.ts");
+			const startedAt = Date.now();
+			fs.writeFileSync(target, "user edit\n", "utf8");
+			const old = new Date(startedAt - 10_000);
+			fs.utimesSync(target, old, old);
+
+			const outcome = await recoverOpaqueChangesViaGit(repoDir, startedAt, {
+				namedPaths: [path.join(repoDir, "src")],
+				dirtyBefore:
+					dirtyBefore === "target" ? [normalizeMapKey(target)] : undefined,
+			});
+			expect(outcome).toMatchObject({ verdict: "recovered", paths: [] });
+			expect(outcome.namedCredited).toBeUndefined();
+		},
+	);
+
 	it("recovers a fresh intent-to-add entry from git add -N", async () => {
 		const intentPath = path.join(repoDir, "src", "intent.ts");
 		const startedAt = Date.now();

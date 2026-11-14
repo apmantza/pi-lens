@@ -449,6 +449,11 @@ export interface OpaqueRecoveryRoots {
 	refused: Array<{ root: string; reason: OpaqueRootRefusal }>;
 	/** Named checkouts past {@link OPAQUE_RECOVERY_ROOT_CAP}. */
 	capped: string[];
+	/**
+	 * Directories the command fills with files it does not name one by one
+	 * (`rsync`, `tar x`, #5552): the scopes a recovery credits by content.
+	 */
+	writtenDirs: string[];
 }
 
 /**
@@ -492,6 +497,8 @@ export function resolveOpaqueRecoveryRoots(
 			owner: file,
 			lookup: path.dirname(file),
 		})),
+		// A directory the command fills is a tree of its own (#5552).
+		...scan.writtenDirs.map((dir) => ({ owner: dir, lookup: dir })),
 	];
 	const considered = new Set<string>();
 	let extra = 0;
@@ -527,7 +534,7 @@ export function resolveOpaqueRecoveryRoots(
 		admitted.add(rootKey);
 		roots.push(checkout.root);
 	}
-	return { roots, refused, capped };
+	return { roots, refused, capped, writtenDirs: scan.writtenDirs };
 }
 
 const ROOT_REFUSAL_REASONS: Record<OpaqueRootRefusal, string> = {
@@ -966,6 +973,13 @@ export interface GitRecoveryOutcome {
 	 * table is visible rather than inferred. Present only when it is nonzero.
 	 */
 	unknownStatusCount?: number;
+	/**
+	 * #5552: the recovered paths a named path or directory credited, whatever
+	 * their mtime or freshness. They are the command's own writes: the prescan
+	 * named where it writes, and the path was clean before it. Present only when
+	 * nonzero.
+	 */
+	namedCredited?: string[];
 }
 
 /** Narrow failure-only policy for Git integration commands. */
@@ -977,9 +991,11 @@ export interface GitRecoveryOptions {
 	 */
 	excludeIndexOnlyWhenUnmerged?: boolean;
 	/**
-	 * Destinations resolved by the bash prescan. A named path git lists as
-	 * changed is reported whatever its mtime, because `mv` and `cp -p` keep the
-	 * source's old one. Applies only with `dirtyBefore`.
+	 * Destinations resolved by the bash prescan: files, and directories the
+	 * command fills (`rsync`, `tar x`). A named path, or a file under a named
+	 * directory, that git lists as changed is reported whatever its mtime,
+	 * because `mv`, `cp -p`, `rsync -a` and `tar x` keep the source's old one.
+	 * Applies only with `dirtyBefore`.
 	 */
 	namedPaths?: readonly string[];
 	/**
@@ -1255,9 +1271,9 @@ export async function readSameHeadDiscards(
 
 /**
  * Files dirty in the working tree whose mtime falls inside
- * [startedAt - tolerance, now]. A destination named by the bash prescan that
- * was clean before the command skips the window, so a preserved mtime does not
- * hide a write.
+ * [startedAt - tolerance, now]. A destination named by the bash prescan (a
+ * file, or a directory the command fills) that was clean before the command
+ * skips the window, so a preserved mtime does not hide a write.
  * Porcelain -z parsing handles renames: the NEW path is the one filtered, and
  * the entry's source side (`renamedFrom`) is ignored here.
  */
@@ -1288,6 +1304,19 @@ export async function recoverOpaqueChangesViaGit(
 		options.dirtyBefore === undefined
 			? undefined
 			: new Set(options.dirtyBefore);
+	const isNamed = (key: string): boolean => {
+		if (namedPaths.has(key)) return true;
+		for (const named of namedPaths)
+			if (key.startsWith(named.endsWith("/") ? named : `${named}/`))
+				return true;
+		return false;
+	};
+	// A named entry is listed by git status, so it differs from HEAD or the
+	// index: that is the write. Only a path that was clean before the command
+	// can be credited so (`cp -n` over a user edit wrote nothing).
+	const isNamedWrite = (absPath: string): boolean =>
+		cleanBefore?.has(normalizeMapKey(absPath)) === false &&
+		isNamed(normalizeMapKey(realpathOrResolve(absPath)));
 	// Kernel "stale" = modified AFTER the window floor - exactly the writes
 	// this command may have authored, so exactly the entries that would be
 	// dispatched absent any other filtering.
@@ -1296,14 +1325,7 @@ export async function recoverOpaqueChangesViaGit(
 		try {
 			const stat = await fs.promises.stat(absPath);
 			if (!stat.isFile()) return false;
-			// A named entry is listed by git status, so it differs from HEAD or the
-			// index: that is the write. Only a path that was clean before the
-			// command can be credited so (`cp -n` over a user edit wrote nothing).
-			if (
-				cleanBefore?.has(normalizeMapKey(absPath)) === false &&
-				namedPaths.has(normalizeMapKey(realpathOrResolve(absPath)))
-			)
-				return true;
+			if (isNamedWrite(absPath)) return true;
 			return (
 				freshnessFromMtime({ mtimeMs: stat.mtimeMs, referenceMs: floorMs })
 					.verdict === "stale"
@@ -1344,8 +1366,12 @@ export async function recoverOpaqueChangesViaGit(
 		candidates = kept;
 	}
 	const paths: string[] = [];
+	const namedCredited: string[] = [];
 	for (const entry of candidates) {
-		if (await isChanged(entry)) paths.push(normalizeMapKey(entry.absPath));
+		if (!(await isChanged(entry))) continue;
+		const key = normalizeMapKey(entry.absPath);
+		paths.push(key);
+		if (isNamedWrite(entry.absPath)) namedCredited.push(key);
 	}
 	return {
 		verdict: "recovered",
@@ -1354,5 +1380,6 @@ export async function recoverOpaqueChangesViaGit(
 		// Omitted when zero so the common outcome keeps one shape.
 		...(excludedIncomingCount > 0 ? { excludedIncomingCount } : {}),
 		...(unknownStatusCount > 0 ? { unknownStatusCount } : {}),
+		...(namedCredited.length > 0 ? { namedCredited } : {}),
 	};
 }
