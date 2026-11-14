@@ -118,6 +118,27 @@ describe("seedFromCapture", () => {
 			expect(preExisting.map((d) => d.runnerId)).toEqual(["tree-sitter"]);
 		});
 
+		// Recurrence prevented (#5583 review F4): `coversEveryLine` decides
+		// whether a span is whole-file. A `>=` there would count a span that
+		// stops one line short as whole-file, so the whole-file entry would
+		// excuse a finding on the unread last line (the F1 shape). The short
+		// span must gate; the span a write records must classify. Real
+		// `classifyPreExisting`, no double.
+		it("gates a span one line short of the last line and classifies one that reaches it", () => {
+			const text = "BAD_SH\nok\nBAD_SH";
+			const seeded = seedFromCapture([finding(3, "tree-sitter")], text, true);
+			const current = [finding(3, "tree-sitter")];
+			const short = classifyPreExisting(seeded, current, text, answered, [
+				{ start: 1, end: 2 },
+			]);
+			expect(short.preExisting).toEqual([]);
+			expect(short.nextSeed).toEqual([]);
+			const whole = classifyPreExisting(seeded, current, text, answered, [
+				{ start: 1, end: 3 },
+			]);
+			expect(whole.preExisting.map((d) => d.runnerId)).toEqual(["tree-sitter"]);
+		});
+
 		it("classifies nothing and keeps nothing of the lane for a dispatch with an edit span", () => {
 			const { preExisting, nextSeed } = classifyPreExisting(
 				seeded(["tree-sitter", "shellcheck"]),
