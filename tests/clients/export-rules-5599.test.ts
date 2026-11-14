@@ -217,6 +217,23 @@ const CELLS: Record<string, Cell> = {
 			E: true,
 		},
 	},
+	// The JS/TS `export` rule is unchanged: exported is true or false, never
+	// unknown, on all three grammars that share it.
+	typescript: {
+		file: "a.ts",
+		src: "export function foo() {}\nfunction bar() {}\n",
+		exported: { foo: true, bar: false },
+	},
+	tsx: {
+		file: "a.tsx",
+		src: "export function foo() {}\nfunction bar() {}\n",
+		exported: { foo: true, bar: false },
+	},
+	javascript: {
+		file: "a.js",
+		src: "export function foo() {}\nfunction bar() {}\n",
+		exported: { foo: true, bar: false },
+	},
 	// No visibility keyword or modifier on the declaration node: the answer is
 	// "unknown", never false (#5599 acceptance 2).
 	python: {
