@@ -40,6 +40,7 @@ import {
 	mayRunGitCommit,
 	planStagedCommit,
 	type ReplayedGit,
+	type ReplayedStep,
 	unknown,
 } from "./git-guard.js";
 import { applyInlineBlockerPolicy } from "./inline-blocker-dispositions.js";
@@ -99,7 +100,12 @@ interface GitRead {
 /** One git read under the replayed command's options, on our index copy. */
 async function runGit(
 	replay: ReplayedGit,
-	extra: { index?: string; config?: string; input?: string },
+	extra: {
+		index?: string;
+		config?: string;
+		input?: string;
+		env?: Readonly<Record<string, string>>;
+	},
 	args: readonly string[],
 	signal: AbortSignal | undefined,
 ): Promise<GitRead> {
@@ -114,6 +120,7 @@ async function runGit(
 			cwd: replay.cwd,
 			env: {
 				...replay.env,
+				...extra.env,
 				...(extra.index === undefined ? {} : { GIT_INDEX_FILE: extra.index }),
 				GIT_TERMINAL_PROMPT: "0",
 				GIT_EDITOR: "false",
@@ -206,6 +213,14 @@ interface Repo {
 	copy: string;
 	mergeHead: string;
 	replay: ReplayedGit;
+	/**
+	 * Destinations a replayed `git mv` moved on the copy, to their sources.
+	 * The working file is not there yet, so each is judged on its index blob,
+	 * and judged whether or not the dry run lists it: a pathspec git matches
+	 * against the working tree (`git commit src/c.ts`) skips a skip-worktree
+	 * entry, while the real commit carries the moved file.
+	 */
+	moved: Map<string, string>;
 }
 
 /**
@@ -233,7 +248,10 @@ async function judgeStagedDelta(
 			"#!/bin/sh\necho 'the command turns the dry run into a real commit' >&2\nexit 1\n",
 			{ mode: 0o755 },
 		);
-		const copies = new Map<string, string>();
+		const copies = new Map<
+			string,
+			{ copy: string; moved: Map<string, string> }
+		>();
 		const repoOf = async (
 			replay: ReplayedGit,
 		): Promise<Repo | StagedDeltaVerdict | "none"> => {
@@ -262,30 +280,31 @@ async function judgeStagedDelta(
 			const [top, index, mergeHead] = out.stdout.split("\n");
 			if (out.status !== 0 || !top || !index || !mergeHead)
 				return gitFailure(out, "finding the repository the commit runs in");
-			let copy = copies.get(index);
-			if (copy === undefined) {
-				copy = path.join(scratch, `index-${copies.size}`);
-				copies.set(index, copy);
+			let held = copies.get(index);
+			if (held === undefined) {
+				held = {
+					copy: path.join(scratch, `index-${copies.size}`),
+					moved: new Map(),
+				};
+				copies.set(index, held);
 				// No index yet is an empty one, for git and for the copy alike.
-				if (nodeFs.existsSync(index)) nodeFs.copyFileSync(index, copy);
+				if (nodeFs.existsSync(index)) nodeFs.copyFileSync(index, held.copy);
 			}
-			return { top, copy, mergeHead, replay };
+			return { top, mergeHead, replay, ...held };
 		};
-		for (const add of plan.adds) {
-			const repo = await repoOf(add);
+		for (const step of plan.steps) {
+			const repo = await repoOf(step);
 			if (repo === "none")
 				return degraded(
 					"git_failed",
-					"replaying git add: not a git repository",
+					`replaying git ${step.verb}: not a git repository`,
 				);
 			if ("kind" in repo) return repo;
-			const out = await runGit(
-				add,
-				{ index: repo.copy },
-				["add", ...add.args],
-				deps.signal,
-			);
-			if (out.status !== 0) return gitFailure(out, "replaying git add");
+			const failed =
+				step.verb === "mv"
+					? await replayMove(step, repo, deps.signal)
+					: await replayIndexStep(step, repo, deps.signal);
+			if (failed) return failed;
 		}
 		const repo = await repoOf(plan.commit);
 		if (repo === "none") return { kind: "clean", files: 0 };
@@ -325,11 +344,157 @@ async function judgeStagedDelta(
 	}
 }
 
+/**
+ * Replays `git add` or `git rm` on the index copy. `git rm` runs as
+ * `git rm --cached`: the working file stays, untracked, which `-a` does not
+ * carry. Its checks are weaker than a real `git rm`'s, so the planner admits
+ * it only before `&&`, where a real failure stops the commit.
+ */
+async function replayIndexStep(
+	step: ReplayedStep,
+	repo: Repo,
+	signal: AbortSignal | undefined,
+): Promise<StagedDeltaVerdict | undefined> {
+	const out = await runGit(
+		step,
+		{ index: repo.copy },
+		step.verb === "rm"
+			? ["rm", "--cached", ...step.args]
+			: ["add", ...step.args],
+		signal,
+	);
+	return out.status === 0
+		? undefined
+		: gitFailure(out, `replaying git ${step.verb}`);
+}
+
+/** git's spelling of a path from the top of the checkout, with no glob. */
+const literalTop = (file: string): string => `:(top,literal)${file}`;
+
+/**
+ * Replays `git mv` on the index copy without moving a working file. git's
+ * own dry run (`git mv -n`, its checks included) names each rename; each file
+ * entry then moves to its destination on the copy, marked skip-worktree so a
+ * later `-a`, pathspec or `git add` reads it as the index holds it. The
+ * destination is judged on that blob ({@link Repo.moved}). A source with
+ * unstaged changes refuses: after the real move its working bytes, which the
+ * replay does not judge, are what `-a` would carry.
+ */
+async function replayMove(
+	step: ReplayedStep,
+	repo: Repo,
+	signal: AbortSignal | undefined,
+): Promise<StagedDeltaVerdict | undefined> {
+	const git = { index: repo.copy };
+	const listed = await runGit(
+		step,
+		{ ...git, env: { LC_ALL: "C" } },
+		["mv", "-n", ...step.args],
+		signal,
+	);
+	if (listed.status !== 0) return gitFailure(listed, "replaying git mv");
+	const renames: Array<[string, string]> = [];
+	for (const line of listed.stdout.split("\n")) {
+		if (line === "" || line.startsWith("Checking rename of ")) continue;
+		const pair = line.startsWith("Renaming ")
+			? line.slice("Renaming ".length).split(" to ")
+			: [];
+		const [from, to] = pair;
+		if (pair.length !== 2 || !from || !to)
+			return degraded("git_failed", `reading git mv's renames: ${line}`);
+		renames.push([from, to]);
+	}
+	if (renames.length === 0) return undefined;
+	const staged = await runGit(
+		step,
+		git,
+		[
+			"ls-files",
+			"-s",
+			"-z",
+			"--full-name",
+			"--",
+			...renames.map(([from]) => literalTop(from)),
+		],
+		signal,
+	);
+	if (staged.status !== 0)
+		return gitFailure(staged, "reading the files git mv moves");
+	const entries = new Map<string, { mode: string; id: string }>();
+	for (const row of staged.stdout.split("\0")) {
+		const match = /^(\d+) ([0-9a-f]{40,64}) 0\t(.+)$/s.exec(row);
+		if (match?.[1] && match[2] && match[3])
+			entries.set(match[3], { mode: match[1], id: match[2] });
+	}
+	// A directory's own line names no entry; its files have lines of their own.
+	const files = renames.flatMap(([from, to]) => {
+		const entry = entries.get(from);
+		return entry ? [{ from, to, ...entry }] : [];
+	});
+	if (files.length === 0) return undefined;
+	const unstaged = await runGit(
+		step,
+		git,
+		[
+			"diff",
+			"--no-ext-diff",
+			"--name-only",
+			"-z",
+			"--",
+			...files.map(({ from }) => literalTop(from)),
+		],
+		signal,
+	);
+	if (unstaged.status !== 0)
+		return gitFailure(unstaged, "reading the files git mv moves");
+	const changed = unstaged.stdout.split("\0").find(Boolean);
+	if (changed)
+		return degraded(
+			"unresolved_command",
+			`git mv moves ${changed}, which has unstaged changes`,
+		);
+	const moved = await runGit(
+		step,
+		{
+			...git,
+			input: files
+				.flatMap(({ from, to, mode, id }) => [
+					`0 ${"0".repeat(id.length)}\t${from}\0`,
+					`${mode} ${id}\t${to}\0`,
+				])
+				.join(""),
+		},
+		["update-index", "-z", "--index-info"],
+		signal,
+	);
+	if (moved.status !== 0) return gitFailure(moved, "replaying git mv");
+	const marked = await runGit(
+		step,
+		{
+			...git,
+			// git spells the top with forward slashes, on Windows too.
+			input: files.map(({ to }) => `${repo.top}/${to}\0`).join(""),
+		},
+		["update-index", "-z", "--skip-worktree", "--stdin"],
+		signal,
+	);
+	if (marked.status !== 0) return gitFailure(marked, "replaying git mv");
+	for (const { from, to } of files) repo.moved.set(to, from);
+	return undefined;
+}
+
 async function judgeCarried(
-	carried: readonly Carried[],
+	listedByGit: readonly Carried[],
 	repo: Repo,
 	deps: StagedDeltaDeps,
 ): Promise<StagedDeltaVerdict> {
+	const listed = new Set(listedByGit.map((entry) => entry.file));
+	const carried = [
+		...listedByGit,
+		...[...repo.moved].flatMap(([file, from]): Carried[] =>
+			listed.has(file) ? [] : [{ x: "R", y: " ", file, from }],
+		),
+	];
 	if (
 		carried.some((entry) => `${entry.file}${entry.from ?? ""}`.includes("\n"))
 	)
@@ -348,9 +513,13 @@ async function judgeCarried(
 	} catch {
 		// none: no MERGE_HEAD file is no merge in progress.
 	}
+	// git reads the working file for an entry it reports equal to it, except
+	// one a replayed `git mv` put there.
+	const readsWork = (entry: Carried): boolean =>
+		entry.y === " " && !repo.moved.has(entry.file);
 	// A symlink or a submodule the working tree holds is no file to lint.
 	const judged = carried.filter((entry) => {
-		if (entry.y !== " ") return true;
+		if (!readsWork(entry)) return true;
 		try {
 			return nodeFs.lstatSync(path.resolve(top, entry.file)).isFile();
 		} catch {
@@ -359,7 +528,7 @@ async function judgeCarried(
 			return false;
 		}
 	});
-	const fromWork = judged.filter((entry) => entry.y === " ");
+	const fromWork = judged.filter(readsWork);
 	const git = { index: repo.copy };
 	let workIds: string[] = [];
 	if (fromWork.length > 0) {
@@ -378,10 +547,11 @@ async function judgeCarried(
 	}
 	const revs = ["HEAD", ...mergeHeads];
 	const names = judged.flatMap((entry) => [
-		...(entry.y === " " ? [] : [`:0:${entry.file}`]),
+		...(readsWork(entry) ? [] : [`:0:${entry.file}`]),
 		...revs.map((rev) => `${rev}:${entry.from ?? entry.file}`),
 	]);
 	const blobs = new Map<string, string>();
+	const gitlinks = new Set<string>();
 	if (names.length > 0) {
 		const checked = await runGit(
 			repo.replay,
@@ -393,12 +563,16 @@ async function judgeCarried(
 		if (checked.status !== 0 || lines.length < names.length)
 			return gitFailure(checked, "reading the blobs the commit carries");
 		names.forEach((name, at) => {
-			const match = /^([0-9a-f]{40,64}) blob \d+$/.exec(lines[at] ?? "");
+			const line = lines[at] ?? "";
+			const match = /^([0-9a-f]{40,64}) blob \d+$/.exec(line);
 			if (match?.[1]) blobs.set(name, match[1]);
+			else if (/^[0-9a-f]{40,64} submodule$/.test(line)) gitlinks.add(name);
 		});
 	}
 	const candidates: Candidate[] = [];
 	for (const entry of judged) {
+		// A submodule pointer is a commit id, not a file to lint.
+		if (gitlinks.has(`:0:${entry.file}`)) continue;
 		const work = fromWork.indexOf(entry);
 		const committedId =
 			work >= 0 ? workIds[work] : blobs.get(`:0:${entry.file}`);
@@ -530,9 +704,9 @@ async function judgeFile(
 /** What clears each degraded read: each names an action the next attempt reads afresh. */
 const DEGRADED_REMEDY: Readonly<Record<StagedDeltaDegraded, string>> = {
 	unresolved_command:
-		"pi-lens judges a commit by replaying it with git before it runs, and cannot replay this command. Run the other commands first, then run git commit on its own (git add, cd and a -m \"$(cat <<'EOF' ... EOF)\" message may stay in it).",
+		"pi-lens judges a commit by replaying it with git before it runs, and cannot replay this command. Run the other commands first, then run git commit on its own (git add, git rm or git mv before &&, cd, export, set -e, make, npm test or npm run, time, timeout or env before git, and a here-doc message may stay in it).",
 	lane_incomplete:
-		"pi-lens could not finish checking the staged files: a linter gave no answer, or the check ran out of time. Fix the linter or its config if one is named, then commit again.",
+		"pi-lens could not finish checking the staged files: a linter gave no answer, or the check ran out of time. Fix the linter or its config if one is named; if the check ran out of time, commit fewer files at once. Then commit again.",
 	file_unreadable:
 		"pi-lens could not read a staged file. Make it readable, then commit again.",
 	git_failed:

@@ -424,7 +424,7 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 ];
 const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
-		"clients/staged-delta.ts#runGit:9ed1005b~b01c76f2",
+		"clients/staged-delta.ts#runGit:67db8378~b01c76f2",
 		"#5553: cwd is the directory the agent's own git command runs in (the session cwd after any literal `cd` the planner followed), so the replayed `git commit --dry-run` resolves the repository and the pathspecs exactly as the real command will; a tool-cwd root would change both",
 	],
 	[

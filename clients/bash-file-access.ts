@@ -511,6 +511,11 @@ export interface DecodedSimpleCommand {
 	exit: ShellSegmentExit;
 	/** An unquoted `(`, `)`, `{`, `}` or backtick appeared in it. */
 	grouping: boolean;
+	/**
+	 * It runs inside an unquoted here-doc's body (`$(…)` there), which bash
+	 * expands before the command that reads the here-doc starts.
+	 */
+	heredocSubstitution?: true;
 }
 
 const MULTI_FIELD_EXPANSION = /\$[@*]|\[[@*]\]/;
@@ -527,6 +532,8 @@ export function decodeShellCommand(command: string): DecodedSimpleCommand[] {
 			output: false,
 			exit: range.exit,
 			grouping: false,
+			// A here-doc's substitution has no range of its own in the command.
+			...(range.start < 0 && { heredocSubstitution: true as const }),
 		};
 		range.words.forEach((word, index) => {
 			if (word.syntax === true) return;

@@ -2814,8 +2814,10 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// the per-file lane runs) under one registered bounded() call with
 	// ctx.signal and a 20 s wall budget; a bound per git read would multiply
 	// that budget by the staged set's size. 12 -> 15 (round 2): the add replay,
-	// the repository read per replayed git and the lane module load.
-	"clients/staged-delta.ts": 15,
+	// the repository read per replayed git and the lane module load. 15 -> 22
+	// (round 3): the git rm replay and the five git reads that replay a
+	// git mv on the index copy, all under the same bound.
+	"clients/staged-delta.ts": 22,
 	"clients/startup-scan.ts": 3,
 	"clients/test-runner-client.ts": 4,
 	// #2507. Unlike every other entry here, this one is unbounded ON PURPOSE

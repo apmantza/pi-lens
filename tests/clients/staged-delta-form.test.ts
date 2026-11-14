@@ -7,7 +7,9 @@
  * commit carries (`npm test`, `git rm`, a script, a substitution that writes)
  * would leave it judging a set the commit no longer has. Only the listed forms
  * replay; everything else is `unresolved`, which the gate refuses (a gate
- * refuses what it does not recognise).
+ * refuses what it does not recognise). Round 2's list refused a clean commit
+ * in 15 of 42 common agent shapes (a here-doc message, `timeout`, `export`,
+ * `make &&`, `git rm`), so each of those now has a replay row here.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -51,10 +53,111 @@ describe("planStagedCommit", () => {
 			globals: [],
 			args: ["-m", "x"],
 		},
+		// A message the commit reads from a here-doc does not change what it
+		// carries; the dry run reads its own input.
+		{
+			command: "git commit -F - <<'EOF'\nx\nEOF",
+			globals: [],
+			args: ["-F", "-"],
+		},
+		{ command: "git commit --file=- <<< x", globals: [], args: ["--file=-"] },
+		{
+			command: "git commit -F - <<EOF\nfix: $(git log -1 --format=%s)\nEOF",
+			globals: [],
+			args: ["-F", "-"],
+		},
+		// Wrappers that run their command unchanged.
+		{ command: "time git commit -m x", globals: [], args: ["-m", "x"] },
+		{ command: "time -p git commit -m x", globals: [], args: ["-m", "x"] },
+		{ command: "timeout 60 git commit -m x", globals: [], args: ["-m", "x"] },
+		{
+			command: "timeout -k 5 --preserve-status 1.5m git commit -m x",
+			globals: [],
+			args: ["-m", "x"],
+		},
+		{ command: "env git commit -m x", globals: [], args: ["-m", "x"] },
+		// A variable git does not read changes nothing the replay passes.
+		{ command: "FOO=1 git commit -m x", globals: [], args: ["-m", "x"] },
+		{ command: "env FOO=1 git commit -m x", globals: [], args: ["-m", "x"] },
+		// Preambles and steps that cannot change the index.
+		{
+			command: "export FOO=1; git commit -m x",
+			globals: [],
+			args: ["-m", "x"],
+		},
+		{
+			command: "set -euo pipefail; git commit -m x",
+			globals: [],
+			args: ["-m", "x"],
+		},
+		{ command: "set -e; set -o pipefail; git commit", globals: [], args: [] },
+		{ command: "ls && pwd && git commit -m x", globals: [], args: ["-m", "x"] },
+		{ command: "make && git commit -m x", globals: [], args: ["-m", "x"] },
+		{ command: "make test && git commit -m x", globals: [], args: ["-m", "x"] },
+		{ command: "npm test && git commit -m x", globals: [], args: ["-m", "x"] },
+		{
+			command: "npm run lint && npm run-script build && git commit -m x",
+			globals: [],
+			args: ["-m", "x"],
+		},
 	])("replays $command", ({ command, globals, args }) => {
 		expect(plan(command)).toEqual({
-			adds: [],
+			steps: [],
 			commit: { cwd: dir(), env: {}, globals, args },
+		});
+	});
+
+	it("carries git's own variables from an env wrapper or an export", () => {
+		for (const command of [
+			"env GIT_AUTHOR_NAME=a git commit -m x",
+			"timeout 60 env GIT_AUTHOR_NAME=a git commit -m x",
+			"export GIT_AUTHOR_NAME=a; git commit -m x",
+		])
+			expect(plan(command), command).toEqual({
+				steps: [],
+				commit: {
+					cwd: dir(),
+					env: { GIT_AUTHOR_NAME: "a" },
+					globals: [],
+					args: ["-m", "x"],
+				},
+			});
+		expect(
+			plan("export GIT_INDEX_FILE=.git/alt && git add -A && git commit -m x"),
+		).toEqual({
+			steps: [
+				{
+					verb: "add",
+					cwd: dir(),
+					env: { GIT_INDEX_FILE: ".git/alt" },
+					globals: [],
+					args: ["-A"],
+				},
+			],
+			commit: {
+				cwd: dir(),
+				env: { GIT_INDEX_FILE: ".git/alt" },
+				globals: [],
+				args: ["-m", "x"],
+			},
+		});
+	});
+
+	it("replays a git rm and a git mv that run before the commit after &&", () => {
+		expect(
+			plan("git rm -r old && git mv a.ts b.ts && git commit -m x"),
+		).toEqual({
+			steps: [
+				{ verb: "rm", cwd: dir(), env: {}, globals: [], args: ["-r", "old"] },
+				{
+					verb: "mv",
+					cwd: dir(),
+					env: {},
+					globals: [],
+					args: ["a.ts", "b.ts"],
+				},
+			],
+			commit: { cwd: dir(), env: {}, globals: [], args: ["-m", "x"] },
 		});
 	});
 
@@ -66,7 +169,7 @@ describe("planStagedCommit", () => {
 				"git add -A && cd src && GIT_INDEX_FILE=../.git/alt git commit -m x",
 			),
 		).toEqual({
-			adds: [{ cwd: dir(), env: {}, globals: [], args: ["-A"] }],
+			steps: [{ verb: "add", cwd: dir(), env: {}, globals: [], args: ["-A"] }],
 			commit: {
 				cwd: src,
 				env: { GIT_INDEX_FILE: "../.git/alt" },
@@ -80,8 +183,69 @@ describe("planStagedCommit", () => {
 	// replay looked, or one the replay cannot pass to git as bash would.
 	it.each([
 		["an indirect launcher", "sh -c 'git commit -m x'", "another command"],
-		["a command that may write", "npm test && git commit -m x", "`npm`"],
-		["git rm", "git rm a.ts && git commit -m x", "git rm"],
+		[
+			"a command that may stage",
+			"./scripts/stage.sh && git commit -m x",
+			"`./scripts/stage.sh`",
+		],
+		["a node script", "node x.js && git commit -m x", "`node`"],
+		[
+			"an npm verb not on the list",
+			"npm install && git commit -m x",
+			"`npm install`",
+		],
+		["npx", "npx lint-staged && git commit -m x", "`npx`"],
+		[
+			"a step with a pipe",
+			"npm test 2>&1 | tail -5 && git commit -m x",
+			"`npm test`",
+		],
+		["a make with a redirection", "make > log && git commit -m x", "`make`"],
+		[
+			"a step whose words the shell expands",
+			'make "$t" && git commit -m x',
+			"`make`",
+		],
+		// A failed `git rm` must stop the commit: its `--cached` replay checks less.
+		["git rm before ;", "git rm a.ts; git commit -m x", "git rm"],
+		["git mv before ;", "git mv a.ts b.ts; git commit -m x", "git mv"],
+		[
+			"git reset",
+			"git add a.ts && git reset a.ts && git commit -m x",
+			"git reset",
+		],
+		["an unknown wrapper", "nice git commit -m x", "another command"],
+		["nohup", "nohup git commit -m x", "another command"],
+		["an env option", "env -i git commit -m x", "`env -i`"],
+		[
+			"an env assignment of git's config",
+			"env GIT_CONFIG_PARAMETERS=x git commit -m x",
+			"GIT_CONFIG_PARAMETERS=",
+		],
+		[
+			"a timeout option not on the list",
+			"timeout -v 60 git commit -m x",
+			"`timeout -v`",
+		],
+		[
+			"a duration the shell expands",
+			'timeout "$t" git commit -m x',
+			"`timeout`",
+		],
+		["an export git reads", "export PATH=/x; git commit -m x", "export PATH"],
+		[
+			"an export of git's config",
+			"export GIT_CONFIG_PARAMETERS=x; git commit -m x",
+			"export GIT_CONFIG_PARAMETERS",
+		],
+		["a bare export", "export FOO; git commit -m x", "`export FOO`"],
+		[
+			"an export the shell expands",
+			'export FOO="$x"; git commit -m x',
+			"`export`",
+		],
+		["a set that changes the words", "set -- a b; git commit -m x", "`set --`"],
+		["a set flag not on the list", "set -f; git commit -m x", "`set -f`"],
 		["two commits", "git commit -m a && git commit -m b", "more than one"],
 		["a glob the shell expands", "git commit -m x src/*.ts", "shell expands"],
 		[
@@ -105,8 +269,18 @@ describe("planStagedCommit", () => {
 			"substitution runs `git`",
 		],
 		["an input redirection", "git commit --interactive < answers", "input"],
-		["a here-doc message file", "git commit -F - <<'EOF'\nx\nEOF", "input"],
-		["an assignment outside git's own", "FOO=1 git commit -m x", "FOO="],
+		[
+			"a here-doc that feeds a path list",
+			"git commit --pathspec-from-file=- <<'EOF'\na.ts\nEOF",
+			"input",
+		],
+		[
+			"a here-doc whose substitution stages",
+			"git commit -F - <<EOF\ndon't $(git add x)\nEOF",
+			"substitution runs `git`",
+		],
+		["a pipe into the commit", "cat m | git commit -F -", "alongside"],
+		["an assignment git reads", "PATH=/x git commit -m x", "PATH="],
 		["an add alongside it", "git add -A & git commit -m x", "alongside"],
 		[
 			"an add with a redirection",
@@ -153,6 +327,27 @@ describe("decodeShellCommand", () => {
 			output,
 		});
 		expect(commands[0]?.words[0]?.text).toBe("git");
+	});
+
+	// Recurrence prevented: bash runs an unquoted here-doc's substitutions
+	// before the commit, and a `'` in the message hides them from a scan of
+	// the command text, so the decoder names them.
+	it("names the commands an unquoted here-doc's substitutions run", () => {
+		const commands = decodeShellCommand(
+			"git commit -F - <<EOF\ndon't $(git add x)\nEOF",
+		);
+		expect(
+			commands.map((simple) => [
+				simple.words.map((word) => word.text).join(" "),
+				simple.heredocSubstitution === true,
+			]),
+		).toEqual([
+			["git commit -F -", false],
+			["git add x", true],
+		]);
+		expect(
+			decodeShellCommand("git commit -F - <<'EOF'\n$(git add x)\nEOF"),
+		).toHaveLength(1);
 	});
 
 	it("passes each word's value as bash does", () => {

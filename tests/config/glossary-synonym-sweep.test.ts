@@ -2019,8 +2019,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/skills-resolver.ts": 6,
 		"clients/spawn-timeout-cooldown.ts": 1,
 		// #5553: each git read's exit `status`, the dry run's "nothing to commit"
-		// exit and the no-repository exit.
-		"clients/staged-delta.ts": 11,
+		// exit and the no-repository exit. 11 -> 16 (round 3): the exit of the
+		// git rm replay and of the git mv replay's five reads.
+		"clients/staged-delta.ts": 16,
 		// 15 -> 16 (#5257): the JSON parser reads the failed suite that explains an unsuccessful run.
 		"clients/test-runner-client.ts": 16,
 		"clients/tree-sitter-logger.ts": 2,

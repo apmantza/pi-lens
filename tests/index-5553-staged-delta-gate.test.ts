@@ -530,13 +530,13 @@ describe("#5553 git resolves what the commit carries", () => {
 			outcome: "unknown unresolved_command",
 		},
 		{
-			form: "a command before it that may write",
-			command: 'npm test && git commit -m "wip"',
+			form: "a script before it that may stage",
+			command: './build.sh && git commit -m "wip"',
 			outcome: "unknown unresolved_command",
 		},
 		{
-			form: "git rm before it",
-			command: `git rm -q ${B} && git commit -m "wip"`,
+			form: "git rm before it with ;",
+			command: `git rm -q ${B}; git commit -m "wip"`,
 			outcome: "unknown unresolved_command",
 		},
 		{
@@ -839,6 +839,184 @@ describe("#5553 a git add before the commit is replayed", () => {
 	);
 });
 
+describe("#5553 the common agent command shapes", () => {
+	/**
+	 * Each row is a command shape an agent commits with. A `replays` row
+	 * commits a clean staged edit and refuses one that adds a `debugger;`; a
+	 * `refused` row is one pi-lens cannot replay before it runs, which the
+	 * gate refuses whatever is staged. Recurrence prevented (verify r2 N1):
+	 * round 2 refused a clean commit in 15 of these shapes that master let
+	 * through (a here-doc message, `timeout`, `env`, `time`, `export`,
+	 * `set -e`, `ls`, `make`, `npm test`, `npm run lint`, `git rm`, `git mv`).
+	 */
+	const heredoc = "git commit -F - <<'EOF'\nmsg\nEOF";
+	const substituted = `git commit -m "$(cat <<'EOF'\nline1\n\nline2\nEOF\n)"`;
+	const SHAPES: ReadonlyArray<[string, "replays" | "refused"]> = [
+		["git commit -m x", "replays"],
+		["git add -A && git commit -m x", "replays"],
+		["git add -A && git commit -m x && git push origin HEAD", "replays"],
+		["git commit -m x 2>&1 | tail -5", "replays"],
+		["git commit -m x 2>&1", "replays"],
+		["git status && git diff --stat && git commit -m x", "replays"],
+		["cd . && git add -A && git commit -m x", "replays"],
+		["git commit -m x || echo failed", "replays"],
+		["git add -A && git commit -m x; git log --oneline -1", "replays"],
+		[`git add -A && ${substituted}`, "replays"],
+		[substituted, "replays"],
+		[heredoc, "replays"],
+		[`git add -A && ${heredoc}`, "replays"],
+		['git commit -m "$(git log -1 --format=%s)"', "replays"],
+		["git commit -m x > out.txt", "replays"],
+		["timeout 60 git commit -m x", "replays"],
+		["env git commit -m x", "replays"],
+		["time git commit -m x", "replays"],
+		["export FOO=1; git commit -m x", "replays"],
+		["set -e; git add -A; git commit -m x", "replays"],
+		["GIT_AUTHOR_NAME=a git commit -m x", "replays"],
+		["npm run lint && git commit -m x", "replays"],
+		["npm test && git add -A && git commit -m x", "replays"],
+		["git add -A && git commit -m x --no-verify", "replays"],
+		['git commit -am "fix: thing"', "replays"],
+		["git commit -m 'a' -m 'b'", "replays"],
+		["git commit --amend --no-edit", "replays"],
+		["git add -A && git commit --amend --no-edit", "replays"],
+		["echo done && git commit -m x", "replays"],
+		["ls && git commit -m x", "replays"],
+		["git diff --cached --stat; git commit -m x", "replays"],
+		["git rm a.txt && git commit -m x", "replays"],
+		["git mv src/a.ts src/c.ts && git commit -m x", "replays"],
+		["git add src/a.ts && git reset src/a.ts && git commit -m x", "refused"],
+		["git commit -m x && git push", "replays"],
+		["(git add -A && git commit -m x)", "refused"],
+		["{ git add -A; git commit -m x; }", "refused"],
+		["git add -A && git commit -m x &", "refused"],
+		["true && git commit -m x", "replays"],
+		["make && git commit -m x", "replays"],
+		["cat msg.txt | git commit -F -", "refused"],
+		["git commit -F msg.txt", "replays"],
+		["git commit -F <(echo hi)", "refused"],
+	];
+	const shapeProject = (bytes: string) => {
+		const proj = seedProject(`shape-${seeded++}`, {
+			[A]: CLEAN,
+			"a.txt": "x\n",
+		});
+		write(proj, A, bytes);
+		write(proj, "msg.txt", "m\n");
+		git(proj, "add", "-A");
+		return proj;
+	};
+
+	it.each(SHAPES)("%s %s", { timeout: 120_000 }, async (command, shape) => {
+		const clean = await decide(shapeProject(`${CLEAN}// ok\n`), command);
+		const dirty = await decide(shapeProject(ADDED), command);
+		if (shape === "refused") {
+			expectOutcome(clean, "unknown unresolved_command");
+			expectOutcome(dirty, "unknown unresolved_command");
+		} else {
+			expectOutcome(clean, "commits");
+			expect(dirty.block, dirty.reason).toBe(true);
+			expect(dirty.unknown, dirty.reason).toBeUndefined();
+			expect(dirty.reason).toContain("adds blocking findings");
+		}
+	});
+
+	// A moved file is judged on the bytes the commit carries under its new
+	// name, whichever form reads it. Recurrence prevented: with the move
+	// replayed on the index alone, `-a` saw the destination missing from the
+	// working tree, and a pathspec naming it matched no skip-worktree entry,
+	// so the dry run carried nothing for it.
+	it.each([
+		'git commit -m "x"',
+		'git commit -a -m "x"',
+		'git commit -m "x" src/c.ts',
+		'git commit -o -m "x" src/c.ts src/a.ts',
+		'git add -A && git commit -m "x"',
+	])("judges a moved file under %s", { timeout: 120_000 }, async (commit) => {
+		const proj = seedProject(`moved-${seeded++}`, { [A]: CLEAN });
+		write(proj, A, ADDED);
+		git(proj, "add", A);
+		expectOutcome(
+			await decide(proj, `git mv ${A} src/c.ts && ${commit}`),
+			"refuses src/c.ts",
+		);
+		// The replay moved nothing for real.
+		expect(fs.existsSync(path.join(proj, A))).toBe(true);
+		expect(git(proj, "diff", "--cached", "--name-status")).toBe(`M\t${A}`);
+	});
+
+	// The replay judges a moved file's index blob; with unstaged changes its
+	// working bytes are what `-a` would carry, so the move refuses.
+	it(
+		"refuses a move whose source has unstaged changes",
+		{ timeout: 120_000 },
+		async () => {
+			const proj = seedProject(`moved-dirty-${seeded++}`, { [A]: CLEAN });
+			write(proj, A, ADDED);
+			expectOutcome(
+				await decide(proj, `git mv ${A} src/c.ts && git commit -a -m "x"`),
+				"unknown unresolved_command",
+			);
+		},
+	);
+
+	// A `git rm` replays on the index alone: the file it removes is not
+	// judged, and the working file stays.
+	it("does not judge a file git rm removes", { timeout: 120_000 }, async () => {
+		const proj = seedProject(`removed-${seeded++}`, { [A]: CLEAN, [B]: CLEAN });
+		write(proj, A, ADDED);
+		write(proj, B, B_EDITED);
+		git(proj, "add", B);
+		expectOutcome(
+			await decide(proj, `git rm --cached -q ${A} && git commit -a -m "x"`),
+			"commits",
+		);
+		expectOutcome(
+			await decide(proj, `git rm -f ${A} && git commit -a -m "x"`),
+			"commits",
+		);
+		// A path git rm cannot match fails its replay, and the read refuses.
+		expectOutcome(
+			await decide(proj, 'git rm nosuch.ts && git commit -m "x"'),
+			"unknown git_failed",
+		);
+		expect(fs.readFileSync(path.join(proj, A), "utf8")).toBe(ADDED);
+	});
+});
+
+describe("#5553 a submodule pointer the commit carries", () => {
+	// Recurrence prevented (verify r2 N3): a gitlink whose submodule has
+	// changes git reports against the working tree was read as a missing
+	// blob, and the commit refused.
+	it(
+		"commits a submodule bump beside a clean edit",
+		{ timeout: 120_000 },
+		async () => {
+			const proj = seedProject(`gitlink-${seeded++}`, { [B]: CLEAN });
+			const sub = path.join(proj, "vendor", "sub");
+			fs.mkdirSync(sub, { recursive: true });
+			git(sub, "init", "-q");
+			git(sub, "config", "user.name", "t");
+			git(sub, "config", "user.email", "t@t.local");
+			write(sub, "f.txt", "one\n");
+			git(sub, "add", "-A");
+			git(sub, "commit", "-qm", "one");
+			git(proj, "add", "vendor/sub");
+			git(proj, "commit", "-qm", "sub");
+			write(sub, "f.txt", "two\n");
+			git(sub, "commit", "-qam", "two");
+			write(sub, "f.txt", "dirty\n");
+			git(proj, "add", "vendor/sub");
+			write(proj, B, B_EDITED);
+			git(proj, "add", B);
+			expect(git(proj, "status", "--porcelain", "--", "vendor/sub")).toBe(
+				"MM vendor/sub",
+			);
+			expectOutcome(await decide(proj, 'git commit -m "x"'), "commits");
+		},
+	);
+});
+
 describe("#5553 a merge commit is judged against every parent", () => {
 	// Recurrence prevented (F4): judged against the first parent alone, a merge
 	// refused over a blocker the other parent already holds, and read every
@@ -980,10 +1158,10 @@ describe("#5553 a read that gives no answer refuses, recorded once", () => {
 	it("refuses once the bound has passed", { timeout: 120_000 }, async () => {
 		resetDegradationLedger();
 		const proj = stagedProject("bound");
-		expectOutcome(
-			await decide(proj, 'git commit -m "x"', { budgetMs: 1 }),
-			"unknown lane_incomplete",
-		);
+		const bounded = await decide(proj, 'git commit -m "x"', { budgetMs: 1 });
+		expectOutcome(bounded, "unknown lane_incomplete");
+		// Verify r2 N2: a large commit hits the bound on every retry.
+		expect(bounded.reason).toContain("commit fewer files at once");
 		// The same file read again inside the real bound refuses on its
 		// finding; by then the abandoned read's aborted git child has settled.
 		expectOutcome(await decide(proj, 'git commit -m "x"'), `refuses ${A}`);
