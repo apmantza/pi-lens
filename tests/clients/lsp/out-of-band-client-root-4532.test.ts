@@ -60,6 +60,7 @@ let main: string;
 let worktree: string;
 let runtime: RuntimeCoordinator;
 let restarts: string[];
+let forwarded: Array<{ filePath: string; type: number }>;
 let clientRoots: Array<{ root: string; spawnedAt: number }>;
 
 function installService(): void {
@@ -72,6 +73,11 @@ function installService(): void {
 				return 1;
 			},
 			getOpenDocumentPaths: () => [],
+			notifyOutOfBandFileChanges: (
+				events: ReadonlyArray<{ filePath: string; type: number }>,
+			) => {
+				forwarded.push(...events);
+			},
 		}),
 	);
 	// The look under test reads the LIVE service through `peekLSPService`, so the
@@ -136,6 +142,7 @@ beforeEach(() => {
 	runtime.setTelemetryIdentity({ sessionId: "pi-lens-4532-client-root" });
 	runtime.beginTurn();
 	restarts = [];
+	forwarded = [];
 	clientRoots = [];
 	resetDegradationLedger();
 	// The recent-phase ring is process-wide and `resetDegradationLedger` does
@@ -179,6 +186,36 @@ describe("the install look at a live client root (#4532 gap 7)", () => {
 				() => true,
 			),
 		).toBeGreaterThan(0);
+	});
+
+	// Recurrence (#5501 r3, F3): the root's first look recorded the manifests it
+	// found and forwarded none, so a `Cargo.toml` fixed after the client spawned
+	// but before this root's first look never reached rust-analyzer (real
+	// service and server: 4 of 4 touches `server-load-failed`).
+	it("forwards a manifest edited after the client spawned, at the client root's first look", async () => {
+		const manifest = path.join(worktree, "Cargo.toml");
+		fs.writeFileSync(manifest, '[package]\nname = "w"\n');
+		clientRoots = [{ root: worktree, spawnedAt: Date.now() - 10_000 }];
+		installService();
+
+		await bashResult("true");
+
+		expect(forwarded).toEqual([{ filePath: manifest, type: 2 }]);
+		// A config is no install: the client is not restarted for it.
+		expect(restarts).toEqual([]);
+	});
+
+	it("only records a manifest the client's spawn already followed", async () => {
+		const manifest = path.join(worktree, "Cargo.toml");
+		fs.writeFileSync(manifest, '[package]\nname = "w"\n');
+		const past = new Date(Date.now() - 60_000);
+		fs.utimesSync(manifest, past, past);
+		clientRoots = [{ root: worktree, spawnedAt: Date.now() - 10_000 }];
+		installService();
+
+		await bashResult("true");
+
+		expect(forwarded).toEqual([]);
 	});
 
 	// The gate the look asks: the session root and its repository's linked

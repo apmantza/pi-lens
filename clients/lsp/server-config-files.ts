@@ -37,13 +37,31 @@
  * (`INSTALL_LOCKFILES` in `clients/out-of-band-changes.ts`), and an edit to
  * either restarts the server as an install.
  *
- * Not yet forwarded (#5501 remainder): a workspace member's `Cargo.toml` below
- * the root (rust-analyzer 6 of 6 touches stale) and a nested `go.mod` under a
- * `go.work` (gopls 5 of 5 stale), because the look stats the root's names only.
- * The first look at a live client root publishes none of the three names edited
- * after spawn (0 of 3: `Cargo.toml`, `go.mod`, `pyproject.toml`). Over the MCP
- * route a rust project in a monorepo subdir was 6 of 6 stale, since that route
- * looks at the cwd only.
+ * #5501 r3: rust-analyzer reads every workspace member's `Cargo.toml` and gopls
+ * every module it serves, so a member manifest fixed after the load failed
+ * stayed unread too: rust-analyzer 1.100.0 stayed `server-load-failed` through
+ * five touches after a member `Cargo.toml` was fixed, and gopls 0.17.1 kept
+ * "requires go1.18" through five touches after a nested `go.mod` (under a
+ * `go.work`, or alone in a monorepo subdirectory) was raised to go 1.21. Once
+ * the event named the manifest, both cleared on the next touch (rust-analyzer
+ * after one still-loading touch). `Cargo.toml` and `go.mod` are therefore also
+ * forwarded below the root ({@link BELOW_ROOT_CONFIG_FILE_NAMES}); the
+ * declaration walk finds them. A name is below-root only with its own
+ * measurement: pyright reads its config at the project root only, and a
+ * `go.work` below the root is unmeasured.
+ *
+ * Measured NOT to need the event (so not listed): clangd 22 re-reads a changed
+ * `compile_commands.json` at the next parse with or without an event (cleared
+ * on the third touch both ways), and lua-language-server watches `.luarc.json`
+ * itself (cleared on the second touch both ways). Unmeasured, so not listed:
+ * the manifests of servers with no binary on the measuring host (`pom.xml`,
+ * `build.gradle`, `composer.json`, `mix.exs`, `pubspec.yaml`, `Package.swift`,
+ * `build.zig`, `stack.yaml`, `dune-project`, `Gemfile`, `deno.json`).
+ *
+ * Not forwarded: the session root's and the MCP cwd's own first look, which
+ * names no client epoch (a config fixed between a client's spawn and that first
+ * look stays unread until the next edit; the first look at any other live
+ * client root does publish it).
  *
  * Imports nothing: `clients/out-of-band-changes.ts` (the detector) and the LSP
  * service (the delivery) both read it.
@@ -63,6 +81,15 @@ const CONFIG_FILE_SERVERS: ReadonlyMap<string, readonly string[]> = new Map([
 export const SERVER_CONFIG_FILE_NAMES: readonly string[] = [
 	...CONFIG_FILE_SERVERS.keys(),
 ];
+
+/**
+ * The names also looked for below the root (#5501 r3): a name whose server
+ * reads every workspace member's copy. A subset of the table above.
+ */
+export const BELOW_ROOT_CONFIG_FILE_NAMES: ReadonlySet<string> = new Set([
+	"Cargo.toml",
+	"go.mod",
+]);
 
 /**
  * The ids of the servers that read `filePath` as config, or `undefined` when
