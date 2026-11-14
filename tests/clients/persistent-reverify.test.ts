@@ -379,10 +379,11 @@ describe("persistent reverify (#3170)", () => {
 	// Recurrence prevented (#5550, the deadline audit's `persistent-reverify.ts`
 	// rows): the re-verify's two bounds abandoned a wedged LSP request and left
 	// it pending with no signal (the touch and the code-action lookup each held
-	// the client busy). The requests now run under the bound's signal, which
-	// the fakes read the way `navRequest` does (`getAmbientAbortSignal()`).
-	// The touch is cut by the wall bound; the code-action lookup by Esc, because
-	// its wall cut races the loop's own `deadlineAt` race in `boundedLspCall`.
+	// the client busy). The work now runs in the bound's scope, which the fakes
+	// read the way `navRequest` does (`getAmbientAbortSignal()`).
+	// In the fakes, the touch's scope aborts on the wall bound and the
+	// code-action lookup's on Esc, because its wall cut races the loop's own
+	// `deadlineAt` race in `boundedLspCall`.
 	// What this proves: the work runs inside the scope and the scope aborts. The
 	// real `codeAction` reads it (`navRequest`); the real `touchFile` does not
 	// yet (`pullDiagnosticSource` owns its own abort), so the touch's cancel
@@ -391,7 +392,7 @@ describe("persistent reverify (#3170)", () => {
 		["touch", "touchFile", "wall"],
 		["code-action lookup", "codeAction", "escape"],
 	] as const)(
-		"C3f: the %s runs in the bound's scope, aborted when the bound fires (#5550)",
+		"C3f: the %s runs in the bound's scope, and that scope aborts when the bound fires (#5550)",
 		async (_label, member, cut) => {
 			const carried = makeCarriedReport(filePath);
 			const service = makeService({

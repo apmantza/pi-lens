@@ -3096,13 +3096,13 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, BoundedSite>> = {
 				"OPTIONAL by design: the pass runs on the turn_end hook, and bounded() " +
 				"reads a missing signal as one that never aborts — the wall budget " +
 				"(budgetMs/REVERIFY_BUDGET_MS) and the per-touch floor (250ms) still " +
-				"bound every call. The optionality is a written decision: the re-verify " +
+				"bound the wait on every call. The optionality is a written decision: the re-verify " +
 				"is best-effort by contract (an unconfirmed touch is kept verbatim and " +
 				"labeled, never a false clean), so a wall-clock-only run degrades " +
 				"honestly rather than blocking the hook. The thunk's scope aborts with " +
-				"the bound, but the real `touchFile` does not read it yet (it owns its " +
-				"`pullAbort`), so the touch's cancel waits on the LSP request sender " +
-				"(#5097).",
+				"the bound, and reaches only what reads it: the real `touchFile` does " +
+				"not read it yet (it owns its `pullAbort`), so the request is not cut " +
+				"when the bound fires. That cut waits on the LSP request sender (#5097).",
 		},
 	"call:clients/persistent-reverify.ts#runPersistentReverify:df18bffa~a607d75c":
 		{
