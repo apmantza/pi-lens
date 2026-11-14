@@ -35,7 +35,8 @@ export interface HostPorts {
 		bus(channel: string, payload: unknown): void;
 	};
 	readonly status: {
-		set(name: string, value: string): void;
+		/** `undefined` removes the key, mirroring the host's `ui.setStatus`. */
+		set(name: string, value: string | undefined): void;
 	};
 	readonly spawn: {
 		abortSignal(): AbortSignal | undefined;

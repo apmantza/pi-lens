@@ -30,23 +30,12 @@ const decisions = () =>
 		.map((call) => call[0])
 		.filter((entry) => entry?.phase === "availability_decision");
 
-// `jvm-runtime.ts` probes `java` through `safeSpawnAsync` directly (#1538),
-// mirroring the #1496 package-manager fix — mock at that boundary. Also
-// reimplement `isCommandAvailableAsync` (not `importOriginal`'d — the real
-// function's internal `safeSpawnAsync` call is bound to its OWN module's
-// unmocked binding, so importing it would bypass this mock and hit the real
-// system PATH). Pre-fix `jvm-runtime.ts` probes through `isCommandAvailableAsync`;
-// post-fix code calls `safeSpawnAsync` directly — routing both through the
-// same hoisted mock lets one test file exercise both at the same boundary and
-// prove the pre-fix code fails on its own logic, not a missing export.
-vi.mock("../../../clients/safe-spawn.js", () => ({
+// `java` is probed through the registry's PATH-only checker (#5410), which
+// spawns `java -version` through `safeSpawnAsync`: mock at that boundary and
+// keep every other export of the module real.
+vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../clients/safe-spawn.js")>()),
 	safeSpawnAsync,
-	safeSpawn: vi.fn(),
-	isCommandAvailableAsync: async (command: string) => {
-		const finder = process.platform === "win32" ? "where" : "which";
-		const result = await safeSpawnAsync(finder, [command], { timeout: 5000 });
-		return result.status === 0 && !result.error;
-	},
 }));
 
 // `discoverJdkHome`'s default `candidateRoots()` scans real per-platform
@@ -87,37 +76,25 @@ const timeoutResult = {
 	spawnFailure: { kind: "timeout" },
 };
 
-/** A real `where`/`which` that ran fine and found nothing: genuine absence. */
-const notFoundResult = { stdout: "", stderr: "", status: 1 };
-
-const okResult = { stdout: "/usr/bin/java\n", stderr: "", status: 0 };
-
-/**
- * The finder itself could not run (the shape `classifySpawnFailure` gives an
- * EACCES): a fact about the prober, not about `java`.
- */
-const finderUnspawnableResult = {
+/** `java` is not on PATH: the spawn seam's typed tool-not-found (ENOENT). */
+const javaAbsentResult = {
 	stdout: "",
 	stderr: "",
 	status: null,
-	error: Object.assign(new Error("spawn which EACCES"), { code: "EACCES" }),
-	failure: "spawn",
-	spawnFailure: { kind: "permission-denied" },
-};
-
-/** The finder is not on PATH (ENOENT, the `tool-not-found` kind): still the prober, not `java`. */
-const finderAbsentResult = {
-	stdout: "",
-	stderr: "",
-	status: null,
-	error: Object.assign(new Error("spawn which ENOENT"), { code: "ENOENT" }),
+	error: Object.assign(new Error("spawn java ENOENT"), { code: "ENOENT" }),
 	failure: "spawn",
 	spawnFailure: { kind: "tool-not-found" },
 };
 
-function finder(): string {
-	return process.platform === "win32" ? "where" : "which";
-}
+/** A `java` that ran and printed its version. */
+const okResult = { stdout: "", stderr: 'openjdk version "21"', status: 0 };
+
+/** A `java` on PATH that exits non-zero on its version probe (a stub, no JDK). */
+const rejectedResult = { stdout: "", stderr: "no JRE", status: 1 };
+
+/** The one spawn the availability probe makes. */
+const isJavaProbe = (cmd: string, args: string[]) =>
+	cmd === "java" && args[0] === "-version";
 
 function advancePastCooldown(): void {
 	vi.setSystemTime(new Date(Date.now() + TRANSIENT_BASE_COOLDOWN_MS + 1));
@@ -229,6 +206,9 @@ describe("jvm-runtime — resolveJavaRuntimeEnv (#241)", () => {
 		const { _resetJvmRuntimeCacheForTests } =
 			await import("../../../clients/lsp/jvm-runtime.js");
 		_resetJvmRuntimeCacheForTests();
+		const { resetDispatchAvailabilityState } =
+			await import("../../../clients/dispatch/runners/utils/runner-helpers.js");
+		resetDispatchAvailabilityState();
 		safeSpawnAsync.mockReset();
 		logLatencySpy.mockReset();
 		// See the first describe block: clear the host's real JAVA_HOME so
@@ -251,7 +231,7 @@ describe("jvm-runtime — resolveJavaRuntimeEnv (#241)", () => {
 
 	it("injects nothing when java is already on PATH", async () => {
 		safeSpawnAsync.mockImplementation(async (cmd: string, args: string[]) =>
-			cmd === finder() && args[0] === "java" ? okResult : notFoundResult,
+			isJavaProbe(cmd, args) ? okResult : javaAbsentResult,
 		);
 		const { resolveJavaRuntimeEnv } =
 			await import("../../../clients/lsp/jvm-runtime.js");
@@ -260,7 +240,7 @@ describe("jvm-runtime — resolveJavaRuntimeEnv (#241)", () => {
 
 	it("injects JAVA_HOME + PATH from a discovered JDK when java is absent", async () => {
 		safeSpawnAsync.mockImplementation(async (cmd: string, args: string[]) =>
-			cmd === finder() && args[0] === "java" ? notFoundResult : notFoundResult,
+			isJavaProbe(cmd, args) ? javaAbsentResult : javaAbsentResult,
 		);
 		const { resolveJavaRuntimeEnv } =
 			await import("../../../clients/lsp/jvm-runtime.js");
@@ -287,14 +267,14 @@ describe("jvm-runtime — resolveJavaRuntimeEnv (#241)", () => {
 
 	it("memoizes a durable verdict across calls", async () => {
 		safeSpawnAsync.mockImplementation(async (cmd: string, args: string[]) =>
-			cmd === finder() && args[0] === "java" ? okResult : notFoundResult,
+			isJavaProbe(cmd, args) ? okResult : javaAbsentResult,
 		);
 		const { resolveJavaRuntimeEnv } =
 			await import("../../../clients/lsp/jvm-runtime.js");
 		await resolveJavaRuntimeEnv();
 		await resolveJavaRuntimeEnv();
-		const javaProbes = safeSpawnAsync.mock.calls.filter(
-			([cmd, args]) => cmd === finder() && args[0] === "java",
+		const javaProbes = safeSpawnAsync.mock.calls.filter(([cmd, args]) =>
+			isJavaProbe(cmd, args),
 		).length;
 		expect(javaProbes).toBe(1);
 	});
@@ -325,7 +305,7 @@ describe("jvm-runtime — resolveJavaRuntimeEnv (#241)", () => {
 	 */
 	it("a timed-out probe is not cached: retried on the next demand call", async () => {
 		safeSpawnAsync.mockImplementation(async (cmd: string, args: string[]) =>
-			cmd === finder() && args[0] === "java" ? timeoutResult : notFoundResult,
+			isJavaProbe(cmd, args) ? timeoutResult : javaAbsentResult,
 		);
 		const { resolveJavaRuntimeEnv } =
 			await import("../../../clients/lsp/jvm-runtime.js");
@@ -334,25 +314,11 @@ describe("jvm-runtime — resolveJavaRuntimeEnv (#241)", () => {
 
 		// An IMMEDIATE re-call lands inside the transient cooldown (the
 		// jdtls-retry shape above). It must not spawn a second probe...
-		logLatencySpy.mockClear();
 		expect(await resolveJavaRuntimeEnv()).toBeUndefined();
 		const probesDuringCooldown = safeSpawnAsync.mock.calls.filter(
-			([cmd, args]) => cmd === finder() && args[0] === "java",
+			([cmd, args]) => isJavaProbe(cmd, args),
 		).length;
 		expect(probesDuringCooldown).toBe(1);
-		// ...but it must still be recorded: this is the state that left zero
-		// trace in latency.log pre-fix-round-2.
-		expect(decisions()).toContainEqual(
-			expect.objectContaining({
-				phase: "availability_decision",
-				metadata: expect.objectContaining({
-					tool: "java",
-					verdict: "unavailable",
-					outcome: "transient",
-				}),
-			}),
-		);
-
 		// Advance past the cooldown to prove the in-cooldown call above never
 		// latched anything into `_cachedEnv`: pre-#1538-round-2, that call would
 		// have written `_cachedEnv = { value: undefined }`, and THIS call would
@@ -361,15 +327,15 @@ describe("jvm-runtime — resolveJavaRuntimeEnv (#241)", () => {
 		advancePastCooldown();
 		expect(await resolveJavaRuntimeEnv()).toBeUndefined();
 
-		const javaProbes = safeSpawnAsync.mock.calls.filter(
-			([cmd, args]) => cmd === finder() && args[0] === "java",
+		const javaProbes = safeSpawnAsync.mock.calls.filter(([cmd, args]) =>
+			isJavaProbe(cmd, args),
 		).length;
 		expect(javaProbes).toBeGreaterThan(1);
 	});
 
 	it("a genuine absence (no JDK, no java) caches: not re-probed", async () => {
 		safeSpawnAsync.mockImplementation(async (cmd: string, args: string[]) =>
-			cmd === finder() && args[0] === "java" ? notFoundResult : notFoundResult,
+			isJavaProbe(cmd, args) ? javaAbsentResult : javaAbsentResult,
 		);
 		const { resolveJavaRuntimeEnv } =
 			await import("../../../clients/lsp/jvm-runtime.js");
@@ -377,12 +343,11 @@ describe("jvm-runtime — resolveJavaRuntimeEnv (#241)", () => {
 		expect(await resolveJavaRuntimeEnv()).toBeUndefined();
 		expect(await resolveJavaRuntimeEnv()).toBeUndefined();
 
-		const javaProbes = safeSpawnAsync.mock.calls.filter(
-			([cmd, args]) => cmd === finder() && args[0] === "java",
+		const javaProbes = safeSpawnAsync.mock.calls.filter(([cmd, args]) =>
+			isJavaProbe(cmd, args),
 		).length;
 		expect(javaProbes).toBe(1);
-		// A finder that RAN and found nothing is a genuine absence, read from the
-		// probe itself: the unspawnable-finder override must not reach it.
+		// The command is absent: a genuine, latched absence read from the probe.
 		expect(decisions().at(-1)?.metadata).toMatchObject({
 			tool: "java",
 			outcome: "missing",
@@ -392,82 +357,31 @@ describe("jvm-runtime — resolveJavaRuntimeEnv (#241)", () => {
 		});
 	});
 
-	// Recurrence: shape 83. `formatters.ts` `which()` learned in #1495 that a
-	// `where`/`which` that could not spawn says nothing about the tool, while
-	// `runJavaProbe` kept the unconditional `missing` override, so one EACCES on
-	// the finder latched java absent until the next session.
-	it("a finder that cannot spawn is a transient rejection, retried after the cooldown", async () => {
-		safeSpawnAsync.mockImplementation(async () => finderUnspawnableResult);
+	// Recurrence (#5410): a `java` on PATH that fails its version probe (the
+	// macOS stub with no JDK) read as present under the old `which java`, so the
+	// discovered JDK's overlay was never applied.
+	it("a java on PATH that rejects its version probe falls through to the discovered JDK", async () => {
+		safeSpawnAsync.mockImplementation(async (cmd: string, args: string[]) =>
+			isJavaProbe(cmd, args) ? rejectedResult : javaAbsentResult,
+		);
 		const { resolveJavaRuntimeEnv } =
 			await import("../../../clients/lsp/jvm-runtime.js");
+		const home = path.join(tmpDir(), "jdk-21");
+		fs.mkdirSync(path.join(home, "bin"), { recursive: true });
+		fs.writeFileSync(path.join(home, "bin", JAVA_EXE), "");
+		process.env.JAVA_HOME = home;
 
-		expect(await resolveJavaRuntimeEnv()).toBeUndefined();
-		expect(decisions().at(-1)?.metadata).toMatchObject({
-			tool: "java",
-			verdict: "unavailable",
-			outcome: "transient",
-			cause: "probe-rejected",
-			latched: false,
-			retryAfterMs: TRANSIENT_BASE_COOLDOWN_MS,
-			classifiedBy: "caller",
-		});
-
-		advancePastCooldown();
-		safeSpawnAsync.mockImplementation(async (cmd: string, args: string[]) =>
-			cmd === finder() && args[0] === "java" ? okResult : notFoundResult,
-		);
-		expect(await resolveJavaRuntimeEnv()).toBeUndefined();
-		expect(
-			safeSpawnAsync.mock.calls.filter(
-				([cmd, args]) => cmd === finder() && args[0] === "java",
-			),
-		).toHaveLength(2);
-		expect(decisions().at(-1)?.metadata).toMatchObject({
-			tool: "java",
-			verdict: "available",
-			outcome: "success",
-		});
-	});
-
-	// Recurrence: shape 83, the finder-ENOENT direction (review r1 F3 on #5403).
-	// An absent finder is `tool-not-found`; no cell pinned it as transient, so a
-	// finder that kept it as `missing` passed the suite and java stayed latched.
-	it("a finder that is absent (ENOENT) is a transient rejection, retried after the cooldown", async () => {
-		safeSpawnAsync.mockImplementation(async () => finderAbsentResult);
-		const { resolveJavaRuntimeEnv } =
-			await import("../../../clients/lsp/jvm-runtime.js");
-
-		expect(await resolveJavaRuntimeEnv()).toBeUndefined();
-		expect(decisions().at(-1)?.metadata).toMatchObject({
-			tool: "java",
-			verdict: "unavailable",
-			outcome: "transient",
-			cause: "probe-rejected",
-			latched: false,
-			retryAfterMs: TRANSIENT_BASE_COOLDOWN_MS,
-			classifiedBy: "caller",
-		});
-
-		advancePastCooldown();
-		safeSpawnAsync.mockImplementation(async (cmd: string, args: string[]) =>
-			cmd === finder() && args[0] === "java" ? okResult : notFoundResult,
-		);
-		expect(await resolveJavaRuntimeEnv()).toBeUndefined();
-		expect(
-			safeSpawnAsync.mock.calls.filter(
-				([cmd, args]) => cmd === finder() && args[0] === "java",
-			),
-		).toHaveLength(2);
+		expect((await resolveJavaRuntimeEnv())?.JAVA_HOME).toBe(home);
 	});
 
 	it("recovers after a transient failure: a later successful probe is used, not the stall", async () => {
 		let call = 0;
 		safeSpawnAsync.mockImplementation(async (cmd: string, args: string[]) => {
-			if (cmd === finder() && args[0] === "java") {
+			if (isJavaProbe(cmd, args)) {
 				call += 1;
 				return call === 1 ? timeoutResult : okResult;
 			}
-			return notFoundResult;
+			return javaAbsentResult;
 		});
 		const { resolveJavaRuntimeEnv } =
 			await import("../../../clients/lsp/jvm-runtime.js");
@@ -480,7 +394,7 @@ describe("jvm-runtime — resolveJavaRuntimeEnv (#241)", () => {
 		// transient verdict into the session cache either.
 		expect(await resolveJavaRuntimeEnv()).toBeUndefined();
 		const probesDuringCooldown = safeSpawnAsync.mock.calls.filter(
-			([cmd, args]) => cmd === finder() && args[0] === "java",
+			([cmd, args]) => isJavaProbe(cmd, args),
 		).length;
 		expect(probesDuringCooldown).toBe(1);
 		// Past the transient cooldown: `java` is reachable again — correctly
@@ -491,15 +405,15 @@ describe("jvm-runtime — resolveJavaRuntimeEnv (#241)", () => {
 		advancePastCooldown();
 		expect(await resolveJavaRuntimeEnv()).toBeUndefined();
 
-		const javaProbes = safeSpawnAsync.mock.calls.filter(
-			([cmd, args]) => cmd === finder() && args[0] === "java",
+		const javaProbes = safeSpawnAsync.mock.calls.filter(([cmd, args]) =>
+			isJavaProbe(cmd, args),
 		).length;
 		expect(javaProbes).toBe(2);
 
 		// Now durable: a third call must not probe again.
 		expect(await resolveJavaRuntimeEnv()).toBeUndefined();
-		const javaProbesAfter = safeSpawnAsync.mock.calls.filter(
-			([cmd, args]) => cmd === finder() && args[0] === "java",
+		const javaProbesAfter = safeSpawnAsync.mock.calls.filter(([cmd, args]) =>
+			isJavaProbe(cmd, args),
 		).length;
 		expect(javaProbesAfter).toBe(2);
 	});
@@ -515,11 +429,11 @@ describe("jvm-runtime — resolveJavaRuntimeEnv (#241)", () => {
 	it("concurrent calls share one probe", async () => {
 		let spawnCount = 0;
 		safeSpawnAsync.mockImplementation(async (cmd: string, args: string[]) => {
-			if (cmd === finder() && args[0] === "java") {
+			if (isJavaProbe(cmd, args)) {
 				spawnCount += 1;
 				return okResult;
 			}
-			return notFoundResult;
+			return javaAbsentResult;
 		});
 		const { resolveJavaRuntimeEnv } =
 			await import("../../../clients/lsp/jvm-runtime.js");

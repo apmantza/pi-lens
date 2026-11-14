@@ -439,8 +439,10 @@ export function materializeClean(
 /**
  * Every command the fixtures name as a probe answer, plus the work binary of
  * each. Both replay suites stub these on a PATH of their own, because
- * `verifyOrInstallCommand` short-circuits on filesystem presence and a host that
- * has one of them must not change which spawns reach the mocked seam.
+ * the registry ladder (`resolveToolCommandWithInstallFallback`) reads filesystem
+ * presence, in its project and managed rungs and in the `isSpawnableCommand`
+ * re-check of a cached positive, and a host that has one of them must not change
+ * which spawns reach the mocked seam.
  *
  * Derived from the fixtures, never listed: a hand-written list (`oxlint` was the
  * one observed spelling) models presence for exactly the tools that already
