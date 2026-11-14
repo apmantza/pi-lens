@@ -333,6 +333,9 @@ const timingSensitiveInclude = [
 // outside this list without a documented exemption — or a member here
 // silently goes stale.
 const lspSpawnHeavyInclude = [
+	// #5552: the real tool_result/dispatcher path waits on a child LSP wire
+	// for mtime-preserving mv and cp -p writes.
+	"tests/index-5552-lsp-resync-wire.test.ts",
 	"tests/clients/ast-grep-rule-precedence-followups.test.ts",
 	// #1712/#4485: the cascade's live twin over a real classic TypeScript
 	// server (opt-in, PI_LENS_INTEGRATION=1); three cascades each wait on
