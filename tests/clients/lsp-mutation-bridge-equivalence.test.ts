@@ -33,6 +33,7 @@ import {
 	type LspMutationContext,
 	recordLspMutation,
 } from "../../clients/lsp-mutation.js";
+import { getProjectDataDir } from "../../clients/file-utils.js";
 import { beginFixRun } from "../../clients/fix-run-restore.js";
 import { registerMutationBridge } from "../../clients/mutation-bridge.js";
 import {
@@ -693,33 +694,12 @@ describe("bookkeepLspMutation — direct path and bridge fallback are equivalent
 		resetObservedMutationNet();
 		resetDegradationLedger();
 		const filePath = writeFixture(dirDirect, "unusable.ts");
-		// Find the turn-state directory with one good write, then make it a
-		// file, so the next `mkdirSync` throws EEXIST.
-		cacheManagerDirect.addModifiedRange(
-			fileDirect,
-			{ start: 1, end: 1 },
-			false,
-			dirDirect,
-			"s-2450-equiv-direct",
-			undefined,
-			dirDirect,
-		);
-		const turnStateDirs: string[] = [];
-		const walk = (dir: string) => {
-			for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-				const full = path.join(dir, entry.name);
-				if (entry.isDirectory()) walk(full);
-				else if (entry.name === "turn-state.json")
-					turnStateDirs.push(path.dirname(full));
-			}
-		};
-		walk(base.tmpDir);
-		walk(dirDirect);
-		expect(turnStateDirs.length).toBeGreaterThan(0);
-		for (const dir of turnStateDirs) {
-			fs.rmSync(dir, { recursive: true });
-			fs.writeFileSync(dir, "not a directory");
-		}
+		// Make the project's data directory a file, so the turn-state write's
+		// `mkdirSync` throws EEXIST.
+		const dataDir = getProjectDataDir(dirDirect);
+		fs.rmSync(dataDir, { recursive: true, force: true });
+		fs.mkdirSync(path.dirname(dataDir), { recursive: true });
+		fs.writeFileSync(dataDir, "not a directory");
 		const acceptedFiles: string[] = [];
 		const receiptsBefore = runtimeDirect.getMutationsSince(0).length;
 		recordLspMutation(
