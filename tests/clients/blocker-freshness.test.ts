@@ -20,7 +20,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	getDegradationSummary,
 	resetDegradationLedger,
@@ -660,6 +660,59 @@ describe("blocker freshness sweep — self-drift on non-LSP provenance", () => {
 				expect.objectContaining({ kind: "self-drift-hash-budget-exhausted" }),
 			]),
 		);
+	});
+
+	// Recurrence (#5550 r1, B2): the sweep runs `detectSelfDrift` as
+	// `bounded((signal) => detectSelfDrift({... signal}))`, and replacing that
+	// `signal` with `undefined` left every test green: the abandoned run's own
+	// stat and hash-read bounds then ran on, reading the whole file for a
+	// verdict nobody takes. The host's `stat` is the one double (it is the
+	// pending request); Esc lands while it is pending and the outer bound
+	// fires. The abandoned run's inner stat bound must then have given up, so
+	// the answer, once it arrives, starts no hash read.
+	it("hands the abandoned self-drift run the bound's abort, so it starts no hash read (#5550)", async () => {
+		const dir = makeDir("pi-lens-fresh-abandoned-");
+		const target = path.join(dir, "consumer.ts");
+		fs.writeFileSync(target, "export const y = 1;\n");
+		const runtime = new RuntimeCoordinator();
+		const content = fs.readFileSync(target);
+		runtime.recordInlineBlockers(
+			target,
+			"🔴 blocker",
+			1,
+			["ast-grep"],
+			undefined,
+			{
+				size: content.byteLength,
+				sha256: createHash("sha256").update(content).digest("hex"),
+			},
+		);
+		const realStat = await fs.promises.stat(target);
+		const escape = new AbortController();
+		let answerStat!: () => void;
+		const realStatFn = fs.promises.stat.bind(fs.promises);
+		vi.spyOn(fs.promises, "stat").mockImplementation(((
+			...args: Parameters<typeof fs.promises.stat>
+		) => {
+			if (args[0] !== target) return realStatFn(...args);
+			queueMicrotask(() => escape.abort());
+			return new Promise((resolve) => {
+				answerStat = () => resolve(realStat);
+			});
+		}) as typeof fs.promises.stat);
+		const readFile = vi.spyOn(fs.promises, "readFile");
+		try {
+			const counts = await sweepInlineBlockerFreshness(runtime, dir, {
+				signal: escape.signal,
+			});
+			expect(counts.selfUnverifiable).toBe(1);
+			answerStat();
+			await new Promise((resolve) => setImmediate(resolve));
+			await new Promise((resolve) => setImmediate(resolve));
+			expect(readFile.mock.calls.map((call) => call[0])).not.toContain(target);
+		} finally {
+			vi.restoreAllMocks();
+		}
 	});
 
 	it("records a distinct bounded record when the self-drift bound expires", async () => {

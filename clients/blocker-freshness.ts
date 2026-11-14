@@ -1359,13 +1359,14 @@ export async function sweepInlineBlockerFreshness(
 				// means "could not decide", never "changed".
 				const hashBudgetWasExhausted = hashBudget.exhausted;
 				const selfDrift = (await bounded(
-					detectSelfDrift({
-						filePath: entry.filePath,
-						recordedSize: entry.recordedSize,
-						recordedHash: entry.recordedHash,
-						signal: options?.signal,
-						budget: hashBudget,
-					}),
+					(signal) =>
+						detectSelfDrift({
+							filePath: entry.filePath,
+							recordedSize: entry.recordedSize,
+							recordedHash: entry.recordedHash,
+							signal,
+							budget: hashBudget,
+						}),
 					{
 						ms: HOOK_WALL_BUDGET_MS.turn_end,
 						signal: options?.signal,

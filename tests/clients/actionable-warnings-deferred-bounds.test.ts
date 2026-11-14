@@ -33,6 +33,7 @@ import {
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
 import { normalizeMapKey } from "../../clients/path-utils.js";
+import { getAmbientAbortSignal } from "../../clients/safe-spawn.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import { setupTestEnvironment } from "./test-utils.js";
@@ -99,8 +100,15 @@ const openFile = vi.fn(async (filePath: string, _content?: string) => {
 	}
 	return undefined;
 });
+/**
+ * The signal an LSP request would read at its start: `getAmbientAbortSignal()`
+ * is what `navRequest` and the other non-spawn LSP calls take (#5097), so the
+ * fake records it per basename (#5550).
+ */
+let requestSignalByFile = new Map<string, AbortSignal | undefined>();
 const getDiagnostics = vi.fn(async (filePath: string) => {
 	const base = path.basename(filePath);
+	requestSignalByFile.set(base, getAmbientAbortSignal());
 	if (wedgedFiles.has(base)) {
 		// Never settles. Only a per-round-trip bound can get past this.
 		await new Promise(() => {});
@@ -193,6 +201,7 @@ beforeEach(() => {
 	pullDelayMs = 0;
 	pullStartedAt = new Map();
 	pullReturnedAt = new Map();
+	requestSignalByFile = new Map();
 	for (const gate of gatedPulls.values()) gate.release();
 	gatedPulls = new Map();
 	openFile.mockClear();
@@ -321,6 +330,42 @@ describe("#2504 r2 F3 — per-round-trip bound on the deferred loop", () => {
 		);
 		// Rising edge, not one row per wedged file: three files share one row.
 		expect(group?.count).toBe(1);
+	});
+
+	// #5550. The bound abandoned the pull and left the request running with no
+	// signal: the deadline audit's `actionable-warnings.ts:835` row (a pending
+	// LSP request, the client held busy). The pull now runs under the bound's
+	// own signal, so a request that reads the ambient signal is cancelled when
+	// the per-trip budget lapses. Pre-fix `getAmbientAbortSignal()` is
+	// `undefined` here: nothing reaches the request. Proves the scope, not the
+	// real service: the fake reads the ambient signal itself, and the real
+	// `getDiagnostics` pull does not yet (it owns its `pullAbort`), so that
+	// cancel waits on the LSP request sender (#5097).
+	it("runs the pull in the bound's scope, aborted when the per-trip budget lapses (#5550)", async () => {
+		const { buildActionableWarningsReport, _awaitDeferredLspPullForTest } =
+			await loadWarnings();
+		const files = makeSources(2);
+		wedgedFiles.add("f0.ts");
+
+		await buildActionableWarningsReport({
+			cwd: env.tmpDir,
+			sessionId: "lens-test",
+			turnIndex: 1,
+			files,
+			modifiedRangesByFile: new Map(),
+			dispatchWarnings: [],
+			includeLspCodeActions: true,
+			lspPullTimeoutMs: 150,
+			onDeferredReport: () => {},
+		});
+		expect(await settlesWithin(_awaitDeferredLspPullForTest(), 2_500)).toBe(
+			"settled",
+		);
+
+		expect(requestSignalByFile.get("f0.ts")?.aborted).toBe(true);
+		// The healthy file's request finished inside its bound: its signal is
+		// live-but-unaborted state, not a cancelled request (state table row 1).
+		expect(requestSignalByFile.get("f1.ts")?.aborted).toBe(false);
 	});
 
 	// #2557 review F3. `boundedLspCall` hard-coded `hook: "turn_end"` /

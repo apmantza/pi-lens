@@ -1187,7 +1187,8 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				let lspSymbolError: string | undefined;
 				try {
 					const result = await bounded(
-						getOpenDocumentSymbols(filePath).then((symbols) => ({ symbols })),
+						() =>
+							getOpenDocumentSymbols(filePath).then((symbols) => ({ symbols })),
 						{
 							ms: EXPANSION_BUDGET_MS,
 							signal: deps.ctx.signal,
@@ -2021,12 +2022,11 @@ async function captureWriterSeeds(
 ): Promise<void> {
 	for (const filePath of filePaths) {
 		const started = Date.now();
-		const controller = new AbortController();
-		const signal = deps.ctx.signal
-			? AbortSignal.any([deps.ctx.signal, controller.signal])
-			: controller.signal;
+		// The thunk's signal is the capture's cancel: it aborts when the budget
+		// lapses or `ctx.signal` fires (#5550; this site hand-built the same
+		// controller, then aborted it after the await).
 		const outcome = await bounded(
-			capturePreEditSeed(filePath, deps, signal, spanless),
+			(signal) => capturePreEditSeed(filePath, deps, signal, spanless),
 			{
 				ms: captureBudgetMs(spanless),
 				signal: deps.ctx.signal,
@@ -2034,7 +2034,6 @@ async function captureWriterSeeds(
 				label: "pre-edit-linter-capture",
 			},
 		);
-		controller.abort();
 		if (!outcome || outcome.outcome === "failed")
 			recordDegradationOnce({
 				kind: "pre-edit-capture-incomplete",
