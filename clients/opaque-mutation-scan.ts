@@ -1010,7 +1010,7 @@ export interface GitRecoveryOutcome {
 	 */
 	namedCredited?: string[];
 	/**
-	 * #5616: the verdict on each recovered path no write form names, present
+	 * #5616: the verdict on each recovered path no named write claimed, present
 	 * only when the caller asked for it ({@link GitRecoveryOptions.scriptCredit}).
 	 */
 	scriptCredit?: ScriptCreditVerdicts;
@@ -1094,7 +1094,7 @@ export interface GitRecoveryOptions {
 	 */
 	dirtyBefore?: readonly string[] | undefined;
 	/**
-	 * #5616: judge each changed path no write form names for credit to a
+	 * #5616: judge each changed path no named write claimed for credit to a
 	 * successful bash call. Set only for such a call; `observedWriters` holds
 	 * the map keys pi-lens recorded a write to since the call's baseline.
 	 */
@@ -1478,12 +1478,10 @@ export async function recoverOpaqueChangesViaGit(
 		const key = normalizeMapKey(entry.absPath);
 		paths.push(key);
 		if (isNamedWrite(entry.absPath)) namedCredited.push(key);
-		// #5616: a path the command names is the named route's to credit.
-		else if (
-			scriptCredit &&
-			options.scriptCredit &&
-			!isNamed(normalizeMapKey(realpathOrResolve(entry.absPath)))
-		) {
+		// #5616: a path no named write claimed. A named one reaching here was
+		// dirty before or has no dirty set, so it is never credited, and the
+		// caller drops its cause with the other named paths.
+		else if (scriptCredit && options.scriptCredit) {
 			const cause: ScriptCreditCause | undefined =
 				cleanBefore === undefined
 					? dirtySetCut

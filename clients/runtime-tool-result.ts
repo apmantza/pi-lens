@@ -3063,9 +3063,9 @@ export async function handleToolResult(
 			}
 			hadOpaqueRecovery = opaquePaths.length > 0;
 			// #5616: each uncredited cause leaves one record per root per session.
-			// The git scan judges only paths no write form names; a checkout with
-			// no git lists the named ones too, so a cause speaks only for a path
-			// still opaque here.
+			// A path a write form names is the named route's, even where the scan
+			// judged it (dirty before, no dirty set, a checkout with no git), so a
+			// cause speaks only for a path still opaque here.
 			const opaqueKeys = new Set(opaquePaths);
 			for (const outcome of outcomes) {
 				if (outcome.verdict !== "observed") continue;
