@@ -182,8 +182,8 @@ function render(
  * the list is empty and the composer fails closed (#4617 review F5).
  */
 function goModuleFiles(cwd: string): string[] {
-	const goFiles = existingDependencyManifests(cwd).filter((file) =>
-		/[\\/]go\.(?:mod|sum)$/.test(file),
+	const goFiles = existingDependencyManifests(cwd).flatMap((file) =>
+		/[\\/]go\.(?:mod|sum)$/.test(file) ? [file] : [],
 	);
 	return goFiles.some((file) => /[\\/]go\.mod$/.test(file)) ? goFiles : [];
 }
