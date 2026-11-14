@@ -1308,6 +1308,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the subject is what a real bash tool call writes into a real git checkout and what the model receives for it, detected by git's own status; a stubbed shell answers only what it was told, and only the host can say whether python3 runs for the trigger's own python form",
 	},
+	// 2026-11-14 (#5552): the real tool_result and dispatcher must carry
+	// mtime-preserving shell-write bytes onto a real child LSP wire.
+	"real-process-spawn:index-5552-lsp-resync-wire.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the subject is the real pi tool_result and dispatcher sending mv and cp -p bytes over a child LSP wire; a stubbed shell or client cannot prove the protocol payload",
+	},
 	// 2026-11-14 (#5552): a bash `mv`, `rsync` and `tar x` keep the source's old
 	// mtime, so only git's own status shows the write; the writers are real
 	// children and the gate reads a real repo.
