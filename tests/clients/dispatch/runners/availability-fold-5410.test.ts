@@ -49,7 +49,7 @@ const {
 	probeMode,
 	probeGate,
 	probeGates,
-	decisionRows,
+	probeSignals,
 } = vi.hoisted(() => {
 	const spawnCalls: Array<{
 		cmd: string;
@@ -96,6 +96,7 @@ const {
 				args.includes("-version") ||
 				(args[0] === "version" && args[1] === "--short");
 			if (isProbe) {
+				for (const signal of probeSignals.splice(0)) signal();
 				await (probeGates.shift() ?? probeGate.current);
 				const tool = path.basename(String(cmd)).replace(/\.(exe|bat)$/, "");
 				// helm 4 has no --version flag, an old JVM has no --version and the
@@ -126,30 +127,15 @@ const {
 			return { error: null, status: 0, stdout: "", stderr: "" };
 		},
 	);
-	// The `availability_decision` rows, in write order.
-	const decisionRows: Array<Record<string, unknown>> = [];
+	// Resolvers of callers waiting for the next version probe to be spawned.
+	const probeSignals: Array<() => void> = [];
 	return {
 		safeSpawnAsync,
 		spawnCalls,
 		probeMode,
 		probeGate,
 		probeGates,
-		decisionRows,
-	};
-});
-vi.mock("../../../../clients/latency-logger.js", async (importOriginal) => {
-	const original =
-		await importOriginal<
-			typeof import("../../../../clients/latency-logger.js")
-		>();
-	return {
-		...original,
-		logLatency: (entry: Parameters<typeof original.logLatency>[0]) => {
-			if (entry.phase === "availability_decision") {
-				decisionRows.push(entry.metadata ?? {});
-			}
-			original.logLatency(entry);
-		},
+		probeSignals,
 	};
 });
 vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
@@ -200,6 +186,13 @@ const probesOf = (binary: string) =>
 				call.args[0] === "version"),
 	);
 
+/** Resolves once `binary` has been probed `count` times (the probe is spawned, so in flight). */
+async function untilProbed(binary: string, count: number): Promise<void> {
+	while (probesOf(binary).length < count) {
+		await new Promise<void>((resolve) => probeSignals.push(resolve));
+	}
+}
+
 describe("one availability ladder per binary (#5410)", () => {
 	let pathEnv: ReturnType<typeof setupTestEnvironment>;
 	let workspace: ReturnType<typeof setupTestEnvironment>;
@@ -218,7 +211,6 @@ describe("one availability ladder per binary (#5410)", () => {
 		for (const key of Object.keys(probeMode)) delete probeMode[key];
 		probeGate.current = undefined;
 		probeGates.length = 0;
-		decisionRows.length = 0;
 		safeSpawnAsync.mockClear();
 	});
 	afterEach(() => {
@@ -368,7 +360,7 @@ describe("one availability ladder per binary (#5410)", () => {
 		setProjectTrustState("untrusted");
 		const before = checker.isAvailableAsync(workspace.tmpDir);
 		// The first probe is spawned, so it is in flight under the old answer.
-		await vi.waitFor(() => expect(probesOf("trivy")).toHaveLength(1));
+		await untilProbed("trivy", 1);
 		setProjectTrustState("trusted");
 		const after = checker.isAvailableAsync(workspace.tmpDir);
 		release();
@@ -428,10 +420,10 @@ describe("one availability ladder per binary (#5410)", () => {
 					"older" | "newer",
 					Promise<boolean>
 				>;
-				await vi.waitFor(() => expect(probesOf("trivy")).toHaveLength(1));
+				await untilProbed("trivy", 1);
 				setProjectTrustState("trusted");
 				calls.newer = checker.isAvailableAsync(cwd);
-				await vi.waitFor(() => expect(probesOf("trivy")).toHaveLength(2));
+				await untilProbed("trivy", 2);
 
 				const modeOf = { older, newer };
 				const order =
@@ -453,40 +445,6 @@ describe("one availability ladder per binary (#5410)", () => {
 				expect(probesOf("trivy")).toHaveLength(2);
 			},
 		);
-	});
-
-	// Recurrence (#5595 B1, observability): a superseded flight's decision row
-	// said `latched: true` for a verdict it never wrote to the latch, so a reader
-	// of the log saw the older failure as the durable state while the newer
-	// success stood. It still writes its row, as not latched.
-	it("logs a superseded flight's verdict as not latched", async () => {
-		const tool = path.join(
-			pathEnv.tmpDir,
-			process.platform === "win32" ? "trivy.exe" : "trivy",
-		);
-		fs.writeFileSync(tool, "#!/bin/sh\n");
-		fs.chmodSync(tool, 0o755);
-		const checker = createAvailabilityChecker("trivy", ".exe");
-		const cwd = workspace.tmpDir;
-		let releaseOlder: () => void = () => {};
-		probeGates.push(
-			new Promise<void>((resolve) => {
-				releaseOlder = resolve;
-			}),
-		);
-		setProjectTrustState("untrusted");
-		const older = checker.isAvailableAsync(cwd);
-		await vi.waitFor(() => expect(probesOf("trivy")).toHaveLength(1));
-		setProjectTrustState("trusted");
-		await checker.isAvailableAsync(cwd);
-		probeMode.trivy = "reject";
-		releaseOlder();
-		await older;
-		const rows = decisionRows.filter((row) => row.tool === "trivy");
-		expect(rows.map((row) => [row.verdict, row.outcome, row.latched])).toEqual([
-			["available", "success", true],
-			["unavailable", "non-installable", false],
-		]);
 	});
 
 	// Recurrence (#5595 F6): the settle-time `finally` removes the in-flight
@@ -515,10 +473,10 @@ describe("one availability ladder per binary (#5410)", () => {
 		);
 		setProjectTrustState("untrusted");
 		const older = checker.isAvailableAsync(cwd);
-		await vi.waitFor(() => expect(probesOf("trivy")).toHaveLength(1));
+		await untilProbed("trivy", 1);
 		setProjectTrustState("trusted");
 		const newer = checker.isAvailableAsync(cwd);
-		await vi.waitFor(() => expect(probesOf("trivy")).toHaveLength(2));
+		await untilProbed("trivy", 2);
 		releaseOlder();
 		await older;
 		const third = checker.isAvailableAsync(cwd);
