@@ -122,11 +122,14 @@ import {
 	awaitOccurrenceKey,
 	DEFINITION_FILE,
 	findBoundedCallLines,
+	findBoundedReferenceLines,
+	findBoundedCalls,
 	findHandRolledRaceLines,
 	findUnboundedAwaitLines,
 	hookHelperModules,
 	hookPathFiles,
 	localImportTargets,
+	scanBoundedCallForms,
 	scanFiles,
 	shippedSourceFiles,
 } from "../support/hook-await-scan.js";
@@ -2849,6 +2852,69 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 };
 
 /**
+ * One registered `bounded()` call (#5550): where its `signal` comes from and
+ * what happens to the work when a bound fires.
+ *
+ * `work` is the closed vocabulary that replaces shape 91's judgment-only
+ * status for a bound's work: `threaded` (the thunk form, so the bound's signal
+ * reaches every spawn and request under it), `pure-read` (a read or a wait:
+ * nothing it holds or writes outlives the bound), `outlives:<owner>` (the work
+ * must keep running and its owner writes the tail) or `migrate:#<n>` (a leak
+ * known and filed). Checked by {@link auditBoundedWork} against the call's
+ * actual form, so the word cannot drift from the code.
+ */
+interface BoundedSite {
+	signal: string;
+	work: string;
+}
+
+const BOUNDED_WORK_WORD =
+	/^(?:threaded|pure-read|outlives:\S[^\n]{9,}|migrate:#[1-9]\d*)$/;
+
+/**
+ * Judge the registry's `work` column against the tree (#5550). A gate admits
+ * a short list of known-good rows and refuses everything else:
+ * - a row with no `work`, or one outside {@link BOUNDED_WORK_WORD}, refuses;
+ * - `threaded` is admitted only for a call whose first argument is a function
+ *   literal (the form the detector can read), and a function-literal call may
+ *   register nothing else;
+ * - a promise-form call (anything the detector cannot read as a literal,
+ *   an alias or a value held in another binding included) may not claim
+ *   `threaded`;
+ * - a registered key the tree has no call for refuses (a stale row).
+ */
+function auditBoundedWork(
+	sites: Readonly<Record<string, { signal?: string; work?: string }>>,
+	forms: ReadonlyMap<string, "thunk" | "promise">,
+): string[] {
+	const problems: string[] = [];
+	for (const [key, row] of Object.entries(sites)) {
+		const work = row.work;
+		if (typeof work !== "string" || !BOUNDED_WORK_WORD.test(work)) {
+			problems.push(
+				`${key}: \`work\` is ${JSON.stringify(work)}; it must be threaded, pure-read, ` +
+					"outlives:<owner and reason> or migrate:#<issue>",
+			);
+			continue;
+		}
+		const form = forms.get(key);
+		if (form === undefined) {
+			problems.push(`${key}: registered, but the tree has no such call`);
+		} else if (form === "thunk" && work !== "threaded") {
+			problems.push(
+				`${key}: the call passes a thunk, so its work IS threaded; register \`threaded\`, not \`${work}\``,
+			);
+		} else if (form === "promise" && work === "threaded") {
+			problems.push(
+				`${key}: \`threaded\` claims a thunk, but the call passes a promise ` +
+					"(or a value the detector cannot read as a function literal)",
+			);
+		}
+	}
+	return problems;
+}
+
+/**
  * Every shipped `bounded()` CALL, and where its `signal` comes from (#2557
  * review F2).
  *
@@ -2862,288 +2928,445 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
  * signal a call passes re-keys it and forces the claim below to be re-stated
  * rather than silently inherited.
  */
-const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
-	"call:clients/actionable-warnings.ts#boundedLspCall:2b57f8b9~9137fb1a":
-		"`LspEnrichmentDeps.signal`. ALWAYS live on the deferred loop (built " +
-		"from the turn signal combined with the deferral controller's). Optional " +
-		"for the in-band loop, which passes `args.signal` — present on every " +
-		"turn_end path and absent only in a unit harness. Deadline half is live " +
-		"either way, and is itself the per-trip minimum of the loop's remaining " +
-		"budget and the per-pull timeout.",
-	"call:clients/blocker-freshness.ts#detectSelfDrift:31ccd4b2~6f51ea0e":
-		"`BlockerFreshnessOptions.signal`, threaded from `TurnEndDeps.signal` by " +
-		"`runtime-turn.ts`'s sweep call. Live on every turn_end path. Absent only " +
-		"in unit harnesses that drive the sweep directly, where the wall-clock " +
-		"half still applies; accepted because the self axis's failure direction " +
-		"is `unverifiable` (change nothing), never a demotion (#2982).",
-	"call:clients/blocker-freshness.ts#detectSelfDrift:a28359f5~facb5902":
-		"Same `BlockerFreshnessOptions.signal` as the stat above. This is the " +
-		"hash tier's whole-file read, reached only when the size tier cannot " +
-		"separate a same-length edit from a `touch`; it is additionally capped by " +
-		"the per-sweep hash budget so the aggregate read is " +
-		"bounded on the count axis too (#2982, defect shape 9).",
-	"call:clients/blocker-freshness.ts#sweepInlineBlockerFreshness:b262cffc~b69fb70f":
-		"Same `BlockerFreshnessOptions.signal`. Wraps the whole per-entry " +
-		"`detectSelfDrift` call so an expiry maps to `unverifiable` at one place " +
-		"rather than leaving a half-finished verdict; the inner bounds above are " +
-		"the leaf budgets (#2982).",
-	"call:clients/bootstrap.ts#requestBootstrapClients:076f54d7~878c680d":
-		"`options.signal`, GENUINELY absent for the three session-start demands: " +
-		"`SessionBootstrapAccess.request` takes no signal on purpose (#1394 — a " +
-		"session_start can land mid-turn, and binding the outgoing turn's signal " +
-		"cancelled every startup scan with no retry). Two live bounds even then, " +
-		"because this call supplies the seam's own `bootstrapShutdownController` " +
-		"as `shutdownSignal`. The tool_call demand passes the ambient signal.",
-	"call:clients/format-service.ts#FormatService:6ec6083f~f49a0718":
-		"The formatter aggregate receives the edit pipeline's live signal. The " +
-		"signal may be absent only in direct unit callers; the edit wall budget " +
-		"and the per-formatter leaf timer remain active in that harness.",
+const BOUNDED_CALL_SITES: Readonly<Record<string, BoundedSite>> = {
+	"call:clients/actionable-warnings.ts#boundedLspCall:2b57f8b9~9137fb1a": {
+		work: "threaded",
+		signal:
+			"`LspEnrichmentDeps.signal`. ALWAYS live on the deferred loop (built " +
+			"from the turn signal combined with the deferral controller's). Optional " +
+			"for the in-band loop, which passes `args.signal` — present on every " +
+			"turn_end path and absent only in a unit harness. Deadline half is live " +
+			"either way, and is itself the per-trip minimum of the loop's remaining " +
+			"budget and the per-pull timeout.",
+	},
+	"call:clients/blocker-freshness.ts#detectSelfDrift:31ccd4b2~6f51ea0e": {
+		work: "pure-read",
+		signal:
+			"`BlockerFreshnessOptions.signal`, threaded from `TurnEndDeps.signal` by " +
+			"`runtime-turn.ts`'s sweep call. Live on every turn_end path. Absent only " +
+			"in unit harnesses that drive the sweep directly, where the wall-clock " +
+			"half still applies; accepted because the self axis's failure direction " +
+			"is `unverifiable` (change nothing), never a demotion (#2982).",
+	},
+	"call:clients/blocker-freshness.ts#detectSelfDrift:a28359f5~facb5902": {
+		work: "pure-read",
+		signal:
+			"Same `BlockerFreshnessOptions.signal` as the stat above. This is the " +
+			"hash tier's whole-file read, reached only when the size tier cannot " +
+			"separate a same-length edit from a `touch`; it is additionally capped by " +
+			"the per-sweep hash budget so the aggregate read is " +
+			"bounded on the count axis too (#2982, defect shape 9).",
+	},
+	"call:clients/blocker-freshness.ts#sweepInlineBlockerFreshness:b262cffc~67c7ff0d":
+		{
+			work: "threaded",
+			signal:
+				"Same `BlockerFreshnessOptions.signal`. Wraps the whole per-entry " +
+				"`detectSelfDrift` call so an expiry maps to `unverifiable` at one place " +
+				"rather than leaving a half-finished verdict; the inner bounds above are " +
+				"the leaf budgets (#2982).",
+		},
+	"call:clients/bootstrap.ts#requestBootstrapClients:076f54d7~878c680d": {
+		work: "outlives:bootstrap singleton load",
+		signal:
+			"`options.signal`, GENUINELY absent for the three session-start demands: " +
+			"`SessionBootstrapAccess.request` takes no signal on purpose (#1394 — a " +
+			"session_start can land mid-turn, and binding the outgoing turn's signal " +
+			"cancelled every startup scan with no retry). Two live bounds even then, " +
+			"because this call supplies the seam's own `bootstrapShutdownController` " +
+			"as `shutdownSignal`. The tool_call demand passes the ambient signal.",
+	},
+	"call:clients/format-service.ts#FormatService:6ec6083f~f49a0718": {
+		work: "outlives:FormatService hold (the formatter child owns a file mutation hold to its exit, #3506)",
+		signal:
+			"The formatter aggregate receives the edit pipeline's live signal. The " +
+			"signal may be absent only in direct unit callers; the edit wall budget " +
+			"and the per-formatter leaf timer remain active in that harness.",
+	},
 	"call:clients/installer/managed-tool-refresh.ts#executeManagedToolRefresh:8d9498e9~773eca34":
-		"`undefined` is intentional: the unref'd timer runs after session_start " +
-		"returns, so no live turn signal belongs to this background refresh. The " +
-		"session_start wall budget still bounds the best-effort alias stamp, and " +
-		"the required signal field makes this absence an explicit decision.",
-	"call:clients/lsp/index.ts#LSPService:4da1e4ca~3228bbca":
-		"`getAmbientAbortSignal()` carries the active turn abort when touchFile runs " +
-		"inside a hook and is absent only in a bare unit harness. The LSP service's " +
-		"shutdown signal supplies the second live bound for retired generations; the " +
-		"hook budget remains live in either case.",
-	"call:clients/lsp/index.ts#LSPService:55b587e6~3997fa51":
-		"`signal` parameter, defaulting to `getAmbientAbortSignal()`. Caller-supplied " +
-		"on the pre-dispatch resync path (passing the turn's ambient signal so Escape mid-turn " +
-		"abandons auxiliary warmup without gating the edit hook) and defaulted to the " +
-		"ambient signal on the touchFile with-auxiliary path. LSP_SPAWN_BUDGET_MS wall-clock " +
-		"bound is live per server.",
-	"call:clients/lsp/server.ts#NearestRoot:1969971c~30941cd1":
-		"`undefined`, and that is the whole decision: `RootFunction` is " +
-		"`(file: string) => Promise<string | undefined>`, so no hook signal reaches " +
-		"the root detector at all until #2523 AC4 threads one through the LSP deps. " +
-		"The wall clock is the live half, on the edit `tool_result` budget — the " +
-		"hook the per-file touch path runs under, and the only one the contract " +
-		"lets block the host. This is the memo's freshness read: a fired bound " +
-		"resolves `undefined`, which the caller treats as NOT fresh, so the worst " +
-		"case is the marker walk it was trying to skip (#3412 review round 1).",
-	"call:clients/lsp/server.ts#NearestRoot:7cc367bc~c3bf473d":
-		"Same `undefined` signal and the same edit `tool_result` budget as the " +
-		"freshness read above, for the walk's own per-step directory-mtime " +
-		"recording. A fired bound here records the step's directories as " +
-		"unreadable rather than dropping them, so the walk still answers and its " +
-		"answer is simply not memoized — never a partial signature that would hide " +
-		"a later change in the missing directory (#3412 review round 1).",
-	"call:clients/mcp/session.ts#runSessionStart:8d9498e9~c78f4265":
-		"The public MCP session_start result fallback is also wall-bounded; " +
-		"its signal is explicitly absent because MCP has no host abort signal.",
-	"call:clients/mcp/session.ts#runSessionStartImpl:8d9498e9~c78f4265":
-		"MCP session_start lifecycle wrapper. MCP has no host abort signal, so " +
-		"the required signal key is explicitly undefined; the shared session_start " +
-		"wall budget remains live and the same handler owns deferred delivery.",
-	"call:clients/mcp/session.ts#runTurnEndNow:8d9498e9~67c7ff0d":
-		"MCP turn_end lifecycle wrapper. MCP has no host abort signal, so the " +
-		"required signal key is explicitly undefined; the shared turn_end wall " +
-		"budget remains live and the transaction retains late findings.",
-	"call:clients/observed-mutation.ts#withBounds:6ec6083f~67028b50":
-		"`withBounds(work, ms, signal, site)`'s third parameter, threaded from " +
-		"`ArmObservationArgs.signal` / `SettledSweepArgs.signal`. Optional in the " +
-		"type; filled by every production hook path (tool_call arm, " +
-		"tool_result_edit settle, agent_settled sweeps). The fallback is " +
-		"fail-safe, not the normal case, and the wall budget is live regardless.",
-	"call:clients/persistent-reverify.ts#runPersistentReverify:1e569f4c~7408bac3":
-		"`deps.signal` — the turn-end abort signal, passed through the wiring " +
-		"conditionally (#3176 round: `deps.signal === undefined ? {} : {signal}`). " +
-		"OPTIONAL by design: the pass runs on the turn_end hook, and bounded() " +
-		"reads a missing signal as one that never aborts — the wall budget " +
-		"(budgetMs/REVERIFY_BUDGET_MS) and the per-touch floor (250ms) still " +
-		"bound every call. The optionality is a written decision: the re-verify " +
-		"is best-effort by contract (an unconfirmed touch is kept verbatim and " +
-		"labeled, never a false clean), so a wall-clock-only run degrades " +
-		"honestly rather than blocking the hook.",
+		{
+			work: "outlives:executeManagedToolRefresh stamp write (lands after the bound)",
+			signal:
+				"`undefined` is intentional: the unref'd timer runs after session_start " +
+				"returns, so no live turn signal belongs to this background refresh. The " +
+				"session_start wall budget still bounds the best-effort alias stamp, and " +
+				"the required signal field makes this absence an explicit decision.",
+		},
+	"call:clients/lsp/index.ts#LSPService:4da1e4ca~3228bbca": {
+		work: "pure-read",
+		signal:
+			"`getAmbientAbortSignal()` carries the active turn abort when touchFile runs " +
+			"inside a hook and is absent only in a bare unit harness. The LSP service's " +
+			"shutdown signal supplies the second live bound for retired generations; the " +
+			"hook budget remains live in either case.",
+	},
+	"call:clients/lsp/index.ts#LSPService:55b587e6~3997fa51": {
+		work: "outlives:ClientRegistry spawn (the in-flight spawn registers its client)",
+		signal:
+			"`signal` parameter, defaulting to `getAmbientAbortSignal()`. Caller-supplied " +
+			"on the pre-dispatch resync path (passing the turn's ambient signal so Escape mid-turn " +
+			"abandons auxiliary warmup without gating the edit hook) and defaulted to the " +
+			"ambient signal on the touchFile with-auxiliary path. LSP_SPAWN_BUDGET_MS wall-clock " +
+			"bound is live per server.",
+	},
+	"call:clients/lsp/server.ts#NearestRoot:1969971c~30941cd1": {
+		work: "pure-read",
+		signal:
+			"`undefined`, and that is the whole decision: `RootFunction` is " +
+			"`(file: string) => Promise<string | undefined>`, so no hook signal reaches " +
+			"the root detector at all until #2523 AC4 threads one through the LSP deps. " +
+			"The wall clock is the live half, on the edit `tool_result` budget — the " +
+			"hook the per-file touch path runs under, and the only one the contract " +
+			"lets block the host. This is the memo's freshness read: a fired bound " +
+			"resolves `undefined`, which the caller treats as NOT fresh, so the worst " +
+			"case is the marker walk it was trying to skip (#3412 review round 1).",
+	},
+	"call:clients/lsp/server.ts#NearestRoot:7cc367bc~c3bf473d": {
+		work: "pure-read",
+		signal:
+			"Same `undefined` signal and the same edit `tool_result` budget as the " +
+			"freshness read above, for the walk's own per-step directory-mtime " +
+			"recording. A fired bound here records the step's directories as " +
+			"unreadable rather than dropping them, so the walk still answers and its " +
+			"answer is simply not memoized — never a partial signature that would hide " +
+			"a later change in the missing directory (#3412 review round 1).",
+	},
+	"call:clients/mcp/session.ts#runSessionStart:8d9498e9~c78f4265": {
+		work: "outlives:handleSessionStart handler (UNPROVEN leak; MCP has no host abort signal and the handler owns background scans and deferred delivery)",
+		signal:
+			"The public MCP session_start result fallback is also wall-bounded; " +
+			"its signal is explicitly absent because MCP has no host abort signal.",
+	},
+	"call:clients/mcp/session.ts#runSessionStartImpl:8d9498e9~c78f4265": {
+		work: "outlives:handleSessionStart handler (UNPROVEN leak; the handler owns its background scans and deferred delivery)",
+		signal:
+			"MCP session_start lifecycle wrapper. MCP has no host abort signal, so " +
+			"the required signal key is explicitly undefined; the shared session_start " +
+			"wall budget remains live and the same handler owns deferred delivery.",
+	},
+	"call:clients/mcp/session.ts#runTurnEndNow:8d9498e9~67c7ff0d": {
+		work: "outlives:turn-end transaction (UNPROVEN leak; the transaction retains late findings for the next delivery)",
+		signal:
+			"MCP turn_end lifecycle wrapper. MCP has no host abort signal, so the " +
+			"required signal key is explicitly undefined; the shared turn_end wall " +
+			"budget remains live and the transaction retains late findings.",
+	},
+	"call:clients/observed-mutation.ts#withBounds:6ec6083f~67028b50": {
+		work: "pure-read",
+		signal:
+			"`withBounds(work, ms, signal, site)`'s third parameter, threaded from " +
+			"`ArmObservationArgs.signal` / `SettledSweepArgs.signal`. Optional in the " +
+			"type; filled by every production hook path (tool_call arm, " +
+			"tool_result_edit settle, agent_settled sweeps). The fallback is " +
+			"fail-safe, not the normal case, and the wall budget is live regardless.",
+	},
+	"call:clients/persistent-reverify.ts#runPersistentReverify:df18bffa~29a3cc43":
+		{
+			work: "threaded",
+			signal:
+				"`deps.signal` — the turn-end abort signal, passed through the wiring " +
+				"conditionally (#3176 round: `deps.signal === undefined ? {} : {signal}`). " +
+				"OPTIONAL by design: the pass runs on the turn_end hook, and bounded() " +
+				"reads a missing signal as one that never aborts — the wall budget " +
+				"(budgetMs/REVERIFY_BUDGET_MS) and the per-touch floor (250ms) still " +
+				"bound every call. The optionality is a written decision: the re-verify " +
+				"is best-effort by contract (an unconfirmed touch is kept verbatim and " +
+				"labeled, never a false clean), so a wall-clock-only run degrades " +
+				"honestly rather than blocking the hook.",
+		},
 	"call:clients/persistent-reverify.ts#runPersistentReverify:df18bffa~a607d75c":
-		"`deps.signal` — the same turn-end abort signal as the touch site above; " +
-		"this is the outer await around `enrichFileFromLsp` (the producer " +
-		"pipeline's own internals are deadline-bounded). OPTIONAL by design, " +
-		"same written decision as the touch site: the pass is best-effort by " +
-		"contract, and the wall budget plus the per-touch floor still bound " +
-		"every call.",
-	"call:clients/pipeline.ts#resyncLspFile:194d22cb~34c8c753":
-		"The AMBIENT turn abort signal, set for the whole tool_result path and " +
-		"absent only in a bare unit harness. PI_LENS_LSP_SYNC_BUDGET_MS is the " +
-		"bound that is always live.",
-	"call:clients/project-trust.ts#readAdoptedProjectTrust:8d9498e9~136c8ea4":
-		"#5469 F1: no owning hook signal at registry; explicit undefined plus " +
-		"registry retirement shutdownSignal and the read-only analysis wall bound host SDK loading.",
-	"call:clients/runtime-agent-end.ts#handleAgentEnd:6ec6083f~93eae0ad":
-		"AgentEndDeps.signal is the agent_settled ctx.signal passed by index.ts; " +
-		"it can be absent in a standalone harness. The shared agent_settled " +
-		"wall budget remains live. Only the restore wait is bounded; the original " +
-		"restore and its single loss-delivery continuation still settle later.",
-	"call:clients/runtime-agent-end.ts#handleAgentEnd:fc644b89~26fd2489":
-		"The drain's post-exit resync of a formatter its own bound gave up on " +
-		"runs OFF the hook (the `void`-launched task starts only after " +
-		"`agent_settled`'s bound gave up), so it carries the same " +
-		"`ambientSignal` the in-hook bound does: the hook's `ctx.signal`, or " +
-		"the ambient slot in a standalone harness, absent only there. The " +
-		"wall-clock half is always live, capped by `DEFERRED_FORMAT_BUDGET_MS`.",
-	"call:clients/runtime-agent-end.ts#handleAgentEnd:fc644b89~93eae0ad":
-		"The deferred formatter drain receives AgentEndDeps.signal, or the " +
-		"ambient signal in a standalone harness; agent_settled bounds the wait.",
+		{
+			work: "threaded",
+			signal:
+				"`deps.signal` — the same turn-end abort signal as the touch site above; " +
+				"this is the outer await around `enrichFileFromLsp` (the producer " +
+				"pipeline's own internals are deadline-bounded). OPTIONAL by design, " +
+				"same written decision as the touch site: the pass is best-effort by " +
+				"contract, and the wall budget plus the per-touch floor still bound " +
+				"every call.",
+		},
+	"call:clients/pipeline.ts#resyncLspFile:194d22cb~34c8c753": {
+		work: "outlives:resyncLspFile notify queue (the abort is threaded into touch by hand; the abandoned write finishes on the queue)",
+		signal:
+			"The AMBIENT turn abort signal, set for the whole tool_result path and " +
+			"absent only in a bare unit harness. PI_LENS_LSP_SYNC_BUDGET_MS is the " +
+			"bound that is always live.",
+	},
+	"call:clients/project-trust.ts#readAdoptedProjectTrust:8d9498e9~136c8ea4": {
+		work: "pure-read",
+		signal:
+			"#5469 F1: no owning hook signal at registry; explicit undefined plus " +
+			"registry retirement shutdownSignal and the read-only analysis wall bound host SDK loading.",
+	},
+	"call:clients/runtime-agent-end.ts#handleAgentEnd:6ec6083f~93eae0ad": {
+		work: "outlives:fix-run restore (the restore keeps owning its writes and reports once on settle, #3915)",
+		signal:
+			"AgentEndDeps.signal is the agent_settled ctx.signal passed by index.ts; " +
+			"it can be absent in a standalone harness. The shared agent_settled " +
+			"wall budget remains live. Only the restore wait is bounded; the original " +
+			"restore and its single loss-delivery continuation still settle later.",
+	},
+	"call:clients/runtime-agent-end.ts#handleAgentEnd:fc644b89~26fd2489": {
+		work: "pure-read",
+		signal:
+			"The drain's post-exit resync of a formatter its own bound gave up on " +
+			"runs OFF the hook (the `void`-launched task starts only after " +
+			"`agent_settled`'s bound gave up), so it carries the same " +
+			"`ambientSignal` the in-hook bound does: the hook's `ctx.signal`, or " +
+			"the ambient slot in a standalone harness, absent only there. The " +
+			"wall-clock half is always live, capped by `DEFERRED_FORMAT_BUDGET_MS`.",
+	},
+	"call:clients/runtime-agent-end.ts#handleAgentEnd:fc644b89~93eae0ad": {
+		work: "outlives:deferred format phase (the formatter child holds the file; the late resync is chained to its settle)",
+		signal:
+			"The deferred formatter drain receives AgentEndDeps.signal, or the " +
+			"ambient signal in a standalone harness; agent_settled bounds the wait.",
+	},
 	"call:clients/runtime-session.ts#readSequenceAndHydrateFreshSnapshot:8d9498e9~c78f4265":
-		"No signal: `SessionStartDeps` carries none, so the key is written as " +
-		"`undefined` and this await runs on the wall clock alone, capped at " +
-		"`HOOK_WALL_BUDGET_MS.session_start`. The signal half is held one frame up: " +
-		"index.ts awaits the whole `handleSessionStart` under `bounded()` with the " +
-		"hook's `ctx.signal`, so Escape releases the handler there. This bound is " +
-		"the registered census site for this await and the backstop if the inner " +
-		"cap regresses: `sequenceReadBudgetMs()` caps the inner race at the same " +
-		"wall budget and its timer is armed first, so the inner arm ends the wait " +
-		"and owns the recovery (the deferred reseed and the #1785 hydration).",
-	"call:clients/runtime-tool-call.ts#handleToolCallImpl:2dc2d1e2~37e44a1d":
-		"The document-symbol enrichment uses the tool_call's ctx.signal, absent " +
-		"only in a harness. Its inner LSP budget and the outer EXPANSION_BUDGET_MS " +
-		"wall bound are both live; the outer bound also releases the hook on Escape.",
-	"call:clients/runtime-tool-call.ts#handleToolCallImpl:2dc2d1e2~ce33f035":
-		"The pre-edit linter capture (#4483) uses the tool_call's ctx.signal, " +
-		"absent only in a harness. #2523 gives tool_call no budget of its own, " +
-		"so the capture carries PRE_EDIT_CAPTURE_BUDGET_MS (500 ms, measured " +
-		"in the PR); that wall bound is always live, and a capture it abandons " +
-		"installs nothing once the host has written.",
-	"call:clients/runtime-tool-call.ts#handleToolCallImpl:c06d5cf4~a6535d16":
-		"The HEAD-move look before a tool runs (#4493) uses the tool_call's " +
-		"ctx.signal, absent only in a harness. #2523 gives tool_call no budget " +
-		"of its own, so the look borrows the read-only tool_result budget " +
-		"(500 ms); that wall bound is always live.",
+		{
+			work: "pure-read",
+			signal:
+				"No signal: `SessionStartDeps` carries none, so the key is written as " +
+				"`undefined` and this await runs on the wall clock alone, capped at " +
+				"`HOOK_WALL_BUDGET_MS.session_start`. The signal half is held one frame up: " +
+				"index.ts awaits the whole `handleSessionStart` under `bounded()` with the " +
+				"hook's `ctx.signal`, so Escape releases the handler there. This bound is " +
+				"the registered census site for this await and the backstop if the inner " +
+				"cap regresses: `sequenceReadBudgetMs()` caps the inner race at the same " +
+				"wall budget and its timer is armed first, so the inner arm ends the wait " +
+				"and owns the recovery (the deferred reseed and the #1785 hydration).",
+		},
+	"call:clients/runtime-tool-call.ts#handleToolCallImpl:2dc2d1e2~37e44a1d": {
+		work: "threaded",
+		signal:
+			"The document-symbol enrichment uses the tool_call's ctx.signal, absent " +
+			"only in a harness. Its inner LSP budget and the outer EXPANSION_BUDGET_MS " +
+			"wall bound are both live; the outer bound also releases the hook on Escape.",
+	},
+	"call:clients/runtime-tool-call.ts#handleToolCallImpl:2dc2d1e2~ce33f035": {
+		work: "threaded",
+		signal:
+			"The pre-edit linter capture (#4483) uses the tool_call's ctx.signal, " +
+			"absent only in a harness. #2523 gives tool_call no budget of its own, " +
+			"so the capture carries PRE_EDIT_CAPTURE_BUDGET_MS (500 ms, measured " +
+			"in the PR); that wall bound is always live, and a capture it abandons " +
+			"installs nothing once the host has written.",
+	},
+	"call:clients/runtime-tool-call.ts#handleToolCallImpl:c06d5cf4~a6535d16": {
+		work: "outlives:resyncHeadMove head record (the record update lives inside the work)",
+		signal:
+			"The HEAD-move look before a tool runs (#4493) uses the tool_call's " +
+			"ctx.signal, absent only in a harness. #2523 gives tool_call no budget " +
+			"of its own, so the look borrows the read-only tool_result budget " +
+			"(500 ms); that wall bound is always live.",
+	},
 	"call:clients/runtime-tool-result.ts#ensureToolResultClients:2b57f8b9~b4f8a98d":
-		"The tool_result signal is threaded into the fail-open bootstrap demand; " +
-		"the edit budget remains live when a caller has no signal.",
-	"call:clients/runtime-tool-result.ts#handleToolResult:19412575~b4f8a98d":
-		"Observed tool analysis uses ToolResultDeps.signal and the edit budget; " +
-		"a missing signal is an explicit standalone-harness case.",
-	"call:clients/runtime-tool-result.ts#handleToolResult:2b57f8b9~51bbeb13":
-		"The edit's complexity delta (#5087) uses the tool_result signal, " +
-		"threaded from ctx.signal and absent only in a harness; the edit " +
-		"budget (HOOK_WALL_BUDGET_MS.tool_result_edit) stays live without it, " +
-		"and a delta it abandons appends nothing to the result.",
-	"call:clients/runtime-tool-result.ts#handleToolResult:2b57f8b9~b4f8a98d":
-		"The classified bootstrap demand uses ToolResultDeps.signal and the " +
-		"edit budget; a missing signal is an explicit harness case.",
-	"call:clients/runtime-tool-result.ts#handleToolResult:464d2ad3~b4f8a98d":
-		"Observed duplicate-claim joins use the same ToolResultDeps.signal and " +
-		"edit budget; the local alias keeps this call site distinct for the sweep.",
-	"call:clients/runtime-tool-result.ts#handleToolResult:861069ce~b4f8a98d":
-		"The HEAD-move look on a bash tool_result (#4493) uses " +
-		"ToolResultDeps.signal and the edit budget, as the bash-write primary " +
-		"phase does (#4528 r4: the read-only bound cut a slow primary " +
-		"mid-send); a missing signal is an explicit standalone-harness case.",
-	"call:clients/runtime-tool-result.ts#handleToolResult:8f7626bd~b4f8a98d":
-		"Each observed changed-file analysis uses ToolResultDeps.signal and the " +
-		"edit budget; the local alias keeps this call site distinct for the sweep.",
-	"call:clients/runtime-tool-result.ts#handleToolResult:b9faf573~b4f8a98d":
-		"Classified pipeline analysis uses ToolResultDeps.signal and the edit " +
-		"budget; a missing signal is an explicit standalone-harness case.",
-	"call:clients/runtime-tool-result.ts#handleToolResult:d0c1590a~b4f8a98d":
-		"`deps.signal` — the `tool_result` hook's own ctx signal, the same one the " +
-		"head-move look beside it passes. Optional in the deps type: a host that " +
-		"offers no signal leaves the wall-clock half live on its own, which is " +
-		"weaker than #2523's contract and is the pre-existing shape of every " +
-		"`tool_result` bound in this handler. The look's publish is never " +
-		"cancelled by a cut, only this wait.",
-	"call:clients/runtime-tool-result.ts#handleToolResult:ef8fdef7~b4f8a98d":
-		"The primary phase of a bash tool_result's written files (#4507) uses " +
-		"ToolResultDeps.signal (aliased so this site keys apart from the HEAD " +
-		"look's) and the edit budget, which its dispatches already run under " +
-		"(#4528 r1 F1: a 500 ms cut let a dependent be checked before its " +
-		"dependency was sent); a missing signal is an explicit " +
-		"standalone-harness case.",
-	"call:clients/runtime-turn.ts#handleTurnEnd:2b57f8b9~67c7ff0d":
-		"`deps.signal` — the live `turn_end` ctx.signal in the pi host, threaded " +
-		"through `TurnEndDeps`, and the SAME optionality as the secrets lane's " +
-		"registered call below (absent only in the standalone MCP adapter and " +
-		"unit harnesses, where the turn_end wall budget is still live). This is " +
-		"#3274's scanner-store read: `readScannerCache` memoizes the bounded " +
-		"promise per store, so the three turn-end stores spend one budget each " +
-		"per delivery however many lanes await them, and an abandoned read " +
-		"yields null — a cold cache to every lane — never a stale envelope.",
-	"call:clients/runtime-turn.ts#handleTurnEnd:2b57f8b9~9c52f63e":
-		"`deps.signal` — the live `turn_end` ctx.signal in the pi host, optional " +
-		"only in the standalone MCP adapter and unit harnesses, where the turn_end " +
-		"wall budget is still live. #4117: this is the dead-code client's " +
-		"`analyze` (vulture), awaited under the budget LEFT after the phases " +
-		"before it, as knip's is above. It replaces the #2523 exemption for the " +
-		"same await; the scan is abandoned, not cancelled: it finishes off-hook " +
-		"under vulture's own 30 s spawn timeout and single-flight slot, writes " +
-		"its row where it settles and is delivered by a later turn (round 2). " +
-		"#4154: a failed scan's re-read of the row on disk " +
-		"(`withRowForFailureWrite`, `readCacheAsync`) runs inside this same bound.",
-	"call:clients/runtime-turn.ts#handleTurnEnd:2b57f8b9~b310ae4e":
-		"`deps.signal` — the live `turn_end` ctx.signal in the pi host, optional " +
-		"only in the standalone MCP adapter and unit harnesses, where the turn_end " +
-		"wall budget is still live. #3872: this is `knipClient.analyze`, awaited " +
-		"under the budget LEFT after the phases before it (not a fresh 3000 ms), " +
-		"so a slow scan releases the handler instead of holding it past " +
-		"`hook-await-exceeded`; a root whose last scan outlasted that budget is " +
-		"awaited for one timer tick only (a memo hit still answers), so the " +
-		"handler does not sit out the full budget on every turn. It replaces the " +
-		"#2523 exemption for the same " +
-		"await; the scan itself is abandoned, not cancelled, and finishes off-hook " +
-		"under knip's own 30 s spawn timeout and single-flight slot.",
-	"call:clients/runtime-turn.ts#handleTurnEnd:4da1e4ca~7e52ce49":
-		"`getAmbientAbortSignal(): AbortSignal | undefined` (clients/safe-spawn.ts) " +
-		"— the turn's registered abort signal, set from the host's `ctx.signal` " +
-		"when the turn_end hook fires (index.ts:3068). ABSENT when the host " +
-		"supplies no signal there, and in a bare unit harness; the bound is then " +
-		"wall-clock only. Either way the wall budget is live: the hook's " +
-		"HOOK_WALL_BUDGET_MS.turn_end caps the whole pass and composes with the " +
-		"pass's own internal deadline (3s) and the per-touch floor.",
-	"call:clients/runtime-turn.ts#handleTurnEnd:9256e1fe~67c7ff0d":
-		"`cascadeSettleSignal` is the live turn_end abort signal from " +
-		"`TurnEndDeps.signal`; direct harnesses may omit it, leaving the " +
-		"explicit turn_end wall cap as the remaining bound for parked computes.",
-	"call:clients/runtime-turn.ts#handleTurnEnd:c900b7a9~67c7ff0d":
-		"`runnerDrainSignal` is the live turn_end abort signal from " +
-		"`TurnEndDeps.signal`; it is optional only in direct unit harnesses, " +
-		"where the wall-clock half still bounds the drain. The drain is the " +
-		"session-partitioned runner delivery seam and must not wait indefinitely.",
-	"call:clients/runtime-turn.ts#handleTurnEnd:e5344cbe~67c7ff0d":
-		"`madgeAvailabilitySignal` is the live turn_end abort signal from " +
-		"`TurnEndDeps.signal`; it may be absent only in direct harnesses, while " +
-		"the madge availability probe remains wall-bounded and best effort.",
-	"call:clients/runtime-turn.ts#handleTurnEnd:e953bca9~404f0b0f":
-		"The late auxiliary re-promotion observer receives the live `turn_end` " +
-		"ctx.signal from `deps.signal` when pi supplies one, but that signal is " +
-		"optional on the MCP adapter and unit harness. One shared turn-end deadline " +
-		"bounds the entire drained-pair loop, so missing abort provenance cannot " +
-		"multiply the wall budget by the 50-pair cap.",
-	"call:clients/session-event-guard.ts#guardSessionEvent:04249a13~4951798b":
-		"The registered pi handler receives its live ctx.signal through the " +
-		"shared session-event wrapper. The agent_settled handler installs its " +
-		"own ambient abort signal before the signal-less outer bound, so aborted " +
-		"work requeues before release (#2939 F6). Its budget is selected from the one hook " +
-		"registry, including the read-only versus edit tool_result split.",
+		{
+			work: "outlives:bootstrap singleton load",
+			signal:
+				"The tool_result signal is threaded into the fail-open bootstrap demand; " +
+				"the edit budget remains live when a caller has no signal.",
+		},
+	"call:clients/runtime-tool-result.ts#handleToolResult:19412575~b4f8a98d": {
+		work: "pure-read",
+		signal:
+			"Observed tool analysis uses ToolResultDeps.signal and the edit budget; " +
+			"a missing signal is an explicit standalone-harness case.",
+	},
+	"call:clients/runtime-tool-result.ts#handleToolResult:2b57f8b9~b4f8a98d": {
+		work: "pure-read",
+		signal:
+			"The classified bootstrap demand uses ToolResultDeps.signal and the " +
+			"edit budget; a missing signal is an explicit harness case.",
+	},
+	"call:clients/runtime-tool-result.ts#handleToolResult:2b57f8b9~baa4ea2a": {
+		work: "threaded",
+		signal:
+			"The edit's complexity delta (#5087) uses the tool_result signal, " +
+			"threaded from ctx.signal and absent only in a harness; the edit " +
+			"budget (HOOK_WALL_BUDGET_MS.tool_result_edit) stays live without it, " +
+			"and a delta it abandons appends nothing to the result.",
+	},
+	"call:clients/runtime-tool-result.ts#handleToolResult:464d2ad3~b4f8a98d": {
+		work: "pure-read",
+		signal:
+			"Observed duplicate-claim joins use the same ToolResultDeps.signal and " +
+			"edit budget; the local alias keeps this call site distinct for the sweep.",
+	},
+	"call:clients/runtime-tool-result.ts#handleToolResult:861069ce~b4f8a98d": {
+		work: "outlives:resyncHeadMove head record (the record update lives inside the work)",
+		signal:
+			"The HEAD-move look on a bash tool_result (#4493) uses " +
+			"ToolResultDeps.signal and the edit budget, as the bash-write primary " +
+			"phase does (#4528 r4: the read-only bound cut a slow primary " +
+			"mid-send); a missing signal is an explicit standalone-harness case.",
+	},
+	"call:clients/runtime-tool-result.ts#handleToolResult:8f7626bd~b4f8a98d": {
+		work: "outlives:observedDelivery late tail (publishInlineVerdict runs when the abandoned pipeline settles, #5165)",
+		signal:
+			"Each observed changed-file analysis uses ToolResultDeps.signal and the " +
+			"edit budget; the local alias keeps this call site distinct for the sweep.",
+	},
+	"call:clients/runtime-tool-result.ts#handleToolResult:b9faf573~b4f8a98d": {
+		work: "outlives:delivery.abandoned late tail (the classified pipeline publishes when it settles, #5165)",
+		signal:
+			"Classified pipeline analysis uses ToolResultDeps.signal and the edit " +
+			"budget; a missing signal is an explicit standalone-harness case.",
+	},
+	"call:clients/runtime-tool-result.ts#handleToolResult:d0c1590a~b4f8a98d": {
+		work: "outlives:lookForOutOfBandChanges single flight (the look finishes in its own flight)",
+		signal:
+			"`deps.signal` — the `tool_result` hook's own ctx signal, the same one the " +
+			"head-move look beside it passes. Optional in the deps type: a host that " +
+			"offers no signal leaves the wall-clock half live on its own, which is " +
+			"weaker than #2523's contract and is the pre-existing shape of every " +
+			"`tool_result` bound in this handler. The look's publish is never " +
+			"cancelled by a cut, only this wait.",
+	},
+	"call:clients/runtime-tool-result.ts#handleToolResult:ef8fdef7~b4f8a98d": {
+		work: "outlives:bash-write drift chain (publishDiskChange sends, joined by the detached drift pass)",
+		signal:
+			"The primary phase of a bash tool_result's written files (#4507) uses " +
+			"ToolResultDeps.signal (aliased so this site keys apart from the HEAD " +
+			"look's) and the edit budget, which its dispatches already run under " +
+			"(#4528 r1 F1: a 500 ms cut let a dependent be checked before its " +
+			"dependency was sent); a missing signal is an explicit " +
+			"standalone-harness case.",
+	},
+	"call:clients/runtime-turn.ts#handleTurnEnd:2b57f8b9~67c7ff0d": {
+		work: "pure-read",
+		signal:
+			"`deps.signal` — the live `turn_end` ctx.signal in the pi host, threaded " +
+			"through `TurnEndDeps`, and the SAME optionality as the secrets lane's " +
+			"registered call below (absent only in the standalone MCP adapter and " +
+			"unit harnesses, where the turn_end wall budget is still live). This is " +
+			"#3274's scanner-store read: `readScannerCache` memoizes the bounded " +
+			"promise per store, so the three turn-end stores spend one budget each " +
+			"per delivery however many lanes await them, and an abandoned read " +
+			"yields null — a cold cache to every lane — never a stale envelope.",
+	},
+	"call:clients/runtime-turn.ts#handleTurnEnd:2b57f8b9~9c52f63e": {
+		work: "outlives:parkLateDeadCodeScan (the late scan writes its row at settle)",
+		signal:
+			"`deps.signal` — the live `turn_end` ctx.signal in the pi host, optional " +
+			"only in the standalone MCP adapter and unit harnesses, where the turn_end " +
+			"wall budget is still live. #4117: this is the dead-code client's " +
+			"`analyze` (vulture), awaited under the budget LEFT after the phases " +
+			"before it, as knip's is above. It replaces the #2523 exemption for the " +
+			"same await; the scan is abandoned, not cancelled: it finishes off-hook " +
+			"under vulture's own 30 s spawn timeout and single-flight slot, writes " +
+			"its row where it settles and is delivered by a later turn (round 2). " +
+			"#4154: a failed scan's re-read of the row on disk " +
+			"(`withRowForFailureWrite`, `readCacheAsync`) runs inside this same bound.",
+	},
+	"call:clients/runtime-turn.ts#handleTurnEnd:2b57f8b9~b310ae4e": {
+		work: "outlives:knip single flight (its own 30 s child; the late scan warms the cache)",
+		signal:
+			"`deps.signal` — the live `turn_end` ctx.signal in the pi host, optional " +
+			"only in the standalone MCP adapter and unit harnesses, where the turn_end " +
+			"wall budget is still live. #3872: this is `knipClient.analyze`, awaited " +
+			"under the budget LEFT after the phases before it (not a fresh 3000 ms), " +
+			"so a slow scan releases the handler instead of holding it past " +
+			"`hook-await-exceeded`; a root whose last scan outlasted that budget is " +
+			"awaited for one timer tick only (a memo hit still answers), so the " +
+			"handler does not sit out the full budget on every turn. It replaces the " +
+			"#2523 exemption for the same " +
+			"await; the scan itself is abandoned, not cancelled, and finishes off-hook " +
+			"under knip's own 30 s spawn timeout and single-flight slot.",
+	},
+	"call:clients/runtime-turn.ts#handleTurnEnd:4da1e4ca~67c7ff0d": {
+		work: "threaded",
+		signal:
+			"`getAmbientAbortSignal(): AbortSignal | undefined` (clients/safe-spawn.ts) " +
+			"— the turn's registered abort signal, set from the host's `ctx.signal` " +
+			"when the turn_end hook fires (index.ts:3068). ABSENT when the host " +
+			"supplies no signal there, and in a bare unit harness; the bound is then " +
+			"wall-clock only. Either way the wall budget is live: the hook's " +
+			"HOOK_WALL_BUDGET_MS.turn_end caps the whole pass and composes with the " +
+			"pass's own internal deadline (3s) and the per-touch floor.",
+	},
+	"call:clients/runtime-turn.ts#handleTurnEnd:9256e1fe~67c7ff0d": {
+		work: "outlives:parked cascade computes (taken at the call, written back fenced)",
+		signal:
+			"`cascadeSettleSignal` is the live turn_end abort signal from " +
+			"`TurnEndDeps.signal`; direct harnesses may omit it, leaving the " +
+			"explicit turn_end wall cap as the remaining bound for parked computes.",
+	},
+	"call:clients/runtime-turn.ts#handleTurnEnd:c900b7a9~67c7ff0d": {
+		work: "pure-read",
+		signal:
+			"`runnerDrainSignal` is the live turn_end abort signal from " +
+			"`TurnEndDeps.signal`; it is optional only in direct unit harnesses, " +
+			"where the wall-clock half still bounds the drain. The drain is the " +
+			"session-partitioned runner delivery seam and must not wait indefinitely.",
+	},
+	"call:clients/runtime-turn.ts#handleTurnEnd:e5344cbe~67c7ff0d": {
+		work: "outlives:DependencyChecker.ensureInFlight (a shared single flight whose install must run to completion; off by default, #766)",
+		signal:
+			"`madgeAvailabilitySignal` is the live turn_end abort signal from " +
+			"`TurnEndDeps.signal`; it may be absent only in direct harnesses, while " +
+			"the madge availability probe remains wall-bounded and best effort.",
+	},
+	"call:clients/runtime-turn.ts#handleTurnEnd:e953bca9~404f0b0f": {
+		work: "pure-read",
+		signal:
+			"The late auxiliary re-promotion observer receives the live `turn_end` " +
+			"ctx.signal from `deps.signal` when pi supplies one, but that signal is " +
+			"optional on the MCP adapter and unit harness. One shared turn-end deadline " +
+			"bounds the entire drained-pair loop, so missing abort provenance cannot " +
+			"multiply the wall budget by the 50-pair cap.",
+	},
+	"call:clients/session-event-guard.ts#guardSessionEvent:04249a13~4951798b": {
+		work: "outlives:registered session handler (the guard walls the host's wait, the handler owns its own tail)",
+		signal:
+			"The registered pi handler receives its live ctx.signal through the " +
+			"shared session-event wrapper. The agent_settled handler installs its " +
+			"own ambient abort signal before the signal-less outer bound, so aborted " +
+			"work requeues before release (#2939 F6). Its budget is selected from the one hook " +
+			"registry, including the read-only versus edit tool_result split.",
+	},
 	"call:clients/turn-end/lanes/secrets.ts#blockingGitleaksFindings:c06d5cf4~67c7ff0d":
-		"#1892 moved this call, unchanged, from `runtime-turn.ts` into the secrets " +
-		"lane (the key it held there was " +
-		"`call:clients/runtime-turn.ts#2b57f8b9~67c7ff0d`). `ctx.signal` is " +
-		"`TurnEndLaneContext.signal`, which the composer fills from `deps.signal` " +
-		"— the live `turn_end` ctx.signal in the pi host, optional only for the " +
-		"standalone MCP adapter and unit harnesses. The turn_end wall budget is " +
-		"always live, and timeout falls back to raw findings so security findings " +
-		"remain blockers.",
-	"call:index.ts#activateExtension:8d9498e9~d5ee5018":
-		"`undefined` is intentional: pi provides no caller abort signal for " +
-		"session_shutdown. The handler returns this promise to pi, which awaits " +
-		"the extension shutdown event before closing stdin or exiting. The " +
-		"quit-only session_shutdown_quit wall bound is 500ms; replacement " +
-		"reasons use the zero session_shutdown budget to preserve successor " +
-		"ordering, and a wedged quit sink records one hook-await-exceeded row.",
-	"call:index.ts#activateExtension:c06d5cf4~a7f40027":
-		"The tool_result handler receives the live pi ctx.signal and the selected " +
-		"read-only or edit budget; the nested handler bound is deliberate. It " +
-		"ends on the registration bound's deadline (#5108 G2).",
-	"call:index.ts#activateExtension:c06d5cf4~b4f8a98d":
-		"The tool_result edit bootstrap receives the live pi ctx.signal and the " +
-		"edit budget; read-only calls use only resident clients.",
-	"call:index.ts#activateExtension:c06d5cf4~c78f4265":
-		"The session_start handler receives the live pi ctx.signal; the shared " +
-		"session_start budget bounds the handler await.",
+		{
+			work: "pure-read",
+			signal:
+				"#1892 moved this call, unchanged, from `runtime-turn.ts` into the secrets " +
+				"lane (the key it held there was " +
+				"`call:clients/runtime-turn.ts#2b57f8b9~67c7ff0d`). `ctx.signal` is " +
+				"`TurnEndLaneContext.signal`, which the composer fills from `deps.signal` " +
+				"— the live `turn_end` ctx.signal in the pi host, optional only for the " +
+				"standalone MCP adapter and unit harnesses. The turn_end wall budget is " +
+				"always live, and timeout falls back to raw findings so security findings " +
+				"remain blockers.",
+		},
+	"call:index.ts#activateExtension:8d9498e9~d5ee5018": {
+		work: "outlives:flushAllNdjsonWriters (the flush completes on its own at shutdown)",
+		signal:
+			"`undefined` is intentional: pi provides no caller abort signal for " +
+			"session_shutdown. The handler returns this promise to pi, which awaits " +
+			"the extension shutdown event before closing stdin or exiting. The " +
+			"quit-only session_shutdown_quit wall bound is 500ms; replacement " +
+			"reasons use the zero session_shutdown budget to preserve successor " +
+			"ordering, and a wedged quit sink records one hook-await-exceeded row.",
+	},
+	"call:index.ts#activateExtension:c06d5cf4~a7f40027": {
+		work: "outlives:handleToolResult late advisory (withheldNotices queues it, #5108)",
+		signal:
+			"The tool_result handler receives the live pi ctx.signal and the selected " +
+			"read-only or edit budget; the nested handler bound is deliberate. It " +
+			"ends on the registration bound's deadline (#5108 G2).",
+	},
+	"call:index.ts#activateExtension:c06d5cf4~b4f8a98d": {
+		work: "outlives:bootstrap singleton load",
+		signal:
+			"The tool_result edit bootstrap receives the live pi ctx.signal and the " +
+			"edit budget; read-only calls use only resident clients.",
+	},
+	"call:index.ts#activateExtension:c06d5cf4~c78f4265": {
+		work: "outlives:session_start handler (the handler continues and records its own row)",
+		signal:
+			"The session_start handler receives the live pi ctx.signal; the shared " +
+			"session_start budget bounds the handler await.",
+	},
 };
 
 /**
@@ -3301,6 +3524,20 @@ const boundedCalls = scanFiles(
 	"call:",
 	(rel) => rel === DEFINITION_FILE,
 );
+
+const boundedForms = scanBoundedCallForms(
+	REPO_ROOT,
+	shippedSourceFiles(REPO_ROOT),
+	(rel) => rel === DEFINITION_FILE,
+);
+/** Every shipped file's `bounded` references the call detector cannot see. */
+const boundedReferences = shippedSourceFiles(REPO_ROOT).flatMap((absolute) => {
+	const rel = relativePosix(REPO_ROOT, absolute);
+	if (rel === DEFINITION_FILE) return [];
+	return findBoundedReferenceLines(fs.readFileSync(absolute, "utf8")).map(
+		(line) => `${rel}:${line}`,
+	);
+});
 
 /** rel -> unbounded-await count for every one-hop helper that has any. */
 function measureHelperModules(): Record<string, number> {
@@ -3792,26 +4029,191 @@ describe("#2523 AC1 every hook-path await is bounded, and no new hand-rolled rac
 				sweepName: "bounded() call-site registry (#2523)",
 				flagged: boundedCalls.occurrences,
 				registered: [],
-				exemptions: BOUNDED_CALL_SITES,
+				exemptions: Object.fromEntries(
+					Object.entries(BOUNDED_CALL_SITES).map(([key, row]) => [
+						key,
+						row.signal,
+					]),
+				),
 				scannedCount: boundedCalls.scanned,
 				minScanned: 200,
 				minFlagged: 1,
 				remediation:
 					"A new bounded() call site. Add an entry here keyed by the printed " +
-					"occurrence key, saying WHERE its `signal` comes from and whether " +
-					"that source can be undefined — if it can, this call runs on the " +
-					"wall clock alone whenever it is, which is weaker than #2523's " +
-					"contract and has to be a written decision rather than a default.",
+					"occurrence key: `signal` says WHERE its signal comes from and whether " +
+					"that source can be undefined (if it can, this call runs on the wall " +
+					"clock alone whenever it is, which is weaker than #2523's contract and " +
+					"has to be a written decision rather than a default), and `work` says " +
+					"what happens to the work when a bound fires: `threaded` (pass a thunk, " +
+					"`bounded((signal) => work, opts)`), `pure-read`, `outlives:<owner>` or " +
+					"`migrate:#<issue>` (#5550).",
 			});
 			expect(audit.problems, audit.problems.join("\n\n")).toEqual([]);
-			for (const [key, reason] of Object.entries(BOUNDED_CALL_SITES)) {
-				expect(reason.length, `${key}: provenance too thin`).toBeGreaterThan(
-					80,
-				);
+			for (const [key, row] of Object.entries(BOUNDED_CALL_SITES)) {
+				expect(
+					row.signal.length,
+					`${key}: provenance too thin`,
+				).toBeGreaterThan(80);
 			}
 		},
 		TREE_WALK_TIMEOUT_MS,
 	);
+
+	// Recurrence prevented (#5550, shape 91's `bounded` half): a bound added
+	// with no statement of what happens to its work left the work running
+	// after the bound gave up (the deadline audit's 8 sites). The `work` column
+	// is read against the call's own form, so a row cannot say `threaded` over
+	// a promise or `pure-read` over a thunk, and a new call cannot register
+	// without the column at all.
+	it("every registered bounded() call states what happens to its work, and the word matches the call", () => {
+		expect(
+			auditBoundedWork(BOUNDED_CALL_SITES, boundedForms),
+			"BOUNDED_CALL_SITES `work` column",
+		).toEqual([]);
+	});
+
+	// Recurrence prevented (#5550): the call detector reads `bounded(` only, so
+	// an alias, a value passed on, a re-export or a namespace member would call
+	// the primitive where no row could name it (AGENTS.md shape 69: a gate
+	// admits the known-good form and refuses the rest).
+	it("no module reaches bounded() by any spelling the call detector cannot see", () => {
+		expect(boundedReferences).toEqual([]);
+	});
+
+	it("MUTATION: auditBoundedWork refuses every row it must", () => {
+		const forms = new Map<string, "thunk" | "promise">([
+			["call:a#f:1", "thunk"],
+			["call:b#f:2", "promise"],
+		]);
+		const ok = { signal: "s", work: "threaded" };
+		// The clean pair passes.
+		expect(
+			auditBoundedWork(
+				{ "call:a#f:1": ok, "call:b#f:2": { signal: "s", work: "pure-read" } },
+				forms,
+			),
+		).toEqual([]);
+		// A new bounded() with no `work` field (the acceptance case).
+		expect(
+			auditBoundedWork(
+				{ "call:a#f:1": { signal: "s" }, "call:b#f:2": ok },
+				forms,
+			),
+		).toHaveLength(2);
+		// Unknown word, empty owner, issue-less migrate.
+		for (const work of [
+			"detached",
+			"outlives:",
+			"outlives:x",
+			"migrate:#",
+			"migrate:5550",
+			"",
+		]) {
+			expect(
+				auditBoundedWork({ "call:b#f:2": { signal: "s", work } }, forms),
+				work,
+			).toHaveLength(1);
+		}
+		// `threaded` over a promise (a value held in another binding), and a
+		// non-threaded word over a thunk.
+		expect(auditBoundedWork({ "call:b#f:2": ok }, forms)).toHaveLength(1);
+		expect(
+			auditBoundedWork(
+				{ "call:a#f:1": { signal: "s", work: "pure-read" } },
+				forms,
+			),
+		).toHaveLength(1);
+		// A stale row.
+		expect(auditBoundedWork({ "call:gone#f:9": ok }, forms)).toHaveLength(1);
+	});
+
+	it("MUTATION: the call-form and reference detectors fail closed on spellings nobody planned", () => {
+		const form = (src: string) => findBoundedCalls(stripSource(src))[0]?.form;
+		// The admitted thunk literals.
+		for (const first of [
+			"(signal) => work(signal)",
+			"() => work()",
+			"async (signal: AbortSignal): Promise<number> => work(signal)",
+			"signal => work(signal)",
+			"async signal => work(signal)",
+			"function (signal) { return work(signal); }",
+		]) {
+			expect(form(`await bounded(${first}, { ms: 1 });`), first).toBe("thunk");
+		}
+		// Planted spelling 3: the value reached through another binding. A name
+		// the detector cannot read is the promise form, so it cannot claim
+		// `threaded`.
+		for (const first of [
+			"w",
+			"makeWork()",
+			"deps.work",
+			"cond ? a : b",
+			"await w",
+			"(w)",
+			"(a, b)",
+		]) {
+			expect(form(`await bounded(${first}, { ms: 1 });`), first).toBe(
+				"promise",
+			);
+		}
+		// The `signal` key is read AFTER the first argument, so a thunk body
+		// spelling `signal` cannot stand in for the options' own.
+		const keyed = findBoundedCallLines(
+			stripSource(
+				[
+					"await bounded(",
+					"\t(signal) =>",
+					"\t\twork(signal),",
+					"\t{",
+					"\t\tms: 1,",
+					"\t\tsignal: hookSignal,",
+					"\t},",
+					");",
+				].join("\n"),
+			),
+		);
+		expect(keyed).toEqual([6]);
+		// Planted spellings 1 and 2: an alias, and the primitive handed on as a
+		// value. Plus the namespace member and the dynamic import. Each is a
+		// reference, never a call the table could name.
+		const imp = 'import { bounded } from "./deadline-utils.js";\n';
+		for (const body of [
+			"const b = bounded;\nawait b(p, o);",
+			"await run(bounded, p, o);",
+			"const [f] = [bounded];",
+			"export { bounded };",
+		]) {
+			expect(findBoundedReferenceLines(imp + body), body).not.toEqual([]);
+		}
+		expect(
+			findBoundedReferenceLines(
+				'import { bounded as b } from "./deadline-utils.js";\nawait b(p, o);',
+			),
+		).not.toEqual([]);
+		expect(
+			findBoundedReferenceLines(
+				'import * as du from "./deadline-utils.js";\nawait du.bounded(p, o);',
+			),
+		).not.toEqual([]);
+		expect(
+			findBoundedReferenceLines(
+				'const du = await import("./deadline-utils.js");\nawait du.bounded(p, o);',
+			),
+		).not.toEqual([]);
+		// The plain import, the call, a type-position `typeof`, a comment and a
+		// string are not references; nor is a module that never imports bounded.
+		expect(
+			findBoundedReferenceLines(
+				imp +
+					"// bounded(x)\nconst s = 'bounded';\ntype T = Parameters<typeof bounded>[1];\nawait bounded(p, o);",
+			),
+		).toEqual([]);
+		expect(
+			findBoundedReferenceLines(
+				'import { withDeadline } from "./deadline-utils.js";\nconst bounded = 1;\nuse(bounded);',
+			),
+		).toEqual([]);
+	});
 
 	it("MUTATION: the bounded() call detector sees calls and nothing that merely looks like one", () => {
 		expect(

@@ -387,7 +387,7 @@ describe("persistent reverify (#3170)", () => {
 		["touch", "touchFile", "wall"],
 		["code-action lookup", "codeAction", "escape"],
 	] as const)(
-		"C3f: the abandoned %s is cancelled when the %s bound fires (#5550)",
+		"C3f: the abandoned %s is cancelled when its bound fires (#5550)",
 		async (_label, member, cut) => {
 			const carried = makeCarriedReport(filePath);
 			const service = makeService({

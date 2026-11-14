@@ -3157,8 +3157,11 @@ const TypeScriptRoot: RootFunction = withRootMarkers(
 		if (extensionRootKey) {
 			// Bounded walk so we never adopt a parent (e.g. ~/.pi/agent/) as the
 			// LSP root.
-			const bounded = await findExtensionBoundedRoot(file, extensionRootKey);
-			if (bounded) return bounded;
+			const extensionRoot = await findExtensionBoundedRoot(
+				file,
+				extensionRootKey,
+			);
+			if (extensionRoot) return extensionRoot;
 			// No marker inside the extension boundary. An explicit agent-level
 			// tsconfig is the user opting the extensions into one project
 			// (#5335): it roots them, as the path identity the bounded walk

@@ -297,6 +297,8 @@ export async function runPersistentReverify(args: {
 				),
 			{
 				ms: Math.max(250, deadlineAt - Date.now()),
+				// The hook's own signal is the bound's second half; the thunk's
+				// `signal` above is what cancels the enrichment's requests.
 				signal: args.signal,
 				hook: "turn_end",
 				label: "persistent_reverify_enrich",

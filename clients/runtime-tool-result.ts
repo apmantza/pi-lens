@@ -4898,6 +4898,8 @@ export async function handleToolResult(
 				}),
 			{
 				ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
+				// The hook's signal is the bound's second half; the thunk's own
+				// `signal` above is what reaches `adviseOnEdit`.
 				signal: deps.signal,
 				hook: "tool_result_edit",
 				label: "complexity-delta",
