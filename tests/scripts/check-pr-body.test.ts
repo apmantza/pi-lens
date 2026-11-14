@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { beforeEach, describe, expect, it, afterEach, vi } from "vitest";
@@ -3285,11 +3285,72 @@ describe("PR body lint (#1844)", () => {
 		}
 	});
 
-	it("accepts the exact preflight --lint-local command and the title form", () => {
+	it("accepts the exact preflight --lint-local command and the title form", async () => {
 		const directory = mkdtempSync(join(tmpdir(), "pi-lens-pr-body-cli-"));
 		const bodyPath = join(directory, "PR_BODY.md");
 		const titlePath = join(directory, "COMMIT_MSG.txt");
 		const checker = resolve(repositoryRoot, "scripts/check-pr-body.mjs");
+		// One subprocess per distinct input, and all five in flight at once.
+		// Every argv form below is a different input and the only witness for its
+		// command boundary, so the count is already minimal; what cost the case
+		// was running them serially (#5597: 5 spawns measured 941 ms idle and
+		// 5885 ms on two pinned CPUs with eight busy loops, over the 5000 ms
+		// default test timeout; CI shard 5/5 hit 8970 ms). The forms share only
+		// the read-only body file and the read-only fixture cwd, so the case now
+		// costs its slowest single spawn.
+		const runCli = (args: string[]) =>
+			new Promise<{ code: number | null; stderr: string }>((settled) => {
+				const child = spawn(process.execPath, [checker, ...args], {
+					cwd: fixtureCwd,
+					stdio: ["ignore", "ignore", "pipe"],
+				});
+				let stderr = "";
+				child.stderr.setEncoding("utf8");
+				child.stderr.on("data", (chunk: string) => {
+					stderr += chunk;
+				});
+				// Total on both paths: an unhandled child `error` event is a
+				// host-fatal throw, and a spawn that never started still answers
+				// with the verdict the caller reads.
+				child.on("error", () => settled({ code: null, stderr }));
+				child.on("close", (code) => settled({ code, stderr }));
+			});
+		const acceptedForms: [string, string[]][] = [
+			["--lint-local <body>", ["--lint-local", bodyPath]],
+			[
+				"--lint-local <body> --title <refs title>",
+				[
+					"--lint-local",
+					bodyPath,
+					"--title",
+					"ci(test): verify local body lint (refs #2807)",
+				],
+			],
+			[
+				"--body <body file> --title <title file>",
+				["--body", bodyPath, "--title", titlePath],
+			],
+		];
+		// Each rejection carries the rule text that must appear, so a child that
+		// died for an unrelated reason reds the case instead of reading as the
+		// expected refusal.
+		const rejectedForms: [string, string[], string][] = [
+			[
+				"--lint-local <body> --title <closes title>",
+				[
+					"--lint-local",
+					bodyPath,
+					"--title",
+					"ci(test): verify local body lint (closes #2807)",
+				],
+				"Invalid close-keyword placement",
+			],
+			[
+				"--lint-local <body> --ref HEAD",
+				["--lint-local", bodyPath, "--ref", "HEAD"],
+				"does not exist in revision HEAD",
+			],
+		];
 		try {
 			writeFileSync(
 				bodyPath,
@@ -3309,39 +3370,27 @@ describe("PR body lint (#1844)", () => {
 				bodyPath,
 				`${localBody}\n\nRemaining #2807: the fixture follow-up remains open.\n\n### Test assessment\nThe targeted test covers the local CLI.`,
 			);
-			for (const args of [
-				[checker, "--lint-local", bodyPath],
-				[
-					checker,
-					"--lint-local",
-					bodyPath,
-					"--title",
-					"ci(test): verify local body lint (refs #2807)",
-				],
-				[checker, "--body", bodyPath, "--title", titlePath],
-			]) {
-				execFileSync(process.execPath, args, { cwd: fixtureCwd });
-			}
-			expect(() =>
-				execFileSync(
-					process.execPath,
-					[
-						checker,
-						"--lint-local",
-						bodyPath,
-						"--title",
-						"ci(test): verify local body lint (closes #2807)",
-					],
-					{ cwd: fixtureCwd, stdio: "pipe" },
-				),
-			).toThrow();
-			expect(() =>
-				execFileSync(
-					process.execPath,
-					[checker, "--lint-local", bodyPath, "--ref", "HEAD"],
-					{ cwd: fixtureCwd, stdio: "pipe" },
-				),
-			).toThrow();
+			const [accepted, rejected] = await Promise.all([
+				Promise.all(acceptedForms.map(([, args]) => runCli(args))),
+				Promise.all(rejectedForms.map(([, args]) => runCli(args))),
+			]);
+			expect(
+				acceptedForms.map(([label], index) => [label, accepted[index].code]),
+			).toEqual([
+				["--lint-local <body>", 0],
+				["--lint-local <body> --title <refs title>", 0],
+				["--body <body file> --title <title file>", 0],
+			]);
+			expect(
+				rejectedForms.map(([label, , needle], index) => [
+					label,
+					rejected[index].code === 0 ? "accepted" : "rejected",
+					rejected[index].stderr.includes(needle),
+				]),
+			).toEqual([
+				["--lint-local <body> --title <closes title>", "rejected", true],
+				["--lint-local <body> --ref HEAD", "rejected", true],
+			]);
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}
