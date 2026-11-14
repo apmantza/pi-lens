@@ -1010,28 +1010,35 @@ function moveDestinations(move: MoveOperands): ShellOperand[] {
 	}));
 }
 
-/** Whether the filesystem says the operand names a directory right now. */
-function isDirectoryOperand(token: ShellOperand, cwd: string): boolean {
+/** What the filesystem says the operand is right now, undefined when it names nothing readable. */
+function operandStats(
+	token: ShellOperand,
+	cwd: string,
+): nodeFs.Stats | undefined {
 	const abs = operandPath(token, cwd);
-	if (abs === null) return false;
-	// A trailing separator names a directory whether or not it exists yet.
-	if (/[\\/]$/.test(token.text)) return true;
+	if (abs === null) return undefined;
 	try {
-		return nodeFs.statSync(abs).isDirectory();
+		return nodeFs.statSync(abs);
 	} catch {
-		return false;
+		// none: an absent or unreadable path is neither a directory nor a file,
+		// and the callers read exactly that answer.
+		return undefined;
 	}
+}
+
+/** Whether the operand names a directory: a trailing separator, or the filesystem says so. */
+function isDirectoryOperand(token: ShellOperand, cwd: string): boolean {
+	if (operandPath(token, cwd) === null) return false;
+	// A trailing separator names a directory whether or not it exists yet.
+	return (
+		/[\\/]$/.test(token.text) ||
+		operandStats(token, cwd)?.isDirectory() === true
+	);
 }
 
 /** Whether the filesystem says the operand names a regular file right now. */
 function isFileOperand(token: ShellOperand, cwd: string): boolean {
-	const abs = operandPath(token, cwd);
-	if (abs === null) return false;
-	try {
-		return nodeFs.statSync(abs).isFile();
-	} catch {
-		return false;
-	}
+	return operandStats(token, cwd)?.isFile() === true;
 }
 
 /**
