@@ -35,6 +35,10 @@ import {
 } from "../../clients/lsp-mutation.js";
 import { beginFixRun } from "../../clients/fix-run-restore.js";
 import { registerMutationBridge } from "../../clients/mutation-bridge.js";
+import {
+	_observedMutationStateForTests,
+	resetObservedMutationNet,
+} from "../../clients/observed-mutation.js";
 import { readChangesSince } from "../../clients/project-changes.js";
 import { countFileLines } from "../../clients/read-guard-tool-lines.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
@@ -676,6 +680,106 @@ describe("bookkeepLspMutation — direct path and bridge fallback are equivalent
 				(key) => key.endsWith("renamed.ts"),
 			),
 		).toBe(true);
+	});
+
+	// #5592 review r1 F1: the direct branch caught each stage on its own, so
+	// a turn-state write that throws (the data dir cannot be created) still
+	// left the receipt, the handled mark and `acceptedFiles`. The fold put all
+	// stages under the seam's one catch and lost all three. Recurrence: a
+	// stage throw in `recordMutationOutcome` that ends the whole record, so
+	// the settled sweep reports the edit as drift (#2465) and its
+	// `appliedFiles` dispatch drops (#5248).
+	it("keeps the receipt, the handled mark and acceptedFiles when the turn-state write throws", () => {
+		resetObservedMutationNet();
+		resetDegradationLedger();
+		const filePath = writeFixture(dirDirect, "unusable.ts");
+		// Find the turn-state directory with one good write, then make it a
+		// file, so the next `mkdirSync` throws EEXIST.
+		cacheManagerDirect.addModifiedRange(
+			fileDirect,
+			{ start: 1, end: 1 },
+			false,
+			dirDirect,
+			"s-2450-equiv-direct",
+			undefined,
+			dirDirect,
+		);
+		const turnStateDirs: string[] = [];
+		const walk = (dir: string) => {
+			for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+				const full = path.join(dir, entry.name);
+				if (entry.isDirectory()) walk(full);
+				else if (entry.name === "turn-state.json")
+					turnStateDirs.push(path.dirname(full));
+			}
+		};
+		walk(base.tmpDir);
+		walk(dirDirect);
+		expect(turnStateDirs.length).toBeGreaterThan(0);
+		for (const dir of turnStateDirs) {
+			fs.rmSync(dir, { recursive: true });
+			fs.writeFileSync(dir, "not a directory");
+		}
+		const acceptedFiles: string[] = [];
+		const receiptsBefore = runtimeDirect.getMutationsSince(0).length;
+		recordLspMutation(
+			{
+				cwd: dirDirect,
+				correlationId: "eexist-direct",
+				tool: "lsp_navigation:rename",
+				source: "lsp-rename",
+				runtime: runtimeDirect as never,
+				cacheManager: cacheManagerDirect,
+				readGuard: runtimeDirect.readGuard,
+				acceptedFiles,
+				emitSummary: false,
+			},
+			{ results: resultsFor(filePath) },
+		);
+		expect({
+			accepted: acceptedFiles,
+			receipts: runtimeDirect.getMutationsSince(0).length - receiptsBefore,
+			handled: _observedMutationStateForTests().handled.some((key) =>
+				key.endsWith("unusable.ts"),
+			),
+			degraded: getDegradationSummary()
+				.filter((group) => group.kind === "mutation-bridge-stage-failed")
+				.flatMap((group) => group.latestReasons.map((r) => r.subject)),
+		}).toEqual({
+			accepted: [filePath],
+			receipts: 1,
+			handled: true,
+			degraded: ["turn-state"],
+		});
+	});
+
+	// #5592 review r1 F4: the fold checked the session twice per file, once
+	// in `bookkeepLspMutation` and once in the seam, so a dead session counted
+	// two stale writes for one dropped write. Recurrence: a second liveness
+	// probe on the direct branch that doubles `generation-guard-stale-write`.
+	it("counts one stale write per file for a direct LSP edit after the session is replaced", () => {
+		resetDegradationLedger();
+		const filePath = writeFixture(dirDirect, "stale.ts");
+		const session = runtimeDirect.captureSessionGeneration();
+		runtimeDirect.resetForSession();
+		recordLspMutation(
+			{
+				cwd: dirDirect,
+				correlationId: "stale-direct",
+				tool: "lsp_navigation:rename",
+				source: "lsp-rename",
+				runtime: runtimeDirect as never,
+				cacheManager: cacheManagerDirect,
+				session,
+				emitSummary: false,
+			},
+			{ results: resultsFor(filePath) },
+		);
+		expect(
+			getDegradationSummary()
+				.filter((group) => group.kind === "generation-guard-stale-write")
+				.reduce((total, group) => total + group.count, 0),
+		).toBe(1);
 	});
 
 	// #5551: the fold sends the direct branch through the seam's dead-session

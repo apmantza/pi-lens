@@ -459,13 +459,6 @@ function bookkeepLspMutation(
 			: undefined;
 	for (const detail of details) {
 		const filePath = path.resolve(detail.filePath);
-		// #3576, narrowed by #3763 r2: once the caller's session is replaced its
-		// turn summary is dropped; the seam drops the read-guard stamp and the
-		// turn-state entry the same way and keeps the receipt, the file's seq and
-		// the handled mark, which are facts about the bytes.
-		const sessionLive =
-			!context.session ||
-			context.session.guardedWrite(filePath, () => true) !== undefined;
 		// #2450 review round 2 (F4): the SAME recordability gate the bridge
 		// fallback applies internally, so the two branches agree on which files
 		// count as project source (`no-read-guard` / ignored / vendor).
@@ -473,14 +466,31 @@ function bookkeepLspMutation(
 			context.dbg?.(`lsp mutation not recordable, skipping ${filePath}`);
 			continue;
 		}
-		const entry = lspMutationEntry(context, filePath, detail);
-		// The fallback records into the bridge's own runtime, so a guard the
-		// caller threaded without one is stamped here, as before #5551.
-		if (!deps && sessionLive) stampFallbackReadGuard(context, filePath, detail);
+		// #3576, narrowed by #3763 r2: once the caller's session is replaced its
+		// turn summary is dropped; the seam drops the read-guard stamp and the
+		// turn-state entry the same way and keeps the receipt, the file's seq and
+		// the handled mark, which are facts about the bytes. The direct branch
+		// takes liveness from the seam's own check, so a dead session counts
+		// one stale write per file, not two (#5592 review r1 F4).
+		let sessionLive: boolean;
 		// #5248: true once the seam took the record.
-		const accepted = deps
-			? recordMutationOutcome(entry, deps).recorded
-			: recordThroughBridge(context, entry);
+		let accepted: boolean;
+		if (deps) {
+			const entry = lspMutationEntry(context, filePath, detail);
+			const outcome = recordMutationOutcome(entry, deps, {
+				rejectStaleLineage: true,
+			});
+			accepted = outcome.recorded;
+			sessionLive = outcome.reason !== "stale-lineage";
+		} else {
+			sessionLive =
+				!context.session ||
+				context.session.guardedWrite(filePath, () => true) !== undefined;
+			// The fallback records into the bridge's own runtime, so a guard the
+			// caller threaded without one is stamped here, as before #5551.
+			if (sessionLive) stampFallbackReadGuard(context, filePath, detail);
+			accepted = recordThroughBridge(context, filePath, detail);
+		}
 		// #2450 review round 2 (Partial-deps): its own surface, independent of
 		// which branch recorded the receipt and the turn state above.
 		if (sessionLive && context.recordAutofix && context.source === "autofix") {
@@ -540,10 +550,16 @@ function stampFallbackReadGuard(
 	}
 }
 
-/** The fallback for a context with no `runtime` or `cacheManager`. */
+/**
+ * The fallback for a context with no `runtime` or `cacheManager`. The entry is
+ * built inside the `recordMutation` call, so the lineage sweep
+ * (`tests/clients/mutation-bridge-lineage-epoch-sweep.test.ts`) reads
+ * `lspMutationEntry`'s literal at this site.
+ */
 function recordThroughBridge(
 	context: LspMutationContext,
-	entry: MutationBridgeEntry,
+	filePath: string,
+	detail: AppliedWorkspaceEdit["fileDetails"][number],
 ): boolean {
 	const bridge = getMutationBridge();
 	if (!bridge) {
@@ -566,21 +582,22 @@ function recordThroughBridge(
 		if (!noBridgeDbgLogged) {
 			noBridgeDbgLogged = true;
 			context.dbg?.(
-				`lsp mutation bridge unavailable, dropping bookkeeping for ${entry.filePath}`,
+				`lsp mutation bridge unavailable, dropping bookkeeping for ${filePath}`,
 			);
 		}
 		return false;
 	}
 	try {
-		if (bridge.recordMutation(entry)) return true;
+		if (bridge.recordMutation(lspMutationEntry(context, filePath, detail)))
+			return true;
 		context.dbg?.(
-			`lsp mutation bridge dropped ${entry.filePath} (recordMutation() ` +
+			`lsp mutation bridge dropped ${filePath} (recordMutation() ` +
 				"returned false — see the mutation_bridge debug output for the " +
 				"reason: malformed entry, out-of-scope path, or a bookkeeping error)",
 		);
 	} catch (err) {
 		context.dbg?.(
-			`lsp mutation bridge fallback failed for ${entry.filePath}: ${err}`,
+			`lsp mutation bridge fallback failed for ${filePath}: ${err}`,
 		);
 	}
 	return false;

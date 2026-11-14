@@ -434,7 +434,17 @@ function stampLiveMutation(
 		: undefined;
 	// 1. Staleness stamp: the file changed under pi-lens, so a later edit is
 	//    judged by read coverage rather than by this write.
-	if (sessionLive && stampReadGuard) {
+	if (sessionLive && stampReadGuard)
+		runStage(ctx, "stamp", () => stampReadGuardWrite(ctx, stamp));
+	return { sessionLive, stamp };
+}
+
+function stampReadGuardWrite(
+	ctx: MutationBookkeepingContext,
+	stamp: number | undefined,
+): void {
+	const { entry, classification, runtime, filePath } = ctx;
+	{
 		const authoredRanges = resolveAuthorshipRanges(classification);
 		runtime.readGuard.recordWritten?.(filePath, {
 			...(stamp !== undefined && { branchEpoch: stamp }),
@@ -465,7 +475,37 @@ function stampLiveMutation(
 			...(entry.toolCallId !== undefined && { toolCallId: entry.toolCallId }),
 		});
 	}
-	return { sessionLive, stamp };
+}
+
+/** The bookkeeping stages a dependency can throw from (#5592 review r1 F1). */
+type MutationStage = "stamp" | "turn-state" | "deferral";
+
+/**
+ * Run one stage so its throw does not cost the others: a turn-state write
+ * that cannot create its directory must still leave the receipt and the
+ * handled mark (#2465), as the direct LSP branch did before #5551 folded it
+ * here. One record per stage per session; the path and error go in the
+ * reason. Returns false when the stage threw.
+ */
+function runStage(
+	ctx: MutationBookkeepingContext,
+	stage: MutationStage,
+	run: () => void,
+): boolean {
+	try {
+		run();
+		return true;
+	} catch (err) {
+		ctx.deps.dbg?.(
+			`mutation_bridge: ${stage} failed for ${ctx.filePath}: ${err}`,
+		);
+		recordDegradationOnce({
+			kind: "mutation-bridge-stage-failed",
+			subject: stage,
+			reason: `the ${stage} stage of a mutation record threw for ${ctx.filePath}; the other stages still ran: ${err}`,
+		});
+		return false;
+	}
 }
 
 /** Turn state (2) and the attributed change-log receipt (3), then the handled mark. */
@@ -476,16 +516,21 @@ function applyTurnAndChangeLog(
 	const { entry, classification, deps, runtime, filePath, projectRoot } = ctx;
 	const changedRange = resolveChangedRange(classification, deps, filePath);
 	if (sessionLive) {
-		deps
-			.getCacheManager()
-			.addModifiedRange?.(
-				filePath,
-				changedRange,
-				entry.importsChanged ?? false,
-				projectRoot,
-				entry.sessionId ?? runtime.telemetrySessionId,
-			);
+		runStage(ctx, "turn-state", () =>
+			deps
+				.getCacheManager()
+				.addModifiedRange?.(
+					filePath,
+					changedRange,
+					entry.importsChanged ?? false,
+					projectRoot,
+					entry.sessionId ?? runtime.telemetrySessionId,
+				),
+		);
 	}
+	// The receipt is not a stage: when it throws the record was not taken, so
+	// the rest is skipped, the handled mark included, and the settled sweep
+	// still sees the bytes as drift to replay.
 	runtime.recordProjectMutation?.({
 		filePath,
 		source: `agent-tool:${classification.toolName}`,
@@ -539,7 +584,11 @@ function queueDeferredMutation(
 	}
 }
 
-/** The stages inside the producer's try: stamp, turn state, change log, deferral. */
+/**
+ * The liveness decision, then the stages: stamp, turn state and deferral
+ * each under `runStage`, and the change-log receipt in the producer's try.
+ * A liveness, changed-range or receipt throw still ends the record.
+ */
 function runMutationBookkeeping(
 	ctx: MutationBookkeepingContext,
 	queued: Array<"autofix" | "format">,
@@ -547,7 +596,9 @@ function runMutationBookkeeping(
 	const stampReadGuard = ctx.deps.shouldStampReadGuard?.() ?? true;
 	const { sessionLive, stamp } = stampLiveMutation(ctx, stampReadGuard);
 	applyTurnAndChangeLog(ctx, sessionLive);
-	queueDeferredMutation(ctx, sessionLive, stamp, queued);
+	runStage(ctx, "deferral", () =>
+		queueDeferredMutation(ctx, sessionLive, stamp, queued),
+	);
 	return sessionLive;
 }
 

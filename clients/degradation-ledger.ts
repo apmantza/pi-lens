@@ -1473,6 +1473,14 @@ export type DegradationKind =
 	 * records the same drop as `io-bridge-mutate-dropped` and never this.
 	 */
 	| "mutation-bridge-out-of-scope"
+	/**
+	 * `mutation-bridge-stage-failed`: #5551 (review r1 F1): one stage of a
+	 * mutation record (`stamp`, `turn-state` or `deferral`) threw, for
+	 * example a turn-state write whose data directory cannot be created. The
+	 * other stages and the change-log receipt still ran. Once per stage per
+	 * session, the path and the error in the reason.
+	 */
+	| "mutation-bridge-stage-failed"
 	| "native-read-clipped"
 	/**
 	 * `native-read-raced-writer`: #3524: the file moved between a native read's tool_call and its

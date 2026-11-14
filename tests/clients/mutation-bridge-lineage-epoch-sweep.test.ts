@@ -479,7 +479,62 @@ function truthiness(node: SgNode | null): Truth {
 	return "unknown";
 }
 
-function makeResolver(): (node: SgNode | null) => Construction {
+/**
+ * #5551 (review r1 F2): same-file entry builders, by name. A function
+ * declaration qualifies only when its own body (nested functions excluded)
+ * holds exactly one `return`, as its last statement, with an expression: the
+ * returned value is then the only object the call can produce, and the fold
+ * resolves a call of it as that expression. Any other function stays opaque.
+ * `clients/lsp-mutation.ts`'s `lspMutationEntry` is the production member.
+ */
+function collectEntryBuilders(root: SgNode): ReadonlyMap<string, SgNode> {
+	const builders = new Map<string, SgNode>();
+	const FUNCTION_KINDS: ReadonlySet<string> = new Set([
+		"function_declaration",
+		"function_expression",
+		"arrow_function",
+		"method_definition",
+		"generator_function_declaration",
+		"class_declaration",
+	]);
+	const returnsIn = (node: SgNode, out: SgNode[]): void => {
+		for (const child of node.children()) {
+			if (FUNCTION_KINDS.has(String(child.kind()))) continue;
+			if (child.kind() === "return_statement") out.push(child);
+			returnsIn(child, out);
+		}
+	};
+	const visit = (node: SgNode): void => {
+		if (node.kind() === "function_declaration") {
+			const name = node.field("name");
+			const body = node.field("body");
+			if (name?.kind() === "identifier" && body) {
+				const returns: SgNode[] = [];
+				returnsIn(body, returns);
+				const statements = body
+					.namedChildren()
+					.filter((child) => child.kind() !== "comment");
+				const last = statements[statements.length - 1];
+				const value = returns[0]?.namedChildren()[0] ?? null;
+				const only = returns.length === 1 ? returns[0] : undefined;
+				const isLast =
+					only !== undefined &&
+					last !== undefined &&
+					last.range().start.index === only.range().start.index;
+				if (isLast && value) builders.set(name.text(), value);
+			}
+		}
+		for (const child of node.children()) visit(child);
+	};
+	visit(root);
+	return builders;
+}
+
+function makeResolver(
+	builders: ReadonlyMap<string, SgNode> = new Map(),
+): (node: SgNode | null) => Construction {
+	/** Builders being resolved, so a self-call stays opaque. */
+	const active = new Set<string>();
 	/** Distinct output profiles, deduped by `(epoch, lineage, unknown)`. */
 	const dedupe = (outputs: readonly Output[]): Output[] => {
 		const byProfile = new Map<string, Output>();
@@ -753,8 +808,24 @@ function makeResolver(): (node: SgNode | null) => Construction {
 			}
 			return UNKNOWN_CONSTRUCTION;
 		}
-		// A call result (including `Object.assign(…)`) is opaque: the fold does not
-		// see the object it returns.
+		// A same-file entry builder (`collectEntryBuilders`) resolves as the one
+		// expression it returns, so its literal is checked like one written at
+		// the call site (#5551 review r1 F2).
+		if (kind === "call_expression") {
+			const callee = node.field("function");
+			const name = callee?.kind() === "identifier" ? callee.text() : undefined;
+			const returned = name !== undefined ? builders.get(name) : undefined;
+			if (name !== undefined && returned && !active.has(name)) {
+				active.add(name);
+				try {
+					return resolve(returned);
+				} finally {
+					active.delete(name);
+				}
+			}
+		}
+		// Any other call result (including `Object.assign(…)`) is opaque: the
+		// fold does not see the object it returns.
 		return UNKNOWN_CONSTRUCTION;
 	};
 
@@ -863,7 +934,7 @@ function analyzeBridgeSites(source: string, file: string): BridgeSite[] {
 		);
 	}
 	const calleeNames = collectCalleeNames(root);
-	const resolve = makeResolver();
+	const resolve = makeResolver(collectEntryBuilders(root));
 	const sites: BridgeSite[] = [];
 	const visit = (node: SgNode): void => {
 		if (node.kind() === "call_expression") {
@@ -951,8 +1022,6 @@ function localBridgeDeclarations(source: string): string[] {
  * stale one (a resolved form), so the list can only stay honest.
  */
 const ADMITTED_INDETERMINATE: Readonly<Record<string, string>> = {
-	"clients/lsp-mutation.ts::recordThroughBridge::recordMutation":
-		"#5551: the entry is the `entry` parameter, built by `lspMutationEntry` in the same file for both LSP branches; that builder names no `readGuardBranchEpoch`, and it sets `lineage` from `context.session` whenever the caller threads one",
 	"clients/observed-mutation-sources.ts::replayThroughMutationBridge::recordMutation":
 		"the generic replay seam forwards a caller-built entry; its two in-tree callers construct lineage at the call site",
 	"clients/runtime-tool-result.ts::handleToolResult::replayThroughMutationBridge":
@@ -2236,5 +2305,72 @@ describe("#3937 review round 7 — survivor witnesses: deferred aliases, malform
 			}
 		`);
 		expect(site.kind).toBe("unsafe");
+	});
+});
+
+// #5551 review r1 F2: `lspMutationEntry` builds the LSP fallback's entry, so
+// the fold reads a same-file builder's one returned literal at the call. The
+// recurrence: the fallback's site went opaque behind the builder and an
+// admission, and an epoch planted there without lineage passed.
+describe("#5551: a same-file entry builder resolves as the literal it returns", () => {
+	const only = (source: string): BridgeSite => {
+		const sites = analyzeBridgeSites(source, "fixture.ts");
+		expect(sites).toHaveLength(1);
+		return sites[0] as BridgeSite;
+	};
+
+	it("reads an epoch without lineage through a builder with one trailing return", () => {
+		const site = only(`
+			function build(filePath: string) {
+				const known = filePath.length > 0;
+				return { filePath, known, readGuardBranchEpoch: 3 };
+			}
+			function send(bridge: { recordMutation(e: unknown): boolean }) {
+				bridge.recordMutation(build("a.ts"));
+			}
+		`);
+		expect(site.kind).toBe("unsafe");
+	});
+
+	it("does not count a nested function's return against the builder", () => {
+		const site = only(`
+			function build(ranges: number[]) {
+				const doubled = ranges.map(function (n) {
+					return n * 2;
+				});
+				return { doubled, readGuardBranchEpoch: 3 };
+			}
+			function send(bridge: { recordMutation(e: unknown): boolean }) {
+				bridge.recordMutation(build([1]));
+			}
+		`);
+		expect(site.kind).toBe("unsafe");
+	});
+
+	it("passes a builder whose literal names no epoch", () => {
+		const site = only(`
+			function build(filePath: string, session?: object) {
+				return { filePath, ...(session && { lineage: session }) };
+			}
+			function send(bridge: { recordMutation(e: unknown): boolean }) {
+				bridge.recordMutation(build("a.ts"));
+			}
+		`);
+		expect(site.kind).toBe("safe");
+	});
+
+	it("keeps a builder with two returns, or a return inside a branch, opaque", () => {
+		for (const body of [
+			`if (filePath) return { filePath }; return { filePath: "" };`,
+			`if (filePath) { return { filePath }; }`,
+		]) {
+			const site = only(`
+				function build(filePath: string) { ${body} }
+				function send(bridge: { recordMutation(e: unknown): boolean }) {
+					bridge.recordMutation(build("a.ts"));
+				}
+			`);
+			expect(site.kind, body).toBe("indeterminate");
+		}
 	});
 });
