@@ -43,85 +43,115 @@ import { resetWorkspaceTopology } from "../../../../clients/workspace-topology.j
 import { RuffClient } from "../../../../clients/ruff-client.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
-const { safeSpawnAsync, spawnCalls, probeMode, probeGate, probeGates } =
-	vi.hoisted(() => {
-		const spawnCalls: Array<{
-			cmd: string;
-			args: readonly string[];
-			cwd: string | undefined;
-			timeout: number | undefined;
-		}> = [];
-		const probeMode: Record<string, "ok" | "timeout" | "reject"> = {};
-		// When set, a version probe waits on it: the probe is in flight until released.
-		const probeGate: { current?: Promise<void> } = {};
-		// A gate per probe, taken in spawn order: the first probe waits on the first
-		// entry. A probe past the queue waits on `probeGate`, if set.
-		const probeGates: Array<Promise<void>> = [];
-		const safeSpawnAsync = vi.fn(
-			async (
-				cmd: string,
-				args: readonly string[] = [],
-				opts: { cwd?: string; timeout?: number } = {},
-			) => {
-				spawnCalls.push({
-					cmd: String(cmd),
-					args,
-					cwd: opts.cwd,
-					timeout: opts.timeout,
-				});
-				const fs = await import("node:fs");
-				const path = await import("node:path");
-				const onDisk = path.isAbsolute(cmd)
-					? fs.existsSync(cmd)
-					: (process.env.PATH ?? "")
-							.split(path.delimiter)
-							.some((dir) => dir && fs.existsSync(path.join(dir, cmd)));
-				if (!onDisk) {
+const {
+	safeSpawnAsync,
+	spawnCalls,
+	probeMode,
+	probeGate,
+	probeGates,
+	decisionRows,
+} = vi.hoisted(() => {
+	const spawnCalls: Array<{
+		cmd: string;
+		args: readonly string[];
+		cwd: string | undefined;
+		timeout: number | undefined;
+	}> = [];
+	const probeMode: Record<string, "ok" | "timeout" | "reject"> = {};
+	// When set, a version probe waits on it: the probe is in flight until released.
+	const probeGate: { current?: Promise<void> } = {};
+	// A gate per probe, taken in spawn order: the first probe waits on the first
+	// entry. A probe past the queue waits on `probeGate`, if set.
+	const probeGates: Array<Promise<void>> = [];
+	const safeSpawnAsync = vi.fn(
+		async (
+			cmd: string,
+			args: readonly string[] = [],
+			opts: { cwd?: string; timeout?: number } = {},
+		) => {
+			spawnCalls.push({
+				cmd: String(cmd),
+				args,
+				cwd: opts.cwd,
+				timeout: opts.timeout,
+			});
+			const fs = await import("node:fs");
+			const path = await import("node:path");
+			const onDisk = path.isAbsolute(cmd)
+				? fs.existsSync(cmd)
+				: (process.env.PATH ?? "")
+						.split(path.delimiter)
+						.some((dir) => dir && fs.existsSync(path.join(dir, cmd)));
+			if (!onDisk) {
+				return {
+					error: new Error(`spawn ${cmd} ENOENT`),
+					status: null,
+					stdout: "",
+					stderr: "",
+					spawnFailure: { kind: "tool-not-found" },
+				};
+			}
+			const isProbe =
+				args.includes("--version") ||
+				args.includes("-version") ||
+				(args[0] === "version" && args[1] === "--short");
+			if (isProbe) {
+				await (probeGates.shift() ?? probeGate.current);
+				const tool = path.basename(String(cmd)).replace(/\.(exe|bat)$/, "");
+				// helm 4 has no --version flag, an old JVM has no --version and the
+				// spotbugs launcher rejects it: each answers only its own spelling, so a registry row
+				// with the wrong versionArgs reads as a rejected binary (#4453).
+				const spelling =
+					tool === "helm"
+						? args[0] === "version"
+						: tool === "java" || tool === "spotbugs"
+							? args.includes("-version")
+							: true;
+				const mode = spelling ? (probeMode[tool] ?? "ok") : "reject";
+				if (mode === "timeout") {
 					return {
-						error: new Error(`spawn ${cmd} ENOENT`),
+						error: new Error("timed out"),
 						status: null,
 						stdout: "",
 						stderr: "",
-						spawnFailure: { kind: "tool-not-found" },
+						failure: "timeout",
+						spawnFailure: { kind: "timeout" },
 					};
 				}
-				const isProbe =
-					args.includes("--version") ||
-					args.includes("-version") ||
-					(args[0] === "version" && args[1] === "--short");
-				if (isProbe) {
-					await (probeGates.shift() ?? probeGate.current);
-					const tool = path.basename(String(cmd)).replace(/\.(exe|bat)$/, "");
-					// helm 4 has no --version flag, an old JVM has no --version and the
-					// spotbugs launcher rejects it: each answers only its own spelling, so a registry row
-					// with the wrong versionArgs reads as a rejected binary (#4453).
-					const spelling =
-						tool === "helm"
-							? args[0] === "version"
-							: tool === "java" || tool === "spotbugs"
-								? args.includes("-version")
-								: true;
-					const mode = spelling ? (probeMode[tool] ?? "ok") : "reject";
-					if (mode === "timeout") {
-						return {
-							error: new Error("timed out"),
-							status: null,
-							stdout: "",
-							stderr: "",
-							failure: "timeout",
-							spawnFailure: { kind: "timeout" },
-						};
-					}
-					if (mode === "reject") {
-						return { error: null, status: 2, stdout: "", stderr: "bad flag" };
-					}
-					return { error: null, status: 0, stdout: "1.0.0\n", stderr: "" };
+				if (mode === "reject") {
+					return { error: null, status: 2, stdout: "", stderr: "bad flag" };
 				}
-				return { error: null, status: 0, stdout: "", stderr: "" };
-			},
-		);
-		return { safeSpawnAsync, spawnCalls, probeMode, probeGate, probeGates };
-	});
+				return { error: null, status: 0, stdout: "1.0.0\n", stderr: "" };
+			}
+			return { error: null, status: 0, stdout: "", stderr: "" };
+		},
+	);
+	// The `availability_decision` rows, in write order.
+	const decisionRows: Array<Record<string, unknown>> = [];
+	return {
+		safeSpawnAsync,
+		spawnCalls,
+		probeMode,
+		probeGate,
+		probeGates,
+		decisionRows,
+	};
+});
+vi.mock("../../../../clients/latency-logger.js", async (importOriginal) => {
+	const original =
+		await importOriginal<
+			typeof import("../../../../clients/latency-logger.js")
+		>();
+	return {
+		...original,
+		logLatency: (entry: Parameters<typeof original.logLatency>[0]) => {
+			if (entry.phase === "availability_decision") {
+				decisionRows.push(entry.metadata ?? {});
+			}
+			original.logLatency(entry);
+		},
+	};
+});
 vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
 	...(await importOriginal<
 		typeof import("../../../../clients/safe-spawn.js")
@@ -188,6 +218,7 @@ describe("one availability ladder per binary (#5410)", () => {
 		for (const key of Object.keys(probeMode)) delete probeMode[key];
 		probeGate.current = undefined;
 		probeGates.length = 0;
+		decisionRows.length = 0;
 		safeSpawnAsync.mockClear();
 	});
 	afterEach(() => {
@@ -422,6 +453,40 @@ describe("one availability ladder per binary (#5410)", () => {
 				expect(probesOf("trivy")).toHaveLength(2);
 			},
 		);
+	});
+
+	// Recurrence (#5595 B1, observability): a superseded flight's decision row
+	// said `latched: true` for a verdict it never wrote to the latch, so a reader
+	// of the log saw the older failure as the durable state while the newer
+	// success stood. It still writes its row, as not latched.
+	it("logs a superseded flight's verdict as not latched", async () => {
+		const tool = path.join(
+			pathEnv.tmpDir,
+			process.platform === "win32" ? "trivy.exe" : "trivy",
+		);
+		fs.writeFileSync(tool, "#!/bin/sh\n");
+		fs.chmodSync(tool, 0o755);
+		const checker = createAvailabilityChecker("trivy", ".exe");
+		const cwd = workspace.tmpDir;
+		let releaseOlder: () => void = () => {};
+		probeGates.push(
+			new Promise<void>((resolve) => {
+				releaseOlder = resolve;
+			}),
+		);
+		setProjectTrustState("untrusted");
+		const older = checker.isAvailableAsync(cwd);
+		await vi.waitFor(() => expect(probesOf("trivy")).toHaveLength(1));
+		setProjectTrustState("trusted");
+		await checker.isAvailableAsync(cwd);
+		probeMode.trivy = "reject";
+		releaseOlder();
+		await older;
+		const rows = decisionRows.filter((row) => row.tool === "trivy");
+		expect(rows.map((row) => [row.verdict, row.outcome, row.latched])).toEqual([
+			["available", "success", true],
+			["unavailable", "non-installable", false],
+		]);
 	});
 
 	// Recurrence (#5595 F6): the settle-time `finally` removes the in-flight
