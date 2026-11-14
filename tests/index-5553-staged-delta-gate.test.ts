@@ -55,11 +55,17 @@ const setGlobalConfig = useGlobalConfig();
 
 beforeAll(() => warmGuardedSession(fixture.root));
 
+// oxlint is switched off: under husky's relative `node_modules/.bin` PATH
+// entry a bare `oxlint` resolves but cannot spawn from a fixture's cwd, and the
+// gate rightly refuses a lane that gives no answer. The blocker these tests
+// judge is tree-sitter's `debugger-statement`; biome stays on for the lane
+// failure row.
 beforeEach(() =>
 	setGlobalConfig({
 		lsp: {
 			disabledServers: ["deno", "ast-grep", "zizmor", "typos", "opengrep"],
 		},
+		dispatch: { disabledRunners: ["oxlint"] },
 	}),
 );
 
@@ -902,7 +908,8 @@ describe("#5553 a lane that gives no answer refuses", () => {
 			git(proj, "add", A);
 			const decision = await decide(proj, 'git commit -m "x"');
 			expectOutcome(decision, "unknown lane_incomplete");
-			expect(decision.reason).toContain("biome");
+			// The refusal names the lane and how it ended, so the fix is clear.
+			expect(decision.reason).toMatch(/biome-check-json \(failed\b/);
 			const control = seedProject("valid-config", {});
 			write(control, A, CLEAN);
 			git(control, "add", A);

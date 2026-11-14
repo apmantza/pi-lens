@@ -1868,9 +1868,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/collect-later-tier.ts": 1,
 		// 34 -> 35 (#5413): the spawn-timeout cooldown skip in `runRunner`.
 		"clients/dispatch/dispatcher.ts": 36,
-		// 1 -> 2 (#5553): the staged read leaves out a lane row whose `status`
-		// is skipped for a stated cause.
-		"clients/dispatch/integration.ts": 2,
+		// 1 -> 3 (#5553): the staged read leaves out a lane row whose `status`
+		// is skipped for a stated cause, and names the others' `status`.
+		"clients/dispatch/integration.ts": 3,
 		"clients/dispatch/pending-runner-findings.ts": 1,
 		"clients/dispatch/runners/actionlint.ts": 1,
 		"clients/dispatch/runners/ast-grep-napi.ts": 11,

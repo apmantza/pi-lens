@@ -3734,10 +3734,13 @@ export async function collectStagedLaneBlockers(
 	const rows = new Map(
 		(result.latencyReport?.runners ?? []).map((row) => [row.runnerId, row]),
 	);
-	const unanswered = (result.inconclusiveSources?.runnerIds ?? []).filter(
+	// Each named with how it ended, so the refusal says what to fix.
+	const unanswered = (result.inconclusiveSources?.runnerIds ?? []).flatMap(
 		(id) => {
 			const row = rows.get(id);
-			return !(row?.status === "skipped" && row.skipReason !== undefined);
+			if (row?.status === "skipped" && row.skipReason !== undefined) return [];
+			const how = [row?.status, row?.failureKind].filter(Boolean).join(": ");
+			return [how ? `${id} (${how})` : id];
 		},
 	);
 	return { outcome: "ran", blockers: result.blockers, unanswered };
