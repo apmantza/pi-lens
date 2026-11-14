@@ -557,9 +557,6 @@ export const realHarnessInclude = [
 // host. Sweep coverage for other members lives in this list; new entries must
 // carry a wall-clock budget assertion, not just slowness.
 export const wallClockBudgetInclude = [
-	// #5552: real tool_result/dispatcher LSP wire traffic for mtime-preserving
-	// shell writes; serialized with the other child-process witnesses.
-	"tests/index-5552-lsp-resync-wire.test.ts",
 	// #4257: the HOME ceiling witness uses a real child process to isolate the
 	// os.homedir boundary (flake-shape admission).
 	"tests/clients/analysis-root-writers.test.ts",
@@ -894,6 +891,9 @@ export const wallClockBudgetInclude = [
 	// #5108: a real bash write plus a handler held past the live 500 ms bound
 	// (flake-shape admission); the git children ride in the serialized lane.
 	"tests/index-5108-opaque-blocker-disclosure-witness.test.ts",
+	// #5552: real tool_result/dispatcher LSP wire traffic for mtime-preserving
+	// shell writes; serialized with the other child-process witnesses.
+	"tests/index-5552-lsp-resync-wire.test.ts",
 	// #5552: a real `mv`, `rsync` and `tar` write old-mtime files into a real git
 	// checkout behind a real pi session (flake-shape admission); the child
 	// processes ride in the serialized lane.
