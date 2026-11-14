@@ -1,7 +1,7 @@
 // flake-shape: real-process-spawn — the real pi tool_result hook, dispatcher,
 // LSP client and a real child-process LSP server exchange the wire messages.
 /** #5552 acceptance 2: mtime-preserving shell writes reach the LSP wire. */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -32,8 +32,9 @@ const wireHashes = [BLOCKING, BLOCKING_2].map((content) =>
 );
 
 function layout(name: string) {
-	const root = fs.mkdtempSync(
-		path.join(fixture.root, `${name}-${process.pid}-`),
+	const root = path.join(
+		fixture.root,
+		`${name}-${process.pid}-${randomUUID()}`,
 	);
 	const proj = path.join(root, "proj");
 	const stage = path.join(root, "stage");
