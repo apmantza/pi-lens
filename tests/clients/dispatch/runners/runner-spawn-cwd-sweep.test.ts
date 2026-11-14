@@ -170,7 +170,10 @@ const EXPECTED_FILES = 79;
 // 130 -> 127 (#5410): `runJavaProbe`, `verifyOrInstallCommand` and
 // `resolveCommandArgsWithInstallFallback` each held a private spawn; the
 // checker's one probe answers for all three now.
-const EXPECTED_DIRECT_SITES = 127;
+// 127 -> 128 (#5594): `phpstan dump-parameters --json`, the one spawn that reads
+// the `excludePaths` phpstan resolved, so the runner can anchor them at the
+// project root; its cwd is the runner's `resolveRunnerCwd` binding.
+const EXPECTED_DIRECT_SITES = 128;
 /**
  * Every same-file spawn-routing wrapper call site the scan discovers. Pinned
  * as a LIST, not a count, because the list is the part round 2 got wrong: it

@@ -56,6 +56,8 @@ const MEMBERS: Readonly<Record<string, string>> = {
 	"trivy-config.ts": "not config: reads the edited file's content",
 	"utils.ts": "not config: reads the edited file's content",
 	"utils/candidate-probe.ts": "not config: tool binary candidate probe",
+	"utils/ignore-anchor.ts":
+		"not config: reads the config file the config seam already found, only to anchor its ignore globs at the project root, and writes and removes the generated copy in a scratch directory (#5594)",
 	"utils/markdownlint-api.ts":
 		"not config: resolves the markdownlint package from node_modules",
 	"utils/runner-helpers.ts": "not config: tool binary availability probe",
