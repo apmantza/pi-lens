@@ -1992,7 +1992,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"tools/lsp-structured-output.ts": 3,
 		"mcp/analyze-cli.ts": 2,
 		"mcp/server.ts": 1,
-		"index.ts": 2,
+		// 2 -> 3 (#5588): `hostPorts.status.set`, the extension-status port,
+		// publishes the issues line; it names no delivery status.
+		"index.ts": 3,
 	},
 	telemetry: {
 		"clients/lsp-mutation.ts": 11,

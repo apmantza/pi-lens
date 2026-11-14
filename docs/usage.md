@@ -121,6 +121,7 @@ pi --lens-compact-tool-line   # Render tool results as one compact, theme-aware 
 pi --lens-compact-lsp-status  # Collapse the footer LSP status to one state glyph instead of the server names (refs #3099)
 pi --lens-hide-lsp-status     # Publish no pi-lens-lsp footer status at all, so a status-rendering host stops showing the key (closes #3099)
 pi --lens-compact-widget      # Render the widget as one summary line (languages + totals, LSP↑ chip while servers spawn) with no file rows or blocker details (refs #3959)
+pi --lens-issues-status       # Publish a compact pi-lens-issues footer status from the widget summary (●<N>E, !<N>W, ⚠ <N> unchecked, ✓ clean)
 pi --no-lazy-tools       # Keep every pi-lens tool active instead of activating the situational ones on demand
 pi --lens-turn-end-madge # Run the madge circular-dependency check at every turn end, not just at session start
 pi --lens-fallow         # Run fallow-lsp beside the TypeScript server on JS/TS files (advisory unused-code, duplication and cycle findings; opt-in)

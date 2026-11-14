@@ -94,6 +94,7 @@ column is the effective behavior when nothing is set.
 | `--lens-compact-lsp-status` | `ui.compactLspStatus` | global | **off** (footer lists the active server names) |
 | `--lens-hide-lsp-status` | `ui.hideLspStatus` | global | **off** (footer publishes the `pi-lens-lsp` status; outranks `ui.compactLspStatus` when both are set) |
 | `--lens-compact-widget` | `ui.compactWidget` | global | **off** (widget stacks file rows, suppressed count and blocker details below its summary header; **on** renders only that header — languages + totals, plus the `LSP↑` chip while servers are spawning) |
+| `--lens-issues-status` | `ui.issuesStatus` | global | **off** (footer publishes no `pi-lens-issues` status; **on** publishes `●<N>E`, `!<N>W`, `⚠ <N> unchecked`, or `✓ clean` from the widget header's tallies) |
 | `--no-lazy-tools` | `tools.lazy` | global | `true`: the five situational tools start inactive on every model (`"auto"` only on a model that keeps mid-conversation system messages, `false` never) |
 | `--no-tool=<name>` | `tools.<name>.enabled` | project | every lens tool **on** |
 | `--lens-turn-end-madge` | `turnEnd.madge.enabled` | global | **off** (madge runs at session start, not per turn) |

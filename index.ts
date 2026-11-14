@@ -63,12 +63,15 @@ import { resolveSkillPaths } from "./clients/skills-resolver.js";
 import {
 	getFailedLspServerIds,
 	getSessionLanguages,
+	getWidgetSummary,
 	reconcileCascadeNeighborLspErrors,
 	renderWidget,
 	scheduleStaleReconcile,
 	setRenderCallback,
+	setWidgetChangeCallback,
 	wireWidgetDispositionSubscriber,
 } from "./clients/widget-state.js";
+import { formatIssuesStatus } from "./clients/issues-status.js";
 import { selectLspStatus } from "./clients/lsp-status.js";
 import {
 	branchToolResultIds,
@@ -1053,6 +1056,31 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// never captured once — a session replacement invalidates the old ctx.ui.
 	// #1334 S2: the ports notifier owns mode suppression + live-ctx resolution
 	// (per-call, never captured -- the #338/#798 detached-callback rule).
+	// The `pi-lens-issues` key is a projection of the widget store, published
+	// from the live status port so RPC and non-TUI modes reach it too. The
+	// flag is read at publish time (#4913 forbids a factory-time read), and
+	// identical consecutive text is dropped: `setStatus` repaints the host.
+	let issuesStatusPublished = false;
+	let lastIssuesStatus: string | undefined;
+	function resetIssuesStatusPublish(): void {
+		issuesStatusPublished = false;
+		lastIssuesStatus = undefined;
+	}
+	function updateIssuesStatus(): void {
+		try {
+			const enabled = getLensFlag("lens-issues-status") === true;
+			const next = enabled ? formatIssuesStatus(getWidgetSummary()) : undefined;
+			if (issuesStatusPublished && next === lastIssuesStatus) return;
+			// Flag off from the start: publish nothing, so the footer is
+			// byte-identical to a pi-lens without the feature.
+			if (!enabled && !issuesStatusPublished) return;
+			issuesStatusPublished = true;
+			lastIssuesStatus = next;
+			hostPorts.status.set("pi-lens-issues", next);
+		} catch (err) {
+			dbg(`issues status update skipped: ${err}`);
+		}
+	}
 	const refreshCtxDerivedPlumbing = (): void => {
 		// These targets are module singletons, while hostPorts is scoped to this
 		// extension activation. A sibling activation can overwrite them and then
@@ -1078,6 +1106,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 		wireDispositionBusEmitterGetter(getLiveEmit);
 		wireFormatEventsBusEmitterGetter(getLiveEmit);
 		setRenderCallback(() => hostPorts.render.invalidate());
+		setWidgetChangeCallback(updateIssuesStatus);
 	};
 	refreshCtxDerivedPlumbing();
 	// #485: read-only bus subscriber — never publishes, so the #482 loop guard
@@ -2596,6 +2625,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 					);
 				}
 				rememberOwnEventCtx(ctx);
+				// The host clears extension statuses when a session resets, so the
+				// dedupe below must not suppress the first publish of the new
+				// session; `updateIssuesStatus()` runs again after adoption.
+				resetIssuesStatusPublish();
 				refreshCtxDerivedPlumbing();
 				const sessionStartFiredAt = Date.now();
 				try {
@@ -3081,6 +3114,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 					dbg(
 						`session_start: ${sessionReason ?? "startup"} — session stores from ${handoffSource}`,
 					);
+					// Resumed state and `/new` both land in the store above; publish
+					// once now rather than only on the next store mutation.
+					updateIssuesStatus();
 
 					if (lensWidgetVisible) {
 						mountLensWidget(ctx.ui, readExtensionMode(ctx));

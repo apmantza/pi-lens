@@ -17,6 +17,7 @@ import {
 	getFileDiagnostics,
 	getFileDiagnosticSummaries,
 	getSessionLanguages,
+	getWidgetSummary,
 	importWidgetState,
 	incrementWidgetDependencyDriftDelivery,
 	isBlocking,
@@ -3194,5 +3195,73 @@ describe("a file no check can ever cover (#5287)", () => {
 		delete older.files[0].uncheckedInapplicable;
 		expect(importWidgetState(older)).toBe(true);
 		expect(renderWidget(120, theme).join("\n")).toContain("1 unchecked");
+	});
+});
+
+// The widget header and the `pi-lens-issues` status come from one tally. These
+// cases pin the projection's fields to what the header actually draws, so a
+// future header change cannot leave the status counting on its own.
+describe("getWidgetSummary", () => {
+	it("reports the same counts the header draws for errors and warnings", () => {
+		recordDiagnostics("/repo/summary.ts", [
+			{
+				severity: "error",
+				semantic: "blocking",
+				message: "blocking",
+				line: 1,
+				rule: "typescript:1",
+			},
+			{
+				severity: "warning",
+				message: "warning",
+				line: 2,
+				rule: "ts-react-antipatterns",
+			},
+		]);
+
+		const bag = getWidgetSummary();
+		expect(bag).toMatchObject({
+			totalBlocking: 1,
+			totalErrors: 1,
+			totalWarnings: 1,
+			totalSuppressed: 0,
+			hasPendingAnalysis: false,
+			uncheckedCount: 0,
+			hasRenderableCheckedFile: true,
+			hasFiles: true,
+		});
+		const header = renderWidget(120, theme)[0] ?? "";
+		expect(header).toContain(`●${bag.totalErrors}E`);
+		expect(header).toContain(`!${bag.totalWarnings}W`);
+	});
+
+	it("reports clean only when the header draws ✓ clean", () => {
+		recordDiagnostics("/repo/clean.ts", []);
+
+		const bag = getWidgetSummary();
+		expect(bag.hasPendingAnalysis).toBe(false);
+		expect(bag.uncheckedCount).toBe(0);
+		expect(bag.hasRenderableCheckedFile).toBe(true);
+		expect(renderWidget(120, theme).join("\n")).toContain("✓ clean");
+	});
+
+	it("reports the unchecked count the header draws", () => {
+		recordDiagnostics("/repo/unchecked.ts", [], undefined, undefined, {
+			reason: "no primary checker is enabled for this kind",
+		});
+
+		const bag = getWidgetSummary();
+		expect(bag.uncheckedCount).toBe(1);
+		expect(renderWidget(120, theme).join("\n")).toContain("⚠ 1 unchecked");
+	});
+
+	it("reports no files and no clean claim on an empty store", () => {
+		const bag = getWidgetSummary();
+		expect(bag.hasFiles).toBe(false);
+		expect(bag.totalErrors).toBe(0);
+		expect(bag.totalWarnings).toBe(0);
+		// A record with no final snapshot is unfinished evidence, not clean.
+		recordFormatter("/repo/formatted.ts", "prettier", false, true);
+		expect(getWidgetSummary().hasPendingAnalysis).toBe(true);
 	});
 });
