@@ -52,6 +52,7 @@ import type { FileKind } from "../../../../clients/file-kinds.js";
 import type { RunnerResult } from "../../../../clients/dispatch/types.js";
 import { setProjectTrustState } from "../../../../clients/project-trust.js";
 import * as safeSpawnModule from "../../../../clients/safe-spawn.js";
+import { scaledTestTimeout } from "../../../support/test-timeout-scale.js";
 import { makeRunnerCtx } from "../../../support/runner-ctx.js";
 import { removeTempDirSync, setupTestEnvironment } from "../../test-utils.js";
 
@@ -59,6 +60,9 @@ const env = setupTestEnvironment("pi-lens-5594-anchor-");
 const ROOT = env.tmpDir;
 
 const CREDO_BASE = process.env.PI_LENS_TEST_CREDO_BASE;
+
+/** A case runs the real tool in two layouts; a JVM or mix start is seconds. */
+const REAL_RUN_TIMEOUT_MS = scaledTestTimeout(120_000);
 
 /** The layout pair: one project under an ignored ancestor, one under a neutral. */
 const LAYOUTS = {
@@ -223,37 +227,49 @@ describe.each(TOOLS)(
 			);
 
 		describe.skipIf(!available())("tool available", () => {
-			it("reports the findings the control layout reports", async () => {
-				const control = summary(await run(LAYOUTS.control, file));
-				const scratch = summary(await run(LAYOUTS.ignoredAncestor, file));
+			it(
+				"reports the findings the control layout reports",
+				async () => {
+					const control = summary(await run(LAYOUTS.control, file));
+					const scratch = summary(await run(LAYOUTS.ignoredAncestor, file));
 
-				expect(control.rules).toEqual(controlRules);
-				expect(scratch.rules).toEqual(control.rules);
-				expect(scratch.status).toEqual(control.status);
-				expect(scratch.inconclusive).toBe(false);
-			});
+					expect(control.rules).toEqual(controlRules);
+					expect(scratch.rules).toEqual(control.rules);
+					expect(scratch.status).toEqual(control.status);
+					expect(scratch.inconclusive).toBe(false);
+				},
+				REAL_RUN_TIMEOUT_MS,
+			);
 
-			it("names the findings with the absolute dispatched path", async () => {
-				const filePath = path.join(LAYOUTS.ignoredAncestor, file);
-				const result = await run(LAYOUTS.ignoredAncestor, file);
+			it(
+				"names the findings with the absolute dispatched path",
+				async () => {
+					const filePath = path.join(LAYOUTS.ignoredAncestor, file);
+					const result = await run(LAYOUTS.ignoredAncestor, file);
 
-				expect(result.diagnostics.length).toBeGreaterThan(0);
-				expect(summary(result).reportedPaths).toEqual([filePath]);
-			});
+					expect(result.diagnostics.length).toBeGreaterThan(0);
+					expect(summary(result).reportedPaths).toEqual([filePath]);
+				},
+				REAL_RUN_TIMEOUT_MS,
+			);
 
 			// The project's own `.claude/` ignore must still fire: anchoring the glob
 			// must not turn it off. The control run proves the glob matches in a
 			// neutral layout; the ancestor run must agree.
-			it("keeps a file inside the project's own ignored .claude/ directory ignored", async () => {
-				const control = summary(await run(LAYOUTS.control, ignoredFile));
-				const scratch = summary(
-					await run(LAYOUTS.ignoredAncestor, ignoredFile),
-				);
+			it(
+				"keeps a file inside the project's own ignored .claude/ directory ignored",
+				async () => {
+					const control = summary(await run(LAYOUTS.control, ignoredFile));
+					const scratch = summary(
+						await run(LAYOUTS.ignoredAncestor, ignoredFile),
+					);
 
-				expect(control.rules).toEqual([]);
-				expect(scratch.rules).toEqual([]);
-				expect(scratch.status).toEqual(control.status);
-			});
+					expect(control.rules).toEqual([]);
+					expect(scratch.rules).toEqual([]);
+					expect(scratch.status).toEqual(control.status);
+				},
+				REAL_RUN_TIMEOUT_MS,
+			);
 		});
 	},
 );
@@ -268,25 +284,29 @@ describe.skipIf(!toolAvailable("detekt"))(
 		const BRACE_CONFIG =
 			"style:\n  active: true\n  MagicNumber:\n    active: true\n    excludes: ['{**/.claude/**,**/nomatch/**}']\n";
 
-		it("never reports the file clean under an ignored ancestor", async () => {
-			const control = path.join(ROOT, "brace-ctrl/lane1");
-			const scratch = path.join(ROOT, ".claude/worktrees/brace-lane");
-			plantDetekt(control, BRACE_CONFIG);
-			plantDetekt(scratch, BRACE_CONFIG);
-			const run = (project: string) =>
-				detektRunner.run(
-					makeRunnerCtx(path.join(project, "src/A.kt"), project, {
-						kind: "kotlin",
-					}) as never,
-				);
+		it(
+			"never reports the file clean under an ignored ancestor",
+			async () => {
+				const control = path.join(ROOT, "brace-ctrl/lane1");
+				const scratch = path.join(ROOT, ".claude/worktrees/brace-lane");
+				plantDetekt(control, BRACE_CONFIG);
+				plantDetekt(scratch, BRACE_CONFIG);
+				const run = (project: string) =>
+					detektRunner.run(
+						makeRunnerCtx(path.join(project, "src/A.kt"), project, {
+							kind: "kotlin",
+						}) as never,
+					);
 
-			const neutral = summary(await run(control));
-			const ancestor = summary(await run(scratch));
+				const neutral = summary(await run(control));
+				const ancestor = summary(await run(scratch));
 
-			expect(neutral.rules).toEqual(["MagicNumber"]);
-			expect(neutral.inconclusive).toBe(false);
-			expect(ancestor.rules).toEqual([]);
-			expect(ancestor.inconclusive).toBe(true);
-		});
+				expect(neutral.rules).toEqual(["MagicNumber"]);
+				expect(neutral.inconclusive).toBe(false);
+				expect(ancestor.rules).toEqual([]);
+				expect(ancestor.inconclusive).toBe(true);
+			},
+			REAL_RUN_TIMEOUT_MS,
+		);
 	},
 );
