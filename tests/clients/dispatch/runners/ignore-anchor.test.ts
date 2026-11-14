@@ -1,0 +1,842 @@
+/**
+ * #5594: detekt, phpstan and credo match the ignore globs of the project's own
+ * config against the file's ABSOLUTE path, so a project checked out under
+ * `<root>/.claude/worktrees/<lane>` whose config ignores `**\/.claude/**` was
+ * read as clean without being analysed. The runners now hand the tool a copy of
+ * the project's config in which every such glob is anchored at the project root
+ * (`clients/dispatch/runners/utils/ignore-anchor.ts`).
+ *
+ * This file pins the rewrite itself (the glob forms it admits and refuses, each
+ * tool's config reader) and the runner's seam to the tool (what the tool is
+ * handed, what is removed afterwards, what a refusal reports). The tool's own
+ * matching is the real-binary file `ignore-anchor-real.test.ts`; a double has no
+ * matcher, so nothing here claims the anchored globs match.
+ */
+import * as fs from "node:fs";
+import * as path from "node:path";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
+import {
+	anchorIgnorePattern,
+	anchorIgnorePatterns,
+	markUnanchored,
+	withOverlayFile,
+} from "../../../../clients/dispatch/runners/utils/ignore-anchor.js";
+import { anchorDetektConfig } from "../../../../clients/dispatch/runners/detekt.js";
+import {
+	anchorPhpstanConfig,
+	phpstanConfigMayExclude,
+} from "../../../../clients/dispatch/runners/phpstan.js";
+import yaml from "../../../../clients/deps/js-yaml.js";
+import type { RunnerResult } from "../../../../clients/dispatch/types.js";
+import { FactStore } from "../../../../clients/dispatch/fact-store.js";
+import { setProjectTrustState } from "../../../../clients/project-trust.js";
+import { setupTestEnvironment } from "../../test-utils.js";
+
+const { safeSpawnAsync } = vi.hoisted(() => ({ safeSpawnAsync: vi.fn() }));
+
+// A partial mock: the spawn seam is the process boundary, and the rest of the
+// module (the availability probes the runners resolve their command through)
+// stays real.
+vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<Record<string, unknown>>()),
+	safeSpawnAsync,
+}));
+
+// The runners resolve `detekt`, `phpstan` and `mix` by presence on PATH around
+// the version probe. Each gets a non-empty stub on a PATH of this file's own,
+// never executed because `safeSpawnAsync` is the mocked seam, so the answer is
+// the same on a host that has the tool and on one that does not.
+const presence = setupTestEnvironment("pi-lens-5594-bin-");
+const originalPath = process.env.PATH;
+
+beforeAll(() => {
+	for (const name of ["detekt", "phpstan", "mix"]) {
+		fs.writeFileSync(path.join(presence.tmpDir, name), "#!/bin/sh\n", {
+			mode: 0o755,
+		});
+	}
+	process.env.PATH = `${presence.tmpDir}${path.delimiter}${originalPath ?? ""}`;
+	setProjectTrustState("trusted");
+});
+
+afterAll(() => {
+	if (originalPath === undefined) delete process.env.PATH;
+	else process.env.PATH = originalPath;
+	presence.cleanup();
+});
+
+const ROOT = "/work/.claude/worktrees/lane1";
+
+describe("anchorIgnorePattern (java glob, detekt)", () => {
+	it.each([
+		// The two forms `**/X` stands for: no directory below the root, or one or more.
+		["**/.claude/**", [`${ROOT}/.claude/**`, `${ROOT}/**/.claude/**`]],
+		["**/*.kt", [`${ROOT}/*.kt`, `${ROOT}/**/*.kt`]],
+		["glob:**/gen/**", [`${ROOT}/gen/**`, `${ROOT}/**/gen/**`]],
+		// Already absolute: anchored by the user, kept.
+		["/abs/proj/**/gen/**", ["/abs/proj/**/gen/**"]],
+		// A relative pattern that starts with a name cannot match an absolute path.
+		[".claude/**", [".claude/**"]],
+		["src/test/**", ["src/test/**"]],
+	])("%s -> %j", (pattern, expected) => {
+		expect(anchorIgnorePattern(pattern, ROOT, "java-glob")).toEqual(expected);
+	});
+
+	// An unknown spelling is refused, never passed through: a pass-through is a
+	// silent clean again (principles section 1, gates fail closed).
+	it.each([
+		"regex:.*\\.claude.*",
+		"syntax:whatever",
+		"{**/a/**,**/b/**}",
+		"**.claude/**",
+		"*/gen/**",
+		"**/",
+		"**//x",
+		"[ab]/x",
+		"",
+	])("refuses %j", (pattern) => {
+		expect(anchorIgnorePattern(pattern, ROOT, "java-glob")).toBeNull();
+	});
+
+	it("escapes glob metacharacters in the root and keeps its slashes", () => {
+		expect(
+			anchorIgnorePattern("**/x/**", "C:\\w[1]\\{p}\\lane*", "java-glob"),
+		).toEqual([
+			"C:/w\\[1\\]/\\{p\\}/lane\\*/x/**",
+			"C:/w\\[1\\]/\\{p\\}/lane\\*/**/x/**",
+		]);
+	});
+});
+
+describe("anchorIgnorePattern (fnmatch, phpstan)", () => {
+	it.each([
+		["**/.claude/**", [`${ROOT}/.claude/**`, `${ROOT}/*/.claude/**`]],
+		["*/vendor/*", [`${ROOT}/vendor/*`, `${ROOT}/*/vendor/*`]],
+		["*.min.php", [`${ROOT}/*.min.php`]],
+		["/abs/proj/vendor", ["/abs/proj/vendor"]],
+	])("%s -> %j", (pattern, expected) => {
+		expect(anchorIgnorePattern(pattern, ROOT, "fnmatch")).toEqual(expected);
+	});
+
+	it("refuses a relative pattern with no leading wildcard", () => {
+		expect(anchorIgnorePattern("src/gen/*", ROOT, "fnmatch")).toBeNull();
+	});
+});
+
+describe("anchorIgnorePatterns", () => {
+	it("keeps the user's order, drops a duplicate anchor, and refuses the whole list on one unknown entry", () => {
+		expect(
+			anchorIgnorePatterns(["**/a/**", "**/a/**", "b/**"], ROOT, "java-glob"),
+		).toEqual({
+			patterns: [`${ROOT}/a/**`, `${ROOT}/**/a/**`, "b/**"],
+		});
+		expect(
+			anchorIgnorePatterns(["**/a/**", "regex:x"], ROOT, "java-glob"),
+		).toEqual({ unrecognized: "regex:x" });
+	});
+});
+
+describe("anchorDetektConfig", () => {
+	const anchored = (text: string) => anchorDetektConfig(text, ROOT);
+
+	it("anchors a rule's and a rule set's excludes and keeps every other key", () => {
+		const result = anchored(
+			[
+				"build:",
+				"  maxIssues: 0",
+				"style:",
+				"  active: true",
+				"  excludes: ['**/gen/**']",
+				"  MagicNumber:",
+				"    active: true",
+				"    ignoreNumbers: ['-1', '0', '42']",
+				"    excludes: ['**/.claude/**', 'src/legacy/**']",
+				"",
+			].join("\n"),
+		);
+		expect(result.kind).toBe("rewritten");
+		if (result.kind !== "rewritten") return;
+		// js-yaml's own reader, so the assertion reads the file the tool reads.
+		expect(yaml.load(result.text)).toEqual({
+			build: { maxIssues: 0 },
+			style: {
+				active: true,
+				excludes: [`${ROOT}/gen/**`, `${ROOT}/**/gen/**`],
+				MagicNumber: {
+					active: true,
+					ignoreNumbers: ["-1", "0", "42"],
+					excludes: [
+						`${ROOT}/.claude/**`,
+						`${ROOT}/**/.claude/**`,
+						"src/legacy/**",
+					],
+				},
+			},
+		});
+	});
+
+	it("reads the comma string form detekt accepts as a list", () => {
+		const result = anchored("style:\n  excludes: '**/a/**, **/b/**'\n");
+		expect(result.kind).toBe("rewritten");
+		if (result.kind !== "rewritten") return;
+		expect(result.text).toContain(`${ROOT}/a/**`);
+		expect(result.text).toContain(`${ROOT}/**/b/**`);
+	});
+
+	it("leaves the report sections alone: their excludes name reports, not files", () => {
+		expect(
+			anchored(
+				"processors:\n  excludes: ['**/Whatever']\nconfig:\n  excludes: '.*>.*'\nconsole-reports:\n  excludes: ['ComplexityReport']\n",
+			),
+		).toEqual({ kind: "unchanged" });
+	});
+
+	it("has nothing to rewrite for an empty config or one without path filters", () => {
+		expect(anchored("")).toEqual({ kind: "unchanged" });
+		expect(anchored("build:\n")).toEqual({ kind: "unchanged" });
+		expect(anchored("style:\n  MagicNumber:\n    active: true\n")).toEqual({
+			kind: "unchanged",
+		});
+	});
+
+	// Each of these is a config the rewrite cannot be shown to keep: refusing is
+	// the whole point, since a pass-through would hand the tool the very globs
+	// that read the ancestors.
+	it.each([
+		["a regex matcher", "style:\n  excludes: ['regex:.*claude.*']\n"],
+		["a brace string", "style:\n  excludes: '**/*.{kt,kts}'\n"],
+		["a leading brace group", "style:\n  excludes: ['{**/a/**,**/b/**}']\n"],
+		["a non-list value", "style:\n  excludes: 3\n"],
+		["a list holding a non-string", "style:\n  excludes: [1]\n"],
+		[
+			"a rule's unknown form",
+			"style:\n  MagicNumber:\n    includes: ['*/x']\n",
+		],
+		[
+			"a YAML type the dump would not reproduce",
+			"style:\n  flags: !!set {a, b}\n  excludes: ['**/a/**']\n",
+		],
+		["YAML the loader rejects", "style: [\n"],
+		["a non-mapping root", "- a\n- b\n"],
+	])("refuses %s", (_name, text) => {
+		const result = anchored(text);
+		expect(result.kind).toBe("unapplied");
+		expect(result.kind === "unapplied" && result.reason).toContain(
+			"its detekt config",
+		);
+	});
+});
+
+describe("anchorPhpstanConfig", () => {
+	const dump = (excludePaths: unknown) => ({
+		status: 0,
+		stdout: JSON.stringify({ excludePaths }),
+	});
+	const config = "/work/.claude/worktrees/lane1/phpstan.neon";
+
+	it("anchors the wildcard entries, keeps the paths, and includes the project's config", () => {
+		const result = anchorPhpstanConfig(
+			dump({
+				analyseAndScan: [`${ROOT}/vendor`, "**/.claude/**"],
+				analyse: [`${ROOT}/src/*/gen`, "*/legacy/*"],
+			}),
+			config,
+			ROOT,
+		);
+		expect(result).toEqual({
+			kind: "rewritten",
+			text: [
+				"includes:",
+				`\t- "${config}"`,
+				"parameters:",
+				"\texcludePaths!:",
+				"\t\tanalyse:",
+				`\t\t\t- "${ROOT}/src/*/gen"`,
+				`\t\t\t- "${ROOT}/legacy/*"`,
+				`\t\t\t- "${ROOT}/*/legacy/*"`,
+				"\t\tanalyseAndScan:",
+				`\t\t\t- "${ROOT}/vendor (?)"`,
+				`\t\t\t- "${ROOT}/.claude/**"`,
+				`\t\t\t- "${ROOT}/*/.claude/**"`,
+				"",
+			].join("\n"),
+		});
+	});
+
+	it("writes an empty list as one, and doubles a percent sign", () => {
+		const result = anchorPhpstanConfig(
+			dump({ analyseAndScan: ["**/100%/**"], analyse: [] }),
+			config,
+			ROOT,
+		);
+		expect(result.kind === "rewritten" && result.text).toContain(
+			"\t\tanalyse: []\n",
+		);
+		expect(result.kind === "rewritten" && result.text).toContain(
+			`- "${ROOT}/100%%/**"`,
+		);
+	});
+
+	it("has nothing to rewrite when every entry is already absolute or there are none", () => {
+		expect(
+			anchorPhpstanConfig(
+				dump({ analyseAndScan: [`${ROOT}/vendor`], analyse: [] }),
+				config,
+				ROOT,
+			),
+		).toEqual({ kind: "unchanged" });
+		expect(
+			anchorPhpstanConfig(
+				dump({ analyseAndScan: [], analyse: [] }),
+				config,
+				ROOT,
+			),
+		).toEqual({ kind: "unchanged" });
+	});
+
+	it.each([
+		["a failed dump", { status: 1, stdout: "" }, "exited 1"],
+		["no status", { status: null, stdout: "" }, "without a status"],
+		["output that is not JSON", { status: 0, stdout: "Note: x" }, "no JSON"],
+		["no excludePaths", { status: 0, stdout: "{}" }, "no excludePaths object"],
+		["a list", dump([]), "no excludePaths object"],
+		["an unknown list", dump({ other: [] }), "unknown list"],
+		["a non-string entry", dump({ analyse: [3] }), "not a list of strings"],
+		[
+			"a relative entry with no wildcard lead",
+			dump({ analyse: ["src/*"] }),
+			"not a form",
+		],
+	])("refuses %s", (_name, input, reason) => {
+		const result = anchorPhpstanConfig(input, config, ROOT);
+		expect(result.kind).toBe("unapplied");
+		expect(result.kind === "unapplied" && result.reason).toContain(reason);
+	});
+
+	it("skips the dump for a config that cannot set excludePaths", () => {
+		expect(phpstanConfigMayExclude("parameters:\n    level: 5\n")).toBe(false);
+		expect(
+			phpstanConfigMayExclude("parameters:\n  excludePaths:\n    - x\n"),
+		).toBe(true);
+		expect(phpstanConfigMayExclude("includes:\n  - base.neon\n")).toBe(true);
+		expect(
+			phpstanConfigMayExclude("parameters:\n  excludes_analyse:\n    - x\n"),
+		).toBe(true);
+	});
+});
+
+describe("withOverlayFile", () => {
+	it("hands the text to the tool in a scratch directory and removes it on every exit path", async () => {
+		const env = setupTestEnvironment("pi-lens-5594-scratch-");
+		const previous = process.env.PI_LENS_TEST_SCANNER_TMPDIR;
+		process.env.PI_LENS_TEST_SCANNER_TMPDIR = env.tmpDir;
+		try {
+			let seen = "";
+			let dir = "";
+			const value = await withOverlayFile(
+				"detekt",
+				"d.yml",
+				"a: 1\n",
+				async (file) => {
+					seen = fs.readFileSync(file, "utf8");
+					dir = path.dirname(file);
+					expect(path.dirname(dir)).toBe(env.tmpDir);
+					return 7;
+				},
+			);
+			expect(value).toBe(7);
+			expect(seen).toBe("a: 1\n");
+			expect(fs.existsSync(dir)).toBe(false);
+
+			await expect(
+				withOverlayFile("detekt", "d.yml", "a: 1\n", async (file) => {
+					dir = path.dirname(file);
+					throw new Error("the tool blew up");
+				}),
+			).rejects.toThrow("the tool blew up");
+			expect(fs.existsSync(dir)).toBe(false);
+			expect(
+				fs
+					.readdirSync(env.tmpDir)
+					.filter((n) => n.startsWith("pi-lens-detekt-anchor-")),
+			).toEqual([]);
+		} finally {
+			if (previous === undefined)
+				delete process.env.PI_LENS_TEST_SCANNER_TMPDIR;
+			else process.env.PI_LENS_TEST_SCANNER_TMPDIR = previous;
+			env.cleanup();
+		}
+	});
+});
+
+async function ledger() {
+	const mod = await import("../../../../clients/degradation-ledger.js");
+	mod.resetDegradationLedger();
+	return mod;
+}
+
+function unanchoredRows(summary: {
+	getDegradationSummary(): Array<{
+		kind: string;
+		count: number;
+		latestReasons: Array<{ subject: string; reason: string }>;
+	}>;
+}) {
+	return summary
+		.getDegradationSummary()
+		.find((entry) => entry.kind === "runner-ignore-unanchored");
+}
+
+describe("markUnanchored", () => {
+	beforeEach(() => {
+		vi.resetModules();
+	});
+
+	it("reports a clean run inconclusive and leaves one record per tool", async () => {
+		const summary = await ledger();
+		const { markUnanchored: mark } =
+			await import("../../../../clients/dispatch/runners/utils/ignore-anchor.js");
+		const clean: RunnerResult = {
+			status: "succeeded",
+			diagnostics: [],
+			semantic: "none",
+		};
+		expect(mark("detekt", "an ignore it cannot anchor", clean)).toMatchObject({
+			status: "succeeded",
+			inconclusive: true,
+		});
+		mark("detekt", "an ignore it cannot anchor", clean);
+		mark("phpstan", "no dump", clean);
+		const group = unanchoredRows(summary);
+		expect(group?.count).toBe(3);
+		expect(group?.latestReasons.map((row) => row.subject).sort()).toEqual([
+			"detekt",
+			"phpstan",
+		]);
+		expect(
+			group?.latestReasons.find((row) => row.subject === "detekt")?.reason,
+		).toContain("an ignore it cannot anchor");
+	});
+
+	it("keeps a finding the tool printed and a failure as it was", () => {
+		const finding = {
+			status: "failed",
+			diagnostics: [{ id: "x" }],
+			semantic: "blocking",
+		} as never;
+		expect(markUnanchored("credo", "why", finding)).toBe(finding);
+		const failed = {
+			status: "failed",
+			diagnostics: [],
+			semantic: "none",
+		} as never;
+		expect(markUnanchored("credo", "why", failed)).toBe(failed);
+	});
+});
+
+function ctx(kind: string, filePath: string, cwd: string) {
+	return {
+		filePath,
+		cwd,
+		kind,
+		pi: { getFlag: () => false },
+		autofix: false,
+		deltaMode: true,
+		facts: new FactStore(),
+		hasTool: async () => true,
+		log: () => {},
+	};
+}
+
+/** The `--config` file as the tool saw it, because the runner removes it after. */
+function recordConfigAtSpawn(
+	flag: string,
+	seen: { text?: string; file?: string },
+) {
+	return async (_cmd: string, args: string[] = []) => {
+		const at = args.indexOf(flag);
+		if (at >= 0) {
+			seen.file = args[at + 1];
+			seen.text = fs.readFileSync(seen.file, "utf8");
+		}
+		return { stdout: "", stderr: "", status: 0 };
+	};
+}
+
+describe("detekt runner", () => {
+	beforeEach(() => {
+		vi.resetModules();
+		safeSpawnAsync.mockReset();
+	});
+
+	async function runDetekt(root: string) {
+		const runner = (
+			await import("../../../../clients/dispatch/runners/detekt.js")
+		).default;
+		return runner.run(
+			ctx("kotlin", path.join(root, "src/A.kt"), root) as never,
+		);
+	}
+
+	function plant(root: string, config: string) {
+		fs.mkdirSync(path.join(root, "src"), { recursive: true });
+		fs.writeFileSync(path.join(root, "src/A.kt"), "fun f() {}\n");
+		fs.writeFileSync(path.join(root, "detekt.yml"), config);
+	}
+
+	it("hands detekt a config whose globs are anchored at the root, and removes it after", async () => {
+		const env = setupTestEnvironment("pi-lens-5594-detekt-");
+		const scratch = path.join(env.tmpDir, "scratch");
+		fs.mkdirSync(scratch);
+		const previous = process.env.PI_LENS_TEST_SCANNER_TMPDIR;
+		process.env.PI_LENS_TEST_SCANNER_TMPDIR = scratch;
+		try {
+			const root = path.join(env.tmpDir, ".claude/worktrees/lane1");
+			plant(
+				root,
+				"style:\n  MagicNumber:\n    active: true\n    excludes: ['**/.claude/**']\n",
+			);
+			const seen: { text?: string; file?: string } = {};
+			safeSpawnAsync.mockImplementation(recordConfigAtSpawn("--config", seen));
+
+			const result = await runDetekt(root);
+
+			expect(result.status).toBe("succeeded");
+			expect(result.inconclusive).toBeUndefined();
+			expect(seen.file).not.toBe(path.join(root, "detekt.yml"));
+			expect(seen.text).toContain(`${root}/.claude/**`);
+			expect(seen.text).toContain(`${root}/**/.claude/**`);
+			expect(seen.text).not.toContain("'**/.claude/**'");
+			expect(fs.readdirSync(scratch)).toEqual([]);
+		} finally {
+			if (previous === undefined)
+				delete process.env.PI_LENS_TEST_SCANNER_TMPDIR;
+			else process.env.PI_LENS_TEST_SCANNER_TMPDIR = previous;
+			env.cleanup();
+		}
+	});
+
+	it("hands detekt the project's own config when it has no path filter", async () => {
+		const env = setupTestEnvironment("pi-lens-5594-detekt-plain-");
+		try {
+			plant(env.tmpDir, "build:\n  maxIssues: 0\n");
+			const seen: { text?: string; file?: string } = {};
+			safeSpawnAsync.mockImplementation(recordConfigAtSpawn("--config", seen));
+
+			const result = await runDetekt(env.tmpDir);
+
+			expect(seen.file).toBe(path.join(env.tmpDir, "detekt.yml"));
+			expect(result.inconclusive).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// The fail-closed cell. A config the rewrite refuses runs as it stands (the
+	// status quo, findings and all) and a clean answer from it is not a verdict.
+	it("runs a config it cannot anchor as it stands and never reports it clean", async () => {
+		const env = setupTestEnvironment("pi-lens-5594-detekt-refused-");
+		try {
+			const summary = await ledger();
+			plant(
+				env.tmpDir,
+				"style:\n  MagicNumber:\n    excludes: ['regex:.*claude.*']\n",
+			);
+			const seen: { text?: string; file?: string } = {};
+			safeSpawnAsync.mockImplementation(recordConfigAtSpawn("--config", seen));
+
+			const result = await runDetekt(env.tmpDir);
+
+			expect(seen.file).toBe(path.join(env.tmpDir, "detekt.yml"));
+			expect(result.status).toBe("succeeded");
+			expect(result.inconclusive).toBe(true);
+			const row = unanchoredRows(summary)?.latestReasons.find(
+				(entry) => entry.subject === "detekt",
+			);
+			expect(row?.reason).toContain("regex:.*claude.*");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("does not call a run clean when the config is unreadable", async () => {
+		const env = setupTestEnvironment("pi-lens-5594-detekt-broken-");
+		try {
+			const summary = await ledger();
+			plant(env.tmpDir, "style: [\n");
+			safeSpawnAsync.mockResolvedValue({ stdout: "", stderr: "", status: 0 });
+
+			const result = await runDetekt(env.tmpDir);
+
+			expect(result.inconclusive).toBe(true);
+			expect(
+				unanchoredRows(summary)?.latestReasons.find(
+					(e) => e.subject === "detekt",
+				)?.reason,
+			).toContain("not readable YAML");
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
+/** The spawns that did the work, without the availability probe before them. */
+const work = (calls: string[][]) =>
+	calls.filter((args) => args[0] !== "--version");
+
+describe("phpstan runner", () => {
+	beforeEach(() => {
+		vi.resetModules();
+		safeSpawnAsync.mockReset();
+	});
+
+	async function runPhpstan(root: string) {
+		const runner = (
+			await import("../../../../clients/dispatch/runners/phpstan.js")
+		).default;
+		return runner.run(ctx("php", path.join(root, "a.php"), root) as never);
+	}
+
+	function plant(root: string, config: string) {
+		fs.mkdirSync(root, { recursive: true });
+		fs.writeFileSync(path.join(root, "a.php"), "<?php\n");
+		fs.writeFileSync(path.join(root, "phpstan.neon"), config);
+	}
+
+	const CLEAN = {
+		stdout: JSON.stringify({
+			totals: { errors: 0, file_errors: 0 },
+			files: [],
+			errors: [],
+		}),
+		stderr: "",
+		status: 0,
+	};
+
+	it("analyses with a config that includes the project's and anchors its excludePaths", async () => {
+		const env = setupTestEnvironment("pi-lens-5594-phpstan-");
+		try {
+			const root = path.join(env.tmpDir, ".claude/worktrees/lane1");
+			plant(root, "parameters:\n  excludePaths:\n    - '**/.claude/**'\n");
+			const calls: string[][] = [];
+			const seen: { text?: string; file?: string } = {};
+			safeSpawnAsync.mockImplementation(
+				async (_cmd: string, args: string[] = []) => {
+					calls.push(args);
+					if (args[0] === "dump-parameters") {
+						return {
+							status: 0,
+							stdout: JSON.stringify({
+								excludePaths: {
+									analyseAndScan: ["**/.claude/**"],
+									analyse: [],
+								},
+							}),
+							stderr: "Note: Using configuration file x.\n",
+						};
+					}
+					return recordConfigAtSpawn("-c", seen)(_cmd, args).then(() => CLEAN);
+				},
+			);
+
+			const result = await runPhpstan(root);
+
+			expect(work(calls).map((args) => args[0])).toEqual([
+				"dump-parameters",
+				"analyse",
+			]);
+			expect(result.status).toBe("succeeded");
+			expect(result.inconclusive).toBeUndefined();
+			expect(seen.text).toContain(`"${path.join(root, "phpstan.neon")}"`);
+			expect(seen.text).toContain(`- "${root}/.claude/**"`);
+			expect(seen.text).not.toContain('"**/.claude/**"');
+			expect(fs.existsSync(path.dirname(seen.file ?? ""))).toBe(false);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("spawns no dump and passes no -c for a config that cannot exclude", async () => {
+		const env = setupTestEnvironment("pi-lens-5594-phpstan-plain-");
+		try {
+			plant(env.tmpDir, "parameters:\n  level: 5\n");
+			const calls: string[][] = [];
+			safeSpawnAsync.mockImplementation(
+				async (_cmd: string, args: string[] = []) => {
+					calls.push(args);
+					return CLEAN;
+				},
+			);
+
+			const result = await runPhpstan(env.tmpDir);
+
+			expect(work(calls).map((args) => args[0])).toEqual(["analyse"]);
+			expect(work(calls)[0]).not.toContain("-c");
+			expect(result.inconclusive).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("never reports a clean run when phpstan cannot say what it resolved", async () => {
+		const env = setupTestEnvironment("pi-lens-5594-phpstan-nodump-");
+		try {
+			const summary = await ledger();
+			plant(env.tmpDir, "includes:\n  - base.neon\n");
+			const calls: string[][] = [];
+			safeSpawnAsync.mockImplementation(
+				async (_cmd: string, args: string[] = []) => {
+					calls.push(args);
+					return args[0] === "dump-parameters"
+						? {
+								status: 1,
+								stdout: "",
+								stderr: "Command dump-parameters is not defined.\n",
+							}
+						: CLEAN;
+				},
+			);
+
+			const result = await runPhpstan(env.tmpDir);
+
+			expect(work(calls).map((args) => args[0])).toEqual([
+				"dump-parameters",
+				"analyse",
+			]);
+			expect(work(calls)[1]).not.toContain("-c");
+			expect(result.status).toBe("succeeded");
+			expect(result.inconclusive).toBe(true);
+			expect(
+				unanchoredRows(summary)?.latestReasons.find(
+					(e) => e.subject === "phpstan",
+				)?.reason,
+			).toContain("dump-parameters exited 1");
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
+describe("credo runner", () => {
+	beforeEach(() => {
+		vi.resetModules();
+		safeSpawnAsync.mockReset();
+	});
+
+	const CLEAN = {
+		stdout: JSON.stringify({ issues: [] }),
+		stderr: "",
+		status: 0,
+	};
+
+	async function runCredo(root: string) {
+		const runner = (
+			await import("../../../../clients/dispatch/runners/credo.js")
+		).default;
+		return runner.run(
+			ctx("elixir", path.join(root, "lib/a.ex"), root) as never,
+		);
+	}
+
+	function plant(root: string) {
+		fs.mkdirSync(path.join(root, "lib"), { recursive: true });
+		fs.writeFileSync(path.join(root, "lib/a.ex"), "defmodule A do\nend\n");
+		fs.writeFileSync(
+			path.join(root, "mix.exs"),
+			"defmodule P.MixProject do\nend\n",
+		);
+	}
+
+	function spawnSeam(
+		overlay: { text?: string; env?: NodeJS.ProcessEnv },
+		refuse: boolean,
+	) {
+		const runs: Array<{ args: string[]; env?: NodeJS.ProcessEnv }> = [];
+		safeSpawnAsync.mockImplementation(
+			async (
+				_cmd: string,
+				args: string[] = [],
+				options: { env?: NodeJS.ProcessEnv } = {},
+			) => {
+				if (args.includes("--version"))
+					return { stdout: "Credo 1.7.19", stderr: "", status: 0 };
+				runs.push({ args, env: options.env });
+				const at = args.indexOf("--config-file");
+				if (at >= 0) {
+					overlay.text = fs.readFileSync(args[at + 1], "utf8");
+					overlay.env = options.env;
+					if (refuse) {
+						return {
+							stdout: "",
+							stderr:
+								'warning: Execution halted ... %RuntimeError{message: "pi-lens-ignore-unanchored: the file is outside the project root"}\n',
+							status: 129,
+						};
+					}
+				}
+				return CLEAN;
+			},
+		);
+		return runs;
+	}
+
+	it("runs credo on an overlay config that takes the root and the file from the environment", async () => {
+		const env = setupTestEnvironment("pi-lens-5594-credo-");
+		try {
+			plant(env.tmpDir);
+			const overlay: { text?: string; env?: NodeJS.ProcessEnv } = {};
+			const runs = spawnSeam(overlay, false);
+
+			const result = await runCredo(env.tmpDir);
+
+			expect(runs).toHaveLength(1);
+			expect(runs[0].args).toContain("--config-file");
+			expect(runs[0].args.at(-1)).toBe(path.join(env.tmpDir, "lib/a.ex"));
+			expect(overlay.env).toMatchObject({
+				PI_LENS_ANCHOR_ROOT: env.tmpDir,
+				PI_LENS_ANCHOR_TARGET: path.join(env.tmpDir, "lib/a.ex"),
+			});
+			// One constant: a path that is not in the script cannot be an injection.
+			expect(overlay.text).not.toContain(env.tmpDir);
+			expect(overlay.text).toContain("Credo.ConfigFile.read_or_default");
+			expect(result.status).toBe("succeeded");
+			expect(result.inconclusive).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// The fail-closed cell. The overlay refuses by raising its marker; credo
+	// then runs on the project's own config and a clean answer is withheld.
+	it("falls back to the project's own config when the overlay refuses, and never reports it clean", async () => {
+		const env = setupTestEnvironment("pi-lens-5594-credo-refused-");
+		try {
+			const summary = await ledger();
+			plant(env.tmpDir);
+			const overlay: { text?: string; env?: NodeJS.ProcessEnv } = {};
+			const runs = spawnSeam(overlay, true);
+
+			const result = await runCredo(env.tmpDir);
+
+			expect(runs).toHaveLength(2);
+			expect(runs[1].args).not.toContain("--config-file");
+			expect(result.status).toBe("succeeded");
+			expect(result.inconclusive).toBe(true);
+			expect(
+				unanchoredRows(summary)?.latestReasons.find(
+					(e) => e.subject === "credo",
+				)?.reason,
+			).toContain("the file is outside the project root");
+		} finally {
+			env.cleanup();
+		}
+	});
+});

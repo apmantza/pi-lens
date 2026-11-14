@@ -11,6 +11,7 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import { PRIORITY } from "../priorities.js";
+import { markUnanchored, withOverlayFile } from "./utils/ignore-anchor.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 import { createCwdCachedProbe } from "./utils/runner-helpers.js";
 
@@ -79,6 +80,85 @@ export function parseCredoJson(
 	}
 }
 
+/**
+ * #5594: credo tests each regex in `files.excluded` against the file's ABSOLUTE
+ * path (`String.match?(path, regex)`), so `~r"/\.claude/"` also matches a project
+ * checked out under `<root>/.claude/worktrees/<lane>`, and credo then reports
+ * "No files found!" for a file it never read. A glob string is not affected: credo
+ * expands it from the working directory.
+ *
+ * `mix credo --config-file` replaces the config chain credo would have found, so
+ * this script, which credo evaluates as that config, rebuilds the chain with
+ * credo's own `ConfigFile.read_or_default` (the same function, the same default
+ * config, the same ancestor and `config/` search, over a fresh execution so the
+ * script is not read twice) and hands the merged result back unchanged, except
+ * for `files.excluded`: the regexes there are tested against the file's path
+ * from the project root (`/lib/a.ex`), and a regex that matches is replaced by
+ * the file's own path, which credo excludes literally. The glob and path
+ * entries stay. The project root and the file come from the environment, so the
+ * script is one constant and nothing is interpolated into Elixir source.
+ *
+ * It refuses by raising a message that starts `pi-lens-ignore-unanchored:`
+ * (the file lies outside the root, the project's own config did not load, or
+ * this credo lacks the API it calls); credo prints it, and the runner then runs
+ * credo on the project's own config.
+ */
+const CREDO_ANCHOR_OVERLAY = `refuse = fn why -> raise "pi-lens-ignore-unanchored: #{why}" end
+
+try do
+  root = System.get_env("PI_LENS_ANCHOR_ROOT") || refuse.("no project root")
+  target = System.get_env("PI_LENS_ANCHOR_TARGET") || refuse.("no target file")
+  prefix = String.trim_trailing(root, "/") <> "/"
+
+  if not String.starts_with?(target, prefix),
+    do: refuse.("the file is outside the project root")
+
+  rel = "/" <> binary_part(target, byte_size(prefix), byte_size(target) - byte_size(prefix))
+  overlay = Path.expand(__ENV__.file)
+
+  inner =
+    exec
+    |> Credo.Execution.get_config_files()
+    |> Enum.reject(fn {origin, file, _} -> origin == :file and Path.expand(file) == overlay end)
+    |> Enum.reduce(Credo.Execution.build([]), &Credo.Execution.append_config_file(&2, &1))
+
+  dir = Credo.CLI.Filename.remove_line_no_and_column(exec.cli_options.path)
+  name = exec.cli_options.switches[:config_name]
+
+  config =
+    case Credo.ConfigFile.read_or_default(inner, dir, name) do
+      {:ok, config} -> config
+      {:error, _} -> refuse.("the project's credo config did not load")
+    end
+
+  {regexes, others} = Enum.split_with(config.files.excluded, &match?(%Regex{}, &1))
+
+  excluded =
+    if Enum.any?(regexes, &Regex.match?(&1, rel)), do: others ++ [target], else: others
+
+  %{
+    configs: [
+      %{
+        name: name || "default",
+        files: %{included: config.files.included, excluded: excluded},
+        checks: config.checks,
+        color: config.color,
+        parse_timeout: config.parse_timeout,
+        plugins: config.plugins,
+        requires: config.requires,
+        strict: config.strict
+      }
+    ]
+  }
+rescue
+  error ->
+    reason = String.replace_prefix(Exception.message(error), "pi-lens-ignore-unanchored: ", "")
+    refuse.(reason)
+end`;
+
+/** What the overlay raises, so the runner can tell a refusal from a finding. */
+const CREDO_UNANCHORED_REFUSAL = /pi-lens-ignore-unanchored: ([^\n"]*)/;
+
 const credoRunner: RunnerDefinition = {
 	id: "credo",
 	appliesTo: ["elixir"],
@@ -100,11 +180,34 @@ const credoRunner: RunnerDefinition = {
 		}
 
 		const absPath = path.resolve(cwd, ctx.filePath);
-		const result = await safeSpawnAsync(
-			"mix",
-			["credo", "--format", "json", "--strict", absPath],
-			{ timeout: 30000, cwd },
+		const spawnCredo = (config: readonly string[], env?: NodeJS.ProcessEnv) =>
+			safeSpawnAsync(
+				"mix",
+				["credo", "--format", "json", "--strict", ...config, absPath],
+				{ timeout: 30000, cwd, ...(env ? { env } : {}) },
+			);
+		// #5594: credo runs on the project's own config with its `files.excluded`
+		// regexes read from the project root (`CREDO_ANCHOR_OVERLAY`). When the
+		// overlay refuses, credo runs on the config as it stands and `finish`
+		// withholds a clean answer.
+		const anchoredRun = await withOverlayFile(
+			"credo",
+			"anchor.exs",
+			CREDO_ANCHOR_OVERLAY,
+			(file) =>
+				spawnCredo(["--config-file", file], {
+					PI_LENS_ANCHOR_ROOT: cwd,
+					PI_LENS_ANCHOR_TARGET: absPath,
+				}),
 		);
+		const refusal = CREDO_UNANCHORED_REFUSAL.exec(
+			`${anchoredRun.stdout ?? ""}${anchoredRun.stderr ?? ""}`,
+		);
+		const result = refusal ? await spawnCredo([]) : anchoredRun;
+		const finish = (verdict: RunnerResult): RunnerResult =>
+			refusal
+				? markUnanchored("credo", refusal[1] ?? "no reason given", verdict)
+				: verdict;
 
 		const parsed = parseToolRun(
 			"credo",
@@ -117,12 +220,14 @@ const credoRunner: RunnerDefinition = {
 			{ parseStreams: "stdout-else-stderr" },
 		);
 		if (parsed.skipped) return parsed.skipped;
-		return finishParsedRun({
-			tool: "credo",
-			ctx,
-			result,
-			diagnostics: parsed.diagnostics,
-		});
+		return finish(
+			finishParsedRun({
+				tool: "credo",
+				ctx,
+				result,
+				diagnostics: parsed.diagnostics,
+			}),
+		);
 	},
 };
 

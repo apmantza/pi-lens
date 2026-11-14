@@ -1132,7 +1132,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/mypy.ts": 3,
 		"clients/dispatch/runners/oxlint.ts": 5,
 		"clients/dispatch/runners/php-lint.ts": 4,
-		"clients/dispatch/runners/phpstan.ts": 4,
+		// 4 -> 5 (#5594): `path.resolve(cwd, ownConfig)` absolutizes the config file
+		// the overlay includes; the same sense as the file's other path operations.
+		"clients/dispatch/runners/phpstan.ts": 5,
 		"clients/dispatch/runners/prisma-validate.ts": 2,
 		"clients/dispatch/runners/psscriptanalyzer.ts": 3,
 		"clients/dispatch/runners/rubocop.ts": 6,
@@ -1154,6 +1156,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/tree-sitter.ts": 2,
 		"clients/dispatch/runners/trivy-config.ts": 4,
 		"clients/dispatch/runners/utils/diagnostic-parsers.ts": 3,
+		// #5594: `path.join` of the scratch directory and of the one overlay file in
+		// it, plus the import; a path operation, the same sense as its siblings.
+		"clients/dispatch/runners/utils/ignore-anchor.ts": 3,
 		// 7 (#5119): `node:path` joins and resolves while locating cli2's package.
 		"clients/dispatch/runners/utils/markdownlint-api.ts": 7,
 		// 23 -> 30 (#2660): the resolver now carries its selected `path` and
@@ -1876,7 +1881,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/markdownlint.ts": 1,
 		"clients/dispatch/runners/oxlint.ts": 9,
 		"clients/dispatch/runners/php-lint.ts": 1,
-		"clients/dispatch/runners/phpstan.ts": 1,
+		// 1 -> 4 (#5594): the `dump-parameters` spawn's exit `status`, read three
+		// ways before the overlay is built; the spawn-result field, the same sense
+		// as the file's analyse run.
+		"clients/dispatch/runners/phpstan.ts": 4,
 		// 4 -> 3 (#5411): the plain skip leaves; `finishParsedRun` owns that verdict.
 		"clients/dispatch/runners/prisma-validate.ts": 3,
 		"clients/dispatch/runners/psscriptanalyzer.ts": 9,
@@ -1902,6 +1910,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/trivy-config.ts": 8,
 		"clients/dispatch/runners/utils/availability-policy.ts": 5,
 		"clients/dispatch/runners/utils/candidate-probe.ts": 1,
+		// #5594: the `status` of the `RunnerResult` `markUnanchored` withholds a
+		// clean verdict from; the result field, the same sense as its siblings.
+		"clients/dispatch/runners/utils/ignore-anchor.ts": 1,
 		"clients/dispatch/runners/utils/lazy-installer.ts": 3,
 		// 7 -> 5 (#5410): the rubocop bundler form and its install-fallback pair
 		// left the file.

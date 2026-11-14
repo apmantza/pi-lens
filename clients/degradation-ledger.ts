@@ -1909,6 +1909,17 @@ export type DegradationKind =
 	/** `runner-findings-stale`: A completed runner answer was stale and dropped instead of being replayed. */
 	| "runner-findings-stale"
 	/**
+	 * `runner-ignore-unanchored`: #5594: detekt, phpstan or credo matches the ignore globs of the
+	 * project's own config against the file's absolute path, so a project under
+	 * an ignored ancestor (`.claude/worktrees/<lane>`) reads clean without being
+	 * analysed. The runner anchors the globs at the project root through a
+	 * generated copy of the config; this row says it could not (an unrecognised
+	 * pattern form, an unreadable config, a tool that cannot report what it
+	 * resolved), so the tool ran on the original config and a clean answer was
+	 * reported `inconclusive`. Subject is the tool id; the reason names the cause.
+	 */
+	| "runner-ignore-unanchored"
+	/**
 	 * `runner-parsed-nothing`: A shell-out runner's tool DID produce output, exited nonzero, and the
 	 * runner's parser extracted ZERO diagnostics from it (#1948). The adjacent
 	 * `runner-empty-result` covers "the tool produced nothing"; this covers
