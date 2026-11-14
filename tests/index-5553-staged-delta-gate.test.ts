@@ -626,6 +626,35 @@ describe("#5553 a staged set the gate cannot read refuses, once", () => {
 			},
 		);
 
+		// Recurrence prevented: a commit git places in a directory that is no
+		// repository fails by itself and carries nothing, but a command that may
+		// start elsewhere (a `cd`) cannot be placed, so the same answer from the
+		// directory the shell started in must not read as "nothing to judge".
+		it(
+			"refuses a `cd` command run outside any repository, passes a placed one",
+			{ timeout: 120_000 },
+			async () => {
+				const bare = path.join(fixture.root, "norepo");
+				fs.mkdirSync(bare, { recursive: true });
+				try {
+					const ask = (command: string) =>
+						gateStagedDelta(
+							"bash",
+							{ command },
+							{ cwd: bare, projectRoot: bare, getFlag: () => false },
+							undefined,
+						);
+					const placed = await ask(`git -C ${bare} commit -m "x"`);
+					expect(placed.block).toBe(false);
+					const unplaced = await ask('cd src && git commit -m "x"');
+					expect(unplaced).toMatchObject({ block: true, unknown: true });
+					expect(unplaced.reason).toContain("staged_delta_no_checkout");
+				} finally {
+					fs.rmSync(bare, { recursive: true, force: true });
+				}
+			},
+		);
+
 		// Control: the same staged file and the real budget refuse on the
 		// finding, so the two refusals above are the bound's and not the file's.
 		it(
