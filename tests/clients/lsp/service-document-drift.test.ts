@@ -615,18 +615,49 @@ describe("LSPService disk-drift backstop (#1783)", () => {
 			// the write loop EARLY, so it never reaches notifyWriteTimedOutServerIds
 			// and a gate reading only that list stamps full coverage for a view that
 			// received nothing.
+			//
+			// #5555: the blocking write used to be a promise nothing settles, with
+			// PI_LENS_LSP_NOTIFY_BUDGET_MS shrunk to 50ms to keep the wedged touch
+			// quick. The wedge window IS 5 x that budget (`notifyWedgedMs()`), so the
+			// claim armed a 250ms timer that DEMOTES the auxiliary — this fake has no
+			// `getProcessPid`, so the #2358 stall verdict is `unmeasured` — and the
+			// rest of the case (one budget's worth of wedged touch, a disk write, a
+			// deferred touch and a sweep) had to fit inside it. A loaded runner that
+			// stalled past the window demoted the auxiliary mid-case, the next touch
+			// then reached every live view, and the sweep found nothing to heal.
+			// The park and its release are now the case's: the blocking write lives
+			// exactly as long as the case says, and no step here competes with a
+			// wall clock.
+			// The budget is pinned to its production default for this case, and
+			// restored after it: an ambient PI_LENS_LSP_NOTIFY_BUDGET_MS would shrink
+			// the wedge window this case has to finish inside (#5555).
 			const previousBudget = process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS;
-			process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS = "50";
+			delete process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS;
 			try {
 				const { LSPService } = await import("../../../clients/lsp/index.js");
 				const service = new LSPService();
 				const primaryOpen = new Set<string>();
 				const auxOpen = new Set<string>();
 				const primary = makeClient(primaryOpen);
-				let wedged = false;
+				// ONE auxiliary write parks inside the client until the case releases it,
+				// and remembers what it was carrying. From the release on every auxiliary
+				// write rejects — the answer a dead input path gives — so the heal below
+				// exits through its own failure seam instead of waiting out a budget.
+				let parksNextWrite = false;
+				let refusing = false;
+				let parkedContent: string | undefined;
+				let releaseParkedWrite!: () => void;
+				const parkedWriteSettles = new Promise<void>((resolve) => {
+					releaseParkedWrite = resolve;
+				});
 				const aux = makeClient(auxOpen, {
-					onOpen: async () => {
-						if (wedged) await new Promise(() => {});
+					onOpen: async (_filePath, content) => {
+						if (parksNextWrite) {
+							parksNextWrite = false;
+							parkedContent = content;
+							await parkedWriteSettles;
+						}
+						if (refusing) throw new Error("notify write rejected");
 					},
 				});
 				getServersForFileWithConfig.mockReturnValue([
@@ -646,21 +677,25 @@ describe("LSPService disk-drift backstop (#1783)", () => {
 				});
 				expect(service._driftTrackedCountForTests()).toBe(1);
 
-				// The auxiliary's next write never settles, so it keeps the #1459
-				// resync slot claimed.
-				wedged = true;
 				const C2 = "export const answer = 2;\n";
-				await fs.writeFile(file, C2, "utf-8");
-				await service.touchFile(file, C2, {
+				const C3 = "export const answer = 3;\nexport const three = 3;\n";
+				// Disk is already at C3 before the two touches below, so nothing between
+				// the blocking claim and the deferred touch relies on wall-clock ordering.
+				await fs.writeFile(file, C3, "utf-8");
+
+				// The auxiliary's next write parks on the case, holding the #1459 resync
+				// slot for exactly as long as the case needs it. The touch that owns it is
+				// left in flight: the case releases it, further down.
+				parksNextWrite = true;
+				const wedgedTouch = service.touchFile(file, C2, {
 					diagnostics: "none",
 					clientScope: "all",
 					source: "lsp_sync",
 				});
-
 				// With the slot occupied and no time left to queue, THIS touch's
-				// auxiliary write is deferred rather than attempted.
-				const C3 = "export const answer = 3;\nexport const three = 3;\n";
-				await fs.writeFile(file, C3, "utf-8");
+				// auxiliary write is deferred rather than attempted. `claimAuxNotifySlot`
+				// is atomic and precedes `notify.open`, so the C2 write already reaching
+				// the client — witnessed below — is what holds the slot here.
 				await service.touchFile(file, C3, {
 					diagnostics: "none",
 					clientScope: "all",
@@ -668,16 +703,33 @@ describe("LSPService disk-drift backstop (#1783)", () => {
 					maxClientWaitMs: 0,
 				});
 
-				// The auxiliary still holds C1, so the record must still describe C1
-				// and the sweep must still see this file as drifted.
+				// Three witnesses that the deferral, and not something else, is what the
+				// rest of the case runs on: the parked write carries C2, the auxiliary
+				// was never asked for C3 (a third call would mean the #1459 gate pushed
+				// past an outstanding write), and the one view the record may describe
+				// still holds C1.
+				expect(parkedContent).toBe(C2);
+				expect(aux.notify.open).toHaveBeenCalledTimes(2);
 				expect(aux.received).toEqual([ORIGINAL]);
+
+				// #5555: the wedge window (10 s at the default budget) must not fire here.
+				expect(aux.shutdown).not.toHaveBeenCalled();
+
+				// Hand the parked write its verdict and settle the touch that owns it, so
+				// the heal below runs against settled state rather than a parked write.
+				refusing = true;
+				releaseParkedWrite();
+				await wedgedTouch;
+
 				const result = await service.sweepDocumentDrift({ force: true });
 
 				expect(result?.candidates).toBe(1);
-				// The heal cannot complete while that scanner is wedged, and it says
-				// so rather than laundering the record.
+				// The heal cannot complete while that scanner refuses writes, and it
+				// says so rather than laundering the record.
 				expect(result?.resynced).toBe(0);
 				expect(result?.failed).toBe(1);
+				// The deferred view never received the heal either.
+				expect(aux.received).toEqual([ORIGINAL]);
 			} finally {
 				if (previousBudget === undefined) {
 					delete process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS;

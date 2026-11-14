@@ -80,6 +80,13 @@ files unknown, with `node scripts/gen-test-shard-weights.mjs` from either the
 shards' uploaded `vitest-results.json` (`--run <dir>`) or the nightly journal
 (`--journal <file> [--days 5]`, no GitHub API: `git fetch <remote>
 data/test-history`, then `git show FETCH_HEAD:history/test-daily.ndjson`).
+Prefer `--run` over the journal, on the newest 10 or more green master pushes.
+The journal's five-day median held a regressed file (`tool-state-matrix`, 302 s
+against 60 s once fixed) for days after its fix. With the previous weights,
+shard max-minus-mean was 62 s p50 over 15 runs of 2026-11-13 (measured, #3801).
+The refreshed weights model 16 s with no run noise. With run noise added, the
+model gives about 32 s p50 and 68 s p90, so the #3801 bar of a gap under 30 s
+is probably not met (modelled).
 
 ## Actions cache
 
