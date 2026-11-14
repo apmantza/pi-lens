@@ -31,7 +31,13 @@ export interface Symbol {
 	nameLine?: number;
 	nameColumn?: number;
 	signature?: string; // For functions: "(a: T, b: U) => R"
-	isExported: boolean;
+	/**
+	 * true: exported; false: the language's export rule decided it is not;
+	 * undefined: no rule for this language can decide (#5599), which a reader
+	 * must not take for false. Mirrors `ReviewGraphNode.exported`, already
+	 * optional.
+	 */
+	isExported?: boolean;
 	/**
 	 * Access visibility when the language exposes a REAL, detectable modifier
 	 * (TS/JS `private`/`protected`/`#`). Undefined = public or not applicable —

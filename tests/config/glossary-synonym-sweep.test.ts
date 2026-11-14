@@ -762,7 +762,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/mcp/analyze.ts": 2,
 		"clients/middle-man-analysis.ts": 4,
 		"clients/model-provider.ts": 1,
-		"clients/module-report.ts": 17,
+		"clients/module-report.ts": 15,
 		"clients/mutation-attribution.ts": 2,
 		"clients/ndjson-logger.ts": 1,
 		"clients/observed-mutation.ts": 2,

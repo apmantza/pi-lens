@@ -24,6 +24,33 @@ type Recorded = {
 };
 
 describe("module_report tool", () => {
+	// Recurrence (#5599): the collapsed line printed `${details?.exports ?? 0}
+	// exports`, so a Python module read "0 exports" whatever its symbols were.
+	it("the collapsed line names no export count when visibility is unknown", () => {
+		const tool = createModuleReportTool(() => "/repo");
+		const theme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
+		const line = (details: Record<string, unknown>): string =>
+			String(
+				(
+					tool.renderResult(
+						{ content: [{ type: "text", text: "x" }], details } as never,
+						{ expanded: false },
+						theme as never,
+						{ args: { path: "a.py" } },
+					) as unknown as { render: (w: number) => string[] }
+				)
+					.render(200)
+					.join(" "),
+			);
+		expect(line({ available: true, symbols: 2 })).not.toContain("exports");
+		expect(line({ available: true, symbols: 2, exports: 1 })).toContain(
+			"1 exports",
+		);
+		expect(line({ available: true, symbols: 2, exports: 0 })).toContain(
+			"0 exports",
+		);
+	});
+
 	it("returns a navigable JSON report with derivable (not per-symbol) read args (outline)", async () => {
 		const env = setupTestEnvironment("pi-lens-modreport-tool-");
 		try {
