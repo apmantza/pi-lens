@@ -6491,50 +6491,48 @@ export async function navRequest<T>(
 		normalizedPath !== undefined
 			? state.documentVersions.get(normalizedPath)
 			: undefined;
-	// #1716: captured OUTSIDE withTimeout, mirroring #1713's pull-diagnostic
-	// fix (`pullDiagnosticSource`), so a timeout's catch below still holds a
-	// live handle on the request for the late-answer watch. `withTimeout`
-	// only races it against a timer — the request keeps running server-side
-	// either way, and without this handle an abandoned answer would settle
-	// into the void with no way to observe it.
+	// #5097: the sender owns the deadline and the abort. Either one cancels the
+	// request on the wire and releases the busy count before this call resumes
+	// (Esc returns within the abort's own latency, not the ceiling). #1716: the
+	// late answer of a request abandoned by TIMEOUT is observed through the
+	// sender's hook, not through a handle on the request, so the watch survives
+	// the release.
 	const requestStartedAt = Date.now();
-	const requestPromise = safeSendRequest<T>(
+	const result = (await safeSendRequest<T>(
 		state.connection,
 		method,
 		params,
 		signal,
-	);
-	const result = (await withTimeout(requestPromise, timeoutMs).catch(
-		(err: unknown) => {
-			if (isNavTimeoutError(err, timeoutMs)) {
-				recordNavTimeoutTelemetry({
-					method,
-					scope: normalizedPath,
-					budgetMs: timeoutMs,
-					elapsedMs: Date.now() - requestStartedAt,
-				});
-				armNavLateAnswerTelemetry({
-					requestPromise,
-					method,
-					scope: normalizedPath,
-					requestStartedAt,
-				});
-				throw new LspRequestTimeoutError(
-					method,
-					timeoutMs,
-					Date.now() - requestStartedAt,
-				);
-			}
-			if (err instanceof Error && err.message.startsWith("Timeout after")) {
-				throw new LspRequestTimeoutError(
-					method,
-					timeoutMs,
-					Date.now() - requestStartedAt,
-				);
-			}
-			throw err;
+		undefined,
+		{
+			timeoutMs,
+			cancel: true,
+			onLateSettle: (answered) => {
+				if (answered) {
+					recordNavLateAnswerTelemetry({
+						method,
+						scope: normalizedPath,
+						requestStartedAt,
+					});
+				}
+			},
 		},
-	)) as T | undefined;
+	).catch((err: unknown) => {
+		if (isNavTimeoutError(err, timeoutMs)) {
+			recordNavTimeoutTelemetry({
+				method,
+				scope: normalizedPath,
+				budgetMs: timeoutMs,
+				elapsedMs: Date.now() - requestStartedAt,
+			});
+			throw new LspRequestTimeoutError(
+				method,
+				timeoutMs,
+				Date.now() - requestStartedAt,
+			);
+		}
+		throw err;
+	})) as T | undefined;
 	// requestVersion === undefined (never opened, or version-less) → unaffected,
 	// matching the diagnostics path; the request timeout remains the backstop.
 	if (
@@ -6551,14 +6549,10 @@ export async function navRequest<T>(
 }
 
 /**
- * #1716: `withTimeout` rejects with this EXACT message (`clients/deadline-
- * utils.ts`) only when its own timer wins the race — mirrors #1713's
- * `isPullTimeoutError`. Only the timer-won case is a "the answer might still
- * be coming" situation worth a late-answer watch; a request that already
- * failed fast (or a stale-message coincidence) has nothing further to
- * observe. `navRequest`'s own behavior still falls back to the looser
- * `startsWith` check afterward, unchanged, so this stricter check only gates
- * telemetry — never the existing timeout-handling behavior.
+ * #1716: the sender (`safeSendRequest`) rejects with this EXACT message only
+ * when its own timer wins the race — mirrors #1713's `isPullTimeoutError`. A
+ * request that already failed fast (or a stale-message coincidence) is not a
+ * timeout and is not recorded as one.
  */
 function isNavTimeoutError(err: unknown, timeoutMs: number): boolean {
 	return err instanceof Error && err.message === `Timeout after ${timeoutMs}ms`;
@@ -6625,11 +6619,10 @@ function recordNavTimeoutTelemetry(args: {
 }
 
 /**
- * #1716: nav-request sibling of #1713's `armLateAnswerTelemetry`. A
- * telemetry-only continuation on the ALREADY-abandoned request promise —
- * purely observational, never touches `state`, and attaching `.then` here
- * creates no new timer, socket, or other handle, so it cannot keep the
- * process alive a moment longer than the pending request already does.
+ * #1716: nav-request sibling of #1713's `armLateAnswerTelemetry`. Runs from
+ * the sender's `onLateSettle` hook when a request abandoned by timeout
+ * answers after all. Purely observational, never touches `state`, and creates
+ * no timer, socket, or other handle.
  *
  * Bounded the same way as the timeout record above: every late answer is
  * counted exactly via the ledger, but only the rising edge per (method,
@@ -6638,46 +6631,37 @@ function recordNavTimeoutTelemetry(args: {
  * Nav answers are read-once — unlike diagnostics' persistent pull cache,
  * there is no stale value this could poison — so this exists purely for
  * observability: telling a dogfood session "truly hung" apart from
- * "answered late", the same distinction #1713 made possible for pulls.
+ * "answered late", the same distinction #1713 made possible for pulls. An
+ * abandoned request that eventually failed rather than answering is not an
+ * "answer discarded" event, and the sender hands this hook only answers.
  */
-function armNavLateAnswerTelemetry(args: {
-	requestPromise: Promise<unknown>;
+function recordNavLateAnswerTelemetry(args: {
 	method: string;
 	scope: string | undefined;
 	requestStartedAt: number;
 }): void {
-	args.requestPromise.then(
-		() => {
-			try {
-				const elapsedMs = Date.now() - args.requestStartedAt;
-				// #1743: same rising-edge gate as the timeout record above, now
-				// carried by the helper instead of hand-rolled here.
-				emitBounded(
-					"lsp_nav_late_answer_discarded",
-					`${args.method}:${args.scope ?? NAV_REQUEST_NO_PATH_SCOPE}`,
-					{
-						type: "phase",
-						filePath: args.scope ?? NAV_REQUEST_NO_PATH_SCOPE,
-						durationMs: elapsedMs,
-						metadata: { method: args.method },
-					},
-					{
-						ledgerKind: "lsp-nav-late-answer",
-						risingEdgePer: "identity",
-						reason: `late nav answer discarded after ${elapsedMs}ms`,
-					},
-				);
-			} catch {
-				// Telemetry must never break the observed path.
-			}
-		},
-		() => {
-			// The abandoned request eventually failed rather than answering —
-			// not an "answer discarded" event. Nothing more to record here; this
-			// handler exists so the request's eventual rejection never surfaces
-			// as an unhandled rejection.
-		},
-	);
+	try {
+		const elapsedMs = Date.now() - args.requestStartedAt;
+		// #1743: same rising-edge gate as the timeout record above, now
+		// carried by the helper instead of hand-rolled here.
+		emitBounded(
+			"lsp_nav_late_answer_discarded",
+			`${args.method}:${args.scope ?? NAV_REQUEST_NO_PATH_SCOPE}`,
+			{
+				type: "phase",
+				filePath: args.scope ?? NAV_REQUEST_NO_PATH_SCOPE,
+				durationMs: elapsedMs,
+				metadata: { method: args.method },
+			},
+			{
+				ledgerKind: "lsp-nav-late-answer",
+				risingEdgePer: "identity",
+				reason: `late nav answer discarded after ${elapsedMs}ms`,
+			},
+		);
+	} catch {
+		// Telemetry must never break the observed path.
+	}
 }
 
 /**
@@ -6795,9 +6779,17 @@ async function clientPingLiveness(
 		return isClientAlive(state);
 	}
 	try {
-		await withTimeout(
-			safeSendRequest(state.connection, probe.method, probe.params),
-			timeoutMs,
+		// #5097: a timed-out probe is cancelled and released, so a wedged server
+		// holds one pending request at a time, not one per touch. No signal: the
+		// ping is a shared barrier (`paceAuxNotify`'s `record.drain`), and an
+		// aborted ping must not read as alive.
+		await safeSendRequest(
+			state.connection,
+			probe.method,
+			probe.params,
+			undefined,
+			undefined,
+			{ timeoutMs, cancel: true },
 		);
 	} catch (err) {
 		if (err instanceof Error && err.message.startsWith("Timeout after")) {
@@ -6881,12 +6873,15 @@ export async function runServerCommand(
 	try {
 		let result: unknown;
 		try {
-			result = await withTimeout(
-				safeSendRequest<unknown>(state.connection, "workspace/executeCommand", {
-					command,
-					arguments: args ?? [],
-				}),
-				timeoutMs,
+			// #5097: no cancel, the command may be applying server-side; the busy
+			// count is released locally when the backstop fires.
+			result = await safeSendRequest<unknown>(
+				state.connection,
+				"workspace/executeCommand",
+				{ command, arguments: args ?? [] },
+				undefined,
+				undefined,
+				{ timeoutMs, cancel: false },
 			);
 		} catch (err) {
 			// Generous backstop only: a timeout means the server is hung (or the
@@ -6945,35 +6940,23 @@ export async function runReadOnlyServerCommand(
 			reason: `command "${command}" is not advertised by the ${state.serverId} server`,
 		};
 	}
-	// #4801: a timed-out probe is abandoned for good, so it is cancelled on the
-	// wire and released locally. Without the signal the request stayed pending
-	// for as long as the server stayed silent, kept the connection busy, and
-	// kept `ClientRegistry` from ever evicting the client.
-	const abandon = new AbortController();
-	const request = safeSendRequest<unknown>(
-		state.connection,
-		"workspace/executeCommand",
-		{ command, arguments: args ?? [] },
-		abandon.signal,
-		undefined,
-		true,
-	);
+	// #4801, #5097: a timed-out probe is abandoned for good, so the sender
+	// cancels it on the wire and releases it locally, and the client is idle
+	// when this call resumes. Without it the request stayed pending for as long
+	// as the server stayed silent, kept the connection busy, and kept
+	// `ClientRegistry` from ever evicting the client.
 	try {
-		const result = await withTimeout(request, timeoutMs);
+		const result = await safeSendRequest<unknown>(
+			state.connection,
+			"workspace/executeCommand",
+			{ command, arguments: args ?? [] },
+			undefined,
+			undefined,
+			{ timeoutMs, cancel: true },
+		);
 		return { executed: true, result };
 	} catch (err) {
 		if (err instanceof Error && err.message.startsWith("Timeout after")) {
-			abandon.abort();
-			// The abort only SCHEDULES the release: it cancels the token (the wire
-			// `$/cancelRequest`) and resolves the sentinel that wins the race, and
-			// the count itself drops in `safeSendRequest`'s `finally`. Awaiting the
-			// raced request here is what makes "the client is idle when the caller
-			// resumes" a guarantee instead of a property of the current `async`
-			// hop count: without it one behaviour-preserving hop removal leaves
-			// `isBusy()` true for a tick after the caller sees the timeout. It is
-			// bounded — the abort is exactly what settles the race, so this cannot
-			// wait on the server.
-			await request;
 			// #4801: a regression of the release is otherwise invisible in
 			// production. The request ceiling is not the caller-deadline abandon
 			// `warm-attach-membership-probe-abandoned` records, and the caller only
@@ -7095,13 +7078,13 @@ async function resolveCodeActionBestEffort(
 	}
 	let resolved: LSPCodeAction | null | undefined;
 	try {
-		resolved = await withTimeout(
-			safeSendRequest<LSPCodeAction>(
-				state.connection,
-				"codeAction/resolve",
-				action,
-			),
-			NAV_REQUEST_TIMEOUT_MS,
+		resolved = await safeSendRequest<LSPCodeAction>(
+			state.connection,
+			"codeAction/resolve",
+			action,
+			getAmbientAbortSignal(),
+			undefined,
+			{ timeoutMs: NAV_REQUEST_TIMEOUT_MS, cancel: true },
 		);
 	} catch {
 		// codeAction/resolve is optional. Keep the original lightweight action when
@@ -8306,12 +8289,49 @@ async function safeSendNotification(
 
 const activeRequestsByConnection = new WeakMap<MessageConnection, number>();
 
-/** Sentinel `safeSendRequest` races against a reply when `releaseOnAbort` is set. */
+/** Sentinels a bounded `safeSendRequest` races against the reply. */
 const RELEASED_ON_ABORT = Symbol("released-on-abort");
+const RELEASED_ON_TIMEOUT = Symbol("released-on-timeout");
 
 /** A request pi-lens sent on this connection is still unanswered. */
 export function isConnectionBusy(connection: MessageConnection): boolean {
 	return (activeRequestsByConnection.get(connection) ?? 0) > 0;
+}
+
+/**
+ * #5097: the wall bound a caller gives `safeSendRequest` when it will not wait
+ * for the answer past a deadline or an abort. Passing one is what opts a
+ * request into release: the bound fires, or the caller's `signal` aborts, and
+ * the request is let go once, here, instead of per caller. Omitting it keeps
+ * the request pending on purpose, for the callers that watch for the late
+ * answer themselves (the pull diagnostics, `abandonedPullRequests`).
+ *
+ * Transitions (the sender applies them; no caller does). Cancel-and-release
+ * kinds are navigation, `codeAction/resolve`, the liveness ping and the
+ * read-only command; the mutating `executeCommand` releases without a cancel:
+ *
+ * - Answer in time: busy -1, no cancel.
+ * - Timeout: busy -1 before the caller resumes; `$/cancelRequest` sent unless
+ *   `cancel` is false (the command may still be applying server-side); the
+ *   call rejects `Timeout after <ms>ms`.
+ * - Caller abort: the same release and cancel, then returns `undefined`. The
+ *   mutating command takes no signal.
+ * - Server exits: the stream error settles the request; busy -1, `undefined`.
+ * - Late settlement of a released request: observed, never unhandled, and
+ *   handed to `onLateSettle` after a timeout only.
+ */
+interface RequestBound {
+	timeoutMs: number;
+	/** Send `$/cancelRequest` when the timer fires. A caller abort always cancels; a call that must never cancel passes no signal. */
+	cancel: boolean;
+	/**
+	 * The released request settled after a TIMEOUT: `answered` is true for a
+	 * real reply, false for a rejection (the cancel's own `RequestCancelled`
+	 * included). Navigation counts the first as a discarded late answer. It
+	 * never runs for an abort (an Esc is not a degradation) and never throws
+	 * into the sender.
+	 */
+	onLateSettle?: (answered: boolean) => void;
 }
 
 // Helper to safely send requests - catches stream destruction
@@ -8325,32 +8345,44 @@ async function safeSendRequest<T>(
 	// Item 1). The rejection that follows is swallowed (treated as `undefined`).
 	signal?: AbortSignal,
 	settlement?: { cancelled: boolean },
-	// #4801: vscode-jsonrpc settles a cancelled request only when the server
-	// answers it, so a server that ignores `$/cancelRequest` (a wedged one)
-	// holds the busy count for good. A caller that has already given up on the
-	// answer and wants the connection counted idle again passes true: abort then
-	// also settles this call locally, right after the cancel is sent. Off by
-	// default because the pull-diagnostic and navigation callers keep the
-	// request pending on purpose, to watch for the late answer.
-	releaseOnAbort = false,
+	// #4801, #5097: vscode-jsonrpc settles a cancelled request only when the
+	// server answers it, so a server that ignores `$/cancelRequest` (a wedged
+	// one) holds the busy count for good. A caller that has given up on the
+	// answer passes a bound: timeout and abort then also settle this call
+	// locally, right after the cancel (when `bound.cancel`) is sent.
+	bound?: RequestBound,
 ): Promise<T | undefined> {
 	// Already abandoned before we even sent — don't bother the server.
 	if (signal?.aborted) return undefined;
 
 	let tokenSource: InstanceType<typeof CancellationTokenSource> | undefined;
 	let onAbort: (() => void) | undefined;
-	let released: Promise<typeof RELEASED_ON_ABORT> | undefined;
-	let release: (() => void) | undefined;
+	let released:
+		| Promise<typeof RELEASED_ON_ABORT | typeof RELEASED_ON_TIMEOUT>
+		| undefined;
+	let release:
+		| ((why: typeof RELEASED_ON_ABORT | typeof RELEASED_ON_TIMEOUT) => void)
+		| undefined;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let timeoutError: Error | undefined;
+	if (signal || bound?.cancel) tokenSource = new CancellationTokenSource();
+	if (bound) {
+		released = new Promise((resolve) => {
+			release = resolve;
+		});
+		timer = setTimeout(
+			() => {
+				timeoutError = new Error(`Timeout after ${bound.timeoutMs}ms`);
+				if (bound.cancel) tokenSource?.cancel();
+				release?.(RELEASED_ON_TIMEOUT);
+			},
+			Math.max(0, bound.timeoutMs),
+		);
+	}
 	if (signal) {
-		tokenSource = new CancellationTokenSource();
-		if (releaseOnAbort) {
-			released = new Promise((resolve) => {
-				release = () => resolve(RELEASED_ON_ABORT);
-			});
-		}
 		onAbort = () => {
 			tokenSource?.cancel();
-			release?.();
+			release?.(RELEASED_ON_ABORT);
 		};
 		signal.addEventListener("abort", onAbort, { once: true });
 	}
@@ -8378,8 +8410,21 @@ async function safeSendRequest<T>(
 		for (let attempt = 1; ; attempt++) {
 			try {
 				if (!released) return (await send()) as T;
-				const reply = await Promise.race([send(), released]);
-				if (reply === RELEASED_ON_ABORT) return undefined;
+				const sent = Promise.resolve(send());
+				const reply = await Promise.race([sent, released]);
+				if (reply === RELEASED_ON_ABORT || reply === RELEASED_ON_TIMEOUT) {
+					// The abandoned request may still settle (a server that ignores the
+					// cancel, or answers it): observe it so its rejection is never
+					// unhandled, and tell the caller's hook about a late timeout answer.
+					const lateHook =
+						reply === RELEASED_ON_TIMEOUT ? bound?.onLateSettle : undefined;
+					sent.then(
+						() => lateHook?.(true),
+						() => lateHook?.(false),
+					);
+					if (reply === RELEASED_ON_TIMEOUT) throw timeoutError;
+					return undefined;
+				}
 				return reply as T;
 			} catch (err) {
 				if (isCancellationError(err)) {
@@ -8405,6 +8450,7 @@ async function safeSendRequest<T>(
 		const remaining = (activeRequestsByConnection.get(connection) ?? 1) - 1;
 		if (remaining > 0) activeRequestsByConnection.set(connection, remaining);
 		else activeRequestsByConnection.delete(connection);
+		if (timer) clearTimeout(timer);
 		if (signal && onAbort) signal.removeEventListener("abort", onAbort);
 		tokenSource?.dispose();
 	}
