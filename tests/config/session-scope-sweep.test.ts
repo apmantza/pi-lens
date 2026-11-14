@@ -96,6 +96,10 @@ const CONVERSATION_MODULE_STATE: Readonly<Record<string, readonly string[]>> = {
 		"runnerWriteGuard",
 		"sessionLanguages",
 		"staleReconcileTimer",
+		// #5588: the activation-scoped store-change listener. Not a store: it
+		// holds one callback and no conversation facts, and `clearWidgetState`
+		// deliberately keeps it so a reset still reaches the projection.
+		"widgetChangeFn",
 	],
 	"index.ts": [
 		"_bridgeGetFlag",
@@ -129,6 +133,10 @@ const ACTIVATION_STATE: Readonly<Record<string, string>> = {
 		"the /lens-context-toggle choice; D6 was not approved, so it resets per activation (N6 accepted)",
 	enabledLazyTools:
 		"the lazy tools the config enables, derived once per activation (design B6)",
+	issuesStatusPublished:
+		"whether this activation has published the issues status, so a session reset republishes even identical text while a disabled flag stays silent (#5588)",
+	lastIssuesStatus:
+		"the last text this activation published to the issues status; the dedupe key for a host call that repaints the footer (#5588)",
 	lensEnabled:
 		"the /lens-toggle choice; D6 was not approved, so it resets per activation (N6 accepted)",
 	lensWidgetVisible:

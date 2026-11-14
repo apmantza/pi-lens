@@ -56,7 +56,9 @@ describe("availability_decision classifiedBy sweep (#2131)", () => {
 			// non-trivial.
 			// #5410: 20 -> 19 — the dispatcher's own `hasTool` probe now
 			// delegates to the checker, whose `cause: "ok"` site already counts.
-			expect(OK_SITES.length).toBe(19);
+			// #5410: 19 -> 18 — jvm-runtime's own `runJavaProbe` held one stamped
+			// `cause: "ok"` site; java now asks the registry checker.
+			expect(OK_SITES.length).toBe(18);
 		},
 		TREE_WALK_TIMEOUT_MS,
 	);

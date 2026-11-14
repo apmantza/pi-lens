@@ -855,7 +855,6 @@ const ROWS: Readonly<Record<string, Row>> = {
 	"clients/installer/managed-tool-refresh.ts#safeSpawnAsync": GATED(2),
 	// -- the rest: classified, each count pinned --
 	...because(LSP, {
-		"clients/lsp/jvm-runtime.ts#safeSpawnAsync": 1,
 		"clients/lsp/launch.ts#safeSpawn": 1,
 		"clients/lsp/server.ts#safeSpawnAsync": {
 			sites: 4,
@@ -962,7 +961,7 @@ const ROWS: Readonly<Record<string, Row>> = {
 		"clients/dispatch/runners/trivy-config.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/utils/candidate-probe.ts#probeToolAsync": 1,
 		"clients/dispatch/runners/utils/runner-helpers.ts#probeToolAsync": 2,
-		"clients/dispatch/runners/utils/runner-helpers.ts#safeSpawnAsync": 3,
+		"clients/dispatch/runners/utils/runner-helpers.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/vale.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/yamllint.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/zig-check.ts#safeSpawnAsync": 1,

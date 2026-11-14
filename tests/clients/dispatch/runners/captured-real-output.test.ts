@@ -20,8 +20,7 @@
  * reaches the replay layer instead of being mocked into "installed". Only the
  * process boundary is replaced, plus the measured-presence seam: each probing
  * command gets a stub on a PATH of this suite's own, because presence is a
- * filesystem fact the capture cannot carry, and `verifyOrInstallCommand`
- * short-circuits on it.
+ * filesystem fact the capture cannot carry, and the registry ladder reads it.
  *
  * A parser regression against a real binary now reds here.
  */
@@ -439,8 +438,9 @@ describe("captured real-binary output", () => {
 	});
 
 	/**
-	 * Commands the runners resolve by PRESENCE before they spawn anything
-	 * (`verifyOrInstallCommand` → `isSpawnableCommand`, a PATH walk). The capture
+	 * Commands the runners resolve by PRESENCE around the version probe (the
+	 * registry ladder's rungs, and `isSpawnableCommand`, a PATH walk, on a cached
+	 * positive). The capture
 	 * cannot carry a filesystem fact about the replay host, so each command the
 	 * fixtures name gets a non-empty stub on a PATH of this suite's own; the stub
 	 * is never executed because `safeSpawnAsync` is the mocked seam.

@@ -130,7 +130,6 @@
 	"tests/clients/lsp/managed-bin-fastpath.test.ts:../../../clients/installer/index.js:[\"ensureTool\",\"findManagedToolBinary\",\"getInstallAttempt\",\"getToolEnvironment\"]": 49,
 	"tests/clients/lsp/push-wait-settle-rejection.test.ts:../../../clients/lsp/client.js:[\"createLSPClient\"]": 35,
 	"tests/clients/lsp/resolve-and-launch-fallback.test.ts:../../../clients/installer/index.js:[\"ensureTool\",\"findManagedToolBinary\",\"getToolEnvironment\"]": 50,
-	"tests/clients/lsp/runtime-install-discovery.test.ts:../../../clients/installer/index.js:[\"ensureTool\",\"findManagedToolBinary\",\"getToolEnvironment\"]": 50,
 	"tests/clients/lsp/server-policy.test.ts:../../../clients/installer/index.js:[\"ensureTool\",\"findManagedToolBinary\",\"getToolEnvironment\"]": 50,
 	"tests/clients/lsp/service-aux-grace.test.ts:../../../clients/lsp/client.js:[\"createLSPClient\"]": 35,
 	"tests/clients/lsp/service-early-unblock.test.ts:../../../clients/lsp/client.js:[\"createLSPClient\"]": 35,

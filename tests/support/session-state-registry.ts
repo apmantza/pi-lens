@@ -2498,9 +2498,10 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"dispatch/runners/spotbugs.ts": 1,
 	"dispatch/runners/tree-sitter.ts": 1,
 	"dispatch/runners/utils/lazy-installer.ts": 2,
-	// #5410: 7 -> 8. `toolBinaryCheckers`, one resolver checker per registry
+	// #5410: 7 -> 8, then 8 -> 7 when `uncorrectedEmissionsByCwd` went with the
+	// compensating-row branch it fed. `toolBinaryCheckers`, one resolver checker per registry
 	// tool id; its per-cwd latches clear at the same generation bump.
-	"dispatch/runners/utils/runner-helpers.ts": 8,
+	"dispatch/runners/utils/runner-helpers.ts": 7,
 	"dispatch/runners/yaml-rule-parser.ts": 4,
 	"disposition-publish.ts": 0,
 	"ephemeral-root.ts": 1,

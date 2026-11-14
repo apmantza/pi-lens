@@ -3,9 +3,11 @@
  * the runner used, through the real runner.
  *
  * Recurrence prevented: #5258 r2 verify N2 and N4, and the sweep of the same
- * shape. rubocop resolves by its own `--version` spawn and its skip read the
+ * shape. rubocop resolved by its own `--version` spawn and its skip read the
  * registry ladder it never probed, so a rubocop that hung or rejected the
- * probe read "not installed, and the managed install is off"; taplo's upward
+ * probe read "not installed, and the managed install is off" (rubocop is on
+ * the registry ladder since #5410, and its trust refusal reads as every
+ * ladder tool's does); taplo's upward
  * walk and phpstan's `vendor/bin` walk refuse a project binary their checker
  * never looks up, and the skip read an absence; elixir-check read the mix
  * probe in a project that is not a mix project, where only elixirc ran.
@@ -151,22 +153,9 @@ describe("a skip reads the resolution its runner used (#5258 r3)", () => {
 			{ error: null, status: 3, stdout: "", stderr: "" },
 			"probe-rejected",
 		],
-		[
-			"was refused by trust",
-			{
-				error: new Error("refused"),
-				status: null,
-				failure: "spawn",
-				spawnFailure: { kind: "trust-refused" },
-				stdout: "",
-				stderr: "",
-			},
-			"trust-refused",
-		],
 	] as const)(
-		"rubocop: reads its own --version spawn when it %s",
+		"rubocop: reads the registry ladder's verdict when it %s",
 		async (_name, result, reason) => {
-			// On disk, so the verify spawns it again instead of installing it.
 			const bin = path.join(env.tmpDir, "bin");
 			binaries(bin, "rubocop");
 			restoreEnv = withEnv({ PATH: bin });

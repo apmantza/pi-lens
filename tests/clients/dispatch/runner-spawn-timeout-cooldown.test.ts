@@ -39,7 +39,7 @@ import {
 	isInSpawnTimeoutCooldown,
 	resetSpawnTimeoutCooldowns,
 } from "../../../clients/spawn-timeout-cooldown.js";
-import { resolveCommandArgsWithInstallFallback } from "../../../clients/dispatch/runners/utils/runner-helpers.js";
+import { createAvailabilityChecker } from "../../../clients/dispatch/runners/utils/runner-helpers.js";
 import { probeToolAsync } from "../../../clients/tool-probe.js";
 import { setupTestEnvironment } from "../test-utils.js";
 
@@ -207,17 +207,15 @@ describe("which runner spawns arm the cooldown (#5413)", () => {
 		expect(isInSpawnTimeoutCooldown("probe-runner")).toBe(false);
 	}, 30_000);
 
-	it("the runner-helpers version checks (cooldown: false) that time out arm nothing", async () => {
-		// Both version checks hang: the bundler-form check and the on-disk
-		// verify it falls back to, so neutering either opt-out arms the runner.
+	it("the availability checker's version check that times out arms nothing", async () => {
+		// The checker is where a version check runs now (#5410): its probe
+		// spawns without opting into the runner cooldown, so a hung `--version`
+		// must leave the runner dispatchable.
+		const checker = createAvailabilityChecker(process.execPath, "", HANG, {
+			probeTimeout: 300,
+		});
 		const runs = await dispatchTwice("version-check-runner", () =>
-			resolveCommandArgsWithInstallFallback(
-				{ cmd: process.execPath, args: [] },
-				"version-check-runner",
-				env.tmpDir,
-				HANG,
-				300,
-			),
+			checker.isAvailableAsync(env.tmpDir),
 		);
 		expect(runs).toBe(2);
 		expect(isInSpawnTimeoutCooldown("version-check-runner")).toBe(false);

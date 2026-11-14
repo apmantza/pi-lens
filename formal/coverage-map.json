@@ -551,7 +551,7 @@
     "clients/dispatch/runners/helm-render.ts": "The module-level path-keyed in-flight Promise map changes on render requests and settlement; concurrent runner ownership is unmodelled.",
     "clients/dispatch/runners/psscriptanalyzer.ts": "The module-level PowerShell availability latch changes on probe, cooldown and reset; runner callers and expiry are unmodelled.",
     "clients/hashline-anchor.ts": "The module-level bounded anchor-index cache changes on hashline indexing and eviction; index reuse and invalidation are unmodelled.",
-    "clients/lsp/jvm-runtime.ts": "The module-level Java availability latch changes on probe, cooldown and reset; LSP runtime callers and expiry are unmodelled.",
+    "clients/lsp/jvm-runtime.ts": "The module-level JVM environment cache (`_cachedEnv`) changes on probe and reset; the java-on-PATH verdict itself now lives in the registry checker's availability latch (runner-helpers, #5410). LSP runtime callers and expiry are unmodelled.",
     "clients/lsp/session-roots.ts": "The module-level bounded session-root registry changes on root admission and eviction; session ownership and expiry are unmodelled.",
     "clients/lsp/spawn-history.ts": "The module-level bounded successful-spawn history changes on LSP spawn completion and eviction; its retention lifecycle is unmodelled.",
     "clients/path-birth.ts": "The module-level bounded path-birth maps change on path replacement and appearance observations; eviction and session readers are unmodelled.",

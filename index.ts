@@ -63,12 +63,16 @@ import { resolveSkillPaths } from "./clients/skills-resolver.js";
 import {
 	getFailedLspServerIds,
 	getSessionLanguages,
+	getWidgetSummary,
 	reconcileCascadeNeighborLspErrors,
 	renderWidget,
 	scheduleStaleReconcile,
 	setRenderCallback,
+	setWidgetChangeCallback,
+	clearWidgetChangeCallback,
 	wireWidgetDispositionSubscriber,
 } from "./clients/widget-state.js";
+import { formatIssuesStatus } from "./clients/issues-status.js";
 import { selectLspStatus } from "./clients/lsp-status.js";
 import {
 	branchToolResultIds,
@@ -543,6 +547,12 @@ function getStableSessionId(ctx: unknown): string | undefined {
 
 export interface CreateHostPortsOptions {
 	getContext: () => unknown;
+	/**
+	 * The context a status write targets. Defaults to `getContext`; an activation
+	 * that owns a status projection passes its OWN live event ctx, so a sibling
+	 * activation's later event cannot redirect that activation's footer write.
+	 */
+	getStatusContext?: () => unknown;
 	getProjectRoot?: () => string | undefined;
 	getRenderInvalidator?: () => (() => void) | undefined;
 }
@@ -553,6 +563,10 @@ export function createHostPorts(
 	options: CreateHostPortsOptions,
 ): HostPorts {
 	const context = () => options.getContext() as any;
+	const statusContext = () =>
+		(options.getStatusContext
+			? options.getStatusContext()
+			: options.getContext()) as any;
 	const currentMode = () => readExtensionMode(context());
 	const emit = (channel: string, payload: unknown): void => {
 		const bus = pi.events;
@@ -603,7 +617,9 @@ export function createHostPorts(
 				}),
 		},
 		emit: { bus: emit },
-		status: { set: (name, value) => context()?.ui?.setStatus?.(name, value) },
+		status: {
+			set: (name, value) => statusContext()?.ui?.setStatus?.(name, value),
+		},
 		spawn: {
 			abortSignal: () => context()?.signal,
 			isAllowed: assertInstallAllowed,
@@ -1032,6 +1048,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 	let renderInvalidator: (() => void) | undefined;
 	const hostPorts = createHostPorts(pi, {
 		getContext: () => latestEventCtx,
+		// Status writes belong to THIS activation's live ctx. `latestEventCtx`
+		// belongs to whichever activation received the last event, so a sibling's
+		// start would otherwise redirect this activation's footer write.
+		getStatusContext: () => ownEventCtx,
 		getProjectRoot: () => runtime.projectRoot,
 		getRenderInvalidator: () => renderInvalidator,
 	});
@@ -1053,6 +1073,38 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// never captured once — a session replacement invalidates the old ctx.ui.
 	// #1334 S2: the ports notifier owns mode suppression + live-ctx resolution
 	// (per-call, never captured -- the #338/#798 detached-callback rule).
+	// The `pi-lens-issues` key is a projection of the widget store, published
+	// from the live status port so RPC and non-TUI modes reach it too. The
+	// flag is read at publish time (#4913 forbids a factory-time read), and
+	// identical consecutive text is dropped: `setStatus` repaints the host.
+	let issuesStatusPublished = false;
+	let lastIssuesStatus: string | undefined;
+	function resetIssuesStatusPublish(): void {
+		issuesStatusPublished = false;
+		lastIssuesStatus = undefined;
+	}
+	function updateIssuesStatus(): void {
+		const enabled = getLensFlag("lens-issues-status") === true;
+		const next = enabled ? formatIssuesStatus(getWidgetSummary()) : undefined;
+		if (issuesStatusPublished && next === lastIssuesStatus) return;
+		// Flag off from the start: publish nothing, so the footer is
+		// byte-identical to a pi-lens without the feature.
+		if (!enabled && !issuesStatusPublished) return;
+		// The store write that triggered this call already committed; a stale ctx
+		// or a host that refuses the key must not escape the writer. The dedupe
+		// state advances only AFTER the host accepted the value, so a failed
+		// publish is retried on the next store change.
+		try {
+			hostPorts.status.set("pi-lens-issues", next);
+		} catch (err) {
+			dbg(
+				`pi-lens-issues publish skipped: ${err instanceof Error ? err.message : String(err)}`,
+			);
+			return;
+		}
+		issuesStatusPublished = true;
+		lastIssuesStatus = next;
+	}
 	const refreshCtxDerivedPlumbing = (): void => {
 		// These targets are module singletons, while hostPorts is scoped to this
 		// extension activation. A sibling activation can overwrite them and then
@@ -3081,6 +3133,15 @@ function activateExtension(hostPi: ExtensionAPI) {
 					dbg(
 						`session_start: ${sessionReason ?? "startup"} — session stores from ${handoffSource}`,
 					);
+					// Resumed state and `/new` both land in the store above; publish
+					// once now rather than only on the next store mutation. Only the
+					// admitted primary owns the status listener: a declined
+					// concurrent secondary must not replace it with its own closure.
+					// The host clears extension statuses on a session reset, so the
+					// dedupe must not suppress this session's first publish.
+					setWidgetChangeCallback(updateIssuesStatus);
+					resetIssuesStatusPublish();
+					updateIssuesStatus();
 
 					if (lensWidgetVisible) {
 						mountLensWidget(ctx.ui, readExtensionMode(ctx));
@@ -3485,6 +3546,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// biome-ignore lint/suspicious/noExplicitAny: heterogeneous pi event ctx shapes
 	const onTurnStart = (_event: any, ctx: any) => {
 		rememberOwnEventCtx(ctx);
+		// A sibling activation can take the process-global listener slot; the
+		// live primary reclaims it each turn, as it reclaims the render callback.
+		if (ownedSessionRole === "primary")
+			setWidgetChangeCallback(updateIssuesStatus);
 		// Trust can change without a new session. Re-adopt before this turn can
 		// reach any install-capable or LSP-spawn path.
 		adoptProjectTrustFromPorts(hostPorts);
@@ -4432,6 +4497,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// The LSP idle-reset timer (240s) is unref'd but we cancel it explicitly here
 	// so it does not fire after shutdown. resetLSPService shuts down any live clients.
 	(pi as any).on("session_shutdown", (event: unknown, ctx: unknown) => {
+		// A departed activation must not keep publishing to a footer its host has
+		// already replaced; the clear is identity-checked, so a successor's
+		// listener is untouched.
+		clearWidgetChangeCallback(updateIssuesStatus);
 		// #473: a concurrently-live in-process subagent session shutting down
 		// (its sibling primary — the real parent — still active) must NOT run
 		// the shared-infra teardown below: no LSP fleet shutdown, no idle-timer

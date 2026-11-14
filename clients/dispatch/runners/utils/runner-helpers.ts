@@ -16,7 +16,10 @@ import { logSessionStart } from "../../../sessionstart-logger.js";
 import { incrementDegradationCount } from "../../../degradation-ledger.js";
 import { isToolInstallDisabled } from "../../../env-utils.js";
 import { getGlobalPiLensDir } from "../../../file-utils.js";
-import { getProjectTrustState } from "../../../project-trust.js";
+import {
+	getProjectTrustGeneration,
+	getProjectTrustState,
+} from "../../../project-trust.js";
 import {
 	createGenerationSource,
 	type GenerationHandle,
@@ -760,6 +763,22 @@ export async function resolveManagedToolClient<T>(options: {
  * next read; the checker keeps only the command the verdict resolved and the
  * probe's elapsed time for the unavailable message.
  */
+/** A verdict a probe flight hands `noteDecision` (#1500, #5595). */
+type AvailabilityVerdictNote = {
+	available: boolean;
+	/** The command that answered, written to the entry on an available verdict. */
+	command?: string;
+	outcome: AvailabilityOutcome;
+	cause: AvailabilityCause;
+	elapsedMs: number;
+	hostStallMs?: number;
+	/** How the outcome was reached, and the facts behind it (#1500). */
+	classifiedBy?: "probe" | "caller" | "joined";
+	evidence?: ProbeEvidence;
+	/** Probe output of a present binary that failed its version check. */
+	rejectedOutput?: string;
+};
+
 type AvailabilityCache = {
 	latch: AvailabilityLatch;
 	command: string | null;
@@ -872,22 +891,9 @@ const resolveInstallInFlightByCwd = new PathKeyedMap<
 // "available", even though only the first call actually ran an install.
 //
 // A correction is genuine only when a latched `unavailable` row for the same
-// pair stood before it. `verifyOrInstallCommand` also emits through this seam
-// with NO prior latch behind it (the bundler-form
-// `resolveCommandArgsWithInstallFallback` reaches it with no checker probe at
-// all), and burning this memo on such a row silences the
-// LATER genuine latch-then-recover for the same pair — the #1606 defect back
-// through the #1612 seam (#1657). Those rows dedupe against
-// `uncorrectedEmissionsByCwd` instead, so repeats stay suppressed without
-// pre-empting the real correction.
+// pair stood before it, and `resolveAvailableOrInstallUnshared` writes that
+// latch before it emits, so every emission through this seam is one (#1657).
 const correctedAvailabilityByCwd = new PathKeyedMap<Set<string>>(
-	normalizeMapKey,
-);
-// Which (cwd, toolId) pairs already emitted an `available` row that corrected
-// nothing (no latched `unavailable` stood before it). Same one-row-per-session
-// bound as the memo above, kept in a SEPARATE scope so it cannot answer for a
-// correction that has not happened yet (#1657).
-const uncorrectedEmissionsByCwd = new PathKeyedMap<Set<string>>(
 	normalizeMapKey,
 );
 // Which (cwd, tool) pairs currently stand latched `unavailable` in the durable
@@ -1131,9 +1137,8 @@ function resolvedTagForAttempt(
 /**
  * Emit the ONE compensating `available` row for a (cwd, toolId) correction,
  * after a latched unavailable probe recovers via `ensureTool`. This is the
- * SINGLE row constructor for every caller behind this seam —
- * `resolveAvailableOrInstallUnshared` (#1612) and `verifyOrInstallCommand`
- * (#1636) both call it rather than each hand-rolling their own, which is
+ * SINGLE row constructor behind this seam: `resolveAvailableOrInstallUnshared`
+ * (#1612) calls it rather than each caller hand-rolling its own, which is
  * exactly the drift #1610's own review caught the first time this shape
  * shipped twice.
  *
@@ -1144,10 +1149,10 @@ function resolvedTagForAttempt(
  * every time.
  *
  * `latchKeys` are every name a latched `unavailable` row for this pair could
- * carry. A row that clears one of them is a genuine correction and burns the
- * correction memo; a row with nothing to correct dedupes in its own scope, so
- * it cannot silence the genuine latch-then-recover that follows it for the
- * same pair (#1657).
+ * carry. The one caller (`resolveAvailableOrInstallUnshared`) records that
+ * latched row for the pair just before it calls, so the row is a genuine
+ * correction: it burns the correction memo and clears every key (#1657). The
+ * `correctsLatchedRow` evidence still reads the ledger rather than assuming it.
  */
 function emitCompensatingAvailableRow(
 	cwd: string,
@@ -1164,9 +1169,6 @@ function emitCompensatingAvailableRow(
 		// checker records the row under its COMMAND, and a leftover entry would
 		// later back a "correction" with nothing behind it (#1674 review F3).
 		clearLatchedUnavailable(cwd, ...latchKeys);
-	} else {
-		if (hasId(uncorrectedEmissionsByCwd, cwd, toolId)) return;
-		addId(uncorrectedEmissionsByCwd, cwd, toolId);
 	}
 	// `installed`/`installedPath` can come back truthy WITHOUT ensureTool
 	// running an install this call — its in-memory cache, its on-disk probe
@@ -1221,7 +1223,6 @@ export function resetDispatchAvailabilityState(): void {
 	installAttemptsByCwd.clear();
 	resolveInstallInFlightByCwd.clear();
 	correctedAvailabilityByCwd.clear();
-	uncorrectedEmissionsByCwd.clear();
 	latchedUnavailableByCwd.clear();
 	managedBinaryVerdicts.clear();
 	managedVerifyInFlight.clear();
@@ -1277,9 +1278,13 @@ export function createAvailabilityChecker(
 	const cacheByCwd = new PathKeyedMap<AvailabilityCache>(
 		normalizeEphemeralMapKey,
 	);
-	const inFlightByCwd = new PathKeyedMap<Promise<boolean>>(
-		normalizeEphemeralMapKey,
-	);
+	// The trust the probe started under rides with it: a caller that arrives
+	// after pi's trust answer changed starts its own probe instead of joining
+	// one whose search path was scoped for the old answer (#4776).
+	const inFlightByCwd = new PathKeyedMap<{
+		trustGeneration: number;
+		promise: Promise<boolean>;
+	}>(normalizeEphemeralMapKey);
 	let checkerGeneration = availabilityGeneration.current();
 	let checkerFlightGeneration = 0;
 
@@ -1359,47 +1364,57 @@ export function createAvailabilityChecker(
 		return created;
 	}
 
-	/** Record a verdict on the cache and emit exactly one decision record. */
+	/**
+	 * Record a verdict on the cache and emit exactly one decision record.
+	 *
+	 * `publishes` is whether the flight that reached the verdict is still the
+	 * current one for its key. A trust change starts a second flight for the
+	 * same cwd while the first is in flight (#4776), and both write the one
+	 * entry: the older, settling after the newer, would overwrite a newer
+	 * success with an older failure (or the reverse), leaving `getCommand` and
+	 * the latch disagreeing (#5595 B1). A superseded flight still writes its
+	 * row, but as not latched, and touches neither the entry, the latch nor the
+	 * latched-row memo.
+	 */
 	function noteDecision(
 		cache: AvailabilityCache,
 		resolvedCwd: string,
-		verdict: {
-			available: boolean;
-			outcome: AvailabilityOutcome;
-			cause: AvailabilityCause;
-			elapsedMs: number;
-			hostStallMs?: number;
-			/** How the outcome was reached, and the facts behind it (#1500). */
-			classifiedBy?: "probe" | "caller" | "joined";
-			evidence?: ProbeEvidence;
-			/** Probe output of a present binary that failed its version check. */
-			rejectedOutput?: string;
-		},
+		verdict: AvailabilityVerdictNote,
+		publishes: boolean,
 	): void {
-		cache.elapsedMs = verdict.elapsedMs;
-		cache.rejectedOutput = verdict.available
-			? undefined
-			: verdict.rejectedOutput;
 		let retryAfterMs: number | undefined;
-		if (verdict.available) {
-			cache.latch.noteAvailable(verdict.cause);
-		} else {
-			cache.command = null;
-			const delay = cache.latch.noteUnavailable(verdict.outcome, verdict.cause);
-			if (delay > 0) retryAfterMs = delay;
+		if (publishes) {
+			cache.elapsedMs = verdict.elapsedMs;
+			cache.rejectedOutput = verdict.available
+				? undefined
+				: verdict.rejectedOutput;
+			if (verdict.available) {
+				if (verdict.command !== undefined) cache.command = verdict.command;
+				cache.latch.noteAvailable(verdict.cause);
+			} else {
+				cache.command = null;
+				const delay = cache.latch.noteUnavailable(
+					verdict.outcome,
+					verdict.cause,
+				);
+				if (delay > 0) retryAfterMs = delay;
+			}
 		}
-		const latched = verdict.available || isLatchingOutcome(verdict.outcome);
+		const latched =
+			publishes && (verdict.available || isLatchingOutcome(verdict.outcome));
 		// Remember the pair whose durable row now says "unavailable and staying
 		// that way" — that is the row a later compensating `available` row
 		// corrects, and the only thing that makes such a row a correction
 		// (#1657).
-		if (!verdict.available && latched) {
-			noteLatchedUnavailable(resolvedCwd, command);
-		} else if (verdict.available) {
-			// The latched row this pair carried no longer stands: THIS row says
-			// the tool is back. Dropping the record here keeps a stale latch from
-			// backing a later "correction" that corrects nothing (#1674 F3).
-			clearLatchedUnavailable(resolvedCwd, ...latchKeysFor(command));
+		if (publishes) {
+			if (!verdict.available && latched) {
+				noteLatchedUnavailable(resolvedCwd, command);
+			} else if (verdict.available) {
+				// The latched row this pair carried no longer stands: THIS row says
+				// the tool is back. Dropping the record here keeps a stale latch from
+				// backing a later "correction" that corrects nothing (#1674 F3).
+				clearLatchedUnavailable(resolvedCwd, ...latchKeysFor(command));
+			}
 		}
 		logAvailabilityDecision(
 			{
@@ -1446,17 +1461,33 @@ export function createAvailabilityChecker(
 		}
 
 		const key = path.resolve(resolvedCwd);
+		const trustGeneration = getProjectTrustGeneration();
 		const existing = inFlightByCwd.get(key);
-		if (existing) return existing;
+		if (existing?.trustGeneration === trustGeneration) return existing.promise;
+		// A flight for another trust is still out. Its read left the latch owing a
+		// verdict stamped with that trust, so this flight's note would take the
+		// old stamp and read as stale at the next read (#5595 B1). It stops
+		// publishing once this flight replaces it below.
+		if (existing) cache.latch.reset();
 
 		const promiseGeneration = checkerGeneration;
 		let promise: Promise<boolean>;
+		// Whether this flight is still the current one for its key. A trust
+		// change replaces it in the table with a newer flight (#4776); once
+		// replaced, nothing it settles may reach the shared entry (#5595 B1).
+		const note = (verdict: AvailabilityVerdictNote): void =>
+			noteDecision(
+				cache,
+				resolvedCwd,
+				verdict,
+				inFlightByCwd.get(key)?.promise === promise,
+			);
 		promise = (async () => {
 			const fastPath = await options.fastPath?.();
 			if (fastPath) {
-				cache.command = fastPath;
-				noteDecision(cache, resolvedCwd, {
+				note({
 					available: true,
+					command: fastPath,
 					outcome: "success",
 					cause: "fast-path",
 					elapsedMs: 0,
@@ -1473,7 +1504,7 @@ export function createAvailabilityChecker(
 			try {
 				const cwdStat = await fs.promises.stat(resolvedCwd);
 				if (!cwdStat.isDirectory()) {
-					noteDecision(cache, resolvedCwd, {
+					note({
 						available: false,
 						outcome: "non-installable",
 						cause: "bad-cwd",
@@ -1485,7 +1516,7 @@ export function createAvailabilityChecker(
 					return false;
 				}
 			} catch {
-				noteDecision(cache, resolvedCwd, {
+				note({
 					available: false,
 					outcome: "non-installable",
 					cause: "bad-cwd",
@@ -1523,7 +1554,7 @@ export function createAvailabilityChecker(
 				// and session-long suppression from it would contradict the
 				// #1494 retry ladder this classification exists for.
 				if (isInSpawnTimeoutCooldown(cmd)) {
-					noteDecision(cache, resolvedCwd, {
+					note({
 						available: false,
 						outcome: "transient",
 						cause: "probe-timeout",
@@ -1547,7 +1578,7 @@ export function createAvailabilityChecker(
 				let probeJoined = false;
 				try {
 					const shared = checkerProbeFlights.run(
-						`checker:${command}|${versionArgs.join("|")}|${key}|${checkerFlightGeneration}|${windowsExt}|${cmd}|${JSON.stringify(Object.entries(env ?? {}).sort(([a], [b]) => compareOrdinal(a, b)))}`,
+						`checker:${command}|${versionArgs.join("|")}|${key}|${trustGeneration}|${checkerFlightGeneration}|${windowsExt}|${cmd}|${JSON.stringify(Object.entries(env ?? {}).sort(([a], [b]) => compareOrdinal(a, b)))}`,
 						() =>
 							// A bare PATH-only probe goes through the cwd-less probe seam
 							// (#2894): nothing it answers is read out of a project.
@@ -1579,9 +1610,9 @@ export function createAvailabilityChecker(
 				);
 
 				if (!result.error && result.status === 0) {
-					cache.command = cmd;
-					noteDecision(cache, resolvedCwd, {
+					note({
 						available: true,
+						command: cmd,
 						outcome: "success",
 						cause: "ok",
 						elapsedMs,
@@ -1613,7 +1644,7 @@ export function createAvailabilityChecker(
 				// `unclassifiedFailureOutcome: "missing"` compatibility verdict is a
 				// guess, not evidence that PATH changed.
 				if (result.spawnFailure?.kind === "tool-not-found") resetPathWalkMemo();
-				noteDecision(cache, resolvedCwd, {
+				note({
 					available: false,
 					outcome,
 					cause,
@@ -1635,12 +1666,12 @@ export function createAvailabilityChecker(
 			// that newer-generation entry when it settles.
 			if (
 				checkerGeneration === promiseGeneration &&
-				inFlightByCwd.get(key) === promise
+				inFlightByCwd.get(key)?.promise === promise
 			) {
 				inFlightByCwd.delete(key);
 			}
 		});
-		inFlightByCwd.set(key, promise);
+		inFlightByCwd.set(key, { trustGeneration, promise });
 		return promise;
 	}
 
@@ -1985,7 +2016,13 @@ type AvailabilityChecker = ReturnType<typeof createAvailabilityChecker>;
  */
 const toolBinaryCheckers = new Map<string, AvailabilityChecker>();
 
-type ToolBinaryOrder = NonNullable<AvailabilityCheckerOptions["order"]>;
+/**
+ * `path-only` is not a ladder order: the bare command on PATH and nothing
+ * else, for a caller whose child spawns it by that name (`toolOnPath`).
+ */
+type ToolBinaryOrder =
+	| NonNullable<AvailabilityCheckerOptions["order"]>
+	| "path-only";
 
 /**
  * One checker per (tool id, order): a runner (managed before PATH) and a
@@ -2007,7 +2044,10 @@ function toolBinaryChecker(
 		spec.versionArgs ?? ["--version"],
 		{
 			projectBinDirs: [...VENV_BIN_DIRS, ...NODE_MODULES_BIN_DIRS],
-			order,
+			...(spec.probeTimeoutMs !== undefined && {
+				probeTimeout: spec.probeTimeoutMs,
+			}),
+			...(order === "path-only" ? { pathOnly: true } : { order }),
 		},
 	);
 	toolBinaryCheckers.set(key, checker);
@@ -2034,6 +2074,30 @@ export async function resolveToolCommandWithInstallFallback(
 		getToolCommandSpec(toolId)?.managedToolId ?? toolId,
 		cwd,
 	);
+}
+
+/**
+ * Does `toolId`'s bare command run on PATH right now (#5410)? For a caller
+ * that hands the name to a child it does not control, where a project or
+ * managed binary is no answer: the LSP launcher starting jdtls asks this of
+ * `java`. `true` and `false` are durable (the version probe passed, or the
+ * command is absent or rejects it); `undefined` is a probe that never got a
+ * fair hearing (timeout, abort, host stall), so the caller must not treat the
+ * call as proof the tool is absent; so is a call across a trust change, whose
+ * answer is not the trust it asked under. The verdict, its cooldown and the
+ * trust stamp are the shared checker's.
+ */
+export async function toolOnPath(toolId: string): Promise<boolean | undefined> {
+	const checker = toolBinaryChecker(toolId, "path-only");
+	if (!checker) return false;
+	const trustGeneration = getProjectTrustGeneration();
+	const onPath = await checker.isAvailableAsync();
+	// The flight resolves its rung, then spawns, and the spawn scopes the search
+	// path by the trust answer of that moment: a flip while it resolved makes
+	// the answer the NEW trust's, which is not what this caller asked (#4776).
+	if (getProjectTrustGeneration() !== trustGeneration) return undefined;
+	if (onPath) return true;
+	return checker.getOutcome() === "transient" ? undefined : false;
 }
 
 /** What a ladder that never probed (or an id with no spec) reports. */
@@ -2098,103 +2162,24 @@ export async function resolveInstalledToolCommand(
 		: { command: null };
 }
 
-async function verifyOrInstallCommand(
-	command: string,
-	toolId: string,
-	cwd: string,
-	versionArgs: string[] = ["--version"],
-	timeout = 5000,
-	onUnusable: (verdict: ToolVerdict) => void = () => {},
-): Promise<string | null> {
-	// Skip the --version spawn when the command isn't even on disk — the ~μs
-	// stat/PATH walk beats a guaranteed-to-fail spawn round-trip.
-	const spawnable = await isSpawnableCommand(command);
-	if (spawnable) {
-		const versionCheck = await safeSpawnAsync(command, versionArgs, {
-			timeout,
-			cwd,
-			input: "",
-			cooldown: false,
-		});
-		if (!versionCheck.error && versionCheck.status === 0) {
-			return command;
-		}
-		// A command that was found but rejected its probe is not fixed by a
-		// reinstall. This also covers permissions and malformed shims; a probe
-		// that timed out or that trust refused is classified as what it is.
-		const { outcome, cause } = classifyProbeFailure(versionCheck, { command });
-		onUnusable({ outcome, cause });
-		return null;
-	}
-	if (!shouldAutoInstallTool(toolId)) return null;
-
-	const state = installStateFor(cwd, toolId);
-	if (state.suppressed) return null;
-	const installStartedAt = Date.now();
-	const installed = await ensureTool(toolId);
-	if (installed) {
-		noteInstallSuccess(toolId, cwd);
-		// A latched `unavailable` row MAY stand here, written by whatever probe
-		// the caller ran first — but not always. The on-disk pre-check above
-		// logs nothing, and the bundler form (rubocop's
-		// `resolveCommandArgsWithInstallFallback`) reaches this seam with no
-		// checker probe at all (#1657). So the row is
-		// emitted either way, and only a call that really clears a latched row is
-		// recorded as a correction. Without the row, the durable log keeps saying
-		// the tool is off after the installer just brought it back — the third
-		// seam of #1606/#1610/#1612 (#1636).
-		emitCompensatingAvailableRow(
-			cwd,
-			toolId,
-			installStartedAt,
-			installed,
-			latchKeysFor(toolId, command),
-		);
-		return installed;
-	}
-	noteInstallFailure(toolId, cwd);
-	return null;
-}
-
 /**
- * The bundler-form resolver (`bundle exec rubocop`): a `--version` spawn of the
- * argv, then the on-disk verify or install of its command. It holds no
- * checker, so a caller that must say why it got `null` reads `onUnusable`: it
- * is called with the verdict of a command that is on disk and failed its
- * probe, and not called for a command that is not on disk, an absence
- * (#5258).
+ * The command that runs rubocop in `cwd` (#5410). `form` is the project's
+ * choice (`getRubocopCommand`): the bundler form (`bundle exec rubocop`) is
+ * used when the registry's `bundle` ladder answers, else the plain `rubocop`
+ * ladder, so a Gemfile on a host without bundler still reaches a working
+ * rubocop. One memoized verdict per binary; a caller reads why it got `null`
+ * from `toolBinaryVerdict`.
  */
-export async function resolveCommandArgsWithInstallFallback(
-	command: { cmd: string; args: string[] },
-	toolId: string,
+export async function resolveRubocopCommand(
+	form: { cmd: string; args: string[] },
 	cwd: string,
-	versionArgs: string[] = ["--version"],
-	timeout = 5000,
-	onUnusable?: (verdict: ToolVerdict) => void,
 ): Promise<{ cmd: string; args: string[] } | null> {
-	const versionCheck = await safeSpawnAsync(
-		command.cmd,
-		[...command.args, ...versionArgs],
-		{ timeout, cwd, input: "", cooldown: false },
-	);
-	if (!versionCheck.error && versionCheck.status === 0) {
-		return command;
+	if (form.cmd === "bundle") {
+		const bundle = await resolveToolCommandWithInstallFallback(cwd, "bundle");
+		if (bundle) return { cmd: bundle, args: form.args };
 	}
-	const installed = await verifyOrInstallCommand(
-		command.cmd,
-		toolId,
-		cwd,
-		versionArgs,
-		timeout,
-		onUnusable,
-	);
-	if (!installed) {
-		return null;
-	}
-	if (installed === command.cmd) {
-		return command;
-	}
-	return { cmd: installed, args: [] };
+	const cmd = await resolveToolCommandWithInstallFallback(cwd, "rubocop");
+	return cmd ? { cmd, args: [] } : null;
 }
 
 async function resolveAvailableOrInstallUnshared(
@@ -2230,8 +2215,7 @@ async function resolveAvailableOrInstallUnshared(
 		// `checker.isAvailableAsync`. Without a compensating row here, the durable
 		// log keeps saying the tool is off after the installer just brought it
 		// back — the shape #1606/PR #1610 fixed in `ensureViaInstaller`, shared
-		// here by ~16 runners behind this helper (#1612), and by
-		// `verifyOrInstallCommand` for the third seam (#1636).
+		// here by ~16 runners behind this helper (#1612).
 		//
 		// `checker.reset()` above clears the checker's cache, so the NEXT call
 		// re-probes PATH from scratch — and for a managed-dir-only install that

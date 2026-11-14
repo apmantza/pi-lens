@@ -982,6 +982,8 @@ export interface ToolCommandSpec {
 	windowsExt?: string;
 	versionArgs?: string[];
 	managedToolId?: string;
+	/** Version-probe budget, ms, for a tool slower to start than the 5000 default. */
+	probeTimeoutMs?: number;
 }
 
 const AUTOFIX_CAPABILITIES = new Map<string, AutofixCapability>([
@@ -1163,6 +1165,8 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 			command: "rubocop",
 			versionArgs: ["--version"],
 			managedToolId: "rubocop",
+			// A Ruby start is slow; the bundler form's probe had this budget (#5410).
+			probeTimeoutMs: 10000,
 		},
 	],
 	[
@@ -1294,6 +1298,28 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 			command: "java",
 			windowsExt: ".exe",
 			versionArgs: ["-version"],
+		},
+	],
+	[
+		// Rubocop's bundler form (`bundle exec rubocop`) is available when
+		// bundler is. No managedToolId: pi-lens never installs bundler.
+		"bundle",
+		{
+			command: "bundle",
+			windowsExt: ".bat",
+			versionArgs: ["--version"],
+			probeTimeoutMs: 10000,
+		},
+	],
+	[
+		// The archive launcher is `bin/spotbugs`, which prints its version under
+		// `-version` and rejects `--version` (installer entry, #133).
+		"spotbugs",
+		{
+			command: "spotbugs",
+			windowsExt: ".bat",
+			versionArgs: ["-version"],
+			managedToolId: "spotbugs",
 		},
 	],
 	[
