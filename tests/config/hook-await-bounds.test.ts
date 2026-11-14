@@ -1231,6 +1231,21 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"an invented one.",
 		owner: "#2523 slice 2",
 	},
+	// #5553: the staged-delta read before a commit. The bound is not at this
+	// await: `gateStagedDelta` holds the whole read under one registered
+	// `bounded()` call (`call:clients/staged-delta.ts#gateStagedDelta:...`) with
+	// `ctx.signal` and its own 20 s wall budget, and turns a read that gave no
+	// answer into a refusal. A second wrap here would spend the budget twice.
+	"clients/runtime-tool-call.ts#handleToolCallImpl:1689e577~ee312146": {
+		family: "hook-await",
+		site: "unbudgeted-hook",
+		reason:
+			"`gateStagedDelta`, bounded inside by its registered bounded() call " +
+			"with the tool_call's ctx.signal; a second wrap here would double-count " +
+			"one budget, and a timeout would lose the degraded refusal the callee " +
+			"records.",
+		owner: "#5553",
+	},
 	"clients/runtime-tool-call.ts#handleToolCallImpl:1f887b0e~81c1d77f": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
@@ -2355,7 +2370,13 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// `dispatchForFile`; its only hook caller, the tool_call capture, holds it
 	// under bounded() with ctx.signal and PRE_EDIT_CAPTURE_BUDGET_MS, so a
 	// second bound here would add a timer for the same deadline.
-	"clients/dispatch/integration.ts": 22,
+	// 22 -> 24 (#5553): the seed-lane dispatch the pre-edit capture ran inline is
+	// now `dispatchSeedLanes` (one await, the capture and the staged read share
+	// it), and `collectStagedLaneBlockers` awaits it. The capture still holds its
+	// call under bounded(); the staged read's only hook caller, the commit gate's
+	// `gateStagedDelta`, holds the whole read under bounded() with ctx.signal, so
+	// a second bound here would add a timer for the same deadline.
+	"clients/dispatch/integration.ts": 24,
 	// 2 → 3 (#4484 review F5): `settlePendingRunnerFindingsForTests` awaits
 	// the store's runs so a test joins a collect-later settle without polling.
 	// Only tests call it; no hook handler reaches it.
@@ -2788,6 +2809,12 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/session-state-store.ts": 4,
 	"clients/shared-checkout-guard.ts": 7,
 	"clients/source-filter.ts": 2,
+	// #5553: the commit gate's staged-delta read. `gateStagedDelta` is the one
+	// hook-path entry and holds every await below it (the git reads, the per-file
+	// lane runs) under one registered bounded() call with ctx.signal and a 20 s
+	// wall budget; a bound per git read would multiply that budget by the staged
+	// set's size.
+	"clients/staged-delta.ts": 12,
 	"clients/startup-scan.ts": 3,
 	"clients/test-runner-client.ts": 4,
 	// #2507. Unlike every other entry here, this one is unbounded ON PURPOSE
@@ -3361,6 +3388,16 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, BoundedSite>> = {
 			"own ambient abort signal before the signal-less outer bound, so aborted " +
 			"work requeues before release (#2939 F6). Its budget is selected from the one hook " +
 			"registry, including the read-only versus edit tool_result split.",
+	},
+	"call:clients/staged-delta.ts#gateStagedDelta:6ec6083f~8ae70b5c": {
+		work: "threaded",
+		signal:
+			"The tool_call's `ctx.signal`, passed by `handleToolCallImpl`, absent " +
+			"only in a harness; the wall half (`STAGED_DELTA_BUDGET_MS`, 20 s) is " +
+			"always live. The thunk threads its own work signal into every git " +
+			"spawn, so a timeout or an abort cancels those; a per-file lane run does " +
+			"not read it yet and ends on its own runner timeouts. Either way the " +
+			"commit refuses and `staged-delta-degraded` is recorded.",
 	},
 	"call:clients/turn-end/lanes/secrets.ts#blockingGitleaksFindings:c06d5cf4~67c7ff0d":
 		{
