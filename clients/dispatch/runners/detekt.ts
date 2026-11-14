@@ -18,6 +18,14 @@ import {
 } from "./utils/runner-helpers.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
+import yaml from "../../deps/js-yaml.js";
+import {
+	type AnchoredConfig,
+	anchorIgnorePatterns,
+	markUnanchored,
+	readConfigText,
+	withOverlayFile,
+} from "./utils/ignore-anchor.js";
 
 // Rules that `detekt --auto-correct` rewrites deterministically. Detekt's
 // formatting ruleset wraps ktlint, whose rules are all autocorrectable; a
@@ -142,6 +150,142 @@ function parseDetektOutput(
 	return located > 0 ? diagnostics : null;
 }
 
+/**
+ * detekt's own top-level sections that are not rule sets: their `excludes` and
+ * `exclude` keys name report ids or config paths, never files, so they are not
+ * path filters and are left as written.
+ */
+const DETEKT_NON_RULESET_KEYS = new Set([
+	"build",
+	"config",
+	"processors",
+	"console-reports",
+	"output-reports",
+]);
+
+const DETEKT_PATH_FILTER_KEYS = ["excludes", "includes"] as const;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		!Array.isArray(value) &&
+		Object.getPrototypeOf(value) === Object.prototype
+	);
+}
+
+/**
+ * detekt reads `excludes` and `includes` at two depths of the config: on a rule
+ * set (`style: excludes:`) and on a rule (`style: MagicNumber: excludes:`). The
+ * value is a list of globs, or one string of comma-separated globs. Each glob is
+ * matched against the file's absolute path, so a `**\/x/**` entry reaches the
+ * ancestors of the project root too (#5594).
+ *
+ * The result is an overlay holding ONLY the lists this rewrote, at the place
+ * they sit; detekt reads it after the project's own file (`--config
+ * <project>,<overlay>`: the later file wins a key), so every other value is the
+ * one detekt reads from the project's file itself. A copy of the whole tree
+ * would re-spell values this does not model: `threshold: 60.0` came back as
+ * `60`, and a config detekt refuses ran (#5606 round 3, row D20).
+ *
+ * Refused (`unapplied`), because the rewrite cannot be shown to keep the
+ * meaning: a YAML the loader cannot read, a path-filter value of another type,
+ * a glob form `anchorIgnorePattern` does not recognise, and a comma string
+ * holding braces (the comma inside `{kt,kts}` and the comma between globs
+ * cannot be told apart).
+ */
+export function anchorDetektConfig(text: string, root: string): AnchoredConfig {
+	// An empty file holds no glob, and js-yaml refuses a document with no content.
+	if (text.trim() === "") return { kind: "unchanged" };
+	let tree: unknown;
+	try {
+		tree = yaml.load(text);
+	} catch (err) {
+		// none: the failure is returned as `unapplied`, and the runner's `markUnanchored` records it and withholds the clean verdict.
+		return {
+			kind: "unapplied",
+			reason: `its detekt config is not readable YAML (${
+				err instanceof Error ? err.message.split("\n")[0] : "load failed"
+			})`,
+		};
+	}
+	if (tree === null || tree === undefined) return { kind: "unchanged" };
+	if (!isPlainObject(tree)) {
+		return {
+			kind: "unapplied",
+			reason: "its detekt config is not a map of rule sets",
+		};
+	}
+	// Null-prototype maps: a rule set or rule named `__proto__` stays a key.
+	const overlay: Record<string, Record<string, unknown>> = Object.create(null);
+	let refused: string | undefined;
+	const rewrite = (
+		holder: Record<string, unknown>,
+		place: () => Record<string, unknown>,
+	): void => {
+		for (const key of DETEKT_PATH_FILTER_KEYS) {
+			const value = holder[key];
+			if (value === undefined || value === null) continue;
+			let entries: string[];
+			if (typeof value === "string") {
+				if (/[{}]/.test(value)) {
+					refused = `an ${key} string holds braces: ${value}`;
+					return;
+				}
+				entries = value.split(",").flatMap((entry) => {
+					const trimmed = entry.trim();
+					return trimmed.length > 0 ? [trimmed] : [];
+				});
+			} else if (
+				Array.isArray(value) &&
+				value.every((entry) => typeof entry === "string")
+			) {
+				entries = value as string[];
+			} else {
+				refused = `an ${key} value is not a glob list`;
+				return;
+			}
+			const anchored = anchorIgnorePatterns(entries, root, "java-glob");
+			if ("unrecognized" in anchored) {
+				refused = `${key} entry ${JSON.stringify(anchored.unrecognized)} is not a form it can anchor`;
+				return;
+			}
+			if (
+				anchored.patterns.length !== entries.length ||
+				anchored.patterns.some((entry, index) => entry !== entries[index])
+			) {
+				place()[key] = anchored.patterns;
+			}
+		}
+	};
+	for (const [name, ruleset] of Object.entries(tree)) {
+		if (DETEKT_NON_RULESET_KEYS.has(name) || !isPlainObject(ruleset)) continue;
+		const rulesetPlace = () => (overlay[name] ??= Object.create(null));
+		rewrite(ruleset, rulesetPlace);
+		for (const [ruleName, rule] of Object.entries(ruleset)) {
+			if (refused) break;
+			if (isPlainObject(rule)) {
+				rewrite(rule, () => {
+					const set = rulesetPlace();
+					return (set[ruleName] ??= Object.create(null)) as Record<
+						string,
+						unknown
+					>;
+				});
+			}
+		}
+		if (refused) break;
+	}
+	if (refused) {
+		return { kind: "unapplied", reason: `its detekt config: ${refused}` };
+	}
+	if (Object.keys(overlay).length === 0) return { kind: "unchanged" };
+	return {
+		kind: "rewritten",
+		text: yaml.dump(overlay, { lineWidth: -1, noRefs: true }),
+	};
+}
+
 const detektRunner: RunnerDefinition = {
 	id: "detekt",
 	appliesTo: ["kotlin"],
@@ -167,11 +311,28 @@ const detektRunner: RunnerDefinition = {
 		if (!cmd) return toolAbsentSkip(cwd, { id: "detekt" });
 
 		const absPath = path.resolve(cwd, ctx.filePath);
-		const result = await safeSpawnAsync(
-			cmd,
-			["--input", absPath, "--config", configPath],
-			{ cwd, timeout: 60000 },
-		);
+		// #5594: detekt reads the project's own config and then an overlay with
+		// every glob list anchored at the project root (the later file wins a
+		// key). A config the rewrite cannot be shown to keep runs as it stands,
+		// and `finish` withholds its clean answer.
+		const read = readConfigText("detekt", configPath);
+		const anchored: AnchoredConfig =
+			read.kind === "read" ? anchorDetektConfig(read.text, cwd) : read;
+		const finish = (verdict: RunnerResult): RunnerResult =>
+			anchored.kind === "unapplied"
+				? markUnanchored("detekt", anchored.reason, verdict)
+				: verdict;
+		const spawnDetekt = (config: string) =>
+			safeSpawnAsync(cmd, ["--input", absPath, "--config", config], {
+				cwd,
+				timeout: 60000,
+			});
+		const result =
+			anchored.kind === "rewritten"
+				? await withOverlayFile("detekt", "detekt.yml", anchored.text, (file) =>
+						spawnDetekt(`${configPath},${file}`),
+					)
+				: await spawnDetekt(configPath);
 
 		// #1948: detekt reports across both streams, so the gate and the parser
 		// read the same concatenated string. A nonzero exit that yields zero
@@ -209,7 +370,7 @@ const detektRunner: RunnerDefinition = {
 				};
 			},
 		});
-		if (run.diagnostics.length === 0) return verdict;
+		if (run.diagnostics.length === 0) return finish(verdict);
 		// #4522 T1: exit 1 is a tool error, and detekt can print findings before it.
 		// Those findings are kept, but the read is incomplete, so the run is flagged
 		// `inconclusive` (the existing "reached no verdict" shape, as tree-sitter's
@@ -218,7 +379,9 @@ const detektRunner: RunnerDefinition = {
 		// a pairing the RunnerResult field doc does not name, and hasUsableResult still
 		// counts this run as usable coverage. It is inert for detekt today (no
 		// primary-group consumer reads it); this is a documented gap, not a behaviour.
-		return result.status === 1 ? { ...verdict, inconclusive: true } : verdict;
+		return finish(
+			result.status === 1 ? { ...verdict, inconclusive: true } : verdict,
+		);
 	},
 };
 

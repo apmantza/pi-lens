@@ -839,7 +839,7 @@ const PM =
 const LSP =
 	"language-server launch and install code: its installs follow PI_LENS_DISABLE_LSP_INSTALL (canInstall in clients/lsp/server.ts, a separate switch), and its probes (java finder, --version) install nothing";
 const OPERAND =
-	"a known-good command and literal words plus one computed operand the census cannot fold: mix credo's file argument is path.resolve(cwd, file), an absolute path that cannot read as an option, git diff's two operands are commit ids readGitHead read from git rev-parse, and the complexity baseline's git for-each-ref lists fixed ref names and its git show names `<ref>:./<path>`, a revision spec that cannot read as an option; no tool here installs anything. Each call's words and options are pinned by text";
+	"a known-good command and literal words plus one computed operand the census cannot fold: mix credo's file argument is path.resolve(cwd, file), an absolute path that cannot read as an option, and its `...config` spread is either nothing or the literal `--config-file <generated overlay path>` of the same runner's two call sites (#5594), git diff's two operands are commit ids readGitHead read from git rev-parse, and the complexity baseline's git for-each-ref lists fixed ref names and its git show names `<ref>:./<path>`, a revision spec that cannot read as an option; no tool here installs anything. Each call's words and options are pinned by text";
 const REGISTRY_PATH =
 	"a PowerShell -Command whose script is one fixed string literal reading the Machine and User Path variables (readWindowsRegistryPath); it starts no installer, and its script is pinned by text, so a changed script is a finding";
 
@@ -869,7 +869,7 @@ const ROWS: Readonly<Record<string, Row>> = {
 		"clients/dispatch/runners/credo.ts#safeSpawnAsync": {
 			sites: 1,
 			pins: [
-				`"mix" ["credo", "--format", "json", "--strict", absPath] {timeout: 30000, cwd}`,
+				`"mix" ["credo", "--format", "json", "--strict", ...config, absPath] {timeout: 30000, cwd, ...(env ? {env} : {})}`,
 			],
 		},
 		"clients/metrics/complexity-baseline.ts#safeSpawnAsync": {
@@ -936,7 +936,7 @@ const ROWS: Readonly<Record<string, Row>> = {
 		"clients/dispatch/runners/mypy.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/oxlint.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/php-lint.ts#safeSpawnAsync": 1,
-		"clients/dispatch/runners/phpstan.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/phpstan.ts#safeSpawnAsync": 2,
 		"clients/dispatch/runners/prisma-validate.ts#resolveLocalFirstAsync": {
 			sites: 1,
 			pins: [`"prisma" cwd`],

@@ -86,6 +86,10 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 	// scratch parent, so there is no source population to floor.
 	"tests/clients/report-scan-outcomes.test.ts":
 		"behavior table over four report clients; its readdir checks one scratch parent for leftovers, not a source population sweep",
+	// #5594: the overlay seam's behaviour table. Its readdir checks that one run
+	// left nothing in its own scratch parent, so there is no source population.
+	"tests/clients/dispatch/runners/ignore-anchor.test.ts":
+		"behavior table over the config-overlay seam; its readdir checks one scratch parent for leftovers after a run, not a source population sweep",
 	"tests/clients/ast-grep-rule-regex-budget.test.ts":
 		"rule YAML corpus enumeration, not a production population sweep",
 	"tests/config/lsp-idle-eviction-registry.test.ts":

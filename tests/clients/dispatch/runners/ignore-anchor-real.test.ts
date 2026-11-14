@@ -1,0 +1,562 @@
+// flake-shape: real-process-spawn — the defect is detekt's, phpstan's and
+// credo's OWN matching of the project's ignore globs against the absolute path of
+// the file, so a double has no matcher to model and a shim would not reproduce
+// the tool's ignore either.
+// lane: a case runs where its binary is on the PATH the runner's lookup walks
+// (`detekt` and `phpstan` as commands; `mix` plus a prepared credo project, see
+// `PI_LENS_TEST_CREDO_BASE` below). A lane without one skips that tool visibly.
+// CI's tool-smoke lane installs neither detekt nor phpstan nor credo's deps, so
+// these cases run on a host that has them; the hermetic file
+// `ignore-anchor.test.ts` is what CI runs for the rewrite itself.
+
+/**
+ * #5594: detekt (`excludes`), phpstan (`excludePaths`) and credo
+ * (`files.excluded` regexes) turn the project config's ignore globs into
+ * absolute patterns themselves and match them against the file's absolute path.
+ * A project checked out under `<scratch>/.claude/worktrees/lane1` whose config
+ * ignores `**\/.claude/**` was therefore excluded from its own analysis, and no
+ * argv spelling avoids that (the argv fix for the other runners is
+ * `ignore-glob-relative-argv-real.test.ts`).
+ *
+ * Each case plants one byte-identical project twice, once under a `.claude`
+ * ancestor and once under a neutral `ctrl` ancestor, and requires the SAME
+ * outcome from both. The control run pins a non-empty expected rule set of its
+ * own, so two silent runs cannot satisfy the equality. A file inside the
+ * project's own ignored `.claude/` directory stays ignored in both layouts.
+ *
+ * Credo needs a project with its deps compiled, which needs the network. Point
+ * `PI_LENS_TEST_CREDO_BASE` at a directory holding a `mix.exs` that depends on
+ * credo, with `mix.lock`, `deps/` and `_build/` already fetched and compiled
+ * (`mix deps.get && mix deps.compile`), and put `mix` on PATH.
+ */
+
+// order-dependent: false — every case builds its own project pair under this
+// file's fixture root, and pins trust before the first run.
+import * as fs from "node:fs";
+import * as path from "node:path";
+
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
+
+import credoRunner from "../../../../clients/dispatch/runners/credo.js";
+import detektRunner from "../../../../clients/dispatch/runners/detekt.js";
+import phpstanRunner from "../../../../clients/dispatch/runners/phpstan.js";
+import type { FileKind } from "../../../../clients/file-kinds.js";
+import type { RunnerResult } from "../../../../clients/dispatch/types.js";
+import { setProjectTrustState } from "../../../../clients/project-trust.js";
+import * as safeSpawnModule from "../../../../clients/safe-spawn.js";
+import { scaledTestTimeout } from "../../../support/test-timeout-scale.js";
+import { makeRunnerCtx } from "../../../support/runner-ctx.js";
+import { removeTempDirSync, setupTestEnvironment } from "../../test-utils.js";
+
+const env = setupTestEnvironment("pi-lens-5594-anchor-");
+const ROOT = env.tmpDir;
+
+const CREDO_BASE = process.env.PI_LENS_TEST_CREDO_BASE;
+
+/** A case runs the real tool in two layouts; a JVM or mix start is seconds. */
+const REAL_RUN_TIMEOUT_MS = scaledTestTimeout(120_000);
+
+/** The layout pair: one project under an ignored ancestor, one under a neutral. */
+const LAYOUTS = {
+	ignoredAncestor: path.join(ROOT, ".claude/worktrees/lane1"),
+	control: path.join(ROOT, "ctrl/lane1"),
+};
+
+/** `fn f(x) { return x * 42 }` in Kotlin: detekt's MagicNumber fires on the 42. */
+const KOTLIN = "fun f(x: Int): Int {\n    return x * 42\n}\n";
+
+function plantDetekt(project: string, config?: string): void {
+	fs.mkdirSync(path.join(project, "src"), { recursive: true });
+	fs.mkdirSync(path.join(project, ".claude"), { recursive: true });
+	fs.writeFileSync(
+		path.join(project, "detekt.yml"),
+		config ??
+			"style:\n  active: true\n  MagicNumber:\n    active: true\n    excludes: ['**/.claude/**']\n",
+	);
+	fs.writeFileSync(path.join(project, "src/A.kt"), KOTLIN);
+	fs.writeFileSync(path.join(project, ".claude/B.kt"), KOTLIN);
+}
+
+const PHPSTAN_EXCLUDE =
+	"parameters:\n  level: 5\n  excludePaths:\n    - '**/.claude/**'\n";
+
+function plantPhpstan(project: string, config: string = PHPSTAN_EXCLUDE): void {
+	fs.mkdirSync(path.join(project, ".claude"), { recursive: true });
+	fs.mkdirSync(path.join(project, "src/gen"), { recursive: true });
+	fs.writeFileSync(path.join(project, "phpstan.neon"), config);
+	const source = "<?php\necho $undefinedVar;\n";
+	fs.writeFileSync(path.join(project, "a.php"), source);
+	fs.writeFileSync(path.join(project, ".claude/b.php"), source);
+	fs.writeFileSync(path.join(project, "src/gen/g.php"), source);
+}
+
+/** The `files.excluded` regex at the top level of a credo config. */
+const CREDO_TOP_LEVEL =
+	'%{configs: [%{name: "default", files: %{included: ["lib/", ".claude/"], excluded: [~r"/\\.claude/"]}, strict: true}]}\n';
+
+function plantCredo(project: string, config: string = CREDO_TOP_LEVEL): void {
+	fs.mkdirSync(path.join(project, "lib"), { recursive: true });
+	fs.mkdirSync(path.join(project, ".claude"), { recursive: true });
+	for (const name of ["mix.exs", "mix.lock"]) {
+		fs.copyFileSync(
+			path.join(CREDO_BASE ?? "", name),
+			path.join(project, name),
+		);
+	}
+	for (const name of ["deps", "_build"]) {
+		fs.cpSync(path.join(CREDO_BASE ?? "", name), path.join(project, name), {
+			recursive: true,
+			verbatimSymlinks: true,
+		});
+	}
+	// A Design finding: credo's exit status is a per-category bitmask, and the
+	// runner's exit table admits 0, 1 and 2 only, so a Readability finding (4)
+	// would be read as a rejected invocation and hide what this file proves.
+	const module = (name: string) =>
+		`defmodule ${name} do\n  @moduledoc "m"\n  # TODO: later\n  def f(x), do: x\nend\n`;
+	fs.mkdirSync(path.join(project, "lib/gen"), { recursive: true });
+	fs.mkdirSync(path.join(project, "lib/ok"), { recursive: true });
+	fs.writeFileSync(path.join(project, "lib/a.ex"), module("A"));
+	fs.writeFileSync(path.join(project, ".claude/b.ex"), module("B"));
+	fs.writeFileSync(path.join(project, "lib/gen/g.ex"), module("G"));
+	fs.writeFileSync(path.join(project, "lib/ok/o.ex"), module("O"));
+	// The regex tests the absolute path: it names the project's own `.claude/`
+	// directory, and also the ancestor of a project under `.claude/worktrees`.
+	fs.writeFileSync(path.join(project, ".credo.exs"), config);
+}
+
+/** Is the binary on the PATH the runner's lookup walks? */
+function toolAvailable(binary: string): boolean {
+	return (process.env.PATH ?? "")
+		.split(path.delimiter)
+		.filter(Boolean)
+		.some((dir) =>
+			[path.join(dir, binary), `${path.join(dir, binary)}.cmd`].some(
+				(candidate) => fs.existsSync(candidate),
+			),
+		);
+}
+
+const credoAvailable = (): boolean =>
+	toolAvailable("mix") &&
+	CREDO_BASE !== undefined &&
+	fs.existsSync(path.join(CREDO_BASE, "deps/credo"));
+
+function summary(result: RunnerResult): {
+	status: string;
+	rules: string[];
+	reportedPaths: string[];
+	inconclusive: boolean;
+} {
+	return {
+		status: result.status,
+		rules: result.diagnostics.map((diagnostic) => diagnostic.rule ?? ""),
+		reportedPaths: [...new Set(result.diagnostics.map((d) => d.filePath))],
+		inconclusive: result.inconclusive === true,
+	};
+}
+
+beforeAll(() => {
+	for (const project of Object.values(LAYOUTS)) {
+		plantDetekt(project);
+		plantPhpstan(project);
+		if (credoAvailable()) plantCredo(project);
+	}
+	// The spawn seam drops a PATH entry inside the checkout while the project is
+	// untrusted; these cases run the developer- or lane-installed tool.
+	setProjectTrustState("trusted");
+});
+
+afterAll(() => {
+	removeTempDirSync(ROOT);
+});
+
+beforeEach(() => {
+	vi.spyOn(safeSpawnModule, "safeSpawnAsync");
+});
+
+const TOOLS: ReadonlyArray<{
+	runnerId: string;
+	available: () => boolean;
+	kind: FileKind;
+	runner: { run: (ctx: never) => Promise<RunnerResult> };
+	file: string;
+	controlRules: string[];
+	ignoredFile: string;
+}> = [
+	{
+		runnerId: "detekt",
+		available: () => toolAvailable("detekt"),
+		kind: "kotlin",
+		runner: detektRunner,
+		/** The file whose finding proves the run read the project. */
+		file: "src/A.kt",
+		controlRules: ["MagicNumber"],
+		/** A file inside the project's own ignored dir. */
+		ignoredFile: ".claude/B.kt",
+	},
+	{
+		runnerId: "phpstan",
+		available: () => toolAvailable("phpstan"),
+		kind: "php",
+		runner: phpstanRunner,
+		file: "a.php",
+		controlRules: ["variable.undefined"],
+		ignoredFile: ".claude/b.php",
+	},
+	{
+		runnerId: "credo",
+		available: credoAvailable,
+		kind: "elixir",
+		runner: credoRunner,
+		file: "lib/a.ex",
+		controlRules: ["Credo.Check.Design.TagTODO"],
+		ignoredFile: ".claude/b.ex",
+	},
+];
+
+describe.each(TOOLS)(
+	"$runnerId analyses a project whose ignore glob names its own ancestor",
+	({ available, kind, runner, file, controlRules, ignoredFile }) => {
+		const run = (project: string, name: string) =>
+			runner.run(
+				makeRunnerCtx(path.join(project, name), project, { kind }) as never,
+			);
+
+		describe.skipIf(!available())("tool available", () => {
+			it(
+				"reports the findings the control layout reports",
+				async () => {
+					const control = summary(await run(LAYOUTS.control, file));
+					const scratch = summary(await run(LAYOUTS.ignoredAncestor, file));
+
+					expect(control.rules).toEqual(controlRules);
+					expect(scratch.rules).toEqual(control.rules);
+					expect(scratch.status).toEqual(control.status);
+					expect(scratch.inconclusive).toBe(false);
+				},
+				REAL_RUN_TIMEOUT_MS,
+			);
+
+			it(
+				"names the findings with the absolute dispatched path",
+				async () => {
+					const filePath = path.join(LAYOUTS.ignoredAncestor, file);
+					const result = await run(LAYOUTS.ignoredAncestor, file);
+
+					expect(result.diagnostics.length).toBeGreaterThan(0);
+					expect(summary(result).reportedPaths).toEqual([filePath]);
+				},
+				REAL_RUN_TIMEOUT_MS,
+			);
+
+			// The project's own `.claude/` ignore must still fire: anchoring the glob
+			// must not turn it off. The control run proves the glob matches in a
+			// neutral layout; the ancestor run must agree.
+			it(
+				"keeps a file inside the project's own ignored .claude/ directory ignored",
+				async () => {
+					const control = summary(await run(LAYOUTS.control, ignoredFile));
+					const scratch = summary(
+						await run(LAYOUTS.ignoredAncestor, ignoredFile),
+					);
+
+					expect(control.rules).toEqual([]);
+					expect(scratch.rules).toEqual([]);
+					expect(scratch.status).toEqual(control.status);
+				},
+				REAL_RUN_TIMEOUT_MS,
+			);
+		});
+	},
+);
+
+// The fail-closed cell, with the real binary: a glob form the rewrite does not
+// recognise (a leading brace group, valid Java glob) is run as it stands. In the neutral layout
+// that still reports the project's finding; under the ancestor it reads nothing,
+// and that nothing must not be called a clean file.
+describe.skipIf(!toolAvailable("detekt"))(
+	"detekt with an ignore it cannot anchor",
+	() => {
+		const BRACE_CONFIG =
+			"style:\n  active: true\n  MagicNumber:\n    active: true\n    excludes: ['{**/.claude/**,**/nomatch/**}']\n";
+
+		it(
+			"never reports the file clean under an ignored ancestor",
+			async () => {
+				const control = path.join(ROOT, "brace-ctrl/lane1");
+				const scratch = path.join(ROOT, ".claude/worktrees/brace-lane");
+				plantDetekt(control, BRACE_CONFIG);
+				plantDetekt(scratch, BRACE_CONFIG);
+				const run = (project: string) =>
+					detektRunner.run(
+						makeRunnerCtx(path.join(project, "src/A.kt"), project, {
+							kind: "kotlin",
+						}) as never,
+					);
+
+				const neutral = summary(await run(control));
+				const ancestor = summary(await run(scratch));
+
+				expect(neutral.rules).toEqual(["MagicNumber"]);
+				expect(neutral.inconclusive).toBe(false);
+				expect(ancestor.rules).toEqual([]);
+				expect(ancestor.inconclusive).toBe(true);
+			},
+			REAL_RUN_TIMEOUT_MS,
+		);
+	},
+);
+
+// Ignore-bearing fields beyond the one the cases above plant. A recognised list
+// inside a larger set of ignore fields is the same defect once the OTHER fields
+// are left as they were (#5606 review r1: F1, F2, Q1), so each field gets the
+// two-layout equality and the file in the project's own `.claude/` stays ignored.
+const VARIANTS: ReadonlyArray<{
+	name: string;
+	runnerId: string;
+	available: () => boolean;
+	kind: FileKind;
+	runner: { run: (ctx: never) => Promise<RunnerResult> };
+	plant: (project: string) => void;
+	file: string;
+	controlRules: string[];
+	ignoredFiles: string[];
+}> = [
+	{
+		// A plain entry beside the wildcard: it must stay excluded (F1), not be
+		// re-included by the overlay's rewrite of the list.
+		name: "phpstan excludePaths with a plain entry beside the wildcard",
+		runnerId: "phpstan",
+		available: () => toolAvailable("phpstan"),
+		kind: "php",
+		runner: phpstanRunner,
+		plant: (project) =>
+			plantPhpstan(
+				project,
+				"parameters:\n  level: 5\n  excludePaths:\n    - src/gen\n    - '**/.claude/**'\n",
+			),
+		file: "a.php",
+		controlRules: ["variable.undefined"],
+		ignoredFiles: [".claude/b.php", "src/gen/g.php"],
+	},
+	{
+		name: "phpstan ignoreErrors with a wildcard path",
+		runnerId: "phpstan",
+		available: () => toolAvailable("phpstan"),
+		kind: "php",
+		runner: phpstanRunner,
+		plant: (project) =>
+			plantPhpstan(
+				project,
+				"parameters:\n  level: 5\n  ignoreErrors:\n    -\n      message: '#might not be defined#'\n      paths:\n        - '**/.claude/**'\n        - src/gen/*\n",
+			),
+		file: "a.php",
+		controlRules: ["variable.undefined"],
+		ignoredFiles: [".claude/b.php", "src/gen/g.php"],
+	},
+	{
+		name: "credo check params with a files.excluded regex",
+		runnerId: "credo",
+		available: credoAvailable,
+		kind: "elixir",
+		runner: credoRunner,
+		plant: (project) =>
+			plantCredo(
+				project,
+				'%{configs: [%{name: "default", files: %{included: ["lib/", ".claude/"], excluded: []}, strict: true, checks: %{extra: [{Credo.Check.Design.TagTODO, [files: %{excluded: [~r"/\\.claude/"]}]}]}}]}\n',
+			),
+		file: "lib/a.ex",
+		controlRules: ["Credo.Check.Design.TagTODO"],
+		ignoredFiles: [".claude/b.ex"],
+	},
+	{
+		// Row C12 (r1 F6): round 2 kept a check's regex verdict and dropped the
+		// check's string entries, so `lib/gen/` was analysed in both layouts.
+		name: "credo check params with string entries beside the regexes",
+		runnerId: "credo",
+		available: credoAvailable,
+		kind: "elixir",
+		runner: credoRunner,
+		plant: (project) =>
+			plantCredo(
+				project,
+				'%{configs: [%{name: "default", files: %{included: ["lib/", ".claude/"], excluded: []}, strict: true, checks: %{extra: [{Credo.Check.Design.TagTODO, [files: %{excluded: [~r"/\\.claude/", "lib/gen/", ~r"^/lib/"]}]}]}}]}\n',
+			),
+		file: "lib/a.ex",
+		controlRules: ["Credo.Check.Design.TagTODO"],
+		ignoredFiles: [".claude/b.ex", "lib/gen/g.ex"],
+	},
+	{
+		// Rows C3, C4: round 2 tested each regex on the path from the root
+		// (`/lib/gen/g.ex`), where `^/lib/gen/` matches and `[^/]/lib/ok/` does
+		// not; credo tests the absolute path, where each answers the other way.
+		name: "credo files.excluded regexes anchored at the path's start or reading the char before it",
+		runnerId: "credo",
+		available: credoAvailable,
+		kind: "elixir",
+		runner: credoRunner,
+		plant: (project) =>
+			plantCredo(
+				project,
+				'%{configs: [%{name: "default", files: %{included: ["lib/", ".claude/"], excluded: [~r"/\\.claude/", ~r"^/lib/gen/", ~r"[^/]/lib/ok/"]}, strict: true}]}\n',
+			),
+		file: "lib/gen/g.ex",
+		controlRules: ["Credo.Check.Design.TagTODO"],
+		ignoredFiles: [".claude/b.ex", "lib/ok/o.ex"],
+	},
+];
+
+// Forms the rewrite must not change and cannot anchor: each runs as it stands,
+// so the answer equals the control layout's, and a clean one is withheld.
+const AS_IT_STANDS: ReadonlyArray<{
+	name: string;
+	available: () => boolean;
+	kind: FileKind;
+	runner: { run: (ctx: never) => Promise<RunnerResult> };
+	plant: (project: string) => void;
+	file: string;
+	expected: {
+		neutral: Partial<ReturnType<typeof summary>>;
+		ancestor: Partial<ReturnType<typeof summary>>;
+	};
+}> = [
+	{
+		// Row C13: the regex names the root's own name, so it excludes the file in
+		// every layout and no neutral root can stand in for it.
+		name: "credo files.excluded regex naming the project root",
+		available: credoAvailable,
+		kind: "elixir",
+		runner: credoRunner,
+		plant: (project) =>
+			plantCredo(
+				project,
+				'%{configs: [%{name: "default", files: %{included: ["lib/"], excluded: [~r"/lane1/lib/gen/"]}, strict: true}]}\n',
+			),
+		file: "lib/gen/g.ex",
+		expected: {
+			neutral: { rules: [], inconclusive: true },
+			ancestor: { rules: [], inconclusive: true },
+		},
+	},
+	{
+		// Row D20: round 2 copied the whole tree, so `threshold: 60.0` reached
+		// detekt as `60`, and a config detekt refuses for an Int ran and reported.
+		name: "detekt config holding a value detekt refuses",
+		available: () => toolAvailable("detekt"),
+		kind: "kotlin",
+		runner: detektRunner,
+		plant: (project) =>
+			plantDetekt(
+				project,
+				"complexity:\n  active: true\n  LongMethod:\n    active: true\n    threshold: 60.0\nstyle:\n  active: true\n  MagicNumber:\n    active: true\n    excludes: ['**/.claude/**']\n",
+			),
+		file: "src/A.kt",
+		// detekt's refusal is one tool-error diagnostic with no rule id.
+		expected: {
+			neutral: { status: "failed", rules: [""] },
+			ancestor: { status: "failed", rules: [""] },
+		},
+	},
+];
+
+describe.each(AS_IT_STANDS)(
+	"$name",
+	({ available, kind, runner, plant, file, expected, name }) => {
+		const control = path.join(ROOT, "as-it-stands", name, "ctrl/lane1");
+		const scratch = path.join(
+			ROOT,
+			"as-it-stands",
+			name,
+			".claude/worktrees/lane1",
+		);
+		const run = async (project: string) =>
+			summary(
+				await runner.run(
+					makeRunnerCtx(path.join(project, file), project, { kind }) as never,
+				),
+			);
+
+		describe.skipIf(!available())("tool available", () => {
+			it(
+				"answers under the ignored ancestor as in the control layout",
+				async () => {
+					plant(control);
+					plant(scratch);
+					const neutral = await run(control);
+					const ancestor = await run(scratch);
+					expect(neutral).toMatchObject(expected.neutral);
+					expect(ancestor).toMatchObject(expected.ancestor);
+					expect(ancestor.status).toBe(neutral.status);
+				},
+				REAL_RUN_TIMEOUT_MS,
+			);
+		});
+	},
+);
+
+describe.each(VARIANTS)(
+	"$name",
+	({
+		available,
+		kind,
+		runner,
+		plant,
+		file,
+		controlRules,
+		ignoredFiles,
+		name,
+	}) => {
+		const control = path.join(ROOT, "variants", name, "ctrl/lane1");
+		const scratch = path.join(
+			ROOT,
+			"variants",
+			name,
+			".claude/worktrees/lane1",
+		);
+		const run = async (project: string, target: string) =>
+			summary(
+				await runner.run(
+					makeRunnerCtx(path.join(project, target), project, { kind }) as never,
+				),
+			);
+
+		describe.skipIf(!available())("tool available", () => {
+			beforeAll(() => {
+				plant(control);
+				plant(scratch);
+			});
+
+			it(
+				"reports under the ignored ancestor what the control layout reports",
+				async () => {
+					const neutral = await run(control, file);
+					const ancestor = await run(scratch, file);
+					expect(neutral.rules).toEqual(controlRules);
+					expect(ancestor.rules).toEqual(controlRules);
+					expect(ancestor.inconclusive).toBe(false);
+				},
+				REAL_RUN_TIMEOUT_MS,
+			);
+
+			it(
+				"keeps what the project's own ignore names ignored, in both layouts",
+				async () => {
+					for (const target of ignoredFiles) {
+						expect((await run(control, target)).rules, target).toEqual([]);
+						expect((await run(scratch, target)).rules, target).toEqual([]);
+					}
+				},
+				REAL_RUN_TIMEOUT_MS,
+			);
+		});
+	},
+);
