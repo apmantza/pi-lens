@@ -557,6 +557,9 @@ export const realHarnessInclude = [
 // host. Sweep coverage for other members lives in this list; new entries must
 // carry a wall-clock budget assertion, not just slowness.
 export const wallClockBudgetInclude = [
+	// #5552: real tool_result/dispatcher LSP wire traffic for mtime-preserving
+	// shell writes; serialized with the other child-process witnesses.
+	"tests/index-5552-lsp-resync-wire.test.ts",
 	// #4257: the HOME ceiling witness uses a real child process to isolate the
 	// os.homedir boundary (flake-shape admission).
 	"tests/clients/analysis-root-writers.test.ts",
