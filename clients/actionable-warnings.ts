@@ -822,9 +822,9 @@ interface LspEnrichmentDeps {
  * own `deadlineAt` — a deadline-only wait with no ledger connection of its
  * own, the same primitive `bounded()` itself is built to replace when a
  * caller needs BOTH bounds. The still-running `bounded()` call is not
- * cancelled (nothing here can cancel already-started work); if it later
- * genuinely outlives `pullTimeoutMs`, it still records, correctly, on its own
- * clock.
+ * cancelled by that outer deadline; if it later genuinely outlives
+ * `pullTimeoutMs`, it still records, correctly, on its own clock, and the
+ * thunk's signal cancels the request then (#5550).
  */
 async function boundedLspCall<T>(
 	call: () => Promise<T>,
@@ -842,21 +842,21 @@ async function boundedLspCall<T>(
 	// exceedance would attribute the loop's spent budget to whichever call
 	// happened to be next.
 	if (remainingMs !== undefined && remainingMs <= 0) return undefined;
-	const inner = bounded(
-		call().then((value) => ({ value })),
-		{
-			// Always the FULL per-trip budget -- never clamped to the loop's own
-			// residual. The residual is enforced below, off the ledger.
-			ms: deps.pullTimeoutMs,
-			// Optional for the in-band caller; `bounded()` reads a missing signal
-			// as one that never aborts, so the deadline half stays live.
-			signal: deps.signal,
-			// From the deps, never a literal: the in-band and deferred loops must
-			// key separately (#2557 review F3).
-			hook: deps.site.hook,
-			label: deps.site.label,
-		},
-	);
+	// A thunk (#5550): the pull runs under the bound's own signal, so the
+	// per-trip lapse (or the turn's abort) cancels the request instead of only
+	// abandoning it.
+	const inner = bounded(() => call().then((value) => ({ value })), {
+		// Always the FULL per-trip budget -- never clamped to the loop's own
+		// residual. The residual is enforced below, off the ledger.
+		ms: deps.pullTimeoutMs,
+		// Optional for the in-band caller; `bounded()` reads a missing signal
+		// as one that never aborts, so the deadline half stays live.
+		signal: deps.signal,
+		// From the deps, never a literal: the in-band and deferred loops must
+		// key separately (#2557 review F3).
+		hook: deps.site.hook,
+		label: deps.site.label,
+	});
 	const boxed =
 		deps.deadlineAt !== undefined
 			? await withDeadline(inner, {

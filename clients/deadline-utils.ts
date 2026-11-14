@@ -13,6 +13,7 @@
 
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import type { LedgerHookKey } from "./hook-budgets.js";
+import { spawnAbortScope } from "./spawn-abort-scope.js";
 
 /**
  * Combine multiple abort signals into one that aborts when ANY of them does.
@@ -225,6 +226,24 @@ const BOUND_ABORTED: unique symbol = Symbol("pi-lens/bounded/aborted");
  */
 type BoundCause = "deadline" | "caller-abort" | "shutdown";
 
+/**
+ * What {@link bounded} awaits (#5550).
+ *
+ * - A thunk `(signal) => work` is RUN by `bounded`, inside
+ *   `spawnAbortScope.run(signal, ...)`, so every `safeSpawnAsync` and every
+ *   request that reads `getAmbientAbortSignal()` (`navRequest`: document
+ *   symbols, code actions) inherits `signal` with no threading, and `signal`
+ *   aborts when a bound fires: what reads it is cancelled, not only
+ *   abandoned. A request that never reads it (`touchFile`, `getDiagnostics`
+ *   and `openFile` today) is only abandoned, until the LSP request sender
+ *   (#5097) wires them.
+ * - An already-started promise is only abandoned (the pre-#5550 form). It is
+ *   still admitted for work that is a pure read or that must outlive its hook,
+ *   and the `work` column of `BOUNDED_CALL_SITES`
+ *   (`tests/config/hook-await-bounds.test.ts`) makes each such site say which.
+ */
+export type BoundedWork<T> = Promise<T> | ((signal: AbortSignal) => Promise<T>);
+
 /** Everything {@link bounded} needs. Both bounds are REQUIRED — see below. */
 export interface BoundedOptions {
 	/**
@@ -353,14 +372,30 @@ export interface BoundedOptions {
  * failed diagnostic pull is not a clean file). The caller decides what the
  * absence means; the ledger row is what makes it visible either way.
  *
- * The promise is not cancelled — nothing here can cancel work already
- * started. It is abandoned, with the abandonment recorded. Work that must not
- * outlive its hook needs the signal threaded INTO it as well (#2523 slice 2's
- * `TurnEndDeps`/`AgentEndDeps`/`SessionStartDeps` change); wrapping the await
- * bounds the HOOK, not the work.
+ * ## Cancelling the work (#5550)
+ *
+ * A promise is already running, so nothing here can cancel it: it is
+ * abandoned, with the abandonment recorded. Pass a thunk, `bounded((signal) =>
+ * work, opts)`, and `bounded` starts the work itself, inside `spawnAbortScope`,
+ * so every `safeSpawnAsync` and every request that reads
+ * `getAmbientAbortSignal()` under it inherits `signal`, and the bound's firing
+ * (deadline, shutdown or the caller's abort) aborts it. The scope reaches only
+ * what reads it: `touchFile`, `getDiagnostics` and `openFile` do not yet
+ * (#5097), so a thunk over them is handed the signal but cancels nothing. The
+ * thunk's signal is NOT aborted when the work settles in time. A site that
+ * keeps the promise form says why in the `work` column of
+ * `BOUNDED_CALL_SITES` (`pure-read`, `outlives:<owner>` or `migrate:#<n>`), so a
+ * new bound cannot leave its work running by omission.
+ *
+ * Inside the scope `getAmbientAbortSignal()` answers with the thunk's signal,
+ * not the turn's, so a bound whose own `signal` is some OTHER signal than the
+ * turn's would hide Esc from an LSP request the thunk starts. Every shipped
+ * thunk site passes the turn's signal (`ctx.signal`, `deps.signal`,
+ * `args.signal`), so none does; a site that cannot say the same keeps the
+ * promise form.
  */
 export async function bounded<T>(
-	promise: Promise<T>,
+	work: BoundedWork<T>,
 	options: BoundedOptions,
 ): Promise<T | undefined> {
 	const { signal, shutdownSignal, hook, label } = options;
@@ -372,14 +407,6 @@ export async function bounded<T>(
 	// `Number.isFinite`-before-`Math.max` gate the runtime-config readers use.
 	const ms = Number.isFinite(options.ms) ? Math.max(0, options.ms) : 0;
 	const startedAt = Date.now();
-
-	// Late rejection from work a bound has already abandoned must not surface
-	// as an unhandled rejection. Attached to the BOXED promise, which is what
-	// the race below actually subscribes to; the caller still sees a rejection
-	// that arrives inside the bounds, because `Promise.race` attaches its own
-	// handler to the same promise.
-	const boxed = promise.then((value) => ({ value }) as const);
-	void boxed.catch(() => {});
 
 	// ONE timer and ONE listener per source signal, all released in `finally`
 	// (#2530 review F2/F4).
@@ -400,13 +427,23 @@ export async function bounded<T>(
 	let onCallerAbort: (() => void) | undefined;
 	let onShutdownAbort: (() => void) | undefined;
 
+	// The thunk form's cancel half (#5550). `workController` is the signal the
+	// work receives AND the one `spawnAbortScope` carries into every spawn and
+	// request under it. It aborts when a bound fires, never when the work
+	// settles in time (row 1 of the state table: a thunk that detached
+	// background work keeps it).
+	const workController =
+		typeof work === "function" ? new AbortController() : undefined;
 	const abandoned = new Promise<typeof BOUND_ABORTED>((resolve) => {
 		// `abandonedError`'s precedence, unchanged: the caller's own signal
 		// first, then teardown, then the clock. A turn cancelled while the
 		// session also happens to be tearing down is still a cancel.
 		const fire = (reason: BoundCause) => {
 			cause ??= reason;
+			// The race below also reads `boxed`, which settles a tick after the
+			// work, so the abort rejection the cancel may cause cannot beat this.
 			resolve(BOUND_ABORTED);
+			workController?.abort();
 		};
 		// `signal?.` — a missing signal is treated as one that never aborts.
 		// The KEY is required (so a call that never mentions a signal does not
@@ -435,6 +472,25 @@ export async function bounded<T>(
 			});
 		}
 	});
+
+	// Started AFTER the bounds are armed, so a bound that has already elapsed
+	// hands the work an already-aborted signal (state table row 3b). An async
+	// arrow turns a synchronous throw from the thunk into a rejection
+	// at this await, where the promise form's caller-side throw surfaced too.
+	const promise: Promise<T> =
+		typeof work === "function" && workController
+			? spawnAbortScope.run(workController.signal, async () =>
+					work(workController.signal),
+				)
+			: (work as Promise<T>);
+
+	// Late rejection from work a bound has already abandoned must not surface
+	// as an unhandled rejection. Attached to the BOXED promise, which is what
+	// the race below actually subscribes to; the caller still sees a rejection
+	// that arrives inside the bounds, because `Promise.race` attaches its own
+	// handler to the same promise.
+	const boxed = promise.then((value) => ({ value }) as const);
+	void boxed.catch(() => {});
 
 	try {
 		// The value is boxed so a promise that legitimately resolves

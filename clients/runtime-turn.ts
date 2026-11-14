@@ -4437,17 +4437,17 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			entries: DeferredTestTarget[],
 			label: string,
 		): DeferredTestTarget[] => {
-			const bounded = boundDeferredTargets(
+			const cappedTargets = boundDeferredTargets(
 				entries,
 				TEST_RUNNER_MAX_PERSISTED_TARGETS,
 				isThisSession,
 			);
-			if (bounded.length !== entries.length) {
+			if (cappedTargets.length !== entries.length) {
 				dbg(
 					`turn_end: ${label} test target list held ${entries.length} entries, bounded to the newest ${TEST_RUNNER_MAX_PERSISTED_TARGETS} (oldest foreign-session rows dropped)`,
 				);
 			}
-			return bounded;
+			return cappedTargets;
 		};
 		const writeTestFindings = (
 			record: TestRunnerFindingsCache,
@@ -5586,12 +5586,13 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				// budget and signal; the pass's internal deadline (3s) is the
 				// tighter of the two.
 				reverify = await bounded(
-					runPersistentReverify({
-						report: persistedReport,
-						cwd,
-						lspService: reverifyLspService,
-						signal: getAmbientAbortSignal(),
-					}),
+					(signal) =>
+						runPersistentReverify({
+							report: persistedReport,
+							cwd,
+							lspService: reverifyLspService,
+							signal,
+						}),
 					{
 						ms: HOOK_WALL_BUDGET_MS.turn_end,
 						signal: getAmbientAbortSignal(),

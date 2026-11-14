@@ -13,6 +13,7 @@ import { CacheManager } from "../../clients/cache-manager.js";
 import { tryExpandRead } from "../../clients/read-expansion.js";
 import { lineContentHash } from "../../clients/read-guard.js";
 import { normalizeFilePath } from "../../clients/path-utils.js";
+import { getAmbientAbortSignal } from "../../clients/safe-spawn.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
@@ -240,6 +241,43 @@ describe("read-expansion LSP enrichment (#158)", () => {
 			expect(event?.symbol).toBe("runSynthesis");
 			expect(event?.metadata).toMatchObject({ lspSymbolTimeout: true });
 		} finally {
+			env.cleanup();
+		}
+	});
+});
+
+// Recurrence prevented (#5550, the deadline audit's `runtime-tool-call.ts:1171`
+// row): Esc during the symbol lookup released the read but left the
+// documentSymbol request pending with no signal, so the client stayed busy.
+// The request now runs under the bound's signal, which aborts when the
+// caller's does; the fake reads it the way the LSP request layer does. (The
+// inner 150 ms `withBudget` lapse is a different abandonment, owned by the LSP
+// request sender lane, #5097.)
+describe("read-expansion LSP enrichment cancels what it abandons (#5550)", () => {
+	it("aborts the documentSymbol request's signal when the caller's signal fires", async () => {
+		const env = setupTestEnvironment("pi-lens-enrich-cancel-");
+		try {
+			getWarmClientForFileMock.mockResolvedValue(warmClient);
+			const controller = new AbortController();
+			let seen: AbortSignal | undefined;
+			let releaseRequest!: () => void;
+			documentSymbolMock.mockImplementation(() => {
+				seen = getAmbientAbortSignal();
+				// Esc lands while the request is pending.
+				queueMicrotask(() => controller.abort());
+				return new Promise<never[]>((resolve) => {
+					releaseRequest = () => resolve([]);
+				});
+			});
+			const filePath = createTempFile(env.tmpDir, "src/cancel.ts", SOURCE);
+			const deps = makeDeps(env.tmpDir, filePath);
+			deps.ctx.signal = controller.signal;
+			await runHandlerExpectingNoThrow(() => handleToolCall(deps));
+			expect(seen).toBeDefined();
+			expect(seen?.aborted).toBe(true);
+			releaseRequest();
+		} finally {
+			documentSymbolMock.mockReset();
 			env.cleanup();
 		}
 	});
