@@ -10,7 +10,7 @@ its recoveries feed, and the inline blocker record those dispatches write. The b
 config states its expected verdict on its first line. The `TLA+ models` CI job
 (`node scripts/check-tla-models.mjs`) checks them all.
 
-Issue: #4137. Lane M5 of #3803.
+Issue: #4137. Lane M5 of #3803. The script-write credit: #5616.
 
 ## What the model covers
 
@@ -29,6 +29,11 @@ Issue: #4137. Lane M5 of #3803.
   - `blockedNamer`: call 1 names a path and is blocked, so it never runs and
     never gets a `tool_result`. Opaque calls 2 and 3 write the path, in call
     1's turn or the next.
+  - `script` (#5616): call 1 names and writes its path. Calls 2 and 3 are
+    scripts (`python3 fix.py`), each the only writer of a path it does not
+    name.
+  - `scriptFailedSibling` (#5616): call 2 is a script as above. Call 3 fails
+    and writes nothing, but its window still holds call 2's write.
 - **The store.** `Record` stores a baseline under the call's key. With
   `Retire`, it first retires every entry whose turn is over. A baseline under
   the same key is overwritten, and on a full store the oldest is dropped
@@ -38,8 +43,16 @@ Issue: #4137. Lane M5 of #3803.
 - **The recovery.** A call's window holds every path written since its
   baseline's owner recorded. A path the call names that changed in the window
   is dispatched with authorship. The rest of the window is opaque and is
-  dispatched without authorship (#3226). With no baseline, the named paths are
-  dispatched without authorship.
+  dispatched without authorship (#3226), except a path the call is credited
+  with (`Credit`, below). With no baseline, the named paths are dispatched
+  without authorship.
+- **The credit (#5616).** At `Take`, a successful call is credited with an
+  opaque path that was clean when its baseline's owner recorded (`dirtyAt`,
+  the baseline's dirty set) and that no dispatch recorded a write to since
+  (`observed`: `recordProjectChange` runs only for a claim that proceeds, and
+  `getFilesChangedSince` of the baseline's `projectSeq` reads it). A credited
+  path dispatches with authorship. `creditSeen` holds every credited version
+  another dispatch had already analysed.
 - **The dedupe.** A claim is skipped when this turn's latch holds the same
   bytes and that analysis satisfies the claim. With `Dedupe = "content"` (the
   pre-fix rule), any analysis satisfies any claim. With `"authority"` (the
@@ -70,6 +83,10 @@ Issue: #4137. Lane M5 of #3803.
     read.
   - `LatchClear` admits a concurrent session's turn start, which clears the
     dedupe's latch and nothing else (#3613).
+  - `Credit = "clean"` is the #5616 credit; `"none"` is the code before it,
+    where every opaque path dispatches without authorship. Every `expect: pass`
+    config is as built and sets `"clean"`; the configs of earlier designs set
+    `"none"`.
   - `ClearRule = "bytes"` is round 3's refusal; `"always"` the clear before it.
     The configs that model pre-fix or round-1 code carry `"always"`; the rule
     is inert in them, because their dedupe never lets an unauthored dispatch
@@ -96,6 +113,12 @@ Issue: #4137. Lane M5 of #3803.
   stat snapshot of the whole tree.
 - `RetiresOnlyAbandoned`: retirement never takes a call that can still get its
   result.
+- `ScriptWriteAttributed` (#5616): a finished, successful call that alone
+  writes a path it does not name has an authored analysis of it, unless a
+  counted loss took its baseline.
+- `CreditOnUnclaimedBytes` (#5616): no credit takes a version of a path that
+  another call's dispatch already analysed; those bytes are that call's
+  write, and pi-lens saw it.
 - `StaleRecordCleared`: the clear rule's other half. An authored record about
   older bytes does not outlive an unauthored analysis of the path's current
   bytes; the refusal covers the very bytes the verdict is about, nothing wider.
@@ -106,22 +129,26 @@ States are as TLC reported them with `-workers 1` (generated / distinct).
 
 | Config | Expect | States | What it proves |
 |---|---|---|---|
-| `CwdKeyedSlot` | violated `EveryWriteAttributed` | 122 / 105 | The pre-fix store. A later `Record` overwrites the earlier baseline, and that call finds nothing at `Take` (the S8 trace: `RECORD x3`, then a take that finds a baseline, then two that find none). |
+| `CwdKeyedSlot` | violated `EveryWriteAttributed` | 122 / 107 | The pre-fix store. A later `Record` overwrites the earlier baseline, and that call finds nothing at `Take` (the S8 trace: `RECORD x3`, then a take that finds a baseline, then two that find none). |
 | `CwdKeyedUncounted` | violated `SlotLossObservable` | 6 / 6 | The pre-fix observability: an overwrite left no record. |
-| `PerCallKeyed` | pass | 6142 / 3251 | The fix on S8. All three calls keep authorship and their blocker records, nothing is dropped, and stale entries are retired. |
-| `PerCallSecondaryTurn` | pass | 17766 / 8217 | VERIFY_4159 N1, fixed. A concurrent session's turn start may clear the latch at any time, so an opaque sibling's recovery of authored bytes runs; the clear rule keeps the authored record. |
-| `Round2SecondaryTurn` | violated `BlockerKept` | 2554 / 1504 | Round 2 under the same latch clear (the verifier's TC mutant as a config). The opaque sibling's run proceeds and its clean result clears the authored record. |
-| `PerCallContentDedupe` | violated `EveryWriteAttributed` | 1281 / 791 | Keying alone is not enough. The first call to take claims its siblings' paths as opaque, and the content dedupe then skips their authored dispatch of the same bytes. This is the keying-only run of the parallel-bash test: 1 of 3 authored. |
-| `PerCallNamedSibling` | pass | 1926 / 971 | The fix on REVIEW_4159 F2 P1 and P2. |
-| `PerCallFailedSibling` | pass | 2449 / 1171 | The fix on F2 P2e. Call 1 keeps its blocker record. |
-| `PerCallBlockedNamer` | pass | 752 / 374 | The fix on F1. Every later write is analysed, and the blocked entry is retired with its turn and counted. |
-| `Round1NamedSibling` | violated `NoDrop` | 1161 / 697 | Round 1's design (subtraction plus the content dedupe). Call 1 dispatches its path. Call 3 then writes it again, and the settled claim subtracts that write from call 3's recovery (P1). |
-| `Round1BlockedNamer` | violated `NoDrop` | 261 / 173 | Round 1 on F1. The blocked call's pending entry subtracts the path it names from a later opaque writer's recovery. |
+| `PerCallKeyed` | pass | 18952 / 11776 | The fix on S8. All three calls keep authorship and their blocker records, nothing is dropped, and stale entries are retired. |
+| `PerCallSecondaryTurn` | pass | 81453 / 39909 | VERIFY_4159 N1, fixed. A concurrent session's turn start may clear the latch at any time, so an opaque sibling's recovery of authored bytes runs; the clear rule keeps the authored record. |
+| `Round2SecondaryTurn` | violated `BlockerKept` | 3544 / 2507 | Round 2 under the same latch clear (the verifier's TC mutant as a config). The opaque sibling's run proceeds and its clean result clears the authored record. |
+| `PerCallContentDedupe` | violated `EveryWriteAttributed` | 1480 / 1084 | Keying alone is not enough. The first call to take claims its siblings' paths as opaque, and the content dedupe then skips their authored dispatch of the same bytes. This is the keying-only run of the parallel-bash test: 1 of 3 authored. |
+| `PerCallNamedSibling` | pass | 5926 / 3531 | The fix on REVIEW_4159 F2 P1 and P2. |
+| `PerCallFailedSibling` | pass | 6598 / 3908 | The fix on F2 P2e. Call 1 keeps its blocker record. |
+| `PerCallBlockedNamer` | pass | 1779 / 1055 | The fix on F1. Every later write is analysed, and the blocked entry is retired with its turn and counted. |
+| `Round1NamedSibling` | violated `NoDrop` | 1417 / 991 | Round 1's design (subtraction plus the content dedupe). Call 1 dispatches its path. Call 3 then writes it again, and the settled claim subtracts that write from call 3's recovery (P1). |
+| `Round1BlockedNamer` | violated `NoDrop` | 267 / 195 | Round 1 on F1. The blocked call's pending entry subtracts the path it names from a later opaque writer's recovery. |
 | `PerCallNoRetire` | violated `StaleRetired` | 41 / 39 | Without retirement, the blocked call's entry outlives its turn. |
-| `PerCallOverCap` | pass | 11644 / 6094 | More parallel calls than the cap. The oldest baseline is dropped and counted, and no write goes unanalysed without a counted loss. |
+| `PerCallOverCap` | pass | 36034 / 22849 | More parallel calls than the cap. The oldest baseline is dropped and counted, and no write goes unanalysed without a counted loss. |
 | `PerCallOverCapUncounted` | violated `SlotLossObservable` | 19 / 19 | A cap eviction without its ledger record is a silent loss. |
-| `SequentialSingle` | pass | 121 / 108 | Today's rows. Calls that never overlap share the one cwd slot without loss, under the pre-fix keying and dedupe. `PerCallKeyed`'s state space includes every sequential order. |
-| `SplitRootSlot` | violated `EveryCallFindsItsBaseline` | not measured here (no JVM on the authoring host; the `TLA+ models` CI job reports it) | The pre-fix root split with the per-call keying already in place. Each call records under its own key in one root and takes under the other, so every take misses and reports `no-pending-snapshot` for a command that did write. Nothing is overwritten or evicted, so the loss is uncounted: the evidence is the miss itself. |
+| `SequentialSingle` | pass | 166 / 148 | Today's rows. Calls that never overlap share the one cwd slot without loss, under the pre-fix keying and dedupe. `PerCallKeyed`'s state space includes every sequential order. |
+| `SplitRootSlot` | violated `EveryCallFindsItsBaseline` | 41 / 41 | The pre-fix root split with the per-call keying already in place. Each call records under its own key in one root and takes under the other, so every take misses and reports `no-pending-snapshot` for a command that did write. Nothing is overwritten or evicted, so the loss is uncounted: the evidence is the miss itself. |
+
+| `ScriptCredit` | pass | 18952 / 11776 | #5616 as built. Both scripts' writes get an authored analysis, and no credit takes bytes another call's dispatch already analysed. |
+| `ScriptNoCredit` | violated `ScriptWriteAttributed` | 81 / 73 | The code before #5616 on the same calls: a script's own write only ever dispatches without authorship (pi session 01a1db69, turn 81). |
+| `ScriptFailedSibling` | violated `ScriptWriteAttributed` | 1597 / 998 | The residual #5616 leaves for the maintainer. A failed sibling's recovery dispatches the script's write without authorship first; that dispatch is recorded, so the script's own call reads it as another writer and is not credited. Its blockers go out on the withheld line. |
 
 ## Counter-checks
 
@@ -138,6 +165,7 @@ Each knob has a config that flips when it is turned:
 - `Retire`: `PerCallBlockedNamer` to `PerCallNoRetire`.
 - `Observe`: `CwdKeyedSlot` to `CwdKeyedUncounted`.
 - The cap: `PerCallKeyed` to `PerCallOverCap`.
+- `Credit`: `ScriptCredit` to `ScriptNoCredit`.
 
 The spec mutants run for round 2 each red the invariant named here:
 
@@ -161,13 +189,37 @@ The spec mutants run for round 3:
   `Round2SecondaryTurn` to pass: a model whose dedupe cannot lose its latch
   cannot see N1.
 
+The spec mutants run for #5616:
+
+- Dropping the observed-writer clause (credit whatever was clean at the
+  baseline) reds `CreditOnUnclaimedBytes` on `ScriptCredit`, `PerCallKeyed`
+  and `PerCallNamedSibling`.
+- Dropping the dirty-before clause reds nothing: in the model a path is
+  written only by calls, and a call's window holds only writes after its
+  baseline, so a path dirty at the baseline that is still in the window was
+  rewritten by an observed or a still-running call. The clause guards a
+  user's bytes, which the model has no actor for; the handler test
+  `names the file and count in the tool result and leaves the commit gate
+  open` pins it.
+- Recording only named dispatches as observed (filtering the recovered
+  `opaque-script` receipts out of the window) turns `ScriptFailedSibling` to
+  pass and reds `CreditOnUnclaimedBytes` on `ScriptCredit`, `PerCallKeyed` and
+  `PerCallNamedSibling`: it credits bytes a sibling's recovery had already
+  analysed without authorship. That is the trade the residual's fix would
+  make.
+
 ## What the model cannot see
 
 - Time and the clock. Windows are ordered by record, write, and take steps, not
   by `startedAt` and mtime (`OPAQUE_MTIME_TOLERANCE_MS`).
 - Window attribution. A call that names a path a sibling wrote inside its window
   dispatches that path with authorship. Master behaves the same way; the model
-  allows this and checks no invariant against it.
+  allows this and checks no invariant against it. The #5616 credit widens it:
+  a call is credited with a still-running sibling's write in its window, since
+  nothing recorded that write yet. Both are the agent's calls, and the
+  blockers are delivered once; only the call that carries them differs.
+- A writer outside pi (an editor, a watcher). The code cannot see one either,
+  and credits its change when it lands in a call's window on a clean file.
 - Concurrency inside a dispatch. Each call's dispatch is one atomic step, so the
   in-flight registry (one run per hash and authority) and an unauthored run that
   settles after an authored one are not modelled. The write-order token
