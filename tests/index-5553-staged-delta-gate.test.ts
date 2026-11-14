@@ -611,6 +611,11 @@ describe("#5553 a staged set the gate cannot read refuses, once", () => {
 			const decision = await decide(stagedProject("bound"), undefined, 1);
 			expect(decision).toMatchObject({ block: true, unknown: true });
 			expect(decision.reason).toContain("staged_delta_lane_incomplete");
+			// The read that gave no answer is recorded once, not left silent.
+			const group = getDegradationSummary().find(
+				(g) => g.kind === "staged-delta-degraded",
+			);
+			expect(group?.count).toBe(1);
 		});
 
 		it(
