@@ -66,7 +66,6 @@ import {
 import { probeToolAsync } from "../../../tool-probe.js";
 import { compareOrdinal } from "../../../string-utils.js";
 import {
-	getRubocopCommand,
 	getToolCommandSpec,
 	shouldAutoInstallTool,
 } from "../../../tool-policy.js";
@@ -2113,19 +2112,20 @@ export async function resolveInstalledToolCommand(
 }
 
 /**
- * The command that runs rubocop in `cwd` (#5410): the bundler form
- * (`bundle exec rubocop`) when the Gemfile names rubocop and the registry's
- * `bundle` ladder answers, else the plain `rubocop` ladder, so a Gemfile on a
- * host without bundler still reaches a working rubocop. One memoized verdict
- * per binary; a caller reads why it got `null` from `toolBinaryVerdict`.
+ * The command that runs rubocop in `cwd` (#5410). `form` is the project's
+ * choice (`getRubocopCommand`): the bundler form (`bundle exec rubocop`) is
+ * used when the registry's `bundle` ladder answers, else the plain `rubocop`
+ * ladder, so a Gemfile on a host without bundler still reaches a working
+ * rubocop. One memoized verdict per binary; a caller reads why it got `null`
+ * from `toolBinaryVerdict`.
  */
 export async function resolveRubocopCommand(
+	form: { cmd: string; args: string[] },
 	cwd: string,
 ): Promise<{ cmd: string; args: string[] } | null> {
-	const bundler = getRubocopCommand(cwd);
-	if (bundler.cmd === "bundle") {
+	if (form.cmd === "bundle") {
 		const bundle = await resolveToolCommandWithInstallFallback(cwd, "bundle");
-		if (bundle) return { cmd: bundle, args: bundler.args };
+		if (bundle) return { cmd: bundle, args: form.args };
 	}
 	const cmd = await resolveToolCommandWithInstallFallback(cwd, "rubocop");
 	return cmd ? { cmd, args: [] } : null;

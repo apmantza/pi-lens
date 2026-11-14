@@ -425,7 +425,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/utils/availability-policy.ts": 4,
 		"clients/dispatch/runners/utils/candidate-probe.ts": 1,
 		"clients/dispatch/runners/utils/lazy-installer.ts": 3,
-		"clients/dispatch/runners/utils/runner-helpers.ts": 8,
+		"clients/dispatch/runners/utils/runner-helpers.ts": 6,
 		"clients/dispatch/runners/utils/spawn-outcome.ts": 2,
 		"clients/dispatch/runners/vale.ts": 1,
 		"clients/dispatch/runners/zig-check.ts": 1,
@@ -465,7 +465,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lsp/client-registry.ts": 4,
 		"clients/lsp/client.ts": 13,
 		"clients/lsp/index.ts": 24,
-		"clients/lsp/jvm-runtime.ts": 1,
 		"clients/lsp/launch.ts": 1,
 		"clients/lsp/server.ts": 13,
 		"clients/mcp/ipc.ts": 8,
@@ -1902,7 +1901,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/utils/availability-policy.ts": 5,
 		"clients/dispatch/runners/utils/candidate-probe.ts": 1,
 		"clients/dispatch/runners/utils/lazy-installer.ts": 3,
-		"clients/dispatch/runners/utils/runner-helpers.ts": 7,
+		// 7 -> 5 (#5410): the rubocop bundler form and its install-fallback pair
+		// left the file.
+		"clients/dispatch/runners/utils/runner-helpers.ts": 5,
 		// 9 -> 10 (#4130 r2): `processCutShort` reads the exit status once.
 		"clients/dispatch/runners/utils/spawn-outcome.ts": 10,
 		// 19 -> 20 (#4130 r2): `faultIfCutShort` builds the one partial-findings `failed` result.
@@ -1942,7 +1943,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lsp/client.ts": 34,
 		"clients/lsp/edits.ts": 1,
 		"clients/lsp/index.ts": 4,
-		"clients/lsp/jvm-runtime.ts": 1,
 		"clients/lsp/launch.ts": 1,
 		"clients/lsp/server.ts": 4,
 		"clients/mcp/analyze.ts": 9,

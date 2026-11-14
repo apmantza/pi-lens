@@ -139,6 +139,7 @@ import {
 	getPreferredAutofixTools,
 	hasKtfmtConfig,
 	hasKtlintConfig,
+	getRubocopCommand,
 	markdownlintConfigArgs,
 	optionSafeTargetArg,
 } from "./tool-policy.js";
@@ -729,7 +730,7 @@ async function tryRubocopFix(
 	cwd: string,
 	writeHold?: FileMutationHold,
 ): Promise<number> {
-	const resolved = await resolveRubocopCommand(cwd);
+	const resolved = await resolveRubocopCommand(getRubocopCommand(cwd), cwd);
 	if (!resolved) return 0;
 	if (writeHold) await writeHold.acquire();
 

@@ -20,6 +20,7 @@ import { resolveRunnerCwd } from "../../tool-cwd.js";
 import {
 	getAutofixCapability,
 	getLinterPolicyForCwd,
+	getRubocopCommand,
 } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -115,7 +116,7 @@ const rubocopRunner: RunnerDefinition = {
 		if (policy && !policy.preferredRunners.includes("rubocop")) {
 			return skipped("not-preferred");
 		}
-		const resolved = await resolveRubocopCommand(cwd);
+		const resolved = await resolveRubocopCommand(getRubocopCommand(cwd), cwd);
 		if (!resolved) return toolAbsentSkip(cwd, { id: "rubocop" });
 		const { cmd, args } = resolved;
 
