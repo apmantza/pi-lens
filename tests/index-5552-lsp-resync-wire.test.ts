@@ -39,6 +39,7 @@ function layout(name: string) {
 	const proj = path.join(root, "proj");
 	const stage = path.join(root, "stage");
 	const target = path.join(proj, "src", "a.ts");
+	fs.rmSync(root, { recursive: true, force: true });
 	fs.mkdirSync(path.dirname(target), { recursive: true });
 	fs.mkdirSync(stage, { recursive: true });
 	fs.writeFileSync(path.join(proj, "package.json"), "{}\n");
