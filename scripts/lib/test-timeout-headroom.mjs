@@ -196,18 +196,16 @@ function timeoutExpressionOf(argNodes) {
 }
 
 /**
- * The options object a runner reads for a budget, or null when the argument
- * cannot carry one. An object with neither a `timeout:` member nor a spread
- * declares no budget, so the caller falls through to the suite and file chain;
- * anything else is handed to `foldMs`, whose object arm owns the read.
+ * The options object a budget slot holds, or null when the slot holds something
+ * else (the handler, a number, a name). Whether that object declares a budget is
+ * `foldObjectTimeout`'s read alone: an object with no reachable `timeout:` pair
+ * folds to nothing, and the test is then reported unresolved against the file
+ * floor rather than quietly taking a default its declaration never named. The
+ * pair-and-spread test this function used to carry decided nothing at either
+ * call site, so the read lives in one place (r2 F7).
  */
 function objectTimeout(node) {
 	if (!node || node.kind() !== "object") return null;
-	if (
-		timeoutPair(node) === null &&
-		!node.children().some((c) => c.kind() === "spread_element")
-	)
-		return null;
 	return { node };
 }
 

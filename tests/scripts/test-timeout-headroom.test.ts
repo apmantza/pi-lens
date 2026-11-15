@@ -17,8 +17,11 @@ import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runCli } from "../../scripts/check-test-timeout-headroom.mjs";
 import {
+	assessReports,
 	baselineEntries,
 	DEFAULT_TEST_TIMEOUT_MS,
+	fileDefaultMs,
+	fileFloorMs,
 	indexTestFile,
 	loadBaseline,
 	parseTestReport,
@@ -511,6 +514,209 @@ describe("suite budget written last", () => {
 			"1 tests read, 0 over 60% (0 known, 0 new)",
 		);
 		expect(lines.filter((line) => line.includes("4000 ms"))).toEqual([]);
+	});
+
+	it("judges an options bag with no budget against the file floor", () => {
+		const file = "tests/named-options/retry-bag.test.ts";
+		source(
+			file,
+			`import { it, vi } from "vitest";
+
+vi.setConfig({ testTimeout: 7_000 });
+
+const RETRY = { retry: 2 };
+
+it("runs on the chain beside a named retry bag", RETRY, async () => {});
+it("runs on the chain beside a trailing retry bag", async () => {}, RETRY);
+`,
+		);
+		const reportFile = report("reports/retry-bag.json", file, [
+			{
+				title: "runs on the chain beside a named retry bag",
+				duration: 4_900,
+			},
+			{
+				title: "runs on the chain beside a trailing retry bag",
+				duration: 4_900,
+			},
+		]);
+		const { lines } = run([
+			"--report",
+			reportFile,
+			"--baseline",
+			at("none.json"),
+		]);
+		// The slot holds an object, so it is the budget expression, and that object
+		// says nothing about a timeout: the cap is unresolved and the row is judged
+		// against this file's floor (its own 7000 ms config), counted as unmeasured.
+		// The alternative -- quietly adopting the file default as the cap -- would
+		// report a budget the declaration never named (r2 F7).
+		expect(summary(lines)).toContain(
+			"2 tests read, 2 over 60% (0 known, 2 new), 2 with an unresolved cap (timeout-unfoldable 2)",
+		);
+		expect(lines.join("\n")).toContain(
+			"4900 ms is 70% of the cap unresolved (timeout-unfoldable, floor 7000 ms)",
+		);
+	});
+
+	it("leaves a budget that could only come from a spread unresolved", () => {
+		const file = "tests/named-options/spread-only.test.ts";
+		source(
+			file,
+			`import { it, vi } from "vitest";
+
+vi.setConfig({ testTimeout: 7_000 });
+
+const SPREAD = { ...laneOptions() };
+
+it("runs under options this file cannot read", SPREAD, async () => {});
+
+function laneOptions() {
+	return { timeout: 120_000 };
+}
+`,
+		);
+		const reportFile = report("reports/spread-only.json", file, [
+			{ title: "runs under options this file cannot read", duration: 4_900 },
+		]);
+		const { lines } = run([
+			"--report",
+			reportFile,
+			"--baseline",
+			at("none.json"),
+		]);
+		// The pair lives behind the spread, so the budget is whatever `laneOptions`
+		// returns. This is the other half of the object rule: a spread member is
+		// where a budget can hide, so the file's own config is not the cap either --
+		// it is only the floor the unresolved row is judged against.
+		expect(summary(lines)).toContain(
+			"1 tests read, 1 over 60% (0 known, 1 new), 1 with an unresolved cap (timeout-unfoldable 1)",
+		);
+	});
+
+	it("reads the pair of an object whose spread comes first", () => {
+		const file = "tests/named-options/spread-before.test.ts";
+		source(
+			file,
+			`import { it } from "vitest";
+
+const LEAD = { ...laneOptions(), timeout: 20_000 };
+
+it("runs under options whose spread comes first", LEAD, async () => {});
+
+function laneOptions() {
+	return { retries: 1 };
+}
+`,
+		);
+		const reportFile = report("reports/spread-before.json", file, [
+			{
+				title: "runs under options whose spread comes first",
+				duration: 13_000,
+			},
+		]);
+		const { lines } = run([
+			"--report",
+			reportFile,
+			"--baseline",
+			at("none.json"),
+		]);
+		// A spread before the pair cannot overwrite it, so the pair is the cap. A
+		// rule that poisoned the object on any spread would lose this row (r2 F7,
+		// mutant L3) and report a 20 s test as unmeasured.
+		expect(summary(lines)).toContain(
+			"1 tests read, 1 over 60% (0 known, 1 new), 0 with an unresolved cap",
+		);
+		expect(lines.join("\n")).toContain("13000 ms is 65% of the 20000 ms cap");
+	});
+
+	it("leaves the file default unresolved when two module-scope configs disagree", () => {
+		const file = "tests/setconfig/conflicting-config.test.ts";
+		source(
+			file,
+			`import { it, vi } from "vitest";
+
+vi.setConfig({ testTimeout: 9_000 });
+vi.setConfig({ testTimeout: 4_000 });
+
+it("ran under whichever config took effect", async () => {});
+`,
+		);
+		const table = indexTestFile(at(file), { scale: 1 });
+		// Vitest applies the last call, but the fold reads the file, not the runner,
+		// and a file that sets two different budgets has no single default. Taking
+		// the first would judge every test in the file against 9000 ms while the
+		// runner killed it at 4000 (r2 F7, mutant L7).
+		expect(fileDefaultMs(table)).toEqual({
+			ms: undefined,
+			reason: "file-timeout-unresolved",
+		});
+		expect(fileFloorMs(table)).toEqual({
+			ms: undefined,
+			reason: "file-timeout-unresolved",
+		});
+	});
+
+	it("leaves the floor unresolved when the file default is unprovable", () => {
+		const file = "tests/setconfig-nested/hook-config-explicit.test.ts";
+		source(
+			file,
+			`import { beforeEach, it, vi } from "vitest";
+
+beforeEach(() => {
+	vi.setConfig({ testTimeout: 90_000 });
+});
+
+it("names its own budget", { timeout: 30_000 }, async () => {});
+`,
+		);
+		const table = indexTestFile(at(file), { scale: 1 });
+		// Every declaration here overrides, so the narrowest declared cap would
+		// otherwise become the floor -- but the file's own default is unknowable, and
+		// a floor this narrow would report a test that had 90 s as a comfortable
+		// pass (r2 F7, mutant L8).
+		expect(fileFloorMs(table)).toEqual({
+			ms: undefined,
+			reason: "file-timeout-nested-setConfig",
+		});
+	});
+
+	it("refuses a ratio outside (0, 1) before judging any row", () => {
+		// The CLI checks `--ratio` on its own arm, so this guard is the one every
+		// other caller gets: a ratio of 0 flags every test and one of 1 flags none.
+		expect(() =>
+			assessReports({ reportValues: [], root: dir, ratio: 0 }),
+		).toThrow(/fraction in \(0, 1\): 0/);
+		expect(() =>
+			assessReports({ reportValues: [], root: dir, ratio: 1 }),
+		).toThrow(/fraction in \(0, 1\): 1/);
+	});
+
+	it("reads scale 1 from a lane env scale of zero or garbage", () => {
+		const previous = process.env.PI_LENS_TEST_TIMEOUT_SCALE;
+		const reportFile = report(
+			"reports/env-scale.json",
+			"tests/default/no-declaration.test.ts",
+			[{ title: "has no declared budget", duration: 4_000 }],
+		);
+		try {
+			for (const declared of ["0", "-2", "not-a-number"]) {
+				process.env.PI_LENS_TEST_TIMEOUT_SCALE = declared;
+				const { lines } = run([
+					"--report",
+					reportFile,
+					"--baseline",
+					at("none.json"),
+				]);
+				// A zero or unreadable multiplier must not fold every cap to zero, and
+				// the summary says which multiplier it used (r2 F7, mutant C4: the
+				// positivity arm of the env parse).
+				expect(summary(lines)).toContain(", scale 1");
+			}
+		} finally {
+			if (previous === undefined) delete process.env.PI_LENS_TEST_TIMEOUT_SCALE;
+			else process.env.PI_LENS_TEST_TIMEOUT_SCALE = previous;
+		}
 	});
 
 	it("reads the budget past a comment standing in a test call's argument slot", () => {
