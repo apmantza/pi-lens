@@ -477,7 +477,8 @@ const WRITE_SITES: Record<string, SiteRow> = {
 		exports: ["writeGzipStageFile", "reapStageFile"],
 	},
 	"clients/installer/index.ts": {
-		sites: 63,
+		// 64 since #5624: the zip branch moves an opted-in tool's bundled DLLs (bundleArchiveDlls) beside its exe.
+		sites: 64,
 		cls: "install",
 		why: "tool installs, their stamps and their locks",
 	},
