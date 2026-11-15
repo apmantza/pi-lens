@@ -101,7 +101,8 @@ mis = "mis"
 # (clients/file-kinds.ts, clients/formatters.ts), not a truncation of "end".
 edn = "edn"
 # HashiCorp brand abbreviation inside camelCase identifiers like
-# `hashiCorpReleaseProduct` (clients/installer/index.ts, tests).
+# `deriveHashiCorpReleaseAsset`, kept in frozen fixtures under tests/fixtures/
+# (the live installer code was renamed in #5643).
 hashi = "hashi"
 # Valid English spelling, already allowlisted for typos-lsp's bundled
 # default (rules/typos/_typos.toml, #967) — repeated here so the same
