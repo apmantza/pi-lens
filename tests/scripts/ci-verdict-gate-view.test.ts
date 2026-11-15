@@ -110,6 +110,24 @@ describe("ci-verdict gate view (#5629)", () => {
 		expect(result.out).not.toContain("every gating check concluded success");
 	});
 
+	// Control (green on the base too): the issue's own acceptance fixture, a
+	// head whose check-runs are the two non-required rows. The absent-required
+	// branches already answered it; this pins them and the re-arm advice a
+	// bot-authored PR with no ci.yml run gets.
+	it("stays pending, naming every required check and the close/reopen advice, when the head holds only CodeRabbit and SonarCloud", async () => {
+		const nonRequired = CHECK_RUNS.check_runs.filter(
+			(row: { name: string }) => row.name === "CodeRabbit",
+		);
+		const result = await verdictFor("5623", {
+			rollup: ROLLUP,
+			checkRuns: { total_count: nonRequired.length, check_runs: nonRequired },
+		});
+		expect(result.code).toBe(EXIT_PENDING);
+		for (const name of REQUIRED) expect(result.out).toContain(name);
+		expect(result.out).toContain("required checks are absent");
+		expect(result.out).toContain("close/reopen to re-arm ci.yml");
+	});
+
 	it("stays green when the PR rollup carries a concluded success for every required name", async () => {
 		const result = await verdictFor("5623", { rollup: allRequiredGreen() });
 		expect(result.code).toBe(EXIT_SUCCESS);
