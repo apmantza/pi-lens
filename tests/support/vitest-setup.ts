@@ -516,15 +516,26 @@ installRealSpawnObserver(
 // after the test file's own hooks, so a child the file started in its own
 // `afterAll` is already in the ledger when this reads it.
 //
-// A file whose OWN code started a real child and that holds no
+// A file whose call chain started a real child and that holds no
 // `real-process-spawn` admission fails HERE, in its own run: that is the
 // fail-closed arm #5100 asks for, and it does not care which name the spawn was
-// spelled under. Only a HARNESS route is charged — production code that reaches
-// `child_process` on its own account (a formatter probe, a git call, the memory
-// sampler's `getconf`) is what the code under test does, and the census has
-// never made its caller a real-spawn member: in a 189-file stratified sample,
-// 39 of the 57 files that started a child were production-route callers, and
-// charging them would serialize most of the suite.
+// spelled under. The CHAIN is charged, not the frame nearest the syscall: a file
+// that reaches `child_process` through `clients/` — the #5084 shape, a tool call
+// that ends in the real ast-grep CLI — owns that child's contention just the
+// same. What stays uncharged is a child nobody asked for, with no `tests/` frame
+// anywhere in its chain (a module-level timer, a watcher, vitest's own pool):
+// charging one blames whichever file happened to be scheduled, which is how an
+// instrument becomes the flake it hunts.
+//
+// The measured shape, across the 274 files the static census names or that reach
+// it: 242 started at least one real child and 233 took a harness charge; the
+// name census lists 212 of them. Four took a charge with no row in either
+// admission source, and all four are spawners a name list cannot see — the
+// vulture capability probe in clients/dead-code-client.test.ts, the real bash
+// tool in clients/runtime-tool-result.test.ts, and two language-server children
+// reached through `spawnClient` and `launchLSP` — so each now holds an observed
+// row. Both admission arms are pinned in
+// `tests/support/real-spawn-observer.test.ts`.
 //
 // The static census stays the deterministic floor the baseline is derived from:
 // a run-time count is not derivable (a skipped case, a platform branch, or a
