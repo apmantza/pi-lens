@@ -82,6 +82,10 @@
 		// member and must remain visible to Knip as a direct test entry.
 		"tests/support/fake-lsp-server.test.ts",
 		"tests/support/pi-mock.test.ts",
+		// #5100: the run-time real-spawn gate's own test is a serialized
+		// wall-clock lane member (it drives a child Vitest run over its
+		// fixtures), so the lane coverage gate (#2837) requires it as an entry.
+		"tests/support/real-spawn-observer.test.ts",
 		"tests/scripts/*.test.ts"
 		// tools/*.ts and vitest's setupFiles are NOT listed here: both are
 		// already reached without help — tools/*.ts via index.ts's and
