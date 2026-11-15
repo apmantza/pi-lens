@@ -2262,7 +2262,7 @@ describe("parallel bash calls (#4137)", () => {
 	// #5616 review F6 (CodeRabbit): another tool's write that pi-lens records
 	// while the recovery waits on `git status` is another observed writer. The
 	// set was read before that await, so the bash call was credited with it.
-	it("does not credit a file another write recorded during the git status read", async () => {
+	it("does not credit a file another write recorded after the git status read", async () => {
 		const runtime = newRuntime("late-observed-writer");
 		(await pipelineMock()).mockClear();
 		await runHandlerExpectingNoThrow(() =>
@@ -2272,16 +2272,39 @@ describe("parallel bash calls (#4137)", () => {
 		const actual = await vi.importActual<
 			typeof import("../../clients/opaque-mutation-scan.js")
 		>("../../clients/opaque-mutation-scan.js");
+		// The write lands at the scan's own stat of the file, after the git
+		// status read, so an observed-writer read taken before that await
+		// (at the call site, or at the top of the scan) misses it.
+		const target = path.join(repoDir, "par-a.ts");
+		const realStat = fs.promises.stat.bind(fs.promises);
+		const stat = vi.spyOn(fs.promises, "stat");
+		let recordedAtStat = false;
 		vi.mocked(recoverOpaqueChangesViaGit).mockImplementationOnce(
 			async (root, startedAt, options) => {
-				runtime.recordProjectMutation({
-					filePath: path.join(repoDir, "par-a.ts"),
-					source: "agent-write",
+				stat.mockImplementation(async (file, opts) => {
+					if (String(file) === target) {
+						stat.mockRestore();
+						recordedAtStat = true;
+						runtime.recordProjectMutation({
+							filePath: target,
+							source: "agent-write",
+						});
+					}
+					return realStat(file, opts);
 				});
-				return actual.recoverOpaqueChangesViaGit(root, startedAt, options);
+				try {
+					return await actual.recoverOpaqueChangesViaGit(
+						root,
+						startedAt,
+						options,
+					);
+				} finally {
+					stat.mockRestore();
+				}
 			},
 		);
 		await handleToolResult(resultDeps(runtime, opaqueCommand(), "opaque"));
+		expect(recordedAtStat).toBe(true);
 		expect(await dispatchLog()).toEqual([["par-a.ts", false]]);
 	});
 
