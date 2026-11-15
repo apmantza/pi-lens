@@ -47,7 +47,6 @@ import { resolveLanguageRootForFile } from "../language-profile.js";
 import { classifyObservedRunner } from "./collect-later-tier.js";
 import {
 	isPreEditSeedRunner,
-	PRE_EDIT_SEED_CONTENT_RUNNER_IDS,
 	type PreEditBytes,
 	preEditSeedFactKey,
 	seedFromCapture,
@@ -73,6 +72,7 @@ export type { DispatchLatencyReport, RunnerLatency };
 // Re-export latency tracking types and functions
 export { clearLatencyReports, formatLatencyReport, getLatencyReports };
 
+import { randomBytes } from "node:crypto";
 import * as nodeFs from "node:fs";
 import * as nodePath from "node:path";
 import { fileURLToPath } from "node:url";
@@ -3475,7 +3475,9 @@ export type PreEditCaptureSkip =
 	| "no-linter"
 	| "unreadable"
 	/** #5616: `before` found no earlier copy (a file the write created). */
-	| "absent-before";
+	| "absent-before"
+	/** #5616: the earlier bytes could not be written beside the file. */
+	| "copy-unwritable";
 
 /** #4483: what one pre-edit capture did, for the `tool_call` record. */
 export type PreEditCaptureOutcome =
@@ -3516,9 +3518,10 @@ export type PreEditCaptureOutcome =
  *
  * #5616: `before` supplies the bytes when the write has already happened (a
  * script write credited at `tool_result`, whose file was clean, so its HEAD
- * copy is what it held). Only the lanes that read the content fact run then
- * (`PRE_EDIT_SEED_CONTENT_RUNNER_IDS`), and the disk is not compared, as it
- * holds the write.
+ * copy is what it held). They are written beside the file under a
+ * `pi-lens-seed-` name for the one run, as the commit gate writes a staged
+ * blob, so a linter that reads the disk reads them under the project's
+ * config; the file itself holds the write.
  */
 export async function capturePreEditLinterFindings(
 	filePath: string,
@@ -3558,13 +3561,16 @@ export async function capturePreEditLinterFindings(
 		return { outcome: "skipped", reason: "capacity" };
 	}
 	// The capture runs under its own 1500 ms bound, so a runner the observed
-	// tier has moved to collect-later stays out of it. #5616: bytes that are
-	// not on disk reach only the lanes that read the content fact.
+	// tier has moved to collect-later stays out of it.
 	const admit = (id: string): boolean =>
-		classifyObservedRunner(projectRoot, id) === "inline" &&
-		(before === undefined || PRE_EDIT_SEED_CONTENT_RUNNER_IDS.has(id));
+		classifyObservedRunner(projectRoot, id) === "inline";
 	let run: SeedLaneRun;
+	let copy: string | undefined;
 	if (before) {
+		const beside = nodePath.join(
+			nodePath.dirname(filePath),
+			`pi-lens-seed-${randomBytes(4).toString("hex")}.${nodePath.basename(filePath)}`,
+		);
 		const lanes = selectSeedLanes(
 			filePath,
 			dispatchCwd,
@@ -3574,6 +3580,7 @@ export async function capturePreEditLinterFindings(
 			spanless,
 			preEditCaptureFacts,
 			admit,
+			beside,
 		);
 		if ("skip" in lanes) return { outcome: "skipped", reason: lanes.skip };
 		const earlier = await before(signal);
@@ -3581,6 +3588,13 @@ export async function capturePreEditLinterFindings(
 			return { outcome: "skipped", reason: "absent-before" };
 		if (earlier === "unreadable")
 			return { outcome: "skipped", reason: "unreadable" };
+		try {
+			nodeFs.writeFileSync(beside, earlier.content, { flag: "wx" });
+		} catch {
+			// none: the skip reason is the record; recordPreEditCapture logs it.
+			return { outcome: "skipped", reason: "copy-unwritable" };
+		}
+		copy = beside;
 		run = {
 			...lanes,
 			before: Buffer.from(earlier.content, "utf8"),
@@ -3617,18 +3631,15 @@ export async function capturePreEditLinterFindings(
 			return { outcome: "discarded", reason: "session-replaced" };
 		if (dispatched())
 			return { outcome: "discarded", reason: "already-dispatched" };
-		// A `before` capture's file already holds the write, so only a disk
-		// read is compared.
-		if (!before) {
-			let now: Buffer | undefined;
-			try {
-				now = nodeFs.readFileSync(ctx.filePath);
-			} catch {
-				now = undefined;
-			}
-			if (!now?.equals(run.before))
-				return { outcome: "discarded", reason: "bytes-changed" };
+		// The bytes the lanes read, still there (a `before` run read its copy).
+		let now: Buffer | undefined;
+		try {
+			now = nodeFs.readFileSync(ctx.filePath);
+		} catch {
+			now = undefined;
 		}
+		if (!now?.equals(run.before))
+			return { outcome: "discarded", reason: "bytes-changed" };
 		const seed = seedFromCapture(result.blockers, content, spanless);
 		sessionFacts.setBoundedSessionFact(seedKey, seed);
 		return {
@@ -3638,6 +3649,7 @@ export async function capturePreEditLinterFindings(
 		};
 	} finally {
 		preEditCapturesInFlight.delete(keyPath);
+		if (copy) nodeFs.rmSync(copy, { force: true });
 	}
 }
 

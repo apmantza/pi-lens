@@ -274,6 +274,10 @@ async function creditedCounts(repo: string): Promise<number[]> {
  * `[result, runners]`. A credited script write's seed is captured from the
  * file's HEAD copy, which only the lanes that read the content fact can see.
  */
+/** #5616 r3: biome's `noAssignInExpressions` blocks on L3; no bundled rule twins it. */
+const ASSIGN_IN_CONDITION =
+	"export function f(a: number): number {\n\tlet b = 0;\n\tif ((b = a)) return b;\n\treturn 0;\n}\n";
+
 async function preEditCaptureRows(repo: string): Promise<string[][]> {
 	await flushLatencyLog();
 	const read = readNdjsonRows(getLatencyLogPath());
@@ -1223,7 +1227,68 @@ describe("#5616: a script write the call is credited with", () => {
 			expect(seeds.map(([result]) => result)).toEqual(Array(9).fill("seeded"));
 			expect(
 				[...new Set(seeds.flatMap(([, runners]) => runners.split(",")))].sort(),
-			).toEqual(["ast-grep-napi", "tree-sitter"]);
+			).toEqual(expect.arrayContaining(["ast-grep-napi", "tree-sitter"]));
+			expect(handle.errors).toEqual([]);
+			await handle.dispose();
+		},
+	);
+
+	// #5616 review r2 N1, and #5553's "commits an unrelated change to a file
+	// whose only blocker is in HEAD" after the merge: a linter that reads the
+	// disk is seeded from the HEAD copy too, written beside the file for the
+	// run. Recurrence prevented: only the content lanes were seeded, so in a
+	// biome project each reformatted file stopped on biome's legacy finding,
+	// and the recorded blocker shut the commit gate on HEAD's debt.
+	it(
+		"seeds a disk linter from the HEAD copy: old findings stay quiet, a new one stops, no copy is left",
+		{ timeout: 150_000 },
+		async () => {
+			const repo = initRepo("5616-head-seed-biome");
+			const files = Array.from({ length: 4 }, (_, i) => `assign${i}.ts`);
+			fs.writeFileSync(path.join(repo, "biome.json"), "{}\n");
+			for (const file of files)
+				fs.writeFileSync(path.join(repo, file), ASSIGN_IN_CONDITION);
+			git(["add", "-A"], repo);
+			git(["commit", "-qm", "legacy"], repo);
+			// The reformat keeps each legacy finding. assign0.ts also gains one on
+			// L4 above it, which moves its legacy finding from L3 to L9: a seed
+			// read from the written bytes would place that one on no HEAD line.
+			const head =
+				"export function g(a: number): number {\\n    let c = 0;\\n    // new\\n    if ((c = a)) return c;\\n    return 0;\\n}\\n";
+			const reformat = `node -e 'const fs = require("node:fs"); for (const f of ${JSON.stringify(files)}) fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/\\t/g, "    ")); fs.writeFileSync("assign0.ts", "${head}" + fs.readFileSync("assign0.ts", "utf8"))'`;
+			gate.results.length = 0;
+			const handle = await startPiSession({
+				root: fixture.root,
+				cwd: repo,
+				flags: new Map([...GUARDED_FLAGS, ["no-delta", false]]),
+				inlineFactory: async () => (await import("../index.js")).default,
+				responses: [
+					step(fauxToolCall("bash", { command: reformat }), "formatting"),
+					endTurn("turn 1 done"),
+					step(commitAttempt(), "committing"),
+					endTurn("turn 2 done"),
+				],
+			});
+			await handle.prompt("reformat the files with a script");
+			await Promise.all(gate.pending);
+			await handle.prompt("commit it");
+			const commit = toolResults(handle.requests.at(-1) ?? [], "bash").at(-1);
+			const [reformatted] = gate.results.map((r) => r.text);
+			expect(reformatted).toMatch(
+				/Pre-existing: 1 .*\(L3 lint\/suspicious\/noAssign/,
+			);
+			// Only the new one stops, so the commit gate shuts on it.
+			expect(reformatted).toContain("\u{1F534} STOP \u2014 1 issue(s)");
+			expect(reformatted).toContain("L4:");
+			expect(commit?.text ?? "").toContain(GATE_BLOCK);
+			expect(await creditedCounts(repo)).toEqual([4]);
+			const seeds = await preEditCaptureRows(repo);
+			expect(seeds.map(([result]) => result)).toEqual(Array(4).fill("seeded"));
+			for (const [, runners] of seeds)
+				expect(runners.split(",")).toContain("biome-check-json");
+			expect(
+				fs.readdirSync(repo).filter((name) => name.startsWith("pi-lens-seed-")),
+			).toEqual([]);
 			expect(handle.errors).toEqual([]);
 			await handle.dispose();
 		},

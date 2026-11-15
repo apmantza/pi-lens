@@ -393,6 +393,11 @@ const WRITE_SITES: Record<string, SiteRow> = {
 		cls: "no-write",
 		why: 'the string "fs" is a boundary-category label, not a module',
 	},
+	"clients/dispatch/integration.ts": {
+		sites: 2,
+		cls: "scratch",
+		why: "a credited script write's HEAD copy, written beside the file under a pi-lens-seed- name for one seed run and removed when the run ends (#5616)",
+	},
 	"clients/dispatch/rules/error-swallowing.ts": {
 		sites: 1,
 		cls: "no-write",

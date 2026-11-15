@@ -95,18 +95,6 @@ export const PRE_EDIT_SEED_SPANLESS_RUNNER_IDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * #5616: the seeded lanes that analyse the dispatch's `file.content` fact, not
- * the file on disk. A capture of bytes the disk no longer holds (a credited
- * script write's HEAD copy, `capturePreEditLinterFindings`' `before`) can run
- * only these: a linter spawned on the path would read the new bytes and seed
- * the write's own findings as pre-existing.
- */
-export const PRE_EDIT_SEED_CONTENT_RUNNER_IDS: ReadonlySet<string> = new Set([
-	"ast-grep-napi",
-	"tree-sitter",
-]);
-
-/**
  * #5616: the bytes a file held before a write that already happened, for the
  * capture's `before`: `absent` when it had none (the write created it).
  */
