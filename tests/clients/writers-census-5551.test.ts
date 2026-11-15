@@ -394,9 +394,9 @@ const WRITE_SITES: Record<string, SiteRow> = {
 		why: 'the string "fs" is a boundary-category label, not a module',
 	},
 	"clients/dispatch/integration.ts": {
-		sites: 4,
+		sites: 5,
 		cls: "state",
-		why: "two writers. Given bytes (a credited script write's HEAD copy, the commit gate's staged blob) are written beside the file under a pi-lens-seed- name for one seed run only when a lane of the run reads the disk, and removed when the run ends (#5616, #5621). Before that copy exists, one line `pi-lens-seed-*` is added to the repository's local info/exclude (the git common dir's, never a tracked .gitignore), once and only when absent (#5621)",
+		why: "two writers. Given bytes (a credited script write's HEAD copy, the commit gate's staged blob) are written beside the file under a pi-lens-seed- name for one seed run only when a lane of the run reads the disk, and removed when the run ends or when its own write fails after creating it (#5616, #5621). Before that copy exists, one line `pi-lens-seed-*` is added to the repository's local info/exclude (the git common dir's, never a tracked .gitignore), once and only when absent (#5621)",
 	},
 	"clients/dispatch/rules/error-swallowing.ts": {
 		sites: 1,
