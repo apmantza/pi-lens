@@ -141,31 +141,40 @@ describe("#5551 a call's written set reaches its tool_result dispatch", () => {
 	// The scope growth, pinned: `lens_diagnostic_mark` records its suppress
 	// through the bridge with its call id, so its result now dispatches the
 	// one file it wrote, and nothing else (a88ac1a87 dispatched none).
-	it("dispatches only the file a lens_diagnostic_mark suppress wrote", async () => {
-		const { proj, target } = seed(fixture.root, "mark-suppress", CLEAN_FILE);
-		const handle = await openGuardedSession(fixture.root, proj, [
-			...raise(target, MARKED_FILE),
-			step(activateMarkTool(), "activating"),
-			step(
-				fauxToolCall("lens_diagnostic_mark", {
-					filePath: target,
-					...BLOCKER,
-					disposition: "suppress",
-				}),
-				"suppressing",
-			),
-			endTurn("turn 2 done"),
-		]);
-		await handle.prompt("write the file");
-		const before = (await handle.latencyRows()).rows as DispatchRow[];
-		await handle.prompt("suppress it");
-		const after = await handle.latencyRows();
-		expect(after.skipped).toBe(0);
-		const turn2 = (after.rows as DispatchRow[]).slice(before.length);
+	// The pipe id is review r1 F1 on #5635: the set was noted under the raw id
+	// and taken under the sanitized one, so a host id the sanitizer changes
+	// (pi-ai's `call_id|item_id`) dispatched nothing.
+	it.each([
+		["a plain id", undefined],
+		["a pipe in the host id", "call_abc|fc_123"],
+	])(
+		"dispatches only the file a lens_diagnostic_mark suppress wrote under %s",
+		async (_name, hostId) => {
+			const { proj, target } = seed(fixture.root, "mark-suppress", CLEAN_FILE);
+			const handle = await openGuardedSession(fixture.root, proj, [
+				...raise(target, MARKED_FILE),
+				step(activateMarkTool(), "activating"),
+				step(
+					fauxToolCall(
+						"lens_diagnostic_mark",
+						{ filePath: target, ...BLOCKER, disposition: "suppress" },
+						hostId === undefined ? undefined : { id: hostId },
+					),
+					"suppressing",
+				),
+				endTurn("turn 2 done"),
+			]);
+			await handle.prompt("write the file");
+			const before = (await handle.latencyRows()).rows as DispatchRow[];
+			await handle.prompt("suppress it");
+			const after = await handle.latencyRows();
+			expect(after.skipped).toBe(0);
+			const turn2 = (after.rows as DispatchRow[]).slice(before.length);
 
-		expect(fs.readFileSync(target, "utf8")).toContain("pi-lens-ignore");
-		expect(runnerRowsFor(turn2, target).length).toBeGreaterThan(0);
-		expect(dispatchedFiles(turn2)).toEqual(["target.ts"]);
-		expect(handle.errors).toEqual([]);
-	});
+			expect(fs.readFileSync(target, "utf8")).toContain("pi-lens-ignore");
+			expect(runnerRowsFor(turn2, target).length).toBeGreaterThan(0);
+			expect(dispatchedFiles(turn2)).toEqual(["target.ts"]);
+			expect(handle.errors).toEqual([]);
+		},
+	);
 });

@@ -31,6 +31,7 @@ import {
 	normalizeMapKey,
 } from "../../clients/path-utils.js";
 import { readChangesSince } from "../../clients/project-changes.js";
+import { resolveToolCallCorrelationId } from "../../clients/tool-event.js";
 import { countFileLines } from "../../clients/read-guard-tool-lines.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { retireScope } from "../../clients/session-scope.js";
@@ -222,6 +223,42 @@ describe("mutation bridge bookkeeping", () => {
 		runtime.resetForSession();
 		expect(runtime.takeCallWrites("c-dead")).toEqual([]);
 	});
+
+	/**
+	 * #5551 r2 (review F1): a producer notes a set under the id its `execute`
+	 * received (`toolCallId`, raw); the `tool_result` reads it under
+	 * `resolveToolCallCorrelationId` (sanitized). A pi-ai OpenAI Responses id
+	 * is `call_id|item_id` (a pipe) and can pass 64 characters, so the two
+	 * spellings differ and the take returned `[]`: the call's dispatch,
+	 * edit-class budget and commit-gate verdict were lost (#5239 back). The
+	 * reader here derives its key with the production resolver, not by hand.
+	 */
+	it.each([
+		["a pipe in the host id", "call_abc|fc_123"],
+		[
+			"an id over 64 characters",
+			"call_" + "x".repeat(90) + "|fc_" + "y".repeat(40),
+		],
+	])(
+		"a written set noted under %s is read under the id the tool_result derives",
+		(_name, rawId) => {
+			const runtime = new RuntimeCoordinator();
+			const readerKey = resolveToolCallCorrelationId({ toolCallId: rawId });
+			expect(readerKey).toBeDefined();
+			expect(readerKey).not.toBe(rawId);
+			runtime.noteCallWrite(rawId, "/project/a.ts");
+			runtime.noteCallWrite(rawId, "/project/b.ts");
+			expect(runtime.peekCallWrites(readerKey ?? "")).toEqual([
+				"/project/a.ts",
+				"/project/b.ts",
+			]);
+			expect(runtime.takeCallWrites(readerKey ?? "")).toEqual([
+				"/project/a.ts",
+				"/project/b.ts",
+			]);
+			expect(runtime.takeCallWrites(readerKey ?? "")).toEqual([]);
+		},
+	);
 
 	it("treats a write with no stated range as the whole file", () => {
 		const env = setupTestEnvironment("pi-lens-2423-bridge-write-");

@@ -45,6 +45,7 @@ import {
 	PartialApplyRecordStore,
 } from "./partial-edit-apply.js";
 import { ReadGuard } from "./read-guard.js";
+import { sanitizeCorrelationId } from "./read-guard-logger.js";
 import type { RuleScanResult } from "./rules-scanner.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
 import { TurnSummaryCollector } from "./turn-summary.js";
@@ -3120,22 +3121,34 @@ export class RuntimeCoordinator {
 		return widening;
 	}
 
-	/** #5551: `recordMutationOutcome` recorded `filePath` for this call. */
-	noteCallWrite(toolCallId: string, filePath: string): void {
+	/**
+	 * #5551: `recordMutationOutcome` recorded `filePath` for this call. The
+	 * id is the producer's raw one (the tool's `execute` argument); the
+	 * `tool_result` reads it as `resolveToolCallCorrelationId` spells it, so
+	 * both sides key by `sanitizeCorrelationId` (a pi-ai `call_id|item_id`
+	 * host id differs raw versus sanitized; review r1 F1 on #5635). The
+	 * result is a no-op on an id already sanitized.
+	 */
+	noteCallWrite(rawToolCallId: string, filePath: string): void {
+		const toolCallId = sanitizeCorrelationId(rawToolCallId);
+		if (toolCallId === undefined) return;
 		const written = this._callWrites.get(toolCallId);
 		if (written) written.add(filePath);
 		else this._callWrites.set(toolCallId, new Set([filePath]));
 	}
 
 	/** #5551: the files recorded for this call so far, in record order. */
-	peekCallWrites(toolCallId: string): string[] {
+	peekCallWrites(rawToolCallId: string): string[] {
+		const toolCallId = sanitizeCorrelationId(rawToolCallId);
+		if (toolCallId === undefined) return [];
 		return [...(this._callWrites.get(toolCallId) ?? [])];
 	}
 
 	/** #5551: one-shot claim of a call's files, as with an attribution. */
-	takeCallWrites(toolCallId: string): string[] {
-		const written = this.peekCallWrites(toolCallId);
-		this._callWrites.delete(toolCallId);
+	takeCallWrites(rawToolCallId: string): string[] {
+		const written = this.peekCallWrites(rawToolCallId);
+		const toolCallId = sanitizeCorrelationId(rawToolCallId);
+		if (toolCallId !== undefined) this._callWrites.delete(toolCallId);
 		return written;
 	}
 
