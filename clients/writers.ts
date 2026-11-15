@@ -155,7 +155,7 @@ const G6_PROBE =
 const G6_SKIP =
 	"the direct LSP branch passes recordMutationOutcome a no-op noteAgentMutation, as it never called it before #5551 (G6); reaching it needs the maintainer's buy-in";
 const DRAIN_NOT_AGENT =
-	"pi-lens's own format or fix is not an agent mutation: capturing it would let a fix-run restore undo the pass itself (#3598); the drain records as the `drain` writer, which skips it";
+	"by design: pi-lens's own format or fix is not an agent mutation, so a fix run never restores the agent's bytes over it (#3598); the drain records as the `drain` writer, which skips the capture";
 
 /** The cells every route leaves unprobed today, for the consumers no probe read. */
 function unread(settle: string): Record<WriterConsumer, WriterCell> {
@@ -663,7 +663,10 @@ export const WRITERS: readonly WriterRoute[] = [
 			"read-guard": reaches(
 				"[carries the authorship through the autofix when no other writer intervened (no-drop)]",
 			),
-			"fix-run-capture": na(DRAIN_NOT_AGENT),
+			"fix-run-capture": silent(
+				"[leaves a drain's write to the fixer: it is pi-lens's, not the agent's]",
+				DRAIN_NOT_AGENT,
+			),
 			"pre-edit-baseline": na(
 				"the pass rewrites a file the agent's write already seeded",
 			),
