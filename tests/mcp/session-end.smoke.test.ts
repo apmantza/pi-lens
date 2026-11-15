@@ -15,8 +15,10 @@ import { McpHarness } from "./harness.js";
 import { waitFor } from "../clients/interleaving-kit.js";
 
 async function readDeadWeight(home: string): Promise<Record<string, unknown>> {
-	// One poll loop for both readers (flake-shape ratchet: one raw timer wait
-	// per file); the single-row reader is the first row of the multi-row one.
+	// One wait for both readers, so the file keeps a single poll loop; the
+	// single-row reader is the first row of the multi-row one. (#4865 r1 F5: the
+	// note here pointed at the flake-shape ratchet's one-raw-timer-wait-per-file
+	// allowance, and after #4865 this file's wait is `waitFor`, not a raw timer.)
 	const [row] = await readDeadWeightRows(home);
 	return row as Record<string, unknown>;
 }

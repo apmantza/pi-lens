@@ -23,14 +23,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hashDiagnosticContent } from "../../../clients/lsp/diagnostic-binding.js";
 import { normalizeMapKey } from "../../../clients/path-utils.js";
 import { removeTempDirSync } from "../test-utils.js";
+import { scaledTestTimeout } from "../../support/test-timeout-scale.js";
 
 const getServersForFileWithConfig = vi.fn();
 const createLSPClient = vi.fn();
 
 /** One pump of the fake-timer clock in the aggregate-wait case below (ms). */
 const PUMP_STEP_MS = 50;
-/** How much virtual time that pump may spend before the case asserts (#4865). */
-const PUMP_VIRTUAL_BUDGET_MS = 100 * PUMP_STEP_MS;
+/**
+ * How much REAL time that pump may spend before the case names its failure
+ * (#4865 r1 F1). It cannot be virtual: the pump is what advances the virtual
+ * clock, so a virtual budget is just the old turn count under a new name, and
+ * real latency in a client mock spends none of it. `performance.now()` is a
+ * real clock here because the case's `useFakeTimers` fakes only `setTimeout`,
+ * `clearTimeout` and `Date`.
+ */
+const PUMP_REAL_BUDGET_MS = scaledTestTimeout(5_000);
+/** The case's own Vitest budget: above the pump ceiling, so the pump reds first. */
+const AGGREGATE_WAIT_TIMEOUT_MS = scaledTestTimeout(20_000);
 vi.mock("../../../clients/lsp/client.js", () => ({ createLSPClient }));
 
 function makeServer(id: string, ext: string, root: string) {
@@ -507,63 +517,98 @@ describe("touchFile capability-aware AGGREGATE wait (#814)", () => {
 		);
 	});
 
-	it("(d) scope-all: EVERY spawned server is silent+tier3-silent — resolves at the max of their budgets as CONFIRMED clean", async () => {
-		// This test asserts the REAL per-server strategy budgets (marksman
-		// 1500ms, typescript 1000ms) are what get paid — undo the describe's
-		// env override so it isn't flattened to 50ms like its siblings.
-		delete process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS;
-		const filePath = path.join(tmp, "a.ts");
-		fs.writeFileSync(filePath, "const x = 1;\n");
-		const marksman = makeServer("marksman", ".ts", tmp);
-		const typescript = makeServer("typescript", ".ts", tmp);
-		getServersForFileWithConfig.mockImplementation((fp: string) =>
-			fp.endsWith(".ts") ? [marksman, typescript] : [],
-		);
-		createLSPClient.mockImplementation(async (opts: { serverId: string }) => {
-			return makeSilentPushOnlyClient(opts.serverId, tmp).client;
-		});
-
-		const { LSPService } = await import("../../../clients/lsp/index.js");
-		const service = new LSPService();
-
-		// The stubs' silent waits sleep on the faked setTimeout; setImmediate
-		// stays real so the touch's own file I/O can interleave with the pump.
-		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-		const startedAt = Date.now();
-		let finishedAt: number | undefined;
-		const touch = service
-			.touchFile(filePath, "const x = 1;\n", {
-				diagnostics: "document",
-				collectDiagnostics: true,
-				clientScope: "all",
-				source: "lens_diagnostics_full",
-			})
-			.then((settled) => {
-				finishedAt = Date.now();
-				return settled;
+	it(
+		"(d) scope-all: EVERY spawned server is silent+tier3-silent — resolves at the max of their budgets as CONFIRMED clean",
+		async () => {
+			// This test asserts the REAL per-server strategy budgets (marksman
+			// 1500ms, typescript 1000ms) are what get paid — undo the describe's
+			// env override so it isn't flattened to 50ms like its siblings.
+			delete process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS;
+			const filePath = path.join(tmp, "a.ts");
+			fs.writeFileSync(filePath, "const x = 1;\n");
+			const marksman = makeServer("marksman", ".ts", tmp);
+			const typescript = makeServer("typescript", ".ts", tmp);
+			getServersForFileWithConfig.mockImplementation((fp: string) =>
+				fp.endsWith(".ts") ? [marksman, typescript] : [],
+			);
+			createLSPClient.mockImplementation(async (opts: { serverId: string }) => {
+				return makeSilentPushOnlyClient(opts.serverId, tmp).client;
 			});
-		// Shape 86 (#4865): the pump's ceiling was `step < 100`. `Date` is faked
-		// here, so the time model of this case is the virtual clock: bounding the
-		// pump by `Date.now()` gives it exactly the 5,000 virtual ms the 100 x 50 ms
-		// steps were, and virtual time advances the same per step under any load.
-		// The per-step `setImmediate` stays (it is not faked) so the touch's real
-		// file I/O still interleaves with the pump.
-		const pumpBudgetEndsAt = startedAt + PUMP_VIRTUAL_BUDGET_MS;
-		while (finishedAt === undefined && Date.now() < pumpBudgetEndsAt) {
-			await vi.advanceTimersByTimeAsync(PUMP_STEP_MS);
-			await new Promise((resolve) => setImmediate(resolve));
-		}
-		const result = await touch;
-		const elapsedMs = (finishedAt ?? Number.NaN) - startedAt;
 
-		expect(Array.isArray(result?.diags)).toBe(true);
-		expect(result?.diags).toHaveLength(0);
-		expect((result as { inconclusive?: boolean }).inconclusive).toBeUndefined();
-		expect(result?.confirmation).toBe("confirmed");
-		// marksman (1500ms) and typescript (1000ms) — the touch waits for the
-		// SLOWER of the two (marksman), not a shortened window.
-		expect(elapsedMs).toBeGreaterThanOrEqual(1490);
-	});
+			const { LSPService } = await import("../../../clients/lsp/index.js");
+			const service = new LSPService();
+
+			// The stubs' silent waits sleep on the faked setTimeout; setImmediate
+			// stays real so the touch's own file I/O can interleave with the pump.
+			vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+			const startedAt = Date.now();
+			// Stamped by the settlement observer below, and only a resolved settlement
+			// reaches the elapsed assertion (a rejection throws at `await touch`), so the
+			// initial value never reaches a comparison.
+			let finishedAt = startedAt;
+			// Recorded on EITHER side of the settlement, so a rejection leaves the pump
+			// immediately (and carries an observer) instead of spinning the whole real
+			// budget and surfacing a pump-timeout message over the rejection reason.
+			let settlement: "pending" | "resolved" | "rejected" = "pending";
+			const touch = service
+				.touchFile(filePath, "const x = 1;\n", {
+					diagnostics: "document",
+					collectDiagnostics: true,
+					clientScope: "all",
+					source: "lens_diagnostics_full",
+				})
+				.then(
+					(outcome) => {
+						settlement = "resolved";
+						finishedAt = Date.now();
+						return outcome;
+					},
+					(failure) => {
+						settlement = "rejected";
+						throw failure;
+					},
+				);
+			// Shape 86 (#4865 r1 F1): the ceiling is a REAL clock. `Date` is faked
+			// here, so bounding the pump by `Date.now()` would leave the old `step <
+			// 100` in place under a new name: only this pump advances the virtual
+			// clock, so any real latency inside the client mock spends none of that
+			// budget and the loop still quits after 100 steps. `performance.now()` is
+			// not in `toFake` above, so it keeps real time. The per-step
+			// `setImmediate` stays (also not faked) so the touch's real file I/O still
+			// interleaves with the pump, and the virtual `advanceTimersByTimeAsync`
+			// stays because the stubs' silent waits sleep on the faked setTimeout.
+			const pumpStartedAtReal = performance.now();
+			const pumpEndsAtReal = pumpStartedAtReal + PUMP_REAL_BUDGET_MS;
+			while (performance.now() < pumpEndsAtReal && settlement === "pending") {
+				await vi.advanceTimersByTimeAsync(PUMP_STEP_MS);
+				await new Promise((resolve) => setImmediate(resolve));
+			}
+			// A real-clock budget that runs out is a red here, not a hang: `touch`
+			// would otherwise await a wait whose pump has stopped.
+			if (settlement === "pending") {
+				throw new Error(
+					`aggregate touch never settled within the pump's real budget of ` +
+						`${PUMP_REAL_BUDGET_MS}ms: ${Math.round(performance.now() - pumpStartedAtReal)}ms real, ` +
+						`${Date.now() - startedAt}ms of it virtual`,
+				);
+			}
+			const result = await touch;
+			const elapsedMs = finishedAt - startedAt;
+
+			expect(Array.isArray(result?.diags)).toBe(true);
+			expect(result?.diags).toHaveLength(0);
+			expect(
+				(result as { inconclusive?: boolean }).inconclusive,
+			).toBeUndefined();
+			expect(result?.confirmation).toBe("confirmed");
+			// marksman (1500ms) and typescript (1000ms) — the touch waits for the
+			// SLOWER of the two (marksman), not a shortened window.
+			expect(elapsedMs).toBeGreaterThanOrEqual(1490);
+		},
+		// Above the pump ceiling: an expired pump reds with its own message
+		// (#4865 r1 F1) instead of Vitest's anonymous timeout.
+		AGGREGATE_WAIT_TIMEOUT_MS,
+	);
 
 	it("(e) scope-all: classification throws — fails safe to today's timeout/inconclusive behavior", async () => {
 		const filePath = path.join(tmp, "a.md");
