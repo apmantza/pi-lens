@@ -269,6 +269,27 @@ async function creditedCounts(repo: string): Promise<number[]> {
 		);
 }
 
+/**
+ * #5616 review F1: the `pre_edit_capture` rows of files under `repo`, as
+ * `[result, runners]`. A credited script write's seed is captured from the
+ * file's HEAD copy, which only the lanes that read the content fact can see.
+ */
+async function preEditCaptureRows(repo: string): Promise<string[][]> {
+	await flushLatencyLog();
+	const read = readNdjsonRows(getLatencyLogPath());
+	expect(read.skipped).toBe(0);
+	return read.rows
+		.filter(
+			(row) =>
+				row.phase === "pre_edit_capture" &&
+				String(row.filePath).startsWith(repo),
+		)
+		.map((row) => [
+			String(row.result),
+			String((row.metadata as { runners?: unknown }).runners ?? ""),
+		]);
+}
+
 function everyText(requests: readonly (readonly PiMessage[])[]): string {
 	return requests
 		.flatMap((messages) => messages)
@@ -1161,7 +1182,7 @@ describe("#5616: a script write the call is credited with", () => {
 				fs.writeFileSync(path.join(repo, file), MARKED_FILE);
 			git(["add", "-A"], repo);
 			git(["commit", "-qm", "legacy"], repo);
-			const reformat = `node -e 'const fs = require("node:fs"); for (const f of ${JSON.stringify(files)}) fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/\\t/g, "    "))'`;
+			const reformat = `node -e 'const fs = require("node:fs"); for (const f of ${JSON.stringify(files)}) fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/\\t/g, "    ")); fs.writeFileSync("made.ts", "export const m = 1;\\n")'`;
 			const added = `node -e 'require("node:fs").appendFileSync("other.ts", "export const h = crypto.createHash(\\"sha1\\").update(\\"x\\").digest(\\"hex\\");\\n")'`;
 			gate.results.length = 0;
 			const handle = await startPiSession({
@@ -1194,7 +1215,15 @@ describe("#5616: a script write the call is credited with", () => {
 			expect(addition).toContain("\u{1F534} STOP \u2014 1 issue(s)");
 			expect(addition).toContain("L5: Weak hash");
 			expect(addition).toMatch(/Pre-existing: 1 .*\(L3 ts-weak-hash\)/);
-			expect(await creditedCounts(repo)).toEqual([8, 1]);
+			expect(await creditedCounts(repo)).toEqual([9, 1]);
+			// One seed per credited file HEAD holds (the created made.ts has none
+			// and leaves no row), from the content lanes only: a linter spawned on
+			// the path would read the write and seed its findings.
+			const seeds = await preEditCaptureRows(repo);
+			expect(seeds.map(([result]) => result)).toEqual(Array(9).fill("seeded"));
+			expect(
+				[...new Set(seeds.flatMap(([, runners]) => runners.split(",")))].sort(),
+			).toEqual(["ast-grep-napi", "tree-sitter"]);
 			expect(handle.errors).toEqual([]);
 			await handle.dispose();
 		},

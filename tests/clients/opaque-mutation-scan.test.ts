@@ -2294,7 +2294,21 @@ describe("parallel bash calls (#4137)", () => {
 			cell: "a credited script write queues nothing and gets no stamp",
 			command: () => opaqueCommand(),
 			dirtyBefore: false,
+			demoted: false,
 			authored: true,
+			bytes: false,
+			queued: 0,
+			stamped: [] as string[],
+		},
+		{
+			// The autofix queue opens for a write only once an edit of the same
+			// file this turn demoted its autofix (`recordMutationToolReceipt`).
+			cell: "a credited script write after a write and an edit this turn queues no autofix",
+			command: () => opaqueCommand(),
+			dirtyBefore: false,
+			demoted: true,
+			authored: true,
+			bytes: false,
 			queued: 0,
 			stamped: [] as string[],
 		},
@@ -2302,7 +2316,9 @@ describe("parallel bash calls (#4137)", () => {
 			cell: "control: a script write over a dirty file is unchanged",
 			command: () => opaqueCommand(),
 			dirtyBefore: true,
+			demoted: false,
 			authored: false,
+			bytes: false,
 			queued: 0,
 			stamped: [] as string[],
 		},
@@ -2310,27 +2326,51 @@ describe("parallel bash calls (#4137)", () => {
 			cell: "control: a named write queues the format and is stamped",
 			command: () => "echo 'debugger;' >> par-a.ts",
 			dirtyBefore: false,
+			demoted: false,
 			authored: true,
+			bytes: true,
 			queued: 1,
 			stamped: ["par-a.ts"],
 		},
-	])("$cell", async ({ command, dirtyBefore, authored, queued, stamped }) => {
-		const runtime = newRuntime("credited-writers");
-		(await pipelineMock()).mockClear();
-		if (dirtyBefore) append("par-a.ts", "// dirty\n");
-		await runHandlerExpectingNoThrow(() =>
-			handleToolCall(callDeps(runtime, command(), "call")),
-		);
-		append("par-a.ts", "debugger;\n");
-		await handleToolResult(resultDeps(runtime, command(), "call"));
-		expect(await dispatchLog()).toEqual([["par-a.ts", authored]]);
-		expect(runtime.pendingDeferredMutationCount).toBe(queued);
-		expect(
-			runtime.readGuard
-				.exportAuthorship()
-				.written.map((file) => path.basename(file)),
-		).toEqual(stamped);
-	});
+	])(
+		"$cell",
+		async ({
+			command,
+			dirtyBefore,
+			demoted,
+			authored,
+			bytes,
+			queued,
+			stamped,
+		}) => {
+			const runtime = newRuntime("credited-writers");
+			(await pipelineMock()).mockClear();
+			if (dirtyBefore) append("par-a.ts", "// dirty\n");
+			if (demoted)
+				for (const kind of ["write", "edit"] as const)
+					runtime.recordMutationToolReceipt(
+						normalizeMapKey(path.join(repoDir, "par-a.ts")),
+						kind,
+					);
+			await runHandlerExpectingNoThrow(() =>
+				handleToolCall(callDeps(runtime, command(), "call")),
+			);
+			append("par-a.ts", "debugger;\n");
+			await handleToolResult(resultDeps(runtime, command(), "call"));
+			expect(await dispatchLog()).toEqual([["par-a.ts", authored]]);
+			// What the handler hands the pipeline, whose own gates
+			// tests/clients/pipeline.test.ts drives.
+			expect(
+				(await pipelineMock()).mock.calls.map(([ctx]) => ctx?.bytesAuthored),
+			).toEqual([bytes]);
+			expect(runtime.pendingDeferredMutationCount).toBe(queued);
+			expect(
+				runtime.readGuard
+					.exportAuthorship()
+					.written.map((file) => path.basename(file)),
+			).toEqual(stamped);
+		},
+	);
 });
 
 // #4732: every tool call that is not known to be read-only or structured is
