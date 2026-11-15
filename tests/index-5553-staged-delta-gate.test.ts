@@ -1049,6 +1049,40 @@ describe("#5553 a command substitution the commit's message runs", () => {
 	);
 });
 
+describe("#5553 a commit hidden behind a here-doc bash does not see", () => {
+	// Recurrence prevented (verify r4 R4-2): the reader took a here-doc where
+	// bash sees none (`<<` in `$((…))` or `${…}`, a delimiter cut by a line
+	// continuation) and swallowed the commit as its body. Detection said "no
+	// commit", the gate stood aside, and HEAD took the `debugger;` that
+	// `$(git add -A)` staged.
+	it.each([
+		"x=$((1<<A))\n$(git add -A)\ngit commit -m x",
+		"echo ${x:-<<'EOF'}\n$(git add -A)\ngit commit -m x",
+		"cat <<EOF\\\n\n$(git add -A)\nEOF\ngit commit -m x",
+	])("blocks %j at the tool call", { timeout: 120_000 }, async (command) => {
+		const proj = seedProject(`hidden-commit-${seeded++}`, { [B]: CLEAN });
+		write(proj, "src/new.ts", ADDED);
+		const handle = await startPiSession({
+			root: fixture.root,
+			cwd: proj,
+			flags: flags(),
+			inlineFactory: async () => (await import("../index.js")).default,
+			responses: [
+				step(
+					fauxToolCall("bash", { command: `${command}\necho ${RAN_MARKER}` }),
+					"committing",
+				),
+				endTurn("done"),
+			],
+		});
+		await handle.prompt("commit it");
+		const [result] = toolResults(handle.requests.at(-1) ?? [], "bash");
+		expect(result?.text).toContain(GATE_BLOCK);
+		expect(result?.text).not.toContain(RAN_MARKER);
+		expect(git(proj, "rev-list", "--count", "HEAD")).toBe("1");
+	});
+});
+
 describe("#5553 a submodule pointer the commit carries", () => {
 	// Recurrence prevented (verify r2 N3): a gitlink whose submodule has
 	// changes git reports against the working tree was read as a missing

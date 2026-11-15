@@ -287,6 +287,11 @@ function parseHeredocDelimiter(
 	let quoted = false;
 	while (i < command.length && !/[\s;&|<>]/.test(command[i] ?? "")) {
 		const ch = command[i];
+		// Bash drops the `$` of a `$'…'` or `$"…"` delimiter: `<<$'E'` ends at `E`.
+		if (ch === "$" && /['"]/.test(command[i + 1] ?? "")) {
+			i += 1;
+			continue;
+		}
 		if (ch === "'" || ch === '"') {
 			quoted = true;
 			const quote = ch;
@@ -315,13 +320,14 @@ function parseHeredocDelimiter(
 /**
  * The here-doc bodies that start at `start`, in order, and the index of the
  * last character they take. `expanding` holds the bodies bash expands (an
- * unquoted delimiter); a quoted one's text is literal.
+ * unquoted delimiter); a quoted one's text is literal. `terminated` is false
+ * when a body runs to the end without its delimiter line.
  */
 function consumeHeredocBodies(
 	command: string,
 	start: number,
 	heredocs: PendingHeredoc[],
-): { end: number; expanding: string[] } {
+): { end: number; expanding: string[]; terminated: boolean } {
 	let cursor = start;
 	const expanding: string[] = [];
 	for (const heredoc of heredocs) {
@@ -342,10 +348,21 @@ function consumeHeredocBodies(
 		}
 		if (!found) {
 			if (!heredoc.quoted) expanding.push(command.slice(bodyStart));
-			return { end: command.length - 1, expanding };
+			return { end: command.length - 1, expanding, terminated: false };
 		}
 	}
-	return { end: cursor - 1, expanding };
+	return { end: cursor - 1, expanding, terminated: true };
+}
+
+/**
+ * Whether `source[i]` starts a word: bash removes each `\<newline>` before it
+ * reads words, so the character before those pairs decides (a blank, an
+ * operator, or nothing since `start`).
+ */
+function startsWord(source: string, i: number, start: number): boolean {
+	let before = i - 1;
+	while (source[before] === "\n" && source[before - 1] === "\\") before -= 2;
+	return before < start || /[\s;&|()]/.test(source[before] ?? "");
 }
 
 /** #5553: one command substitution bash runs, and how many it sits inside (1 is outermost). */
@@ -372,9 +389,11 @@ const HEREDOC_ESCAPES = "$`\\\n";
  * the order they open. It reads quoting as bash does: inside `"…"` a `'` is a
  * character, inside `'…'` nothing expands, `$'…'` ends at an unescaped `'`, a
  * quoted here-doc is literal, and `#` at a word's start comments to the end of
- * the line. `complete` is false when a quote or a body does not close or the
+ * the line. `complete` is false when a quote, a body or a here-doc does not
+ * close (a here-doc still pending when its `$(…)` closes counts) or the
  * nesting passes three levels: a reader refuses that, never takes it as no
- * substitution. `heredoc` reads `text` as the body of an unquoted here-doc.
+ * substitution.
+ * `heredoc` reads `text` as the body of an unquoted here-doc.
  */
 export function shellSubstitutions(
 	text: string,
@@ -502,15 +521,13 @@ export function shellSubstitutions(
 					i + 1,
 					heredocs.splice(0),
 				);
+				if (!consumed.terminated) complete = false;
 				for (const body of consumed.expanding)
 					scan(body, 0, "heredoc", depth, false);
 				i = consumed.end;
 				continue;
 			}
-			if (
-				ch === "#" &&
-				(i === start || /[\s;&|()]/.test(source[i - 1] ?? ""))
-			) {
+			if (ch === "#" && startsWord(source, i, start)) {
 				const lineEnd = source.indexOf("\n", i);
 				i = (lineEnd < 0 ? source.length : lineEnd) - 1;
 				continue;
@@ -518,7 +535,10 @@ export function shellSubstitutions(
 			if (ch === "(") parens += 1;
 			else if (ch === ")") {
 				if (parens > 0) parens -= 1;
-				else if (closesAtParen) return i;
+				else if (closesAtParen) {
+					if (heredocs.length > 0) complete = false;
+					return i;
+				}
 			}
 		}
 		return source.length;
@@ -854,15 +874,18 @@ function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 			continue;
 		}
 		if (escaped) {
-			// A backslash-newline is a shell line continuation, not part of the
-			// command argument. Keeping the newline here makes a continued git command
-			// visible to command guards.
-			if (ch !== "\n") {
-				word += ch;
-				addToPart("escaped", ch);
-			}
+			word += ch;
+			addToPart("escaped", ch);
 			escaped = false;
 			atTokenStart = false;
+			continue;
+		}
+		if (ch === "\\" && next === "\n") {
+			// A line continuation is not part of any word, so a continued git
+			// command stays visible to the guards. Bash removes it before it
+			// reads words, so it leaves the word-start state as it was:
+			// `a \<newline># x` is a comment (#5553 R4-2).
+			i += 1;
 			continue;
 		}
 		if (ch === "\\") {
@@ -870,7 +893,7 @@ function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 			// Windows routinely contain native paths (C:\\src\\file.ts). Preserve
 			// backslashes before ordinary path characters while still honoring
 			// shell escapes and line continuations.
-			if (next === "\n" || /[\s\\'";$|&<>]/.test(next ?? "")) {
+			if (/[\s\\'";$|&<>]/.test(next ?? "")) {
 				escaped = true;
 			} else {
 				// Bash removes this backslash; the token keeps it.

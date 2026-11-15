@@ -539,7 +539,6 @@ const COMMIT_PUSH_MATCHER: GitVerbMatcher = {
 	suppressPostVerbHelp: false,
 };
 
-/** One command substitution's body (canonicalized) and its nesting depth. */
 /**
  * Every command substitution `command` runs, each body put through the same
  * canonical pass as the command (the one parser: `shellSubstitutions`).
@@ -558,15 +557,29 @@ function guardSubstitutions(command: string): {
 	};
 }
 
+/**
+ * Whether a command substitution of `command` runs a verb `matcher` governs.
+ * A read that does not finish (see `shellSubstitutions`) answers yes when the
+ * text names such a verb anywhere: the part it could not read may run it, and
+ * a here-doc misread swallowed a whole commit that way (#5553 R4-2).
+ */
 function containsGuardedSubstitution(
 	command: string,
 	matcher: GitVerbMatcher,
 ): boolean {
-	return guardSubstitutions(command).bodies.some((substitution) =>
+	const read = guardSubstitutions(command);
+	if (!read.complete && namesGuardedVerb(command, matcher)) return true;
+	return read.bodies.some((substitution) =>
 		decodeShellWords(substitution.body).some((segment) =>
 			containsGuardedGitVerb(segment.words, substitution.depth, matcher),
 		),
 	);
+}
+
+/** A word of `command`, quotes and backslashes dropped, that `matcher` governs. */
+function namesGuardedVerb(command: string, matcher: GitVerbMatcher): boolean {
+	const words = command.replace(/['"\\]/g, "").split(/[^\w-]+/);
+	return words.some((word) => matcher.matchesVerb(word, words));
 }
 
 /** Git global options that consume the following token as their value. */

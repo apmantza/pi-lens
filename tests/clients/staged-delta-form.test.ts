@@ -368,6 +368,80 @@ describe("command substitutions, read with bash's quoting", () => {
 	])("reads %s as a commit or push", (command) => {
 		expect(isGitCommitOrPushAttempt("bash", { command })).toBe(true);
 	});
+
+	// Recurrence prevented (verify r4 R4-3): each fail-closed branch of the
+	// parser survived its own removal, because every unterminated row also ran
+	// `git add`. These bodies only read, so the branch alone decides.
+	it.each([
+		["the depth cap", `git commit -m "$(echo $(echo $(echo $(git log -1))))"`],
+		["an unclosed $( body", "git commit -m $(git log -1"],
+		["an unclosed double quote", `git commit -m "abc`],
+		["an unclosed backtick", "git commit -m `git log -1"],
+	])("refuses %s, whose bodies only read", (_branch, command) => {
+		expect(plan(command)).toEqual({
+			unresolved:
+				"a quote or command substitution that does not close, or substitutions nested past three levels",
+		});
+	});
+
+	// Recurrence prevented (verify r4 R4-2): a here-doc the reader takes where
+	// bash sees none swallowed the rest of the command, the commit included,
+	// so detection said "no commit" and the gate stood aside while HEAD took
+	// a `debugger;`. A here-doc whose body never starts or never ends leaves
+	// the read incomplete, and an incomplete read that names the verb is an
+	// attempt.
+	it.each([
+		"x=$((1<<A))\n$(git add -A)\ngit commit -m x",
+		"echo ${x:-<<'EOF'}\n$(git add -A)\ngit commit -m x",
+		"cat <<EOF\\\n\n$(git add -A)\nEOF\ngit commit -m x",
+		"cat <<EOF\ngit push",
+		// Bash reads `<<` in `$(( … ))` as a shift; the reader's here-doc is
+		// still pending at the `)` and would swallow the commit up to `A`.
+		"x=$(( 1 << A ))\ngit commit -m x\nA",
+		// The verb is named through quotes the read never finished.
+		"cat <<EOF\ngit co'mm'it -m x",
+	])("reads %j as a commit or push and does not replay it", (command) => {
+		expect(isGitCommitOrPushAttempt("bash", { command })).toBe(true);
+		expect(plan(command)).toHaveProperty("unresolved");
+	});
+
+	// Recurrence prevented (r5 attack on the rule above): the reader kept the
+	// `$` of a `$'E'` delimiter, so its here-doc ran past bash's `E` line and
+	// swallowed the commit up to a `$E` line, a complete read.
+	it("ends a $'…' delimited here-doc where bash does", () => {
+		expect(
+			isGitCommitOrPushAttempt("bash", {
+				command: "cat <<$'E'\nx\nE\ngit commit -m y\n$E",
+			}),
+		).toBe(true);
+	});
+
+	it("does not read an unterminated here-doc that names no verb as a commit", () => {
+		expect(
+			isGitCommitOrPushAttempt("bash", { command: "cat <<EOF\nnotes" }),
+		).toBe(false);
+	});
+
+	// Recurrence prevented (verify r4 R4-2, fourth root): bash removes a
+	// `\<newline>` before it reads words, so `#` after one starts a comment
+	// only where a blank came before the continuation.
+	it("reads the commit after a comment that follows a line continuation", () => {
+		expect(
+			isGitCommitOrPushAttempt("bash", {
+				command: "echo a \\\n# <<EOF\ngit commit -m x\nEOF",
+			}),
+		).toBe(true);
+	});
+
+	it("reads a substitution in a word a line continuation joins", () => {
+		// Bash runs `-m 'a#<output of git add -A>'`: no blank came before the
+		// `\<newline>`, so the `#` is a character of the word.
+		const answer = plan(`git commit -m "a"\\\n#"$(git add -A)"`);
+		expect(answer).toHaveProperty("unresolved");
+		expect((answer as { unresolved: string }).unresolved).toContain(
+			"substitution runs `git`",
+		);
+	});
 });
 
 describe("decodeShellCommand", () => {
