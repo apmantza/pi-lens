@@ -110,6 +110,17 @@ const summary = (lines: string[]) =>
 			line.startsWith("timeout-headroom: ") && line.includes("tests read"),
 	) ?? "";
 
+/**
+ * The emitted offender rows of a run (`NEW` for one outside the baseline,
+ * `known` for one inside it), without the annotations that repeat their text.
+ */
+const rowLines = (lines: string[], file?: string) =>
+	lines.filter(
+		(line) =>
+			/^(?:NEW|known) {2}\S/.test(line) &&
+			(file === undefined || line.includes(file)),
+	);
+
 describe("scripts/check-test-timeout-headroom.mjs (#5311)", () => {
 	beforeAll(() => {
 		// The issue's motivating shape: a suite that declares a 30 s budget and a
@@ -121,7 +132,7 @@ describe("scripts/check-test-timeout-headroom.mjs (#5311)", () => {
 const CAP_MS = 30_000;
 
 describe("session-fact bound", () => {
-	it("runs at the timeout", async () => {}, { timeout: CAP_MS });
+	it("runs at the timeout", { timeout: CAP_MS }, async () => {});
 	it("runs at half the timeout", async () => {}, CAP_MS / 2);
 });
 `,
@@ -168,7 +179,7 @@ function pickMs(): number {
 	return 60_000;
 }
 
-it("has a budget the fold cannot reach", async () => {}, { timeout: pickMs() });
+it("has a budget the fold cannot reach", { timeout: pickMs() }, async () => {});
 `,
 		);
 		// The same reader from the other side: here nothing in the file folds, so the
@@ -194,9 +205,9 @@ it("ran under the config the fold cannot reach", async () => {});
 
 it("has a comment before its handler", /* ci-only gate */ async () => {}, 2_000);
 
-it("has a comment inside its options", async () => {}, {
-		timeout: /* widened on the cold cache */ 2_000,
-});
+it("has a comment inside its options", {
+	timeout: /* widened on the cold cache */ 2_000,
+}, async () => {});
 `,
 		);
 		// Two budgets of one file folded through the same imported constant: the
@@ -210,6 +221,75 @@ import { CAP_MS } from "./caps.js";
 
 it("first test on the shared cap", async () => {}, CAP_MS);
 it("second test on the shared cap", async () => {}, CAP_MS);
+`,
+		);
+		// The options object as a name the file declares: 16 declarations of this
+		// shape folded 5000 on a real run against a real 180_000, so the cap of a
+		// named options object is read from the binding, and a binding declared below
+		// the test still counts (r1 CR2).
+		source(
+			"tests/named-options/named.test.ts",
+			`import { it } from "vitest";
+
+const LANE_OPTIONS = { timeout: 180_000 };
+
+it("runs under a named options object", LANE_OPTIONS, async () => {});
+it("runs under options declared below it", LATER_OPTIONS, async () => {});
+
+const LATER_OPTIONS = { timeout: 40_000 };
+`,
+		);
+		// One name with two values: which assignment ran decides the cap, so nothing
+		// is provable and the fold must not take whichever initializer came first.
+		source(
+			"tests/named-options/reassigned.test.ts",
+			`import { it } from "vitest";
+
+let OPTION_BAG = { timeout: 40_000 };
+OPTION_BAG = { retry: 2 };
+
+it("runs under a reassigned options name", OPTION_BAG, async () => {});
+`,
+		);
+		// A spread written after the pair can overwrite the declared budget, so that
+		// pair is not the cap either.
+		source(
+			"tests/named-options/spread-after.test.ts",
+			`import { it } from "vitest";
+
+const WIDE = { timeout: 40_000, ...extraOptions() };
+
+it("runs under options a spread can overwrite", WIDE, async () => {});
+
+function extraOptions() {
+	return {};
+}
+`,
+		);
+		// `vi.setConfig` inside a hook is not the file's default: vitest reads the
+		// config while it collects the module, so the tests here ran on the 5000 ms
+		// default while the fold reported 90_000 (r1 F5).
+		source(
+			"tests/setconfig-nested/hook-config.test.ts",
+			`import { beforeEach, it, vi } from "vitest";
+
+beforeEach(() => {
+	vi.setConfig({ testTimeout: 90_000 });
+});
+
+it("spends most of the default", async () => {});
+it("stays inside the default", async () => {});
+`,
+		);
+		// The suite spelling that keeps the third-argument options read: the suite API
+		// accepts options after the factory, unlike `it`.
+		source(
+			"tests/inherited/describe-tail-options.test.ts",
+			`import { describe, it } from "vitest";
+
+describe("suite budget written last", () => {
+	it("inherits the tail options budget", async () => {});
+}, { timeout: 8_000 });
 `,
 		);
 	});
@@ -899,5 +979,174 @@ it("second test on the shared cap", async () => {}, CAP_MS);
 			},
 		);
 		expect(broken.status).toBe(2);
+	});
+
+	it("reads a budget from an options object the file declares as a name", () => {
+		const file = "tests/named-options/named.test.ts";
+		const reportFile = report("reports/named.json", file, [
+			{ title: "runs under a named options object", duration: 175_000 },
+			{ title: "runs under options declared below it", duration: 38_000 },
+		]);
+		const { code, lines } = run(["--report", reportFile]);
+		expect(code).toBe(0);
+		const rows = rowLines(lines, file).join("\n");
+		expect(rows).toContain("180000 ms cap");
+		expect(rows).toContain("40000 ms cap");
+		// A skipped options argument fell through to the 5000 ms default, which
+		// turned a 180 s budget into two false offenders against a 5 s cap.
+		expect(rows).not.toContain("cap unresolved");
+		expect(rows).not.toContain("5000 ms cap");
+	});
+
+	it("leaves a cap unresolved when the file re-binds the options name", () => {
+		const file = "tests/named-options/reassigned.test.ts";
+		const reportFile = report("reports/reassigned.json", file, [
+			{ title: "runs under a reassigned options name", duration: 4_200 },
+		]);
+		const rows = rowLines(run(["--report", reportFile]).lines, file);
+		// Which `OPTION_BAG = …` ran decides the cap, so the file proves no budget:
+		// the row is judged against the floor and says so, not against 40000.
+		expect(rows.length).toBe(1);
+		expect(rows[0]).toContain("cap unresolved (timeout-unfoldable");
+		expect(rows[0]).not.toContain("40000 ms cap");
+	});
+
+	it("leaves a cap unresolved when a spread after the pair can overwrite it", () => {
+		const file = "tests/named-options/spread-after.test.ts";
+		const reportFile = report("reports/spread-after.json", file, [
+			{ title: "runs under options a spread can overwrite", duration: 4_200 },
+		]);
+		const rows = rowLines(run(["--report", reportFile]).lines, file);
+		expect(rows.length).toBe(1);
+		expect(rows[0]).toContain("cap unresolved (timeout-unfoldable");
+	});
+
+	it("leaves a shadowed budget name unresolved rather than naming one binding", () => {
+		const file = "tests/named-options/inner-name.test.ts";
+		source(
+			file,
+			`import { describe, it } from "vitest";
+
+const BUDGET_MS = 20_000;
+
+describe("narrower inside", () => {
+	const BUDGET_MS = 2_000;
+	it("uses the inner binding", async () => {}, BUDGET_MS);
+});
+`,
+		);
+		const reportFile = report("reports/inner-name.json", file, [
+			{
+				title: "uses the inner binding",
+				ancestors: ["narrower inside"],
+				duration: 4_200,
+			},
+		]);
+		const { lines } = run(["--report", reportFile]);
+		const rows = rowLines(lines, file);
+		// The two bindings disagree (20_000 and 2_000) and the fold reads the file
+		// flatly, so naming either cap would be a guess: the row is judged against
+		// the file floor and says which reason.
+		expect(rows.length).toBe(1);
+		expect(rows[0]).toContain("cap unresolved (timeout-unfoldable");
+		expect(summary(lines)).toContain("1 with an unresolved cap");
+	});
+
+	it("resolves a suite budget written after the factory", () => {
+		const file = "tests/inherited/describe-tail-options.test.ts";
+		const reportFile = report("reports/tail-options.json", file, [
+			{
+				title: "inherits the tail options budget",
+				ancestors: ["suite budget written last"],
+				duration: 7_600,
+			},
+		]);
+		const rows = rowLines(run(["--report", reportFile]).lines, file);
+		expect(rows.length).toBe(1);
+		expect(rows[0]).toContain("8000 ms cap");
+	});
+
+	it("counts every judged test with an unresolved cap, not only the emitted rows", () => {
+		// Two files whose cap the fold refuses: a hook-scoped `vi.setConfig` (which
+		// sets no budget any test runs under) and a reassigned options name. One of
+		// the three tests stays well inside its file's floor, so it emits no row —
+		// and still belongs in the count, because an unmeasured test is not a
+		// measured-healthy one (r1 F4: 419 unresolved tests printed as a clean 0).
+		const nested = "tests/setconfig-nested/hook-config.test.ts";
+		const nestedReport = report("reports/nested-config.json", nested, [
+			{ title: "spends most of the default", duration: 4_200 },
+			{ title: "stays inside the default", duration: 900 },
+		]);
+		const reassignedReport = report(
+			"reports/nested-reassigned.json",
+			"tests/named-options/reassigned.test.ts",
+			[{ title: "runs under a reassigned options name", duration: 1_000 }],
+		);
+		const { code, lines } = run([
+			"--report",
+			nestedReport,
+			"--report",
+			reassignedReport,
+		]);
+		expect(code).toBe(0);
+		expect(summary(lines)).toContain("3 with an unresolved cap");
+		expect(summary(lines)).toContain("file-timeout-nested-setConfig 2");
+		expect(rowLines(lines, nested)).toEqual([]);
+	});
+
+	it("writes one baseline entry per identity when overlapping reports repeat one", () => {
+		const file = "tests/near/timeout-near.test.ts";
+		const slower = report("reports/overlap-slow.json", file, [
+			{
+				title: "runs at the timeout",
+				ancestors: ["session-fact bound"],
+				duration: 29_600,
+			},
+		]);
+		const faster = report("reports/overlap-fast.json", file, [
+			{
+				title: "runs at the timeout",
+				ancestors: ["session-fact bound"],
+				duration: 20_000,
+			},
+		]);
+		const written = join(dirAt("baseline-overlap"), "overlap.json");
+		expect(
+			run([
+				"--report",
+				slower,
+				"--report",
+				faster,
+				"--report",
+				slower,
+				"--baseline",
+				written,
+				"--write-baseline",
+			]).code,
+		).toBe(0);
+		const document = JSON.parse(readFileSync(written, "utf8"));
+		expect(document.entries).toHaveLength(1);
+		expect(document.entries[0].durationMs).toBe(29_600);
+		// The reader refuses a duplicate identity, so a document with one would
+		// have made the whole baseline unreadable and every offender new.
+		expect(baselineEntries(document).size).toBe(1);
+		expect(
+			summary(run(["--report", slower, "--baseline", written]).lines),
+		).toContain("1 known, 0 new");
+	});
+
+	it("refuses a value-taking flag with no value after it", () => {
+		const invalid: Array<[string, string[]]> = [
+			["--baseline", ["--baseline"]],
+			["--ratio", ["--ratio", "--report", "reports/none.json"]],
+			["--report", ["--report"]],
+		];
+		for (const [flag, args] of invalid) {
+			const { code, lines } = run(args);
+			expect(code, flag).toBe(2);
+			expect(lines.join("\n"), flag).toContain(
+				`::warning title=test-timeout-headroom::could not measure: ${flag} requires a value`,
+			);
+		}
 	});
 });

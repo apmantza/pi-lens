@@ -101,32 +101,44 @@ function parseArgs(argv) {
 		scale: undefined,
 		failOnNew: false,
 	};
-	for (let i = 0; i < argv.length; i += 1) {
-		const arg = argv[i];
+	// A value-taking flag with nothing after it, or with another flag, is a
+	// malformed call: reading `argv[++i]` instead would hand the next check
+	// `undefined` and report `no baseline at …/undefined` (r1 Q2).
+	let index = 0;
+	const valueOf = (flag) => {
+		const value = argv[index];
+		if (value === undefined || value.startsWith("--"))
+			throw new TimeoutHeadroomError(`${flag} requires a value`);
+		index += 1;
+		return value;
+	};
+	while (index < argv.length) {
+		const arg = argv[index];
+		index += 1;
 		switch (arg) {
 			case "--report":
-				options.reports.push(argv[(i += 1)]);
+				options.reports.push(valueOf("--report"));
 				break;
 			case "--root":
-				options.root = path.resolve(String(argv[(i += 1)]));
+				options.root = path.resolve(valueOf("--root"));
 				break;
 			case "--ratio":
-				options.ratio = Number(argv[(i += 1)]);
+				options.ratio = Number(valueOf("--ratio"));
 				break;
 			case "--baseline":
-				options.baseline = path.resolve(String(argv[(i += 1)]));
+				options.baseline = path.resolve(valueOf("--baseline"));
 				break;
 			case "--write-baseline":
 				options.writeBaseline = true;
 				break;
 			case "--note":
-				options.note = String(argv[(i += 1)]);
+				options.note = valueOf("--note");
 				break;
 			case "--max-rows":
-				options.maxRows = Number(argv[(i += 1)]);
+				options.maxRows = Number(valueOf("--max-rows"));
 				break;
 			case "--scale":
-				options.scale = Number(argv[(i += 1)]);
+				options.scale = Number(valueOf("--scale"));
 				break;
 			case "--fail-on-new":
 				options.failOnNew = true;
@@ -159,13 +171,26 @@ function parseArgs(argv) {
 	return options;
 }
 
+/**
+ * Exit 2's record: the machine-readable verdict plus a step annotation naming
+ * the cause. The committed step runs with `continue-on-error`, so a run that
+ * measured nothing must be visible in the annotations and not as the shard's
+ * red (r1 F1).
+ */
+function unmeasurable(log, message) {
+	log(annotation("test-timeout-headroom", `could not measure: ${message}`));
+	return 2;
+}
+
 export function runCli(argv, { log = console.log } = {}) {
 	let options;
 	try {
 		options = parseArgs(argv);
 	} catch (error) {
-		log(error instanceof Error ? error.message : String(error));
-		return 2;
+		return unmeasurable(
+			log,
+			error instanceof Error ? error.message : String(error),
+		);
 	}
 	const scale = options.scale ?? envTestTimeoutScale();
 	const baselineFile =
@@ -256,11 +281,11 @@ export function runCli(argv, { log = console.log } = {}) {
 					`${added.length - MAX_ANNOTATIONS} further new offenders (see the step log)`,
 				),
 			);
-		if (counts.unknown > 0)
+		if (counts.floored > 0)
 			log(
 				annotation(
 					"test-timeout-headroom",
-					`${counts.unknown} tests are over the ratio against the floor of their file because their cap did not resolve`,
+					`${counts.floored} tests are over the ratio against the floor of their file because their cap did not resolve`,
 				),
 			);
 		if (counts.undated > 0)
@@ -273,8 +298,7 @@ export function runCli(argv, { log = console.log } = {}) {
 		return options.failOnNew && added.length > 0 ? 1 : 0;
 	} catch (error) {
 		if (!(error instanceof TimeoutHeadroomError)) throw error;
-		log(`timeout-headroom: ${error.message}`);
-		return 2;
+		return unmeasurable(log, error.message);
 	}
 }
 

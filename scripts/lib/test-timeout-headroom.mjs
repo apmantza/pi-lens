@@ -13,22 +13,30 @@
  * `createSuite`):
  *
  *   1. the test's own timeout — a trailing number (`it(name, fn, 4 * 60_000)`),
- *      or `timeout:` in the options object (`it(name, { timeout }, fn)`). A
- *      trailing number wins over the object, because `parseArguments` assigns
- *      it after the object branch.
+ *      or `timeout:` in the options object (`it(name, { timeout }, fn)`) whether
+ *      the object is written inline or is a name the file declares
+ *      (`const LANE = { timeout: 180_000 }; it(name, LANE, fn)`). A trailing
+ *      number wins over the object, because `parseArguments` assigns it after
+ *      the object branch.
  *   2. else the nearest enclosing `describe` that declares one — a suite
  *      inherits its parent suite's options
  *      (`options = assignDefined({ ...parentOptions }, options)`), so the
  *      nearest declaration is the effective one at any depth.
  *   3. else the file's `vi.setConfig({ testTimeout })`, which mutates the
- *      runtime config for that file.
+ *      runtime config for that file. Only a module-scope statement is that
+ *      default: vitest reads it while it collects the module, so the same call
+ *      inside a hook, a test body or a branch sets no budget any test runs
+ *      under, and a file that calls it only there has no provable default.
  *   4. else the project default. `vitest.config.ts` sets no `testTimeout`, so
  *      that is vitest's own resolved default of 5000 ms (`DEFAULT_TEST_TIMEOUT_MS`).
  *
  * A cap this module cannot resolve is `unresolved` with a reason, never the
  * default: guessing the default would report a slow test under a wide explicit
- * timeout as passing (#5311 acceptance, and defect shape 10). The unresolved
- * rows are counted and printed, so the population stays visible.
+ * timeout as passing (#5311 acceptance, and defect shape 10). `assessReports`
+ * classifies every test it judges before it filters any, so the summary's
+ * `N with an unresolved cap` is that whole population and not the subset the
+ * ratio happened to emit (r1 F4: 419 unresolved tests on one real run printed
+ * as a clean `0`).
  *
  * What the numbers mean. A row is emitted when a test that ran took more than
  * `ratio` of its own resolved cap, or — for an unresolved cap — more than
@@ -127,20 +135,32 @@ function titleMatches(title, testTitle) {
 	return false;
 }
 
+/** The value node of a `timeout`/`testTimeout` pair, or null for any other pair. */
+function timeoutPairValue(pairNode) {
+	if (pairNode.kind() !== "pair") return null;
+	const named = pairNode.children().filter(isArgumentNode);
+	const key = named[0];
+	if (!key || (key.kind() !== "property_identifier" && key.kind() !== "string"))
+		return null;
+	const name = key.text().replace(/^["']|["']$/g, "");
+	return name === "timeout" || name === "testTimeout"
+		? (named[1] ?? null)
+		: null;
+}
+
+/**
+ * The budget member an object literal declares: the LAST `timeout`/`testTimeout`
+ * pair, because a later key wins in JavaScript, and null when the object declares
+ * none.
+ */
 function timeoutPair(objNode) {
 	if (!objNode || objNode.kind() !== "object") return null;
-	for (const pair of objNode.children().filter((c) => c.kind() === "pair")) {
-		const named = pair.children().filter(isArgumentNode);
-		const key = named[0];
-		if (
-			key &&
-			(key.kind() === "property_identifier" || key.kind() === "string")
-		) {
-			const name = key.text().replace(/^["']|["']$/g, "");
-			if (name === "timeout" || name === "testTimeout") return named[1] ?? null;
-		}
+	let value = null;
+	for (const pair of objNode.children()) {
+		const candidate = timeoutPairValue(pair);
+		if (candidate) value = candidate;
 	}
-	return null;
+	return value;
 }
 
 const isHandler = (node) =>
@@ -164,24 +184,43 @@ function timeoutExpressionOf(argNodes) {
 	// budget of its own.
 	if (third !== undefined && isHandler(second))
 		return objectTimeout(third) ?? { node: third };
+	// A second argument that is not the handler, with a handler after it, is the
+	// options slot: `it(name, LANE, fn)`. Read it as options rather than skipping
+	// to the file chain, so a name bound to `{ timeout: 180_000 }` resolves and a
+	// name this file cannot read lands unresolved at `foldMs` instead of at the
+	// 5000 ms default (r1 CR2: 16 declarations folded 5000 against a real 180000).
+	if (second !== undefined && third !== undefined)
+		return objectTimeout(second) ?? { node: second };
 	if (second !== undefined) return objectTimeout(second);
 	return null;
 }
 
-/** The `timeout:` member of an options object, or null when it has none. */
+/**
+ * The options object a runner reads for a budget, or null when the argument
+ * cannot carry one. An object with neither a `timeout:` member nor a spread
+ * declares no budget, so the caller falls through to the suite and file chain;
+ * anything else is handed to `foldMs`, whose object arm owns the read.
+ */
 function objectTimeout(node) {
 	if (!node || node.kind() !== "object") return null;
-	const value = timeoutPair(node);
-	if (value) return { node: value };
-	// `{ ...opts }` may hold a budget this file cannot name; that stays
-	// unresolved rather than falling back to a smaller default.
-	const spread = node.children().find((c) => c.kind() === "spread_element");
-	return spread ? { node: spread } : null;
+	if (
+		timeoutPair(node) === null &&
+		!node.children().some((c) => c.kind() === "spread_element")
+	)
+		return null;
+	return { node };
 }
 
 // Comments are named nodes in the tree but are never arguments to the runner,
 // so they must not shift the positional read of a test call or stand in as the
 // value of a `timeout:` member.
+// `range()` answers `{ start, end }`, each `{ line, column, index }`; the
+// character offsets are the ones this module compares, so they are spelled once
+// here (a `.range().startIndex` read is `undefined` and every comparison that
+// consumes it fails quietly).
+const startIndex = (node) => node.range().start.index;
+const endIndex = (node) => node.range().end.index;
+
 const isArgumentNode = (c) =>
 	c.isNamed() && c.kind() !== "type_arguments" && c.kind() !== "comment";
 
@@ -214,6 +253,15 @@ function indexSource(text, { scale }) {
 	const consts = new Map();
 	const imports = new Map();
 	const setConfigs = [];
+	// `vi.setConfig` calls that sit inside a hook, a test body or a branch. They
+	// are not the file default (vitest reads the config while it collects the
+	// module), and they make the default unpredictable for some tests, so they
+	// leave the file's default unresolved rather than widening it (r1 F5).
+	const nestedSetConfigs = [];
+	// Names the file re-binds with a plain assignment. A name with more than one
+	// value over the file's run has no foldable budget, so a cap read through it
+	// stays unresolved rather than taking whichever initializer came first (r1 CR2).
+	const reassigned = new Set();
 
 	// A name maps to every initializer that binds it in this file. Two bindings of
 	// one name are common (`const timeout = …` in two test bodies), so folding an
@@ -265,6 +313,32 @@ function indexSource(text, { scale }) {
 		return matched ? matched[1] : name;
 	};
 
+	// The `testTimeout` values of the `vi.setConfig` calls that sit at module
+	// scope, read straight off the module's statement list: vitest evaluates the
+	// module before it collects, so only these are the file's default budget.
+	const moduleSetConfigValues = new Set(
+		root
+			.children()
+			.filter((child) => child.kind() === "expression_statement")
+			.flatMap((statement) => {
+				const call = statement
+					.children()
+					.find((child) => child.kind() === "call_expression");
+				if (
+					!call ||
+					!/^(?:vi\.)?setConfig$/.test(call.field("function")?.text() ?? "")
+				)
+					return [];
+				const args = call.field("arguments");
+				return (
+					args ? args.children().filter((c) => c.kind() === "object") : []
+				)
+					.map((obj) => timeoutPair(obj))
+					.filter(Boolean)
+					.map(startIndex);
+			}),
+	);
+
 	// `stack` is the chain of enclosing suite declarations, innermost last.
 	const walk = (node, stack) => {
 		for (const child of node.children()) {
@@ -276,6 +350,27 @@ function indexSource(text, { scale }) {
 				}
 				case "import_statement": {
 					recordImport(child, imports);
+					continue;
+				}
+				case "assignment_expression": {
+					// The grammar carries no `operator` field through the napi binding (the
+					// token is anonymous), so the operator is the first anonymous node that
+					// starts at or after the target ends. `==`, `=>` and `+=` are not a
+					// re-binding; only a plain `=` makes a name multi-valued (r1 CR2).
+					const left = child.field("left");
+					const operator = left
+						? child
+								.children()
+								.find((c) => !c.isNamed() && startIndex(c) >= endIndex(left))
+						: undefined;
+					if (operator?.text() === "=") {
+						const targets =
+							left.kind() === "identifier"
+								? [left]
+								: left.children().filter((c) => c.kind() === "identifier");
+						for (const target of targets) reassigned.add(target.text());
+					}
+					walk(child, stack);
 					continue;
 				}
 				case "call_expression":
@@ -292,7 +387,10 @@ function indexSource(text, { scale }) {
 					.children()
 					.filter((c) => c.kind() === "object")) {
 					const value = timeoutPair(obj);
-					if (value) setConfigs.push(value);
+					if (!value) continue;
+					if (moduleSetConfigValues.has(startIndex(value)))
+						setConfigs.push(value);
+					else nestedSetConfigs.push(value);
 				}
 				walk(child, stack);
 				continue;
@@ -330,6 +428,8 @@ function indexSource(text, { scale }) {
 		consts,
 		imports,
 		setConfigs,
+		nestedSetConfigs,
+		reassigned,
 		scale,
 	};
 }
@@ -404,12 +504,32 @@ function foldMs(node, table, depth, ctx = createFoldContext()) {
 		}
 		case "identifier":
 		case "shorthand_property_identifier_pattern":
-			return foldIdentifier(node.text(), table, depth, node, ctx);
+			return foldIdentifier(node.text(), table, depth, ctx);
 		case "call_expression":
 			return foldScaleCall(node, table, depth, ctx);
+		case "object":
+			return foldObjectTimeout(node, table, depth, ctx);
 		default:
 			return undefined;
 	}
+}
+
+/**
+ * The budget an options-object node declares. A spread placed after the
+ * `timeout:` pair can overwrite it with a value this file cannot read, so that
+ * budget is not provable (`{ timeout: 400, ...lane }`).
+ */
+function foldObjectTimeout(node, table, depth, ctx) {
+	const value = timeoutPair(node);
+	if (!value) return undefined;
+	const declaredAt = startIndex(value);
+	if (
+		node
+			.children()
+			.some((c) => c.kind() === "spread_element" && startIndex(c) > declaredAt)
+	)
+		return undefined;
+	return foldMs(value, table, depth + 1, ctx);
 }
 
 /** The one meaningful operand of a unary expression. */
@@ -454,18 +574,18 @@ function foldScaleCall(node, table, depth, ctx) {
 	return base === undefined ? undefined : base * table.scale;
 }
 
-function foldIdentifier(name, table, depth, use, ctx) {
+function foldIdentifier(name, table, depth, ctx) {
+	if (table.reassigned.has(name)) return undefined;
 	const bindings = table.consts.get(name) ?? [];
 	if (bindings.length > 0) {
-		// Prefer the binding whose text contains the use: that is the declaration
-		// the author wrote in scope. Otherwise fold every binding and accept the
-		// value only when all of them agree and all of them fold.
-		const pool =
-			bindings.length === 1 ? bindings : enclosingBindings(bindings, use);
-		if (pool.length === 1) return foldMs(pool[0], table, depth + 1, ctx);
-		const values = pool.map((node) => foldMs(node, table, depth + 1, ctx));
+		// Several bindings of one name fold only when all of them fold and all of
+		// them agree. Which binding a use reads is a scope question (a shadowed
+		// `const BUDGET_MS` inside a suite), and this module reads the file
+		// flatly, so a disagreement stays unresolved and visible rather than
+		// naming whichever binding came first.
+		const values = bindings.map((node) => foldMs(node, table, depth + 1, ctx));
 		const folded = values.filter((ms) => ms !== undefined);
-		return folded.length === pool.length && new Set(folded).size === 1
+		return folded.length === bindings.length && new Set(folded).size === 1
 			? folded[0]
 			: undefined;
 	}
@@ -474,18 +594,7 @@ function foldIdentifier(name, table, depth, use, ctx) {
 	const other = table.openImported(bound.module);
 	if (!other || ctx.opened.has(other.file)) return undefined;
 	ctx.opened.add(other.file);
-	return foldIdentifier(bound.exported, other, depth + 1, undefined, ctx);
-}
-
-/** The bindings whose text contains the use, or all of them when none does. */
-function enclosingBindings(bindings, use) {
-	const useStart = use?.range?.().startIndex;
-	if (typeof useStart !== "number") return bindings;
-	const enclosing = bindings.filter((node) => {
-		const range = node.range();
-		return range.startIndex <= useStart && range.endIndex >= useStart;
-	});
-	return enclosing.length > 0 ? enclosing : bindings;
+	return foldIdentifier(bound.exported, other, depth + 1, ctx);
 }
 
 /**
@@ -556,6 +665,11 @@ function buildTable(file, { scale, read, registry }) {
 /** The file's own `vi.setConfig` budget, or vitest's default. */
 export function fileDefaultMs(table) {
 	if (!table) return { ms: undefined, reason: "source-unreadable" };
+	// A `vi.setConfig` that is not a module-scope statement is not the file's
+	// default, and it leaves the budget some later test runs under unpredictable,
+	// so the file has no provable default rather than a wide one (r1 F5).
+	if (table.nestedSetConfigs.length > 0)
+		return { ms: undefined, reason: "file-timeout-nested-setConfig" };
 	if (table.setConfigs.length === 0)
 		return { ms: DEFAULT_TEST_TIMEOUT_MS, reason: "project-default" };
 	const folded = table.setConfigs.map((node) => foldMs(node, table, 0));
@@ -627,7 +741,7 @@ function capOfDeclaration(table, declaration) {
 	}
 	const fallback = fileDefaultMs(table);
 	return fallback.ms === undefined
-		? { status: "unresolved", reason: "file-timeout-unresolved" }
+		? { status: "unresolved", reason: fallback.reason }
 		: { status: "resolved", capMs: fallback.ms };
 }
 
@@ -766,9 +880,11 @@ export function capLabelOf(resolution) {
 
 /**
  * Assess reports against the ratio. Returns the emitted rows (sorted), the
- * counts behind the summary line, and every identity the reports carried per
- * file, which is what tells a stale baseline row from a shard that never ran
- * its file.
+ * counts behind the summary line (including `unresolved`, how many of the
+ * judged tests have no provable cap, and `floored`, how many of those were
+ * emitted against their file's floor), and every identity the reports carried
+ * per file, which is what tells a stale baseline row from a shard that never
+ * ran its file.
  */
 export function assessReports({
 	reportValues,
@@ -784,8 +900,10 @@ export function assessReports({
 	const tables = new Map();
 	const rows = [];
 	const reported = new Map();
+	const byReason = {};
 	let tests = 0;
 	let undated = 0;
+	let unresolved = 0;
 	for (const { value, source } of reportValues) {
 		const parsed = parseTestReport(value, { source });
 		tests += parsed.rows.length;
@@ -801,6 +919,12 @@ export function assessReports({
 				tables.get(tableFile) ??
 				indexTestFile(tableFile, { scale, readFile, tables });
 			const resolution = resolveCap(table, row);
+			// Counted before the ratio filter, so a test under the floor is visible
+			// as unmeasured instead of joining the passing population (r1 F4).
+			if (resolution.status === "unresolved") {
+				unresolved += 1;
+				byReason[resolution.reason] = (byReason[resolution.reason] ?? 0) + 1;
+			}
 			const label = capLabelOf(resolution);
 			const floor = fileFloorMs(table);
 			const limit =
@@ -821,10 +945,9 @@ export function assessReports({
 	rows.sort((a, b) =>
 		a.ratio === b.ratio ? (a.id < b.id ? -1 : 1) : b.ratio - a.ratio,
 	);
-	const unknown = rows.filter((r) => r.capStatus === "unresolved");
-	const byReason = {};
-	for (const row of unknown)
-		byReason[row.reason] = (byReason[row.reason] ?? 0) + 1;
+	// Rows whose cap did not resolve were still judged, against the file's floor;
+	// `unresolved` is the whole judged population, `floored` the emitted subset.
+	const floored = rows.filter((r) => r.capStatus === "unresolved").length;
 	return {
 		rows,
 		reported,
@@ -832,8 +955,8 @@ export function assessReports({
 			tests,
 			undated,
 			emitted: rows.length,
-			over: rows.length - unknown.length,
-			unknown: unknown.length,
+			floored,
+			unresolved,
 			byReason,
 			maxRatio: rows.length ? rows[0].ratio : 0,
 		},
@@ -896,15 +1019,30 @@ export function baselineEntries(value, source = "<baseline>") {
 	return entries;
 }
 
-/** The baseline document for a run's rows (`--write-baseline`). */
+/**
+ * The baseline document for a run's rows (`--write-baseline`).
+ *
+ * One entry per reader identity (`file`, `test`, cap label): two reports can
+ * carry the same test, an overlapping shard or the same file passed twice, and
+ * `baselineEntries` refuses a duplicate identity, which would make the whole
+ * written file unreadable and read every offender back as new. The rows arrive
+ * sorted slowest-first, so keeping the first keeps the highest ratio (r1 Q4).
+ */
 export function buildBaselineDocument({ rows, generatedFrom, ratio, scale }) {
+	const unique = [];
+	const identities = new Set();
+	for (const row of rows) {
+		if (identities.has(row.id)) continue;
+		identities.add(row.id);
+		unique.push(row);
+	}
 	return {
 		schema: BASELINE_SCHEMA,
 		generatedAt: new Date().toISOString(),
 		generatedFrom,
 		ratio,
 		scale,
-		entries: rows
+		entries: unique
 			.map((row) => ({
 				file: row.file,
 				test: [...row.chain, row.title].join(" > "),
@@ -937,7 +1075,7 @@ export function formatSummary(counts, { known, added, ratio, scale }) {
 		.join(", ");
 	return `timeout-headroom: ${counts.tests} tests read, ${counts.emitted} over ${Math.round(
 		ratio * 100,
-	)}% (${known} known, ${added} new), ${counts.unknown} with an unresolved cap${
+	)}% (${known} known, ${added} new), ${counts.unresolved} with an unresolved cap${
 		reasons ? ` (${reasons})` : ""
 	}${counts.undated ? `, ${counts.undated} without a duration` : ""}, scale ${scale}`;
 }
