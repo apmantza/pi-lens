@@ -19,7 +19,8 @@
  *    `tests/fixtures/real-spawn-gate/` witness both directions through a real
  *    fork — the spawner reds, the mocked spawn stays green.
  */
-import { spawnSync } from "node:child_process";
+import cp, { spawnSync } from "node:child_process";
+import * as util from "node:util";
 import * as vm from "node:vm";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -41,16 +42,21 @@ import {
 } from "./real-spawn-admission.js";
 import {
 	REAL_SPAWN_ENTRY_POINTS,
+	chainOwner,
 	classifyFrame,
 	createRealSpawnLedger,
 	formatRealSpawnEvidence,
 	frameOf,
 	harnessSpawnCount,
 	installRealSpawnObserver,
+	repoRelative,
 	type RealSpawnLedger,
 	type RealSpawnTarget,
 } from "./real-spawn-observer.js";
 import { realSpawnLedgerView } from "./vitest-setup.js";
+
+/** A code-unit order: an explicit comparator, never the default sort. */
+const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 const SUPPORT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(SUPPORT_DIR, "../..");
@@ -135,6 +141,38 @@ describe("installRealSpawnObserver", () => {
 		expect(typeof wrapped).toBe("function");
 	});
 
+	// #5100 r3 F1: the wrapper was a bare function, so `util.promisify(execFile)`
+	// found no `[util.promisify.custom]` and resolved a string instead of
+	// `{ stdout, stderr }`: 82 tests in 6 files went red on CI. The wrapper
+	// carries every own property and symbol of what it wraps.
+	it("carries every own property and symbol, so util.promisify keeps its shape", async () => {
+		const target: RealSpawnTarget = {};
+		const custom = function (): Promise<{ stdout: string; stderr: string }> {
+			return Promise.resolve({ stdout: "out", stderr: "err" });
+		};
+		const original = function (): string {
+			return "generic";
+		};
+		Object.defineProperty(original, util.promisify.custom, { value: custom });
+		Object.defineProperty(original, "extra", { value: 7, enumerable: true });
+		target.execFile = original;
+		const ledger = createRealSpawnLedger();
+		installRealSpawnObserver(target, ledger);
+		const wrapped = target.execFile as typeof original;
+
+		expect(wrapped).not.toBe(original);
+		expect(Reflect.ownKeys(wrapped).map(String).sort(byText)).toEqual(
+			Reflect.ownKeys(original).map(String).sort(byText),
+		);
+		expect((wrapped as unknown as { extra: number }).extra).toBe(7);
+		expect(await util.promisify(wrapped)()).toEqual({
+			stdout: "out",
+			stderr: "err",
+		});
+		// The promisified spelling is a spawn entry point too: it is observed.
+		expect(ledger.calls.get("execFile")).toBe(1);
+	});
+
 	it("leaves a member that is not a function alone instead of throwing", () => {
 		const target: RealSpawnTarget = {
 			spawn: "not-a-function",
@@ -184,46 +222,137 @@ describe("installRealSpawnObserver", () => {
 // ---------------------------------------------------------------------------
 
 describe("classifyFrame", () => {
+	const ROOT = "/repo/";
+
 	it("names a harness frame, a production frame, and the boundary", () => {
+		const cls = (frame: string) => classifyFrame(frame, ROOT);
+		expect(cls("    at runTest (/repo/tests/support/x.test.ts:10:3)")).toBe(
+			"harness",
+		);
+		expect(cls("    at helper (/repo/tests/support/kit.ts:4:1)")).toBe(
+			"harness",
+		);
+		expect(cls("    at safeSpawn (/repo/clients/safe-spawn.ts:88:10)")).toBe(
+			"other",
+		);
+		expect(cls("    at Object.<anonymous> (/repo/index.ts:1:1)")).toBe("other");
 		expect(
-			classifyFrame("    at runTest (/repo/tests/support/x.test.ts:10:3)"),
-		).toBe("harness");
-		expect(
-			classifyFrame("    at helper (/repo/tests/support/kit.ts:4:1)"),
-		).toBe("harness");
-		expect(
-			classifyFrame("    at safeSpawn (/repo/clients/safe-spawn.ts:88:10)"),
-		).toBe("other");
-		expect(
-			classifyFrame("    at Object.<anonymous> (/repo/index.ts:1:1)"),
-		).toBe("other");
-		expect(
-			classifyFrame(
-				"    at ChildProcess.spawn (node:internal/child_process:421:11)",
-			),
+			cls("    at ChildProcess.spawn (node:internal/child_process:421:11)"),
 		).toBe("child_process");
 		expect(
-			classifyFrame(
-				"    at Object.spawnSync (/repo/node/common/child_process.js:10:5)",
-			),
+			cls("    at Object.spawnSync (/repo/node/common/child_process.js:10:5)"),
 		).toBe("child_process");
 	});
 
-	it("treats the instrument's own frames as the boundary, so a setup child charges no file", () => {
+	it("treats the instrument's own frames as the setup's, so a setup child charges no file", () => {
+		const cls = (frame: string) => classifyFrame(frame, ROOT);
 		expect(
-			classifyFrame(
-				"    at readGitRoot (/repo/tests/support/vitest-setup.ts:210:5)",
-			),
-		).toBe("child_process");
+			cls("    at readGitRoot (/repo/tests/support/vitest-setup.ts:210:5)"),
+		).toBe("instrument");
 		expect(
-			classifyFrame(
-				"    at note (/repo/tests/support/real-spawn-observer.ts:180:9)",
-			),
-		).toBe("child_process");
+			cls("    at note (/repo/tests/support/real-spawn-observer.ts:180:9)"),
+		).toBe("instrument");
 		// A Windows spelling of a harness frame still reads as harness.
 		expect(
-			classifyFrame("    at run (C:\\repo\\tests\\support\\x.test.ts:3:1)"),
+			classifyFrame(
+				"    at run (C:\\repo\\tests\\support\\x.test.ts:3:1)",
+				"C:\\repo",
+			),
 		).toBe("harness");
+	});
+
+	// #5100 r3 F7: the class was a `/tests/` substring of the ABSOLUTE path, so a
+	// checkout under /home/dev/tests/pi-lens read every production frame as
+	// harness and lost the timer exemption. The path under the root decides.
+	it("judges the path under the checkout, not a tests/ directory above it", () => {
+		const root = "/home/dev/tests/pi-lens/";
+		expect(
+			classifyFrame(
+				"    at safeSpawn (/home/dev/tests/pi-lens/clients/safe-spawn.ts:88:10)",
+				root,
+			),
+		).toBe("other");
+		expect(
+			classifyFrame(
+				"    at it (/home/dev/tests/pi-lens/tests/clients/x.test.ts:4:1)",
+				root,
+			),
+		).toBe("harness");
+		// A frame outside the checkout (a linked node_modules) is nobody's test.
+		expect(
+			classifyFrame("    at f (/elsewhere/tests/dep/index.js:1:1)", root),
+		).toBe("other");
+	});
+});
+
+// #5100 r3 F2: the setup's own hooks start children (`ps` in the dead-owner
+// census, the kill guard, the tmp-hygiene sweep). Their chain holds a
+// `tests/support` frame and ends at the setup's own hook, so the old rule
+// charged every file of CI shard 5 (340 of 420 reds on `spawn:ps`). The
+// owner of a chain is decided by its outermost test-tree frame.
+describe("chainOwner", () => {
+	const ROOT = "/repo/";
+	const owner = (lines: string[], truncated = false) =>
+		chainOwner(lines, truncated, ROOT);
+
+	it("hands a chain that ends at the setup's own hook to the setup", () => {
+		expect(
+			owner([
+				"    at Proxy.queryProcessTable (/repo/tests/support/vitest-setup.ts:942:16)",
+				"    at Object.listProcesses (/repo/tests/support/dead-owner-census.ts:137:13)",
+				"    at Module.runDeadOwnerCensus (/repo/tests/support/dead-owner-census.ts:249:23)",
+				"    at async Promise.all (index 1)",
+				"    at /repo/tests/support/vitest-setup.ts:2145:3",
+			]),
+		).toBe("setup");
+	});
+
+	it("charges a chain whose outermost test-tree frame is a support helper (a kit hook a test registered)", () => {
+		expect(
+			owner([
+				"    at helper (/repo/tests/support/kit.ts:4:1)",
+				"    at processTicksAndRejections (node:internal/process/task_queues:95:5)",
+			]),
+		).toBe("harness");
+	});
+
+	it("charges a chain through the setup that holds a test file's own frame", () => {
+		expect(
+			owner([
+				"    at cleanup (/repo/tests/clients/x.test.ts:9:3)",
+				"    at run (/repo/tests/support/vitest-setup.ts:2100:5)",
+			]),
+		).toBe("harness");
+	});
+
+	it("charges a test file whose chain passes through production code", () => {
+		expect(
+			owner([
+				"    at safeSpawn (/repo/clients/safe-spawn.ts:88:10)",
+				"    at it (/repo/tests/clients/x.test.ts:9:3)",
+				"    at runTest (/repo/node_modules/@vitest/runner/dist/index.js:1:1)",
+			]),
+		).toBe("harness");
+	});
+
+	it("fails closed when the capture was truncated before the outermost frame", () => {
+		const chain = [
+			"    at Object.listProcesses (/repo/tests/support/dead-owner-census.ts:137:13)",
+		];
+		expect(owner(chain, false)).toBe("harness");
+		expect(owner(chain, true)).toBe("harness");
+		expect(
+			owner(
+				[...chain, "    at x (/repo/tests/support/vitest-setup.ts:1:1)"],
+				true,
+			),
+		).toBe("harness");
+	});
+
+	it("owns nothing when no frame is under tests/", () => {
+		expect(
+			owner(["    at Timeout._onTimeout (/repo/clients/sampler.ts:5:5)"]),
+		).toBe("none");
 	});
 });
 
@@ -246,6 +375,34 @@ describe("frameOf", () => {
 		).toBe(
 			"harness:fixtureTest (tests/fixtures/real-spawn-gate/unadmitted-spawn.fixture.ts:5:3)",
 		);
+	});
+
+	// #5100 r3 F4: the root was `${process.cwd()}/`, a backslash path on
+	// Windows, while a vite-node frame spells the same file with forward
+	// slashes, so CI printed `via D:/a/pi-lens/pi-lens/tests/clients/…` and
+	// asked the author to paste an absolute route.
+	it("strips a Windows root from a forward-slash frame and from a backslash one", () => {
+		const root = "D:\\a\\pi-lens\\pi-lens";
+		expect(
+			frameOf(
+				"    at run (D:/a/pi-lens/pi-lens/tests/clients/pipeline.test.ts:78:5)",
+				"harness",
+				root,
+			),
+		).toBe("harness:run (tests/clients/pipeline.test.ts:78:5)");
+		expect(
+			frameOf(
+				"    at run (D:\\a\\pi-lens\\pi-lens\\tests\\clients\\pipeline.test.ts:78:5)",
+				"harness",
+				root,
+			),
+		).toBe("harness:run (tests/clients/pipeline.test.ts:78:5)");
+		expect(
+			repoRelative(
+				"D:/a/pi-lens/pi-lens/tests/clients/pipeline.test.ts:78",
+				root,
+			),
+		).toBe("tests/clients/pipeline.test.ts:78");
 	});
 
 	it("keeps a top-level frame, which has no parenthesised location", () => {
@@ -325,21 +482,6 @@ describe("harnessSpawnCount", () => {
 		expect(harnessSpawnCount(ledger)).toBe(0);
 		expect([...ledger.byClass.keys()]).toEqual(["other"]);
 	});
-
-	it("skips the instrument's own frames, so a setup child charges no file", () => {
-		const ledger = createRealSpawnLedger();
-		// The shared setup's own module-level children reach the wrapper with no
-		// caller frame outside the instrument (all frames are skipped): the
-		// running file owes nothing for them.
-		const skipped = [
-			"at note (/repo/tests/support/real-spawn-observer.ts:1:1)",
-			"at Object.<anonymous> (/repo/tests/support/vitest-setup.ts:2:1)",
-			"at ChildProcess.spawn (node:internal/child_process:4:1)",
-		];
-		for (const frame of skipped)
-			expect(classifyFrame(frame)).toBe("child_process");
-		expect(harnessSpawnCount(ledger)).toBe(0);
-	});
 });
 
 // ---------------------------------------------------------------------------
@@ -355,6 +497,42 @@ describe("the patch published by the shared setup", () => {
 		expect(view.total).toBeGreaterThan(before);
 		expect(view.byClass["harness"] ?? 0).toBeGreaterThan(0);
 		expect(view.entryPoints["spawnSync"] ?? 0).toBeGreaterThan(0);
+	});
+
+	// #5100 r3 F1: the patched real module must promisify exactly as the
+	// pristine one does. The reference is a child that never loaded the setup.
+	it("keeps every wrapped entry point's own keys and its promisified shape", async () => {
+		const reference = JSON.parse(
+			spawnSync(
+				process.execPath,
+				[
+					"-e",
+					`const cp = require("node:child_process");
+const out = {};
+for (const e of ${JSON.stringify(REAL_SPAWN_ENTRY_POINTS)})
+  out[e] = Reflect.ownKeys(cp[e]).map(String).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+console.log(JSON.stringify(out));`,
+				],
+				{ encoding: "utf8" },
+			).stdout,
+		) as Record<string, string[]>;
+		for (const entry of REAL_SPAWN_ENTRY_POINTS) {
+			const patched = (cp as unknown as Record<string, object>)[entry]!;
+			expect(Reflect.ownKeys(patched).map(String).sort(byText)).toEqual(
+				reference[entry],
+			);
+		}
+		for (const entry of ["exec", "execFile"] as const) {
+			const run = util.promisify(cp[entry]) as (
+				...args: unknown[]
+			) => Promise<unknown>;
+			const result = await (entry === "exec"
+				? run(
+						`${JSON.stringify(process.execPath)} -e "process.stdout.write('hi')"`,
+					)
+				: run(process.execPath, ["-e", "process.stdout.write('hi')"]));
+			expect(result).toEqual({ stdout: "hi", stderr: "" });
+		}
 	});
 
 	it("counts a real child reached through vi.importActual (#5064 shape)", async () => {
@@ -607,7 +785,7 @@ describe("the run-time observed ledger", () => {
 	const keys = Object.keys(rows);
 
 	it("is a sorted registry", () => {
-		expect(keys).toEqual([...keys].sort());
+		expect(keys).toEqual([...keys].sort(byText));
 	});
 
 	it("keys a file that exists, spelled below tests/", () => {
@@ -736,6 +914,12 @@ beforeAll(async () => {
 					// The evidence record is a measurement switch; the gate must
 					// red on its own, with no record asked for.
 					PI_LENS_REAL_SPAWN_EVIDENCE: "",
+					// CI shard 5's census runs `ps` from the setup's afterAll in
+					// every file (#5100 r3 F2): the no-op fixture must stay green.
+					PI_LENS_DEAD_OWNER_CENSUS_FILE: path.join(
+						env.tmpDir,
+						"dead-owner-census.log",
+					),
 				},
 			},
 		);
@@ -780,6 +964,29 @@ describe("the gate in a real fork", () => {
 			"spawnSync:node via tests/fixtures/real-spawn-gate/unadmitted-spawn.fixture.ts",
 		);
 		expect(message).toContain(REAL_SPAWN_OBSERVED_FILE);
+	});
+
+	// #5100 r3 F2: with the census on, the setup's own `ps` ran in this file's
+	// afterAll and was charged to it, so a file that spawns nothing went red.
+	it("passes a file that spawns nothing while the dead-owner census runs", () => {
+		expect(statusOf("setup-census-noop.fixture.ts")).toBe("passed");
+		expect(messageOf("setup-census-noop.fixture.ts")).toBe("");
+	});
+
+	// Issue #5100's acceptance: the spellings the name census had to enumerate
+	// are red through the boundary. Each is a real fork, so a spelling the
+	// observer cannot see is a green fixture here.
+	it.each([
+		["actual-spawn.fixture.ts", "spawnSync:node via"],
+		["renamed-spawn.fixture.ts", "execFileSync:node via"],
+		["production-route.fixture.ts", "spawnSync:node via"],
+	])("reds %s, which reaches child_process another way", (fixture, route) => {
+		expect(statusOf(fixture)).toBe("failed");
+		const message = messageOf(fixture);
+		expect(message).toContain("#5100 real-spawn census");
+		expect(message).toContain(
+			`${route} tests/fixtures/real-spawn-gate/${fixture}`,
+		);
 	});
 
 	it("passes the fixture whose spawn is a module mock", () => {

@@ -47,6 +47,10 @@
  *   can enumerate the live population; it is off unless a caller names the path.
  */
 
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+
 /** The `node:child_process` members that start a process. `promises.execFile`
  *  and `promises.exec` are reached through the `promises` namespace object. */
 export const REAL_SPAWN_ENTRY_POINTS = [
@@ -131,75 +135,119 @@ function commandOf(args: unknown[]): string {
 const INSTRUMENT_MODULE =
 	/[\\/]((real-spawn-observer)|(real-spawn-admission)|(vitest-setup))\.[cm]?[jt]sx?:\d+:\d+/;
 
-/** Who a stack line belongs to, for the charge. */
-export type RealSpawnCallerClass = "harness" | "child_process" | "other";
+/** Who a stack line belongs to, for the charge. `instrument` is the shared
+ *  setup's own module (and this observer's): a chain that ends there is the
+ *  setup's, not the running file's. */
+export type RealSpawnCallerClass =
+	| "harness"
+	| "instrument"
+	| "child_process"
+	| "other";
 
-/** One stack line's class. `harness` is a frame below a `tests/` directory:
- *  the running test file, or a harness helper it called. `child_process` is the
- *  boundary itself plus the instrument's own modules. Anything else —
- *  `clients/`, `tools/`, `index.ts`, `node_modules`, an anonymous frame — is
- *  not harness code by itself; whether it takes the charge depends on the rest
- *  of the chain, which is {@link callerFrames}' decision. Both separators are
- *  matched: a Windows stack frame spells the path with backslashes, and a
- *  `/tests/`-only match would leave the gate blind on the Windows lane. */
-export function classifyFrame(frame: string): RealSpawnCallerClass {
+/** A path with forward slashes only: a Windows stack frame spells a path with
+ *  backslashes where a vite-node frame spells the same file with forward
+ *  slashes, and the checkout root arrives in either form (#5100 r3 F4). */
+const toPosix = (text: string): string => text.replace(/\\/g, "/");
+
+/** The checkout root as a frame spells it, from this module's own location, so
+ *  it matches the frames by construction: the working directory is not the
+ *  checkout when a run starts elsewhere or through a link. */
+const REPO_ROOT = toPosix(
+	path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.."),
+);
+
+/** A text with the checkout root removed, so a path reads repo-relative. Both
+ *  separators match, and the root takes no trailing slash from the caller.
+ *  The one rule the ledger applies before any length cut and the route
+ *  summaries apply to the location they show (#5100). */
+export function repoRelative(text: string, root = REPO_ROOT): string {
+	return toPosix(text).replace(`${toPosix(root).replace(/\/+$/, "")}/`, "");
+}
+
+/** One stack line's class. `harness` is a frame below the checkout's `tests/`
+ *  directory: the running test file, or a harness helper it called.
+ *  `child_process` is node's own boundary; `instrument` is the setup's and the
+ *  observer's modules. Anything else — `clients/`, `tools/`, `index.ts`,
+ *  `node_modules`, an anonymous frame — is not harness code by itself; whether
+ *  it takes the charge depends on the rest of the chain, which is
+ *  {@link chainOwner}'s decision. The path judged is the one UNDER the
+ *  checkout: a checkout inside a `tests/` directory must not class its
+ *  production frames as harness (#5100 r3 F7). */
+export function classifyFrame(
+	frame: string,
+	root = REPO_ROOT,
+): RealSpawnCallerClass {
 	if (
 		frame.includes("node:child_process") ||
 		// node's own spawn internals frame reads as `node:internal/child_process`.
 		frame.includes("internal/child_process") ||
-		frame.includes("/child_process.") ||
-		// The observer's own wrapper frames sit between the caller and the real
-		// function: they are part of the boundary, not a caller. So are the
-		// shared setup's frames — the setup's own module-level children (its
-		// repo-root `git`, its hygiene probes) run while whichever file happens
-		// to be first in the worker, and charging that file for the
-		// instrument's own calls would be a flake the instrument caused.
-		// Matched by module basename, not substring: the observer's own test
-		// file (`real-spawn-observer.test.ts`) is a spawner like any other.
-		INSTRUMENT_MODULE.test(frame)
+		frame.includes("/child_process.")
 	) {
 		return "child_process";
 	}
-	return frame.includes("/tests/") || frame.includes("\\tests\\")
+	// Matched by module basename, not substring: the observer's own test file
+	// (`real-spawn-observer.test.ts`) is a spawner like any other.
+	if (INSTRUMENT_MODULE.test(frame)) return "instrument";
+	return /(^|[\s(])tests\//.test(repoRelative(frame, root))
 		? "harness"
 		: "other";
+}
+
+/** A frame of a collected test file, which makes its chain the test's. */
+const TEST_MODULE = /\.test\.[cm]?[jt]sx?:\d+:\d+/;
+
+/** Who asked for the child the chain describes. Judged on the chain's
+ *  OUTERMOST test-tree frame, innermost first in `lines`:
+ *
+ *  - `harness`: the running file asked, directly or through a helper or
+ *    production code (#5084), so it owes the admission.
+ *  - `setup`: the chain ends at the shared setup's own hook, and no test file
+ *    is in it. The kill guard, the tmp-hygiene sweep and the dead-owner census
+ *    start children from there on every file (CI shard 5's `ps` redded 340 of
+ *    420 files); charging them blames the file for the instrument's own work.
+ *  - `none`: no `tests/` frame at all (a module-level timer, a watcher,
+ *    vitest's pool): recorded, never charged, because charging it would blame
+ *    whichever file happened to be scheduled.
+ *
+ *  A capture cut short of the chain's end (`truncated`) cannot say where the
+ *  chain ends, and a chain nobody can place is charged, not excused. */
+export function chainOwner(
+	lines: readonly string[],
+	truncated: boolean,
+	root = REPO_ROOT,
+): "harness" | "setup" | "none" {
+	const tree = lines
+		.map((line) => ({ line, cls: classifyFrame(line, root) }))
+		.filter((frame) => frame.cls === "harness" || frame.cls === "instrument");
+	if (!tree.some((frame) => frame.cls === "harness")) return "none";
+	if (truncated) return "harness";
+	if (tree.some((frame) => TEST_MODULE.test(frame.line))) return "harness";
+	return tree[tree.length - 1]!.cls === "instrument" ? "setup" : "harness";
 }
 
 /** The frames the ledger keeps per call, for the route message. */
 const MAX_RECORDED_FRAMES = 4;
 
-/** How deep to look for the harness frame that caused a spawn. A test that
- *  reaches `child_process` through production code \u2014 the #5084 shape, a tool
- *  call that ends in `safeSpawn`, a client class that runs the real CLI \u2014 has
- *  its own frame below node\u2019s default `Error.stackTraceLimit` of 10. The
- *  widened capture therefore runs only when the shallow one found no harness
- *  frame at all, so a plainly harness-caused child never pays for it. */
-const DEEP_SCAN_FRAMES = 48;
+/** How deep the capture goes. A test that reaches `child_process` through
+ *  production code \u2014 the #5084 shape, a tool call that ends in `safeSpawn`, a
+ *  client class that runs the real CLI \u2014 has its own frame well below node\u2019s
+ *  default `Error.stackTraceLimit` of 10, and the setup\u2019s own hook sits at the
+ *  far end of its chain. One capture of this depth serves both questions; a
+ *  capture that fills it is {@link chainOwner}'s `truncated`. */
+const CAPTURE_FRAMES = 48;
 
-/** The caller lines of the current stack. `limit` of 0 keeps node\u2019s current
- *  `Error.stackTraceLimit`; a raised limit is restored on every path. */
-function stackLines(limit: number): string[] {
-	if (limit === 0)
-		return String(new Error().stack ?? "")
-			.split("\n")
-			.slice(2);
+/** The caller lines of the current stack, `Error.stackTraceLimit` restored on
+ *  every path. */
+function stackLines(): string[] {
 	const previous = Error.stackTraceLimit;
 	try {
-		Error.stackTraceLimit = limit;
+		Error.stackTraceLimit = CAPTURE_FRAMES;
 		return String(new Error().stack ?? "")
 			.split("\n")
 			.slice(2);
 	} finally {
 		Error.stackTraceLimit = previous;
 	}
-}
-
-/** A text with the checkout root removed, so a path reads repo-relative. The
- *  root defaults to the working directory a run starts in, the repository
- *  root. The one rule the ledger applies before any length cut and the route
- *  summaries apply to the location they show (#5100). */
-export function repoRelative(text: string, root = `${process.cwd()}/`): string {
-	return text.replace(root, "");
 }
 
 /** One caller line in ledger form: its class, then its module and position.
@@ -211,7 +259,7 @@ export function repoRelative(text: string, root = `${process.cwd()}/`): string {
  *  location). */
 export function frameOf(
 	line: string,
-	cls: RealSpawnCallerClass,
+	cls: RealSpawnCallerClass | "setup",
 	root?: string,
 ): string {
 	return `${cls}:${repoRelative(line.trim().replace(/^at\s+/, ""), root)}`;
@@ -222,38 +270,60 @@ interface SpawnCallers {
 	 *  check is the test line that asked for the child, not the `node:internal`
 	 *  machinery under it. */
 	frames: string[];
-	/** Whether any caller in the chain is harness code, however deep below a
-	 *  production frame. The file that asked for a real child owes the
-	 *  admission, whether it called `spawn` itself or drove production code
+	/** Who asked for the child ({@link chainOwner}). The file that asked owes
+	 *  the admission, whether it called `spawn` itself or drove production code
 	 *  that did: the contention the admission is about is the same either way
-	 *  (#5084). What stays exempt is a child nobody in the conversation asked
-	 *  for \u2014 a module-level timer, a watcher, vitest\u2019s own pool \u2014 because
-	 *  charging it would blame whichever file happened to be scheduled. */
-	harness: boolean;
+	 *  (#5084). */
+	owner: "harness" | "setup" | "none";
 }
 
 /** The callers that matter, with the chain\u2019s verdict. */
 function callerFrames(depth: number): SpawnCallers {
-	let lines = stackLines(0);
-	let harnessLines = lines.filter((line) => classifyFrame(line) === "harness");
-	if (harnessLines.length === 0 && lines.length >= 10) {
-		// The shallow capture ran into node\u2019s frame cap, so a harness frame
-		// may sit below it: look deeper before letting the call go uncharged.
-		lines = stackLines(DEEP_SCAN_FRAMES);
-		harnessLines = lines.filter((line) => classifyFrame(line) === "harness");
-	}
-	const frames = harnessLines
+	const lines = stackLines();
+	const owner = chainOwner(lines, lines.length >= CAPTURE_FRAMES - 1);
+	const label = owner === "setup" ? "setup" : "harness";
+	const frames = lines
+		.filter((line) => classifyFrame(line) === "harness")
 		.slice(0, depth)
-		.map((line) => frameOf(line, "harness"));
+		.map((line) => frameOf(line, label));
 	for (const line of lines) {
 		if (frames.length >= depth) break;
 		const cls = classifyFrame(line);
-		// `child_process` and already-recorded harness frames are skipped; the
-		// rest is context for a call nobody charged.
-		if (cls === "child_process" || cls === "harness") continue;
+		// `child_process`, instrument and already-recorded harness frames are
+		// skipped; the rest is context for a call nobody charged.
+		if (cls === "child_process" || cls === "harness" || cls === "instrument")
+			continue;
 		frames.push(frameOf(line, cls));
 	}
-	return { frames, harness: harnessLines.length > 0 };
+	return { frames, owner };
+}
+
+/** A copy of `fn` that notes each call and forwards it unmodified. Every own
+ *  property and symbol of `fn` is carried, so `util.promisify(wrapper)` finds
+ *  the `[util.promisify.custom]` node put on `exec` and `execFile` and resolves
+ *  `{ stdout, stderr }` as it does for the original (#5100 r3 F1: a bare
+ *  wrapper resolved a string and 82 tests in 6 files went red). The custom
+ *  function is an entry point of its own and is wrapped the same way. */
+function observed(
+	fn: (...args: unknown[]) => unknown,
+	entry: RealSpawnEntryPoint,
+	note: (entry: RealSpawnEntryPoint, args: unknown[]) => void,
+): (...args: unknown[]) => unknown {
+	const wrapper = function (this: unknown, ...args: unknown[]): unknown {
+		note(entry, args);
+		return fn.apply(this, args);
+	};
+	for (const key of Reflect.ownKeys(fn)) {
+		const descriptor = Object.getOwnPropertyDescriptor(fn, key)!;
+		if (key === promisify.custom && typeof descriptor.value === "function")
+			descriptor.value = observed(
+				descriptor.value as (...args: unknown[]) => unknown,
+				entry,
+				note,
+			);
+		Object.defineProperty(wrapper, key, descriptor);
+	}
+	return wrapper;
 }
 
 export function installRealSpawnObserver(
@@ -269,8 +339,8 @@ export function installRealSpawnObserver(
 		} else {
 			ledger.droppedCommands += 1;
 		}
-		const { frames, harness } = callerFrames(MAX_RECORDED_FRAMES);
-		const cls: RealSpawnCallerClass = harness ? "harness" : "other";
+		const { frames, owner } = callerFrames(MAX_RECORDED_FRAMES);
+		const cls = owner === "none" ? "other" : owner;
 		ledger.byClass.set(cls, (ledger.byClass.get(cls) ?? 0) + 1);
 		const call: RealSpawnCall = { entry, command: commandOf(args), frames };
 		if (ledger.samples.length < MAX_RECORDED_COMMANDS)
@@ -285,29 +355,22 @@ export function installRealSpawnObserver(
 	for (const entry of REAL_SPAWN_ENTRY_POINTS) {
 		const original = target[entry];
 		if (typeof original !== "function") continue;
-		const fn = original as (...args: unknown[]) => unknown;
-		const wrapper = function (this: unknown, ...args: unknown[]): unknown {
-			note(entry, args);
-			return fn.apply(this, args);
-		};
-		try {
-			Object.defineProperty(wrapper, "name", { value: fn.name });
-			Object.defineProperty(wrapper, "length", { value: fn.length });
-		} catch {
-			// A non-configurable name/length costs the message its label only.
-		}
-		target[entry] = wrapper;
+		target[entry] = observed(
+			original as (...args: unknown[]) => unknown,
+			entry,
+			note,
+		);
 	}
 	const promises = target.promises;
 	if (promises) {
 		for (const entry of ["exec", "execFile"] as const) {
 			const original = promises[entry];
 			if (typeof original !== "function") continue;
-			const fn = original as (...args: unknown[]) => unknown;
-			promises[entry] = function (this: unknown, ...args: unknown[]): unknown {
-				note(entry, args);
-				return fn.apply(this, args);
-			};
+			promises[entry] = observed(
+				original as (...args: unknown[]) => unknown,
+				entry,
+				note,
+			);
 		}
 	}
 }
@@ -326,6 +389,9 @@ export function harnessSpawnCount(ledger: RealSpawnLedger): number {
 	return ledger.byClass.get("harness") ?? 0;
 }
 
+/** A code-unit order, so the evidence line reads the same on every host. */
+const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
 export function formatRealSpawnEvidence(
 	file: string,
 	ledger: RealSpawnLedger,
@@ -333,11 +399,11 @@ export function formatRealSpawnEvidence(
 	if (ledger.total === 0) return undefined;
 	const entryPoints = [...ledger.calls.entries()]
 		.map(([name, count]) => `${name}=${count}`)
-		.sort()
+		.sort(byText)
 		.join(",");
 	const classes = [...ledger.byClass.entries()]
 		.map(([name, count]) => `${name}=${count}`)
-		.sort()
+		.sort(byText)
 		.join(",");
 	const samples = ledger.samples
 		.map(
