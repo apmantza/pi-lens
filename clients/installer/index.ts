@@ -4371,7 +4371,7 @@ async function installGitHubTool(
 				);
 				return undefined;
 			}
-			if (spec.bundleArchiveDlls && isWindows) {
+			if (spec.bundleArchiveDlls) {
 				const siblingDir = path.dirname(srcBinary);
 				for (const entry of await fs.readdir(siblingDir)) {
 					if (entry.toLowerCase().endsWith(".dll")) {

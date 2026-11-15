@@ -138,3 +138,6 @@ stubbs = "stubbs"
 # All-contributors table entry — a real contributor's GitHub login
 # (README.md, .all-contributorsrc), not "glyph".
 glyh = "glyh"
+# `libgcc_s_seh-1.dll`, the mingw runtime that opengrep's Windows zip ships
+# (tests/clients/installer/opengrep-windows-zip-5624.test.ts), not the word "she".
+seh = "seh"

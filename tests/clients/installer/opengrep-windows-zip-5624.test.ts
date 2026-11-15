@@ -48,7 +48,9 @@ vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({
 			const destination = /-DestinationPath '([^']+)'/.exec(args[2] ?? "")?.[1];
 			if (!destination) throw new Error("no -DestinationPath in the argv");
 			for (const member of extractedMembers) {
-				fs.writeFileSync(path.join(destination, member), `bytes:${member}`);
+				const target = path.join(destination, member);
+				fs.mkdirSync(path.dirname(target), { recursive: true });
+				fs.writeFileSync(target, `bytes:${member}`);
 			}
 		}
 		return { stdout: "2.0.0", stderr: "", status: 0 };
@@ -193,5 +195,47 @@ describe("opengrep on Windows installs from the v2.0.0 zip with its DLLs (#5624)
 		const installer = await import("../../../clients/installer/index.js");
 		expect(await installer.installTool("opengrep")).toBe(true);
 		expect(fs.readdirSync(path.join(root, "bin"))).toEqual(["opengrep.exe"]);
+	});
+
+	// Pins the `.toLowerCase()` predicate: review r1 F1 showed that dropping it
+	// passed every test. A release that spells the extension in capitals is the
+	// drift this catches.
+	it("moves an upper-case .DLL member too: the extension test ignores case", async () => {
+		extractedMembers.splice(
+			0,
+			extractedMembers.length,
+			"opengrep.exe",
+			"LIBGMP-10.DLL",
+		);
+		const root = pinnedHome();
+
+		vi.resetModules();
+		const installer = await import("../../../clients/installer/index.js");
+		expect(await installer.installTool("opengrep")).toBe(true);
+		expect(fs.readdirSync(path.join(root, "bin")).sort()).toEqual([
+			"LIBGMP-10.DLL",
+			"opengrep.exe",
+		]);
+	});
+
+	// Pins the sibling folder: review r1 F1 showed that reading the archive root
+	// instead of the exe's folder passed every test. A release that wraps the exe
+	// in a versioned folder must still bring its DLLs.
+	it("moves the DLLs beside a nested exe, not the archive root's", async () => {
+		extractedMembers.splice(
+			0,
+			extractedMembers.length,
+			"opengrep-2.0.0/opengrep.exe",
+			"opengrep-2.0.0/libgmp-10.dll",
+		);
+		const root = pinnedHome();
+
+		vi.resetModules();
+		const installer = await import("../../../clients/installer/index.js");
+		expect(await installer.installTool("opengrep")).toBe(true);
+		expect(fs.readdirSync(path.join(root, "bin")).sort()).toEqual([
+			"libgmp-10.dll",
+			"opengrep.exe",
+		]);
 	});
 });
