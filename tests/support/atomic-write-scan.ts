@@ -169,6 +169,8 @@ export const EXEMPT_RAW_WRITE_FILES: Readonly<Record<string, string>> = {
 	// within the SAME command/spawn, never re-read across a session boundary,
 	// so a crash mid-write just means that one invocation fails (surfaced
 	// normally through its own exit code), not a persisted-state read. ---
+	"staged-delta.ts":
+		"per-call commit-gate scratch: the hook net under a fresh os.tmpdir() directory, and an index blob written exclusively (wx) beside the carried file for one lane read; both removed before the call returns, never read back",
 	"sg-runner.ts":
 		"per-invocation ast-grep sgconfig/rule scratch files under a fresh session dir, consumed synchronously by the spawned ast-grep process in the same call, never read back at session_start",
 	"sgconfig.ts":

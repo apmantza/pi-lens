@@ -840,6 +840,8 @@ const LSP =
 	"language-server launch and install code: its installs follow PI_LENS_DISABLE_LSP_INSTALL (canInstall in clients/lsp/server.ts, a separate switch), and its probes (java finder, --version) install nothing";
 const OPERAND =
 	"a known-good command and literal words plus one computed operand the census cannot fold: mix credo's file argument is path.resolve(cwd, file), an absolute path that cannot read as an option, and its `...config` spread is either nothing or the literal `--config-file <generated overlay path>` of the same runner's two call sites (#5594), git diff's two operands are commit ids readGitHead read from git rev-parse, and the complexity baseline's git for-each-ref lists fixed ref names and its git show names `<ref>:./<path>`, a revision spec that cannot read as an option; no tool here installs anything. Each call's words and options are pinned by text";
+const STAGED_REPLAY =
+	"the staged-delta gate's one git runner (runGit in clients/staged-delta.ts): it replays the agent's own git add, git rm (as rm --cached), git mv (as mv -n, then update-index on the copy) and git commit --dry-run, the command about to run, on a private index copy with core.hooksPath set to a net whose prepare-commit-msg hook refuses, and reads blobs with rev-parse, ls-files, diff, hash-object and cat-file; the command is git and no verb it runs installs anything";
 const REGISTRY_PATH =
 	"a PowerShell -Command whose script is one fixed string literal reading the Machine and User Path variables (readWindowsRegistryPath); it starts no installer, and its script is pinned by text, so a changed script is a finding";
 
@@ -883,6 +885,14 @@ const ROWS: Readonly<Record<string, Row>> = {
 			sites: 1,
 			pins: [
 				`"git" ["diff", "--name-only", "--no-renames", "-z", from, to] {cwd: root, timeout: 5000, maxOutputBytes: MAX_GIT_STATUS_OUTPUT_BYTES}`,
+			],
+		},
+	}),
+	...because(STAGED_REPLAY, {
+		"clients/staged-delta.ts#safeSpawnAsync": {
+			sites: 1,
+			pins: [
+				`"git" [...replay.globals, ...(extra.config === undefined ? [] : ["-c", extra.config]), ...args] {cwd: replay.cwd, env: {...replay.env, ...extra.env, ...(extra.index === undefined ? {} : {GIT_INDEX_FILE: extra.index}), GIT_TERMINAL_PROMPT: "0", GIT_EDITOR: "false"}, timeout: GIT_TIMEOUT_MS, maxOutputBytes: MAX_GIT_OUTPUT_BYTES, input: extra.input ?? "", ...(signal === undefined ? {} : {signal})}`,
 			],
 		},
 	}),

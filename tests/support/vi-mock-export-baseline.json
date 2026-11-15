@@ -117,7 +117,7 @@
 	"tests/clients/knip-client.test.ts:../../clients/safe-spawn.js:[\"safeSpawnAsync\"]": 25,
 	"tests/clients/knip-project-toolchain.test.ts:../../clients/safe-spawn.js:[\"safeSpawnAsync\"]": 14,
 	"tests/clients/latency-logger.test.ts:../../clients/ndjson-logger.js:[\"createNdjsonLogger\"]": 1,
-	"tests/clients/lazy-seams-eviction.test.ts:../../clients/dispatch/integration.js:[\"__stub\"]": 24,
+	"tests/clients/lazy-seams-eviction.test.ts:../../clients/dispatch/integration.js:[\"__stub\"]": 25,
 	"tests/clients/lazy-seams-eviction.test.ts:../../clients/formatters.js:[\"__stub\"]": 52,
 	"tests/clients/lazy-seams-eviction.test.ts:../../clients/lsp/capabilities.js:[\"__stub\"]": 12,
 	"tests/clients/lsp/classic-repair-rearm.test.ts:../../../clients/installer/index.js:[\"ensureTool\",\"findManagedToolBinary\",\"getToolEnvironment\"]": 50,

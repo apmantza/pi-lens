@@ -2148,6 +2148,8 @@ export type DegradationKind =
 	 * Subject is the command label; the reason names the stream and the error.
 	 */
 	| "spawn-output-handler-fault"
+	/** `staged-delta-degraded`: #5553: the commit gate could not read the staged delta (a command it cannot replay, a git read that failed or was cut, an unreadable file, a lane that gave no answer, a throw or the bound) and refused the commit. Subject is the reason; once per reason per session. */
+	| "staged-delta-degraded"
 	/** `startup-analyzer-disabled`: A configured analyzer was deliberately skipped for this session. */
 	| "startup-analyzer-disabled"
 	/** `startup-warm-skipped`: A project-size bound skipped the session-start warm pipeline (#4126). */
