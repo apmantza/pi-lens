@@ -394,9 +394,9 @@ const WRITE_SITES: Record<string, SiteRow> = {
 		why: 'the string "fs" is a boundary-category label, not a module',
 	},
 	"clients/dispatch/integration.ts": {
-		sites: 2,
-		cls: "scratch",
-		why: "a credited script write's HEAD copy, written beside the file under a pi-lens-seed- name for one seed run and removed when the run ends (#5616)",
+		sites: 5,
+		cls: "state",
+		why: "two writers. Given bytes (a credited script write's HEAD copy, the commit gate's staged blob) are written beside the file under a pi-lens-seed- name for one seed run only when a lane of the run reads the disk, and removed when the run ends or when its own write fails after creating it (#5616, #5621). Before that copy exists, one line `pi-lens-seed-*` is added to the repository's local info/exclude (the git common dir's, never a tracked .gitignore), once and only when absent (#5621)",
 	},
 	"clients/dispatch/rules/error-swallowing.ts": {
 		sites: 1,
@@ -615,9 +615,9 @@ const WRITE_SITES: Record<string, SiteRow> = {
 		why: "the merged ast-grep rule directory and sgconfig under the scanner report directory",
 	},
 	"clients/staged-delta.ts": {
-		sites: 7,
+		sites: 5,
 		cls: "scratch",
-		why: "the commit gate's per-call scratch: a temporary directory under the OS temp dir with the index copies and the hook net, and an index blob written beside the carried file under a pi-lens-staged- name for one lane read, each removed before the call returns",
+		why: "the commit gate's per-call scratch: a temporary directory under the OS temp dir with the index copies and the hook net, removed before the call returns",
 	},
 	"clients/test-runner-client.ts": {
 		sites: 3,

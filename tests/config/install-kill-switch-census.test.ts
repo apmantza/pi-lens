@@ -164,6 +164,7 @@ const KNOWN_GOOD: Readonly<Record<string, readonly string[]>> = {
 	gh: ["auth", "token"],
 	git: [
 		"--exclude-standard",
+		"--git-common-dir",
 		"--ignored",
 		"--is-inside-work-tree",
 		"--name-only",

@@ -1600,7 +1600,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// the target with `path.basename`, the same call every walker path uses.
 		"clients/source-walker.ts": 4,
 		"clients/spawn-timeout-cooldown.ts": 3,
-		"clients/staged-delta.ts": 13,
+		"clients/staged-delta.ts": 10,
 		"clients/startup-scan.ts": 7,
 		// 61 -> 66: filesystem ownership/discovery operations plus the alias
 		// exception's physical policy-relative path (R4). These remain filesystem
@@ -1872,7 +1872,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/dispatcher.ts": 36,
 		// 1 -> 3 (#5553): the staged read leaves out a lane row whose `status`
 		// is skipped for a stated cause, and names the others' `status`.
-		"clients/dispatch/integration.ts": 3,
+		// 3 -> 4 (#5621): `ensureSeedCopyExcluded` reads the exit `status` of its
+		// one `git rev-parse`, the same member sense as the rows above.
+		"clients/dispatch/integration.ts": 4,
 		"clients/dispatch/pending-runner-findings.ts": 1,
 		"clients/dispatch/runners/actionlint.ts": 1,
 		"clients/dispatch/runners/ast-grep-napi.ts": 11,

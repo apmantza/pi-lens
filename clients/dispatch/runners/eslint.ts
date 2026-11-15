@@ -136,6 +136,7 @@ const eslintRunner: RunnerDefinition = {
 	appliesTo: ["jsts"],
 	priority: PRIORITY.LINT_SECONDARY,
 	requiresConfig: (cwd) => hasToolConfig("eslint", cwd),
+	lintsGivenContent: true,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		// `cwd` is where the child starts (the config's directory, #5541); the
@@ -159,10 +160,23 @@ const eslintRunner: RunnerDefinition = {
 			return toolAbsentSkip(packageDir, { checker: eslintProbe });
 		}
 
+		// #5621: given bytes arrive on stdin under the file's real path, so the
+		// config, the ignores and the reported `filePath` are the file's.
 		const result = await safeSpawnAsync(
 			cmd,
-			["--format", "json", "--no-error-on-unmatched-pattern", ctx.filePath],
-			{ timeout: 30000, cwd },
+			[
+				"--format",
+				"json",
+				"--no-error-on-unmatched-pattern",
+				...(ctx.givenContent === undefined
+					? [ctx.filePath]
+					: ["--stdin", "--stdin-filename", ctx.filePath]),
+			],
+			{
+				timeout: 30000,
+				cwd,
+				...(ctx.givenContent !== undefined && { input: ctx.givenContent }),
+			},
 		);
 
 		// Exit table: 0 is clean-or-findings, and 1/2 are ran outcomes whose

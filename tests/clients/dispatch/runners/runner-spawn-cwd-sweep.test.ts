@@ -151,7 +151,9 @@ const POPULATION_FILES = [
 // #5410: 80 -> 79, clients/lsp/jvm-runtime.ts stopped spawning `which java`:
 // the registry's PATH-only checker probes it.
 // #5553: 79 -> 80, clients/staged-delta.ts (the commit gate's git replay).
-const EXPECTED_FILES = 80;
+// #5621: 80 -> 81, clients/dispatch/integration.ts (the `git rev-parse` that
+// finds the exclude file for a seed copy).
+const EXPECTED_FILES = 81;
 // 135 -> 134 (#4532 round 3): `findBinaryOnPath` stopped spawning
 // `which`/`where` — the bare-command probe resolved its own binary through the
 // path and cwd it was asked to judge, so a project-supplied `which` ran. It is
@@ -176,7 +178,10 @@ const EXPECTED_FILES = 80;
 // project root; its cwd is the runner's `resolveRunnerCwd` binding.
 // 128 -> 129 (#5553): the commit gate's git replay (`runGit` in
 // clients/staged-delta.ts), admitted by name in ORIGIN_ADMISSION_ROWS.
-const EXPECTED_DIRECT_SITES = 129;
+// 129 -> 130 (#5621): `git rev-parse --git-common-dir` in
+// `ensureSeedCopyExcluded` (clients/dispatch/integration.ts), admitted by name
+// in ORIGIN_ADMISSION_ROWS; its one caller is a NO_CWD_EXEMPTION_ROWS row.
+const EXPECTED_DIRECT_SITES = 130;
 /**
  * Every same-file spawn-routing wrapper call site the scan discovers. Pinned
  * as a LIST, not a count, because the list is the part round 2 got wrong: it
@@ -202,6 +207,7 @@ const EXPECTED_WRAPPER_SITES = [
 	"clients/dependency-checker.ts:runMadgeSpawn",
 	"clients/dependency-checker.ts:runMadgeSpawn",
 	"clients/dependency-checker.ts:runScanProject",
+	"clients/dispatch/integration.ts:ensureSeedCopyExcluded",
 	"clients/dispatch/runners/biome-check.ts:resolveBiomeFixKinds",
 	"clients/dispatch/runners/helm-lint.ts:lintChart",
 	"clients/dispatch/runners/helm-render.ts:runIacPass",
@@ -370,6 +376,10 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"forks the review worker with `process.execPath`; the project it must analyse is passed explicitly as the `--cwd=<dir>` argv flag, so the child's own directory is not the channel",
 	],
 	[
+		"clients/dispatch/integration.ts#prepareSeedLaneRun:ce8d9e31~ce8d9e31",
+		"#5621: the call to ensureSeedCopyExcluded passes the directory the seed copy is about to be written in (the given file's own directory); the `git rev-parse --git-common-dir` behind it asks which repository holds that directory, the query's subject, and resolves no project configuration",
+	],
+	[
 		"clients/safe-spawn.ts#safeSpawnAsync.killTree:77f62fd4",
 		"`taskkill /F /T /PID <pid>` — kills a process tree by pid on Windows; it touches no file",
 	],
@@ -422,6 +432,10 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/staged-delta.ts#runGit:67db8378~b01c76f2",
 		"#5553: cwd is the directory the agent's own git command runs in (the session cwd after any literal `cd` the planner followed), so the replayed `git commit --dry-run` resolves the repository and the pathspecs exactly as the real command will; a tool-cwd root would change both",
+	],
+	[
+		"clients/dispatch/integration.ts#ensureSeedCopyExcluded:1404b4b3~7e9cb37a",
+		"#5621: cwd is ensureSeedCopyExcluded's own `dir` parameter, the directory the seed copy goes in; `git rev-parse --git-common-dir` reports on the repository that holds it, so a marker root would answer about a different repository. Its one caller is the checked site (the no-cwd row for prepareSeedLaneRun)",
 	],
 	[
 		"clients/safe-spawn.ts#safeSpawn:ad6fe3ed~be4673bc",

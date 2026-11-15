@@ -361,7 +361,7 @@ function write(proj: string, file: string, bytes: string): void {
 function stagedCopies(proj: string): string[] {
 	return git(proj, "status", "--porcelain", "--untracked-files=all")
 		.split("\n")
-		.filter((line) => line.includes("pi-lens-staged-"));
+		.filter((line) => line.includes("pi-lens-seed-"));
 }
 
 let seeded = 0;

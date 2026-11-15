@@ -2006,6 +2006,14 @@ export type DegradationKind =
 	 * the scan threw. Subject is the tool; counted, with the latest message kept.
 	 */
 	| "security-scan-report-failed"
+	/**
+	 * `seed-exclude-unwritable`: #5621: the repository's local exclude file
+	 * (`info/exclude` of the common git dir) could not be read or written, or
+	 * git gave no answer, so the seed copy written beside a file for one run is
+	 * not excluded from `git add -A`. The copy is still written. Once per
+	 * session.
+	 */
+	| "seed-exclude-unwritable"
 	| "self-drift-hash-budget-exhausted"
 	/** `self-drift-unverifiable`: A self-drift baseline could not be verified within its available evidence. */
 	| "self-drift-unverifiable"
