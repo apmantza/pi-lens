@@ -1,0 +1,83 @@
+{
+	"_provenance": "Asset names of each repo latest release, read 2026-11-15 with: gh release view --repo <repo> --json tagName,assets. Names only; the installer reads releases/latest at install time (#5624).",
+	"tools": {
+		"opengrep": {
+			"repo": "opengrep/opengrep",
+			"tag": "v2.0.0",
+			"assets": [
+				"opengrep_linux_aarch64",
+				"opengrep_linux_aarch64.cert",
+				"opengrep_linux_aarch64.sig",
+				"opengrep_linux_x86",
+				"opengrep_linux_x86.cert",
+				"opengrep_linux_x86.sig",
+				"opengrep_osx_arm64",
+				"opengrep_osx_arm64.cert",
+				"opengrep_osx_arm64.sig",
+				"opengrep_osx_x86",
+				"opengrep_osx_x86.cert",
+				"opengrep_osx_x86.sig",
+				"opengrep_windows_x86.zip",
+				"opengrep_windows_x86.zip.cert",
+				"opengrep_windows_x86.zip.sig"
+			]
+		},
+		"hadolint": {
+			"repo": "hadolint/hadolint",
+			"tag": "v2.15.1",
+			"assets": [
+				"checksums.sha256",
+				"hadolint-linux-arm64",
+				"hadolint-linux-x86_64",
+				"hadolint-macos-arm64",
+				"hadolint-macos-x86_64",
+				"hadolint-windows-x86_64.exe"
+			]
+		},
+		"vale": {
+			"repo": "vale-cli/vale",
+			"tag": "v3.27.0",
+			"assets": [
+				"vale_3.27.0_checksums.txt",
+				"vale_3.27.0_Linux_64-bit.tar.gz",
+				"vale_3.27.0_Linux_arm64.tar.gz",
+				"vale_3.27.0_macOS_64-bit.tar.gz",
+				"vale_3.27.0_macOS_arm64.tar.gz",
+				"vale_3.27.0_wasm.tar.gz",
+				"vale_3.27.0_Windows_64-bit.zip",
+				"vale_3.27.0_Windows_arm64.zip"
+			]
+		},
+		"shfmt": {
+			"repo": "mvdan/sh",
+			"tag": "v3.14.1",
+			"assets": [
+				"shfmt_v3.14.1_darwin_amd64",
+				"shfmt_v3.14.1_darwin_arm64",
+				"shfmt_v3.14.1_linux_386",
+				"shfmt_v3.14.1_linux_amd64",
+				"shfmt_v3.14.1_linux_arm",
+				"shfmt_v3.14.1_linux_arm64",
+				"shfmt_v3.14.1_windows_386.exe",
+				"shfmt_v3.14.1_windows_amd64.exe"
+			]
+		},
+		"tflint": {
+			"repo": "terraform-linters/tflint",
+			"tag": "v0.66.0",
+			"assets": [
+				"checksums.txt",
+				"checksums.txt.keyless.sig",
+				"checksums.txt.pem",
+				"tflint_darwin_amd64.zip",
+				"tflint_darwin_arm64.zip",
+				"tflint_linux_386.zip",
+				"tflint_linux_amd64.zip",
+				"tflint_linux_arm.zip",
+				"tflint_linux_arm64.zip",
+				"tflint_windows_386.zip",
+				"tflint_windows_amd64.zip"
+			]
+		}
+	}
+}
