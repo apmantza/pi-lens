@@ -990,6 +990,205 @@ it("names its own budget", { timeout: 30_000 }, async () => {});
 		).toContain("2 known, 0 new");
 	});
 
+	it("annotates ten new offenders and counts the rest in the log", () => {
+		// The annotation cap is a rate limit on GitHub's check run, not on the
+		// population: a shard with more new offenders than the cap has to say how
+		// many there are (round 1 F7: widening the cap to 10000 survived with no
+		// red, so the truncation itself was unobserved).
+		const titles = Array.from(
+			{ length: 12 },
+			(_, i) => `spends most of its budget ${i + 1}`,
+		);
+		const file = source(
+			"annot/capped.test.ts",
+			[
+				'import { it } from "vitest";',
+				"",
+				...titles.map((t) => `it("${t}", { timeout: 1_000 }, async () => {});`),
+				"",
+			].join("\n"),
+		);
+		const reportFile = report(
+			"reports/annot.json",
+			file,
+			titles.map((title) => ({ title, duration: 700 })),
+		);
+		const { lines } = run([
+			"--report",
+			reportFile,
+			"--baseline",
+			at("baseline/none-annot.json"),
+		]);
+		const warnings = lines.filter(
+			(line) =>
+				line.startsWith("::warning title=test-timeout-headroom::") &&
+				line.includes("spends most of its budget"),
+		);
+		expect(warnings.length).toBe(10);
+		expect(
+			lines.some((line) =>
+				line.includes("2 further new offenders (see the step log)"),
+			),
+		).toBe(true);
+	});
+
+	it("says the ledger is absent when no baseline file exists", () => {
+		// Round 1 F7: the missing-baseline notice had no red, so dropping it kept
+		// the run silent about why every row was new.
+		const file = source(
+			"missing/no-baseline.test.ts",
+			`import { it } from "vitest";
+
+it("runs long with no ledger beside it", { timeout: 1_000 }, async () => {});
+`,
+		);
+		const reportFile = report("reports/missing-baseline.json", file, [
+			{ title: "runs long with no ledger beside it", duration: 800 },
+		]);
+		const { lines } = run([
+			"--report",
+			reportFile,
+			"--baseline",
+			at("baseline/absent-notice.json"),
+		]);
+		expect(
+			lines.some(
+				(line) =>
+					line.includes("no baseline at") &&
+					line.includes("every row below is new"),
+			),
+		).toBe(true);
+	});
+
+	it("says an assertion that carried no duration could not be judged", () => {
+		// Round 1 F7: the undated count had no red either, and an unjudged
+		// assertion must not read as a passing one (shape 10).
+		const file = source(
+			"undated/no-duration.test.ts",
+			`import { it } from "vitest";
+
+it("finishes without reporting a duration", { timeout: 1_000 }, async () => {});
+`,
+		);
+		const reportFile = report("reports/undated.json", file, [
+			{ title: "finishes without reporting a duration" },
+		]);
+		const { lines } = run([
+			"--report",
+			reportFile,
+			"--baseline",
+			at("baseline/none-undated.json"),
+		]);
+		expect(rowLines(lines, file).length).toBe(0);
+		expect(
+			lines.some((line) =>
+				line.includes(
+					"1 ran assertions carried no duration and could not be judged",
+				),
+			),
+		).toBe(true);
+	});
+
+	it("leaves a title two declarations disagree about unresolved", () => {
+		// Round 1 F7: the fail-closed ambiguity guard had no red. Two declarations
+		// can answer one reported title (an exact `it` and a template that fills to
+		// the same text); agreeing budgets are one answer, disagreeing ones are no
+		// answer, and the row is then judged against the file floor.
+		const file = source(
+			"ambiguous/two-caps.test.ts",
+			`import { it } from "vitest";
+
+it("shares one title across two budgets", { timeout: 20_000 }, async () => {});
+it("shares one title across two budgets", { timeout: 5_000 }, async () => {});
+`,
+		);
+		const reportFile = report("reports/ambiguous.json", file, [
+			{ title: "shares one title across two budgets", duration: 14_000 },
+		]);
+		const { lines } = run([
+			"--report",
+			reportFile,
+			"--baseline",
+			at("baseline/none-ambiguous.json"),
+		]);
+		expect(summary(lines)).toContain("1 with an unresolved cap");
+		const rows = rowLines(lines, file);
+		expect(rows.length).toBe(1);
+		expect(rows[0]).toContain("14000 ms");
+	});
+
+	it("floors an unresolved cap at the file default when the file also runs tests at it", () => {
+		// The floor is the file default whenever any test in the file relies on it,
+		// not the narrowest declared cap (round 1 F7: dropping that check survived,
+		// because no case mixed a defaulted test with a narrow declared one).
+		const file = source(
+			"floor/absent-decl.test.ts",
+			[
+				'import { it, vi } from "vitest";',
+				"",
+				"vi.setConfig({ testTimeout: 20_000 });",
+				"",
+				'it("keeps a declared budget", { timeout: 8_000 }, async () => {});',
+				'it("runs at the file default", async () => {});',
+				"const reboundBudget = { timeout: 15_000 };",
+				"reboundBudget.timeout = 30_000;",
+				'it("spends a budget it cannot settle", reboundBudget, async () => {});',
+				"",
+			].join("\n"),
+		);
+		const reportFile = report("reports/floor-absent.json", file, [
+			{ title: "spends a budget it cannot settle", duration: 11_500 },
+		]);
+		// --scale 1 keeps the numbers of this case the ones the branch decides on,
+		// whatever the lane's scale is.
+		const { lines } = run([
+			"--report",
+			reportFile,
+			"--baseline",
+			at("baseline/none-floor.json"),
+			"--scale",
+			"1",
+		]);
+		expect(summary(lines)).toContain("1 with an unresolved cap");
+		expect(rowLines(lines, file)).toEqual([]);
+	});
+
+	it("floors an unresolved cap at the narrowest budget of a fully declared file", () => {
+		// The other side of the same rule: where every test of the file names a
+		// budget narrower than the file default, an unresolvable one is judged
+		// against the narrowest, not against the default.
+		const file = source(
+			"floor/all-declared.test.ts",
+			[
+				'import { it, vi } from "vitest";',
+				"",
+				"vi.setConfig({ testTimeout: 20_000 });",
+				"",
+				'it("keeps a declared budget", { timeout: 8_000 }, async () => {});',
+				'it("keeps a wider one", { timeout: 9_000 }, async () => {});',
+				"",
+			].join("\n"),
+		);
+		const reportFile = report("reports/floor-all.json", file, [
+			{
+				title: "reported under a title the source does not carry",
+				duration: 11_500,
+			},
+		]);
+		const { lines } = run([
+			"--report",
+			reportFile,
+			"--baseline",
+			at("baseline/none-all.json"),
+			"--scale",
+			"1",
+		]);
+		expect(summary(lines)).toContain("1 over 60%");
+		const rows = rowLines(lines, file);
+		expect(rows.length).toBe(1);
+		expect(rows[0]).toContain("floor 8000 ms");
+	});
+
 	it("leaves the committed baseline self-consistent", () => {
 		const committed = join(ROOT, "scripts/test-timeout-headroom-baseline.json");
 		const loaded = loadBaseline(committed);
