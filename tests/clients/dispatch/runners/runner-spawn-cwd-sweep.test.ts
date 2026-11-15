@@ -376,10 +376,6 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"forks the review worker with `process.execPath`; the project it must analyse is passed explicitly as the `--cwd=<dir>` argv flag, so the child's own directory is not the channel",
 	],
 	[
-		"clients/package-manager.ts#probeGlobalBinDirs:4e67f697",
-		"`npm config get prefix` / `pnpm bin -g` / `yarn global bin` — global install-location queries; under untrusted pi trust they run from HOME (#4530) so a project `.npmrc` cannot redirect them",
-	],
-	[
 		"clients/dispatch/integration.ts#prepareSeedLaneRun:ce8d9e31~ce8d9e31",
 		"#5621: the call to ensureSeedCopyExcluded passes the directory the seed copy is about to be written in (the given file's own directory); the `git rev-parse --git-common-dir` behind it asks which repository holds that directory, the query's subject, and resolves no project configuration",
 	],
@@ -608,6 +604,10 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/installer/index.ts#runCommand:bb1c961f~dbf27697",
 		"cwd is runCommand's own `cwd` parameter; its three call sites in this file are the checked ones",
+	],
+	[
+		"clients/package-manager.ts#probeGlobalBinDirs:7a499d5e~eef5e504",
+		"`npm config get prefix` / `pnpm bin -g` / `yarn global bin`, global install-location queries, run from HOME under every trust (#4530, #5632): the managers read project configuration and create their bin dir from their cwd, so a project `.npmrc` cannot redirect them and a relative PNPM_HOME cannot write into the repository (the same rule as probeUserBase)",
 	],
 	[
 		"clients/installer/index.ts#probeUserBase:46b6fb79~eef5e504",

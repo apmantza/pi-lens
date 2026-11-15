@@ -53,6 +53,7 @@ import {
 } from "../../clients/lsp/jvm-runtime.js";
 import {
 	_resetPackageManagerCache,
+	allAvailableGlobalBinDirs,
 	findGlobalBinary,
 } from "../../clients/package-manager.js";
 import { GoServer } from "../../clients/lsp/server.js";
@@ -144,6 +145,15 @@ function plant(dir: string, marker: string, name = TOOL): string {
 
 function ran(marker: string): boolean {
 	return fs.existsSync(marker);
+}
+
+/** The lines a stand-in appended to `log`, oldest first; none when it never ran. */
+function readLog(log: string): string[] {
+	if (!fs.existsSync(log)) return [];
+	return fs
+		.readFileSync(log, "utf8")
+		.split("\n")
+		.filter((line) => line.length > 0);
 }
 
 /**
@@ -892,13 +902,44 @@ describe.skipIf(!POSIX)("package-manager global lookups (#4530)", () => {
 		expect(ran(marker)).toBe(true);
 	});
 
-	it("F8/A4: project configuration cannot redirect the global-bin query", async () => {
-		// The stand-in answers like npm does: a `.npmrc` in its cwd sets the
-		// prefix. The redirected prefix sits OUTSIDE the session, so only the
-		// query's cwd (not the target judgment) can keep it out.
+	it.each(["trusted", "untrusted"] as const)(
+		"F8/A4: project configuration cannot redirect the global-bin query (%s)",
+		async (trust) => {
+			setProjectTrustState(trust);
+			// The stand-in answers like npm does: a `.npmrc` in its cwd sets the
+			// prefix. The redirected prefix sits OUTSIDE the session, so only the
+			// query's cwd (not the target judgment) can keep it out. Under `trusted`
+			// the query used to run in the session and read that `.npmrc` (#5632).
+			const redirected = path.join(layout.outside, "redirected");
+			const honest = path.join(layout.root, "honest-prefix");
+			fs.mkdirSync(path.join(honest, "bin"), { recursive: true });
+			plant(path.join(redirected, "bin"), path.join(layout.root, "unused"));
+			fs.writeFileSync(
+				path.join(layout.main, ".npmrc"),
+				`prefix=${redirected}\n`,
+			);
+			stub.plantOnPath(
+				"npm",
+				[
+					`if [ "$*" != 'config get prefix' ]; then exit 1; fi`,
+					`if [ -f .npmrc ]; then printf '%s\\n' '${redirected}'; else printf '%s\\n' '${honest}'; fi`,
+				].join("\n"),
+			);
+
+			expect(await findGlobalBinary(TOOL)).toBeUndefined();
+		},
+	);
+
+	it("F8/A4: a trusted lookup answers from HOME, so the redirected answer is served under neither trust", async () => {
+		// #5632: a trusted query used to run in the project and reuse its `.npmrc`
+		// answer. Both trust states now answer the honest prefix, so the redirected
+		// tool is never served, before or after the flip to untrusted.
 		const redirected = path.join(layout.outside, "redirected");
 		const honest = path.join(layout.root, "honest-prefix");
-		fs.mkdirSync(path.join(honest, "bin"), { recursive: true });
+		const honestTool = plant(
+			path.join(honest, "bin"),
+			path.join(layout.root, "unused"),
+		);
 		plant(path.join(redirected, "bin"), path.join(layout.root, "unused"));
 		fs.writeFileSync(
 			path.join(layout.main, ".npmrc"),
@@ -912,35 +953,10 @@ describe.skipIf(!POSIX)("package-manager global lookups (#4530)", () => {
 			].join("\n"),
 		);
 
-		expect(await findGlobalBinary(TOOL)).toBeUndefined();
-	});
-
-	it("F8/A4: an answer made under trust never serves an untrusted lookup", async () => {
-		// Trusted, the query runs in the project and reads its `.npmrc`; that
-		// redirected answer must not be reused once the trust answer changes.
-		const redirected = path.join(layout.outside, "redirected");
-		const honest = path.join(layout.root, "honest-prefix");
-		fs.mkdirSync(path.join(honest, "bin"), { recursive: true });
-		const redirectedTool = plant(
-			path.join(redirected, "bin"),
-			path.join(layout.root, "unused"),
-		);
-		fs.writeFileSync(
-			path.join(layout.main, ".npmrc"),
-			`prefix=${redirected}\n`,
-		);
-		stub.plantOnPath(
-			"npm",
-			[
-				`if [ "$*" != 'config get prefix' ]; then exit 1; fi`,
-				`if [ -f .npmrc ]; then printf '%s\\n' '${redirected}'; else printf '%s\\n' '${honest}'; fi`,
-			].join("\n"),
-		);
-
 		setProjectTrustState("trusted");
-		expect(await findGlobalBinary(TOOL)).toBe(redirectedTool);
+		expect(await findGlobalBinary(TOOL)).toBe(honestTool);
 		resetProjectTrust();
-		expect(await findGlobalBinary(TOOL)).toBeUndefined();
+		expect(await findGlobalBinary(TOOL)).toBe(honestTool);
 	});
 
 	it("F11: two session cwds share one manager probe (no cwd in the key)", async () => {
@@ -952,6 +968,71 @@ describe.skipIf(!POSIX)("package-manager global lookups (#4530)", () => {
 
 		expect(stub.queries()).toEqual(["config get prefix"]);
 	});
+
+	/**
+	 * #5632: under trust the global-bin query ran in the session cwd, so a
+	 * relative PNPM_HOME made `pnpm bin -g` create a literal `${HOME}` tree in
+	 * the repository (the reporter's `~/.zshrc` export). Each stand-in logs the
+	 * directory it ran from; the pnpm stand-in creates `$PNPM_HOME/bin` relative
+	 * to that directory, as the reported `pnpm bin -g` side effect does (pnpm is
+	 * not installed on the CI host, so this mirrors the report, not a live run).
+	 * PATH holds only the stub's stand-ins, so the stand-in names `/bin/mkdir`
+	 * absolutely; a bare `mkdir` would be "not found" and the tree never made.
+	 * Every manager now runs from HOME under every trust state; the untrusted
+	 * and unknown rows were already HOME and are the control.
+	 */
+	it.each(
+		(["npm", "pnpm", "yarn"] as const).flatMap((pm) =>
+			(["trusted", "untrusted", "unknown"] as const).map(
+				(trust) => [pm, trust] as const,
+			),
+		),
+	)(
+		"F14/A5: the %s global-bin query runs from HOME under %s trust (#5632)",
+		async (pm, trust) => {
+			const log = path.join(layout.root, "query-cwd.log");
+			const honest = path.join(layout.root, "honest-prefix");
+			const script = {
+				npm: [
+					`if [ "$*" != 'config get prefix' ]; then exit 1; fi`,
+					`printf '%s\\n' "$(pwd -P)" >> '${log}'`,
+					`printf '%s\\n' '${honest}'`,
+				],
+				pnpm: [
+					`if [ "$*" != 'bin -g' ]; then exit 1; fi`,
+					`printf '%s\\n' "$(pwd -P)" >> '${log}'`,
+					`/bin/mkdir -p "$PNPM_HOME/bin"`,
+					`printf '%s\\n' "$PNPM_HOME/bin"`,
+				],
+				yarn: [
+					`if [ "$*" != 'global bin' ]; then exit 1; fi`,
+					`printf '%s\\n' "$(pwd -P)" >> '${log}'`,
+					`printf '%s\\n' '${honest}/bin'`,
+				],
+			}[pm];
+			stub.plantOnPath(pm, script.join("\n"));
+			cleanups.push(withEnv({ PNPM_HOME: "${HOME}/Library/pnpm" }));
+			setProjectTrustState(trust);
+
+			const dirs = await allAvailableGlobalBinDirs();
+
+			expect(fs.existsSync(path.join(layout.main, "${HOME}"))).toBe(false);
+			expect(readLog(log)).toEqual([layout.home]);
+			if (pm === "pnpm") {
+				// #5632 review F1: the answer is relative, so it resolves against the
+				// query cwd (HOME), the dir the side effect landed in, not the session.
+				expect(dirs).toEqual([
+					path.join(layout.home, "${HOME}", "Library", "pnpm", "bin"),
+				]);
+				// The probe still runs; its side effect lands in the pinned HOME.
+				expect(
+					fs.existsSync(
+						path.join(layout.home, "${HOME}", "Library", "pnpm", "bin"),
+					),
+				).toBe(true);
+			}
+		},
+	);
 
 	it("F10/A11: Java resolves again after a trust flip", async () => {
 		const jdk = path.join(layout.outside, "jdk");

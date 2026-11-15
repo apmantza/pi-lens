@@ -39,6 +39,7 @@ per-PR loop itself is `docs/pi-lens-merge-policy.md`.
   <reason>`; the body lint refuses a body without it.
 - The per-PR loop (review, verify, auto-merge on green), round routing, the
   merge gate and the Common mistakes table live in `docs/pi-lens-merge-policy.md`.
-- Read CI with `node scripts/ci-verdict.mjs <pr|sha>` (exact head, all pages).
+- Read CI with `node scripts/ci-verdict.mjs <pr|sha>` (exact head, all pages;
+  a bare sha skips the PR-rollup check, so read the PR number, #5629).
   Never merge on absent, stale, or advisory-only checks.
 

@@ -9,6 +9,7 @@ import {
 	run,
 } from "../../scripts/ci-verdict.mjs";
 import { isNonPrCiEvent } from "../../scripts/lib/ci-checks.mjs";
+import { greenGateView } from "../support/ci-verdict-gate-view.js";
 
 /**
  * #4090: ci-verdict gated on every check-run attached to a commit, including
@@ -124,6 +125,7 @@ async function verdictRaw({
 				headRefOid: sha,
 				mergeable: "MERGEABLE",
 				author,
+				...greenGateView(required),
 			});
 		const endpoint = args[1] ?? "";
 		if (endpoint.endsWith("/protection"))

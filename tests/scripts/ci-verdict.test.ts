@@ -52,6 +52,7 @@ import {
 	run,
 	transportExit,
 } from "../../scripts/ci-verdict.mjs";
+import { greenGateView } from "../support/ci-verdict-gate-view.js";
 import {
 	ADVISORY_CHECKS,
 	isAdvisoryCheck,
@@ -525,7 +526,12 @@ describe("computeVerdict — DIRTY fires on CONFLICTING regardless of check pres
 		const ghExec = (args: string[]) => {
 			if (args[0] === "repo") return "acme/repo";
 			if (args[0] === "pr")
-				return JSON.stringify({ headRefOid: "c0ffee", mergeable: "MERGEABLE" });
+				return JSON.stringify({
+					headRefOid: "c0ffee",
+					mergeable: "MERGEABLE",
+					...greenGateView(),
+					...greenGateView(),
+				});
 			return JSON.stringify(BOTH_SUCCESS);
 		};
 		const stdoutLines: string[] = [];
@@ -1756,7 +1762,11 @@ describe("run — prints the gating source and uses a live branch-protection rea
 		const ghExec = (args: string[]) => {
 			if (args[0] === "repo") return "acme/repo";
 			if (args[0] === "pr")
-				return JSON.stringify({ headRefOid: "c0ffee", mergeable: "MERGEABLE" });
+				return JSON.stringify({
+					headRefOid: "c0ffee",
+					mergeable: "MERGEABLE",
+					...greenGateView(),
+				});
 			if ((args[1] ?? "").endsWith("/protection"))
 				return JSON.stringify({ required_status_checks: { contexts: [] } });
 			if ((args[1] ?? "").includes("/check-runs"))
@@ -1777,7 +1787,11 @@ describe("run — prints the gating source and uses a live branch-protection rea
 		const ghExec = (args: string[]) => {
 			if (args[0] === "repo") return "acme/repo";
 			if (args[0] === "pr")
-				return JSON.stringify({ headRefOid: "c0ffee", mergeable: "MERGEABLE" });
+				return JSON.stringify({
+					headRefOid: "c0ffee",
+					mergeable: "MERGEABLE",
+					...greenGateView(),
+				});
 			if (args[1] === "repos/acme/repo/branches/master/protection") {
 				return JSON.stringify({
 					required_status_checks: {
@@ -1804,7 +1818,11 @@ describe("run — prints the gating source and uses a live branch-protection rea
 		const ghExec = (args: string[]) => {
 			if (args[0] === "repo") return "acme/repo";
 			if (args[0] === "pr")
-				return JSON.stringify({ headRefOid: "c0ffee", mergeable: "MERGEABLE" });
+				return JSON.stringify({
+					headRefOid: "c0ffee",
+					mergeable: "MERGEABLE",
+					...greenGateView(),
+				});
 			if (args[1] === "repos/acme/repo/branches/master/protection") {
 				throw new Error("HTTP 403");
 			}
@@ -2188,7 +2206,11 @@ describe("resolveHeadSha — mergeable resolution (#2539 round 2, F1)", () => {
 		const calls: unknown[] = [];
 		const ghExec = (_args: string[], options: unknown) => {
 			calls.push(options);
-			return JSON.stringify({ headRefOid: "c0ffee", mergeable: "MERGEABLE" });
+			return JSON.stringify({
+				headRefOid: "c0ffee",
+				mergeable: "MERGEABLE",
+				...greenGateView(),
+			});
 		};
 		resolveHeadSha("2539", ghExec, 12_345);
 		expect(calls[0]).toEqual({ timeoutMs: 12_345 });
@@ -2198,7 +2220,11 @@ describe("resolveHeadSha — mergeable resolution (#2539 round 2, F1)", () => {
 		const calls: unknown[] = [];
 		const ghExec = (_args: string[], options: unknown) => {
 			calls.push(options);
-			return JSON.stringify({ headRefOid: "c0ffee", mergeable: "MERGEABLE" });
+			return JSON.stringify({
+				headRefOid: "c0ffee",
+				mergeable: "MERGEABLE",
+				...greenGateView(),
+			});
 		};
 		resolveHeadSha("2539", ghExec);
 		expect(calls[0]).toEqual({ timeoutMs: DEFAULT_GH_TIMEOUT_MS });
@@ -2263,7 +2289,11 @@ describe("run — resolveRepository/resolveHeadSha get a --wait-derived timeout 
 			seenTimeouts.push(options?.timeoutMs);
 			if (args[0] === "repo") return "acme/repo";
 			if (args[0] === "pr")
-				return JSON.stringify({ headRefOid: "c0ffee", mergeable: "MERGEABLE" });
+				return JSON.stringify({
+					headRefOid: "c0ffee",
+					mergeable: "MERGEABLE",
+					...greenGateView(),
+				});
 			return JSON.stringify(BOTH_SUCCESS);
 		};
 		await run({
@@ -2285,7 +2315,11 @@ describe("run — resolveRepository/resolveHeadSha get a --wait-derived timeout 
 			seenTimeouts.push(options?.timeoutMs);
 			if (args[0] === "repo") return "acme/repo";
 			if (args[0] === "pr")
-				return JSON.stringify({ headRefOid: "c0ffee", mergeable: "MERGEABLE" });
+				return JSON.stringify({
+					headRefOid: "c0ffee",
+					mergeable: "MERGEABLE",
+					...greenGateView(),
+				});
 			return JSON.stringify(BOTH_SUCCESS);
 		};
 		await run({
@@ -2341,6 +2375,7 @@ describe("run — exit codes distinct from verdict codes (#2539 round 2, F3)", (
 				return JSON.stringify({
 					headRefOid: "c0ffee",
 					mergeable: "MERGEABLE",
+					...greenGateView(),
 				});
 			return JSON.stringify(BOTH_SUCCESS);
 		};
@@ -2401,6 +2436,7 @@ describe("run --wait — transient gh errors back off instead of exiting 70 (#29
 				return JSON.stringify({
 					headRefOid: "c0ffee",
 					mergeable: "MERGEABLE",
+					...greenGateView(),
 					labels: [],
 					comments: [],
 				});
@@ -2485,7 +2521,11 @@ describe("run --wait — transient gh errors back off instead of exiting 70 (#29
 		const ghExec = (args: string[]) => {
 			if (args[0] === "repo") return "acme/repo";
 			if (args[0] === "pr")
-				return JSON.stringify({ headRefOid: "c0ffee", mergeable: "MERGEABLE" });
+				return JSON.stringify({
+					headRefOid: "c0ffee",
+					mergeable: "MERGEABLE",
+					...greenGateView(),
+				});
 			if (String(args[1]).endsWith("/protection")) throw ghError("HTTP 404");
 			const answer = answers.shift();
 			if (answer instanceof Error) throw answer;
@@ -2602,13 +2642,18 @@ describe("run --wait — transient gh errors back off instead of exiting 70 (#29
 				calls.pr += 1;
 				const failure = prFailures[calls.pr - 1];
 				if (failure) throw failure;
-				return JSON.stringify({ headRefOid: "c0ffee", mergeable: "MERGEABLE" });
+				return JSON.stringify({
+					headRefOid: "c0ffee",
+					mergeable: "MERGEABLE",
+					...greenGateView(),
+				});
 			}
 			if (args[0] === "pr")
 				return JSON.stringify({
 					headRefOid: "c0ffee",
 					labels: [],
 					comments: [],
+					...greenGateView(),
 				});
 			if (String(args[1]).endsWith("/protection")) throw ghError("HTTP 404");
 			return JSON.stringify(BOTH_SUCCESS);
@@ -2675,6 +2720,7 @@ describe("run --wait — transient gh errors back off instead of exiting 70 (#29
 				return JSON.stringify({
 					headRefOid: "c0ffee",
 					mergeable: "MERGEABLE",
+					...greenGateView(),
 					labels: [],
 					comments: [],
 				});
@@ -2829,7 +2875,12 @@ function gh3694({
 			return JSON.stringify({ autoMergeRequest });
 		if (args[0] === "pr" && args.includes("headRefOid,labels,comments"))
 			return JSON.stringify({ headRefOid: sha, labels: [], comments: [] });
-		if (args[0] === "pr") return JSON.stringify({ headRefOid: sha, mergeable });
+		if (args[0] === "pr")
+			return JSON.stringify({
+				headRefOid: sha,
+				mergeable,
+				...greenGateView(),
+			});
 		const endpoint = args[1] ?? "";
 		if (endpoint.includes("/check-runs")) return JSON.stringify(checkRuns);
 		if (endpoint.includes("/actions/runs")) {
@@ -3412,7 +3463,11 @@ function ghQueue({
 				comments: [],
 			});
 		if (args[0] === "pr")
-			return JSON.stringify({ headRefOid: QUEUE_SHA, mergeable: "MERGEABLE" });
+			return JSON.stringify({
+				headRefOid: QUEUE_SHA,
+				mergeable: "MERGEABLE",
+				...greenGateView(),
+			});
 		if (args[1] === "graphql")
 			return JSON.stringify({
 				data: {
