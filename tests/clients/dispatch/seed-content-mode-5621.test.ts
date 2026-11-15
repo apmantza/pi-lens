@@ -21,8 +21,10 @@
  */
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
+import nodeFs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import * as path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
 	capturePreEditLinterFindings,
 	resetDispatchBaselines,
@@ -524,6 +526,74 @@ describe("#5621 the seed copy is excluded from git before it is written", () => 
 		);
 		expect(rows).toHaveLength(1);
 		expect(rows[0]?.count).toBe(1);
+	}, 60_000);
+
+	// Recurrence prevented: the commit gate's own writer removed its copy in a
+	// `finally`; the shared writer dropped that when #5621 deleted it, so a `wx`
+	// write that fails after creating the file (RLIMIT_FSIZE, a full disk) left
+	// a `pi-lens-seed-*` file the exclude line now hides from `git status`
+	// (r1 F2, reproduced with `ulimit -f 1`). The fault is injected at the fs
+	// seam: the real `wx` create and a short write happen, then the write throws
+	// EFBIG, which a real-process limit would do but vitest cannot set.
+	it("removes the copy when its write fails after the file was created", async () => {
+		const { dir, file } = tsRepo("partial-write");
+		const real = nodeFs.writeFileSync;
+		const spy = vi
+			.spyOn(nodeFs, "writeFileSync")
+			.mockImplementation((target, data, options) => {
+				if (!String(target).includes("pi-lens-seed-"))
+					return real(target, data, options);
+				real(target, "partial", options);
+				throw Object.assign(new Error("EFBIG: file too large"), {
+					code: "EFBIG",
+				});
+			});
+		syncBuiltinESMExports();
+		let copyWrites = 0;
+		try {
+			await seed(dir, file);
+			copyWrites = spy.mock.calls.filter(([target]) =>
+				String(target).includes("pi-lens-seed-"),
+			).length;
+		} finally {
+			spy.mockRestore();
+			syncBuiltinESMExports();
+		}
+		// The fault fired on a copy write (a vacuous run cannot pass).
+		expect(copyWrites).toBe(1);
+		expect(
+			fs.readdirSync(dir).filter((n) => n.startsWith("pi-lens-seed-")),
+		).toEqual([]);
+	}, 60_000);
+
+	// Recurrence prevented: the no-answer branch (`exited === null`: git is
+	// missing or timed out) was untested; `if (false)` on it survived with 12
+	// passed (r1 F3). Without a git answer the copy is still written and the
+	// failure is one record, not a silent skip.
+	it("still writes the copy and records one failure when git gives no answer", async () => {
+		const { dir, file } = tsRepo("no-git");
+		const emptyBin = path.join(cells.tmpDir, "empty-bin");
+		fs.mkdirSync(emptyBin, { recursive: true });
+		const savedPath = process.env.PATH;
+		resetDegradationLedger();
+		let copySeen = false;
+		const watcher = fs.watch(dir, (_event, name) => {
+			if (name?.toString().startsWith("pi-lens-seed-")) copySeen = true;
+		});
+		process.env.PATH = emptyBin;
+		try {
+			await seed(dir, file);
+		} finally {
+			process.env.PATH = savedPath;
+			watcher.close();
+		}
+		expect(copySeen).toBe(true);
+		const rows = getDegradationSummary().filter(
+			(row) => row.kind === "seed-exclude-unwritable",
+		);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.latestReasons[0]?.reason).toContain("gave no answer");
+		expect(exclude(path.join(dir, ".git"))).not.toContain(SEED_PATTERN);
 	}, 60_000);
 
 	it("does nothing outside a git repository", async () => {

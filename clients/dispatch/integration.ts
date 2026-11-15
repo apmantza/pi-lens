@@ -3863,6 +3863,10 @@ async function prepareSeedLaneRun(
 	try {
 		nodeFs.writeFileSync(lanes.copyAt, content, { flag: "wx" });
 	} catch {
+		// A write that fails after the file was created (a size limit, a full
+		// disk) leaves a partial copy the exclude line hides from `git status`:
+		// remove it, as the commit gate's own writer did (#5621).
+		nodeFs.rmSync(lanes.copyAt, { force: true });
 		// none: the skip reason is the record; recordPreEditCapture logs it.
 		return { skip: "copy-unwritable" };
 	}
