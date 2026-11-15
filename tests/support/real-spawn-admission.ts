@@ -34,7 +34,7 @@
  * imports it in every worker.
  */
 import type { RealSpawnLedger } from "./real-spawn-observer.js";
-import { harnessSpawnCount } from "./real-spawn-observer.js";
+import { harnessSpawnCount, repoRelative } from "./real-spawn-observer.js";
 
 /** The census baseline file: `{ "<detector>": { "<file below tests/>": count } }`. */
 export const REAL_SPAWN_BASELINE_FILE = "flake-shape-baseline.json";
@@ -183,8 +183,7 @@ export function realSpawnAdmissionProblems(io: RealSpawnAdmissionIo): string[] {
 function frameSite(frame: string): string {
 	const at = /\(([^)]+)\)\s*$/.exec(frame);
 	const site = (at?.[1] ?? frame.replace(/^[a-z]+:/, "")).trim();
-	const cwd = `${process.cwd()}/`;
-	return site.replace(cwd, "").replace(/:(\d+):\d+$/, ":$1");
+	return repoRelative(site).replace(/:(\d+):\d+$/, ":$1");
 }
 
 /** The distinct harness routes this run observed, as

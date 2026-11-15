@@ -44,6 +44,7 @@ import {
 	classifyFrame,
 	createRealSpawnLedger,
 	formatRealSpawnEvidence,
+	frameOf,
 	harnessSpawnCount,
 	installRealSpawnObserver,
 	type RealSpawnLedger,
@@ -223,6 +224,41 @@ describe("classifyFrame", () => {
 		expect(
 			classifyFrame("    at run (C:\\repo\\tests\\support\\x.test.ts:3:1)"),
 		).toBe("harness");
+	});
+});
+
+describe("frameOf", () => {
+	// #5100 r2: the ledger cut the RAW stack line at 120 characters, so a
+	// location past that column lost its tail. The fork test's 63-character
+	// checkout recorded `unadmitted-spawn.fixture.t`; a 41-character checkout
+	// fit the same line. These cases pass a root longer than that cut, so the
+	// location must survive whatever depth the checkout sits at.
+	const deepRoot = `/${"deep-checkout-".repeat(16)}`;
+
+	it("keeps the repo-relative file:line:col under a deep checkout root", () => {
+		const root = `${deepRoot}/`;
+		expect(
+			frameOf(
+				`    at fixtureTest (${root}tests/fixtures/real-spawn-gate/unadmitted-spawn.fixture.ts:5:3)`,
+				"harness",
+				root,
+			),
+		).toBe(
+			"harness:fixtureTest (tests/fixtures/real-spawn-gate/unadmitted-spawn.fixture.ts:5:3)",
+		);
+	});
+
+	it("keeps a top-level frame, which has no parenthesised location", () => {
+		const root = `${deepRoot}/`;
+		expect(
+			frameOf(
+				`    at ${root}tests/fixtures/real-spawn-gate/unadmitted-spawn.fixture.ts:5:3`,
+				"harness",
+				root,
+			),
+		).toBe(
+			"harness:tests/fixtures/real-spawn-gate/unadmitted-spawn.fixture.ts:5:3",
+		);
 	});
 });
 

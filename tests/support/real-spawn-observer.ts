@@ -194,12 +194,27 @@ function stackLines(limit: number): string[] {
 	}
 }
 
-/** One caller line in ledger form: its class, then its module and position. */
-function frameOf(line: string, cls: RealSpawnCallerClass): string {
-	return `${cls}:${line
-		.trim()
-		.replace(/^at\s+/, "")
-		.slice(0, 120)}`;
+/** A text with the checkout root removed, so a path reads repo-relative. The
+ *  root defaults to the working directory a run starts in, the repository
+ *  root. The one rule the ledger applies before any length cut and the route
+ *  summaries apply to the location they show (#5100). */
+export function repoRelative(text: string, root = `${process.cwd()}/`): string {
+	return text.replace(root, "");
+}
+
+/** One caller line in ledger form: its class, then its module and position.
+ *  The location goes repo-relative first and is never cut: a cut through an
+ *  absolute path recorded `…fixture.t` on a 63-character checkout (#5100 r2).
+ *  The function name is not capped either: it is V8's identifier text, and
+ *  every consumer bounds the output already (four frames per call, eight
+ *  samples, the 900-character evidence slice, and a route that shows only the
+ *  location). */
+export function frameOf(
+	line: string,
+	cls: RealSpawnCallerClass,
+	root?: string,
+): string {
+	return `${cls}:${repoRelative(line.trim().replace(/^at\s+/, ""), root)}`;
 }
 
 interface SpawnCallers {
