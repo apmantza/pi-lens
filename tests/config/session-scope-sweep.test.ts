@@ -163,6 +163,7 @@ const ACTIVATION_STATE: Readonly<Record<string, string>> = {
 const COORDINATOR_FIELDS: Readonly<Record<string, "reset" | string>> = {
 	_autofixDemotedThisTurn: "reset",
 	_cachedExports: "reset",
+	_callWrites: "reset",
 	_cascadeRuns: "reset",
 	_cascadeSessionStats: "reset",
 	_complexityBaselines: "reset",

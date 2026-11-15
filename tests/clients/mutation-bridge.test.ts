@@ -31,6 +31,7 @@ import {
 	normalizeMapKey,
 } from "../../clients/path-utils.js";
 import { readChangesSince } from "../../clients/project-changes.js";
+import { resolveToolCallCorrelationId } from "../../clients/tool-event.js";
 import { countFileLines } from "../../clients/read-guard-tool-lines.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { retireScope } from "../../clients/session-scope.js";
@@ -154,6 +155,118 @@ describe("mutation bridge bookkeeping", () => {
 			env.cleanup();
 		}
 	});
+
+	/**
+	 * #5551. Recurrence it prevents: a tool's `tool_result` learned which
+	 * files it wrote from `details.appliedFiles`, admitted by tool NAME, so a
+	 * new pi-lens writer dispatched nothing until someone added its name, and
+	 * the list was built beside the bridge from the bridge's own answers. The
+	 * bridge now notes each file it records under the entry's call id; the
+	 * call's `tool_result` takes the set once. A refused or out-of-scope entry,
+	 * and an entry that names no call, note nothing.
+	 */
+	it("notes each recorded file under its call id, once, and nothing it refused", () => {
+		const env = setupTestEnvironment("pi-lens-5551-call-writes-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const [kept, outside, unnamed] = [
+				"kept.ts",
+				"outside.ts",
+				"unnamed.ts",
+			].map((name) => path.join(env.tmpDir, name));
+			for (const file of [kept, outside, unnamed])
+				fs.writeFileSync(file, SOURCE);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.beginTurn();
+			const deps = makeDeps({
+				tmpDir: env.tmpDir,
+				runtime,
+				cacheManager: new CacheManager(false),
+				isRecordable: (filePath) => filePath !== outside,
+			});
+			for (const filePath of [kept, outside, kept])
+				recordMutationOutcome(
+					{ filePath, kind: "edit", consumer: "any_tool", toolCallId: "c1" },
+					deps,
+				);
+			recordMutationOutcome(
+				{ filePath: unnamed, kind: "edit", consumer: "any_tool" },
+				deps,
+			);
+			recordMutationOutcome(
+				{ filePath: "", kind: "edit", consumer: "any_tool", toolCallId: "c2" },
+				deps,
+			);
+
+			expect(runtime.peekCallWrites("c1")).toEqual([kept]);
+			expect(runtime.takeCallWrites("c1")).toEqual([kept]);
+			expect(runtime.takeCallWrites("c1")).toEqual([]);
+			expect(runtime.takeCallWrites("c2")).toEqual([]);
+		} finally {
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
+			env.cleanup();
+		}
+	});
+
+	/**
+	 * #5551: a call whose `tool_result` never comes (blocked, aborted, or run
+	 * by a host with no `tool_result`) must not keep its set past a session.
+	 * Recurrence it prevents: a per-call map with no reset grows for the life
+	 * of the process and hands a later session a dead call's files.
+	 */
+	it("drops every call's written set at the session reset", () => {
+		const runtime = new RuntimeCoordinator();
+		runtime.noteCallWrite("c-dead", "/project/a.ts");
+		runtime.resetForSession();
+		expect(runtime.takeCallWrites("c-dead")).toEqual([]);
+	});
+
+	/**
+	 * #5551 r2 (review F1): a producer notes a set under the id its `execute`
+	 * received (`toolCallId`, raw); the `tool_result` reads it under
+	 * `resolveToolCallCorrelationId` (sanitized). A pi-ai OpenAI Responses id
+	 * is `call_id|item_id` (a pipe) and can pass 64 characters, so the two
+	 * spellings differ and the take returned `[]`: the call's dispatch,
+	 * edit-class budget and commit-gate verdict were lost (#5239 back). The
+	 * reader here derives its key with the production resolver, not by hand.
+	 */
+	it.each([
+		["a pipe in the host id", "call_abc|fc_123"],
+		[
+			"an id over 64 characters",
+			"call_" + "x".repeat(90) + "|fc_" + "y".repeat(40),
+		],
+	])(
+		"a written set noted under %s is read under the id the tool_result derives",
+		(_name, rawId) => {
+			const runtime = new RuntimeCoordinator();
+			const readerKey = resolveToolCallCorrelationId({ toolCallId: rawId });
+			expect(readerKey).toBeDefined();
+			expect(readerKey).not.toBe(rawId);
+			runtime.noteCallWrite(rawId, "/project/a.ts");
+			runtime.noteCallWrite(rawId, "/project/b.ts");
+			expect(runtime.peekCallWrites(readerKey ?? "")).toEqual([
+				"/project/a.ts",
+				"/project/b.ts",
+			]);
+			// One normalisation at the store's boundary: either spelling of the
+			// id reads and claims the same set, so a reader that holds the raw
+			// id cannot reopen the split.
+			expect(runtime.peekCallWrites(rawId)).toEqual([
+				"/project/a.ts",
+				"/project/b.ts",
+			]);
+			expect(runtime.takeCallWrites(rawId)).toEqual([
+				"/project/a.ts",
+				"/project/b.ts",
+			]);
+			expect(runtime.takeCallWrites(readerKey ?? "")).toEqual([]);
+			expect(runtime.peekCallWrites(rawId)).toEqual([]);
+		},
+	);
 
 	it("treats a write with no stated range as the whole file", () => {
 		const env = setupTestEnvironment("pi-lens-2423-bridge-write-");

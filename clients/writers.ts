@@ -47,10 +47,15 @@ export const SHARED_WRITER_CONSUMERS = [
  * `dispatch`: the write's file is dispatched (`dispatch_start`). `inline-stop`:
  * a blocker reaches the writer's own tool result. `change-log`: a change-log
  * row, with its source label. `commit-gate`: `--lens-guard` refuses a commit of
- * a blocker the write added. `pre-edit-baseline`: the commit gate judges the
+ * a blocker the write added. Since #5609 the gate judges the staged delta, so
+ * for lint findings it sees every route's bytes whoever wrote them: the cell
+ * records whether the gate reaches the route, and the route's authority no
+ * longer decides that. `pre-edit-baseline`: the commit gate judges the
  * write's delta, not the whole file (#5553). `fix-run-capture`:
  * `noteAgentMutation` protects the write from a running whole-package fixer
- * (#3598).
+ * (#3598). `deferred-queue`: the write queues the `agent_settled` autofix and
+ * format pass (`deferMutation`, `deferFormat`); the queue takes only bytes the
+ * route authored (#5551).
  */
 export const AUTHORED_WRITER_CONSUMERS = [
 	"dispatch",
@@ -59,6 +64,7 @@ export const AUTHORED_WRITER_CONSUMERS = [
 	"commit-gate",
 	"pre-edit-baseline",
 	"fix-run-capture",
+	"deferred-queue",
 ] as const;
 
 export const WRITER_CONSUMERS = [
@@ -91,8 +97,9 @@ export type WriterRecorder =
  * `builtin-name`: pi's own `write`/`edit`. `command-parse`: the bash command
  * names them. `disk-recovery`: the opaque net's git and content recovery.
  * `observed-window`: the observation net's disk diff over the call's window,
- * and tier 4's learned name after it. `own-details`: a pi-lens tool reports
- * them in `details.appliedFiles`, admitted by NAME (`APPLIED_FILES_TOOLS`).
+ * and tier 4's learned name after it. `call-writes`: the files the mutation
+ * bridge recorded under the call's id while its tool ran
+ * (`RuntimeCoordinator.takeCallWrites`, #5551), whatever the tool is named.
  * `none`: no tool result names them (a drain, a server-initiated edit).
  * `unread`: the audit observed the dispatch; the code path is not traced.
  */
@@ -101,7 +108,7 @@ export type WriterAttribution =
 	| "command-parse"
 	| "disk-recovery"
 	| "observed-window"
-	| "own-details"
+	| "call-writes"
 	| "none"
 	| "unread";
 
@@ -138,8 +145,13 @@ const G4_NO_INLINE =
 	"a tool-owned write returns no STOP; the first one the agent sees is the commit gate (G4, next-turn delivery unprobed)";
 const UNAUTHORED =
 	"by design: unauthored bytes create no authorship (#4131), and blockers are withheld for them (#3226)";
-const G2_GATE =
-	"the gate judges authorship, not the staged delta, so unauthored bytes commit (G2, an owner decision)";
+const QUEUE_UNPROBED =
+	"settle: read the deferred queue (deferred_format_queued) after this route writes";
+const LSP_NO_QUEUE = "an LSP-applied edit queues no deferred pass (#2450 F3)";
+const LSP_QUEUE_PROBE =
+	"[enqueue no deferred autofix/format pass on either branch (F3)]";
+const BRIDGE_QUEUE_PROBE =
+	"[writes turn state, an attributed change-log entry, and a deferred queue entry]";
 const G6_PROBE =
 	"[skips noteAgentMutation for a direct LSP edit and reaches it through the bridge]";
 const G6_SKIP =
@@ -171,6 +183,9 @@ export const WRITERS: readonly WriterRoute[] = [
 			"commit-gate": reaches("write"),
 			"pre-edit-baseline": unprobed(NOT_SEEDED),
 			"fix-run-capture": unprobed(FIX_RUN_UNPROBED),
+			"deferred-queue": reaches(
+				"[queues successful write/edit files for deferred formatting by default]",
+			),
 			"lsp-documents": reaches("write: didChange"),
 			"read-guard": reaches("write: written=[a.ts]"),
 			"word-index": unprobed(WORD_INDEX_UNPROBED),
@@ -196,6 +211,9 @@ export const WRITERS: readonly WriterRoute[] = [
 				"[control: a host edit of an unrelated line commits]",
 			),
 			"fix-run-capture": unprobed(FIX_RUN_UNPROBED),
+			"deferred-queue": reaches(
+				"[queues successful write/edit files for deferred formatting by default]",
+			),
 			"lsp-documents": reaches("edit: didChange"),
 			"read-guard": na(
 				"an edit needs a read first, so the file is already covered and gains no authorship",
@@ -221,6 +239,7 @@ export const WRITERS: readonly WriterRoute[] = [
 			"commit-gate": reaches("partial-edit"),
 			"pre-edit-baseline": unprobed(NOT_SEEDED),
 			"fix-run-capture": unprobed(FIX_RUN_UNPROBED),
+			"deferred-queue": unprobed(QUEUE_UNPROBED),
 			"lsp-documents": reaches("partial-edit: didChange"),
 			"read-guard": na(
 				"an edit needs a read first; the partial apply logs edit_partial_apply and credits no new authorship",
@@ -246,6 +265,7 @@ export const WRITERS: readonly WriterRoute[] = [
 			"commit-gate": reaches("codemode-bash"),
 			"pre-edit-baseline": unprobed(NOT_SEEDED),
 			"fix-run-capture": unprobed(FIX_RUN_UNPROBED),
+			"deferred-queue": unprobed(QUEUE_UNPROBED),
 			"lsp-documents": reaches("codemode-write: didChange"),
 			"read-guard": reaches("codemode-write: written=[a.ts]"),
 			"word-index": unprobed(WORD_INDEX_UNPROBED),
@@ -271,6 +291,7 @@ export const WRITERS: readonly WriterRoute[] = [
 				"[commits an unrelated change to a file whose blocker is already in HEAD] (sed -i)",
 			),
 			"fix-run-capture": unprobed(FIX_RUN_UNPROBED),
+			"deferred-queue": unprobed(QUEUE_UNPROBED),
 			"lsp-documents": reaches("bash-sed: didChange and watched-files"),
 			"read-guard": reaches("bash-redirect: written=[a.ts]"),
 			"word-index": unprobed(WORD_INDEX_UNPROBED),
@@ -303,6 +324,7 @@ export const WRITERS: readonly WriterRoute[] = [
 			),
 			"pre-edit-baseline": unprobed(NOT_SEEDED),
 			"fix-run-capture": unprobed(FIX_RUN_UNPROBED),
+			"deferred-queue": unprobed(QUEUE_UNPROBED),
 			"lsp-documents": unprobed(
 				"settle: the wire trace after #5552's mv witness; the audit's SILENT predates #5581",
 			),
@@ -330,9 +352,14 @@ export const WRITERS: readonly WriterRoute[] = [
 			dispatch: reaches("bash-opaque"),
 			"inline-stop": silent("bash-opaque", UNAUTHORED),
 			"change-log": reaches("bash-opaque: opaque-script"),
-			"commit-gate": silent("bash-opaque", G2_GATE),
+			"commit-gate": reaches(
+				"[refuses a blocker its bytes add] (bash-opaque; the staged delta since #5609)",
+			),
 			"pre-edit-baseline": unprobed(NOT_SEEDED),
 			"fix-run-capture": unprobed(FIX_RUN_UNPROBED),
+			"deferred-queue": unprobed(
+				"settle: by reading, unauthored bytes queue nothing (bytesAuthored); probe an opaque write",
+			),
 			"lsp-documents": reaches("bash-opaque: didChange and external resync"),
 			"read-guard": silent("bash-opaque: written=[]", UNAUTHORED),
 			"word-index": unprobed(WORD_INDEX_UNPROBED),
@@ -364,6 +391,9 @@ export const WRITERS: readonly WriterRoute[] = [
 				"[judges a credited script write against the file's HEAD copy: old blockers stay quiet, a new one stops]",
 			),
 			"fix-run-capture": unprobed(FIX_RUN_UNPROBED),
+			"deferred-queue": unprobed(
+				"settle: by reading, pi-lens leaves a credited script write's bytes alone (review F10); read the queue after its witness",
+			),
 			"lsp-documents": unprobed(
 				"settle: the wire trace after #5616's credited witness; the publish is bash-opaque's",
 			),
@@ -388,9 +418,14 @@ export const WRITERS: readonly WriterRoute[] = [
 			dispatch: reaches("foreign-blind"),
 			"inline-stop": silent("foreign-blind: result done", UNAUTHORED),
 			"change-log": reaches("foreign-blind: opaque-script"),
-			"commit-gate": silent("foreign-blind", G2_GATE),
+			"commit-gate": reaches(
+				"[refuses a blocker its bytes add] (foreign-blind; the staged delta since #5609)",
+			),
 			"pre-edit-baseline": unprobed(NOT_SEEDED),
 			"fix-run-capture": unprobed(FIX_RUN_UNPROBED),
+			"deferred-queue": unprobed(
+				"settle: by reading, unauthored bytes queue nothing (bytesAuthored); probe a blind foreign write",
+			),
 			"lsp-documents": reaches("foreign-blind: didChange"),
 			"read-guard": silent("foreign-blind: written=[]", UNAUTHORED),
 			"word-index": unprobed(WORD_INDEX_UNPROBED),
@@ -416,6 +451,7 @@ export const WRITERS: readonly WriterRoute[] = [
 				"[commits an unrelated change to a file whose blocker is already in HEAD] (a foreign tool's write)",
 			),
 			"fix-run-capture": unprobed(FIX_RUN_UNPROBED),
+			"deferred-queue": unprobed(QUEUE_UNPROBED),
 			"lsp-documents": reaches("foreign-tool: didChange"),
 			"read-guard": reaches("foreign-tool: written=[a.ts]"),
 			"word-index": unprobed(WORD_INDEX_UNPROBED),
@@ -444,6 +480,7 @@ export const WRITERS: readonly WriterRoute[] = [
 			"commit-gate": reaches("foreign-bridge"),
 			"pre-edit-baseline": unprobed(NOT_SEEDED),
 			"fix-run-capture": unprobed(FIX_RUN_UNPROBED),
+			"deferred-queue": reaches(BRIDGE_QUEUE_PROBE),
 			"lsp-documents": reaches("foreign-bridge: didChange"),
 			"read-guard": reaches("foreign-bridge: written=[a.ts]"),
 			"word-index": unprobed(WORD_INDEX_UNPROBED),
@@ -473,7 +510,7 @@ export const WRITERS: readonly WriterRoute[] = [
 		names: "a paths array, or the project default",
 		writes: "every matched file",
 		authorship: "range",
-		attribution: "own-details",
+		attribution: "call-writes",
 		recorders: ["recordMutationOutcome"],
 		cells: {
 			dispatch: reaches("astgrep-apply"),
@@ -487,6 +524,9 @@ export const WRITERS: readonly WriterRoute[] = [
 				"[commits an unrelated change to a file whose blocker is already in HEAD] (ast_grep_replace)",
 			),
 			"fix-run-capture": unprobed(FIX_RUN_UNPROBED),
+			"deferred-queue": reaches(
+				"[names the calling session on a structural apply, which owns its deferred pass (#4943)]",
+			),
 			"lsp-documents": reaches("astgrep-apply: didChange and watched-files"),
 			"read-guard": reaches("astgrep-apply: written=[a.ts]"),
 			"word-index": unprobed(WORD_INDEX_UNPROBED),
@@ -498,7 +538,7 @@ export const WRITERS: readonly WriterRoute[] = [
 		names: "one path",
 		writes: "the file and every importer the server edits",
 		authorship: "range",
-		attribution: "own-details",
+		attribution: "call-writes",
 		recorders: ["recordMutationOutcome"],
 		cells: {
 			dispatch: reaches("lsp-rename-apply: both files"),
@@ -509,6 +549,7 @@ export const WRITERS: readonly WriterRoute[] = [
 				"[commits an unrelated change to a file whose blocker is already in HEAD] (an LSP rename)",
 			),
 			"fix-run-capture": silent(G6_PROBE, G6_SKIP),
+			"deferred-queue": silent(LSP_QUEUE_PROBE, LSP_NO_QUEUE),
 			"lsp-documents": reaches("lsp-rename-apply: didChange on both"),
 			"read-guard": reaches("lsp-rename-apply: written=[a.ts,b.ts]"),
 			"word-index": unprobed(WORD_INDEX_UNPROBED),
@@ -520,7 +561,7 @@ export const WRITERS: readonly WriterRoute[] = [
 		names: "one path and its new name",
 		writes: "the renamed file and every importer the server edits",
 		authorship: "unknown",
-		attribution: "own-details",
+		attribution: "call-writes",
 		recorders: ["recordMutationOutcome"],
 		cells: {
 			dispatch: reaches("lsp-rename-file: c.ts"),
@@ -529,6 +570,7 @@ export const WRITERS: readonly WriterRoute[] = [
 			"commit-gate": reaches("lsp-rename-file"),
 			"pre-edit-baseline": unprobed(NOT_SEEDED),
 			"fix-run-capture": silent(G6_PROBE, G6_SKIP),
+			"deferred-queue": silent(LSP_QUEUE_PROBE, LSP_NO_QUEUE),
 			"lsp-documents": reaches(
 				"lsp-rename-file: didClose, didOpen and watched-files",
 			),
@@ -542,7 +584,7 @@ export const WRITERS: readonly WriterRoute[] = [
 		names: "one path",
 		writes: "any file the server edits inside the command's window",
 		authorship: "range",
-		attribution: "own-details",
+		attribution: "call-writes",
 		recorders: ["recordMutationOutcome"],
 		cells: {
 			dispatch: reaches("lsp-executecommand"),
@@ -551,6 +593,7 @@ export const WRITERS: readonly WriterRoute[] = [
 			"commit-gate": reaches("lsp-executecommand"),
 			"pre-edit-baseline": unprobed(NOT_SEEDED),
 			"fix-run-capture": silent(G6_PROBE, G6_SKIP),
+			"deferred-queue": silent(LSP_QUEUE_PROBE, LSP_NO_QUEUE),
 			"lsp-documents": reaches("lsp-executecommand: didChange"),
 			"read-guard": reaches("lsp-executecommand: written=[a.ts]"),
 			"word-index": unprobed(WORD_INDEX_UNPROBED),
@@ -569,6 +612,7 @@ export const WRITERS: readonly WriterRoute[] = [
 				"settle: release a deferred applyEdit after executeCommand times out (G9, lsp-exec-deferred)",
 			),
 			"fix-run-capture": reaches(G6_PROBE),
+			"deferred-queue": silent(LSP_QUEUE_PROBE, LSP_NO_QUEUE),
 		},
 	},
 	{
@@ -580,7 +624,7 @@ export const WRITERS: readonly WriterRoute[] = [
 		names: "one path",
 		writes: "the named path",
 		authorship: "range",
-		attribution: "unread",
+		attribution: "call-writes",
 		recorders: ["recordMutationOutcome"],
 		cells: {
 			dispatch: reaches("mark-suppress: dispatch_start x2"),
@@ -589,6 +633,7 @@ export const WRITERS: readonly WriterRoute[] = [
 			"commit-gate": reaches("mark-suppress"),
 			"pre-edit-baseline": unprobed(NOT_SEEDED),
 			"fix-run-capture": unprobed(FIX_RUN_UNPROBED),
+			"deferred-queue": unprobed(QUEUE_UNPROBED),
 			"lsp-documents": reaches("mark-suppress: didChange"),
 			"read-guard": reaches("mark-suppress: written=[a.ts]"),
 			"word-index": unprobed(WORD_INDEX_UNPROBED),
@@ -615,6 +660,7 @@ export const WRITERS: readonly WriterRoute[] = [
 			"pre-edit-baseline": na(
 				"the pass rewrites a file the agent's write already seeded",
 			),
+			"deferred-queue": na("a format or autofix pass queues no further pass"),
 		},
 	},
 	{
@@ -637,6 +683,7 @@ export const WRITERS: readonly WriterRoute[] = [
 				"the drain runs after the turn's writes, with no call to seed",
 			),
 			"fix-run-capture": silent(G6_PROBE, G6_SKIP),
+			"deferred-queue": silent(LSP_QUEUE_PROBE, LSP_NO_QUEUE),
 		},
 	},
 	{
@@ -695,6 +742,9 @@ export const WRITERS: readonly WriterRoute[] = [
 			),
 			"fix-run-capture": na(
 				"the cleanup is not an agent edit a fixer could overwrite",
+			),
+			"deferred-queue": na(
+				"a deleted build-info file has nothing to format or fix",
 			),
 		},
 	},

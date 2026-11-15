@@ -3320,6 +3320,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 		const editClass = isEditClassToolResult(
 			event as { toolName?: string; input?: { command?: unknown } },
 			ctx?.cwd ?? runtime.projectRoot ?? process.cwd(),
+			runtime,
 		);
 		if (rtMutation) {
 			logLatency({
@@ -3482,6 +3483,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 						(_ctx as { cwd?: string })?.cwd ??
 							runtime.projectRoot ??
 							process.cwd(),
+						runtime,
 					)
 						? "tool_result_edit"
 						: "tool_result_read_only";

@@ -690,6 +690,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			namedWriterTargets(writerPaths, runtime.projectRoot),
 			writerSeedDeps(deps),
 			true,
+			"disk",
 		);
 	// #2000 phase 2: opaque-command pre-snapshot. A bash command whose writes
 	// the extractor will not recognize gets a bounded stat snapshot of the
@@ -2013,6 +2014,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			[filePath],
 			writerSeedDeps(deps),
 			mutation.provenance === "learned",
+			"disk",
 		);
 }
 

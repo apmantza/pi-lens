@@ -78,6 +78,8 @@ interface LspMutationRuntime {
 	 * into `LspMutationContext.session`.
 	 */
 	captureSessionGeneration?: () => LineageHandle;
+	/** #5551: the call's written set (`RuntimeCoordinator.noteCallWrite`). */
+	noteCallWrite?: (toolCallId: string, filePath: string) => void;
 }
 
 interface LspMutationCacheManager {
@@ -166,14 +168,6 @@ export interface LspMutationContext {
 	 * branches for the exact same kind of write.
 	 */
 	isRecordable?: (filePath: string) => boolean;
-	/**
-	 * #5248: the files this context's mutation recorded, once each: the paths
-	 * that passed `isRecordable` and, on the bridge fallback, the bridge
-	 * accepted. A caller that wants them (`lsp_navigation`, which reports them
-	 * as `details.appliedFiles`) passes `[]`; every other context leaves it
-	 * unset and collects nothing.
-	 */
-	acceptedFiles?: string[];
 }
 
 export interface LspMutationSummaryOptions {
@@ -411,6 +405,10 @@ function directBookkeepingDeps(
 						source: context.source as ProjectChangeSource,
 					}),
 			}),
+			...(runtime.noteCallWrite !== undefined && {
+				noteCallWrite: (toolCallId, filePath) =>
+					runtime.noteCallWrite?.(toolCallId, filePath),
+			}),
 		}),
 		getCacheManager: () => ({
 			addModifiedRange: (filePath, range, importsChanged, cwd, sessionId) =>
@@ -471,13 +469,8 @@ function bookkeepLspMutation(
 		// turn-state entry the same way and keeps the receipt, the file's seq and
 		// the handled mark, which are facts about the bytes.
 		let sessionLive: boolean;
-		// #5248: true once the seam took the record.
-		let accepted: boolean;
 		if (deps) {
-			accepted = recordMutationOutcome(
-				lspMutationEntry(context, filePath, detail),
-				deps,
-			).recorded;
+			recordMutationOutcome(lspMutationEntry(context, filePath, detail), deps);
 			// The seam's `guardedWrite` already counted a dead session's dropped
 			// write, so this asks `isCurrent()`, the same question without the
 			// count (#5592 review r1 F4). It asks the session, not the record's
@@ -491,7 +484,7 @@ function bookkeepLspMutation(
 			// The fallback records into the bridge's own runtime, so a guard the
 			// caller threaded without one is stamped here, as before #5551.
 			if (sessionLive) stampFallbackReadGuard(context, filePath, detail);
-			accepted = recordThroughBridge(context, filePath, detail);
+			recordThroughBridge(context, filePath, detail);
 		}
 		// #2450 review round 2 (Partial-deps): its own surface, independent of
 		// which branch recorded the receipt and the turn state above.
@@ -505,12 +498,6 @@ function bookkeepLspMutation(
 				context.recordAutofix(filePath);
 			}
 		}
-		if (
-			accepted &&
-			context.acceptedFiles &&
-			!context.acceptedFiles.includes(filePath)
-		)
-			context.acceptedFiles.push(filePath);
 	}
 	if (context.publishFilesTouched && files.length > 0) {
 		context.publishFilesTouched(files);
@@ -562,7 +549,7 @@ function recordThroughBridge(
 	context: LspMutationContext,
 	filePath: string,
 	detail: AppliedWorkspaceEdit["fileDetails"][number],
-): boolean {
+): void {
 	const bridge = getMutationBridge();
 	if (!bridge) {
 		// #2450 review round 2 (F4)/round 3 (minor): the MCP server process
@@ -587,11 +574,11 @@ function recordThroughBridge(
 				`lsp mutation bridge unavailable, dropping bookkeeping for ${filePath}`,
 			);
 		}
-		return false;
+		return;
 	}
 	try {
 		if (bridge.recordMutation(lspMutationEntry(context, filePath, detail)))
-			return true;
+			return;
 		context.dbg?.(
 			`lsp mutation bridge dropped ${filePath} (recordMutation() ` +
 				"returned false — see the mutation_bridge debug output for the " +
@@ -602,7 +589,6 @@ function recordThroughBridge(
 			`lsp mutation bridge fallback failed for ${filePath}: ${err}`,
 		);
 	}
-	return false;
 }
 
 function telemetryFor(

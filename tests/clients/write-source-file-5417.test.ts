@@ -227,7 +227,7 @@ describe("ast_grep_replace apply honors the session's writable roots (#5417)", (
 		expect(result.isError).toBeFalsy();
 		expect(wroteUpdateAll(exec)).toBe(true);
 		expect(refusalSubjects()).toEqual([]);
-		expect(result.details?.appliedFiles).toEqual([file]);
+		expect(recorded.map((entry) => entry.filePath)).toEqual([file]);
 	});
 
 	it("refuses an apply under the no-autofix flag and still previews", async () => {
@@ -286,7 +286,6 @@ describe("an interrupted ast_grep_replace records the files it already rewrote (
 		]);
 
 		expect(result.isError).toBe(true);
-		expect(result.details?.appliedFiles).toEqual([a, c]);
 		expect(recorded.map((entry) => entry.filePath)).toEqual([a, c]);
 	});
 
@@ -318,7 +317,6 @@ describe("an interrupted ast_grep_replace records the files it already rewrote (
 		);
 
 		expect(result.isError).toBe(true);
-		expect(result.details?.appliedFiles).toEqual([a]);
 		expect(recorded.map((entry) => entry.filePath)).toEqual([a]);
 	});
 });

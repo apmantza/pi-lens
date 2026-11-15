@@ -18,6 +18,7 @@ import {
 	isEditClassToolResult,
 	scanShellWriteScopes,
 } from "../../clients/bash-file-access.js";
+import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { removeTempDirSync } from "./test-utils.js";
 
 let tmp: string;
@@ -280,7 +281,11 @@ describe("isEditClassToolResult counts a filled directory as an edit (#5552)", (
 		"%s is edit-class",
 		(command) => {
 			expect(
-				isEditClassToolResult({ toolName: "bash", input: { command } }, tmp),
+				isEditClassToolResult(
+					{ toolName: "bash", input: { command } },
+					tmp,
+					new RuntimeCoordinator(),
+				),
 			).toBe(true);
 		},
 	);
@@ -289,7 +294,11 @@ describe("isEditClassToolResult counts a filled directory as an edit (#5552)", (
 		"%s is not",
 		(command) => {
 			expect(
-				isEditClassToolResult({ toolName: "bash", input: { command } }, tmp),
+				isEditClassToolResult(
+					{ toolName: "bash", input: { command } },
+					tmp,
+					new RuntimeCoordinator(),
+				),
 			).toBe(false);
 		},
 	);

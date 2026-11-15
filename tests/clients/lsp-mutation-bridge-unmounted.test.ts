@@ -63,7 +63,6 @@ describe("lsp-mutation bridge fallback with no bridge mounted (#2450 review roun
 			fs.writeFileSync(fileB, "hello world\n");
 
 			const dbgMessages: string[] = [];
-			const accepted: string[] = [];
 			const context: LspMutationContext = {
 				cwd: tmpDir,
 				correlationId: "no-bridge-mounted",
@@ -71,7 +70,6 @@ describe("lsp-mutation bridge fallback with no bridge mounted (#2450 review roun
 				source: "lsp-execute-command",
 				emitSummary: false,
 				dbg: (message) => dbgMessages.push(message),
-				acceptedFiles: accepted,
 			};
 
 			// No runtime/cacheManager on the context — forces the bridge
@@ -81,9 +79,6 @@ describe("lsp-mutation bridge fallback with no bridge mounted (#2450 review roun
 			expect(
 				dbgMessages.some((message) => message.includes("bridge unavailable")),
 			).toBe(true);
-			// #5248: a path whose bookkeeping went nowhere is not reported as
-			// applied, so nothing downstream dispatches it as recorded.
-			expect(accepted).toEqual([]);
 
 			const summaryAfterFirst = getDegradationSummary();
 			const groupAfterFirst = summaryAfterFirst.find(
