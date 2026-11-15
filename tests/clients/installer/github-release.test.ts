@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -139,6 +140,75 @@ describe("GitHub release asset selection", () => {
 		).toBeUndefined();
 	});
 
+	// Recurrence: #5624. opengrep v2.0.0 (2026-11-13) renamed every asset
+	// (opengrep_manylinux_x86 -> opengrep_linux_x86, windows .exe -> .zip), so
+	// `assetMatch` matched nothing, ensureTool(opengrep) was UNAVAILABLE and the
+	// nightly probe missed two nights. The same sweep found hadolint (linux),
+	// vale (pinned 3.14.2 against a floating `releases/latest`), and
+	// shfmt/tflint (win32/arm64) already off their upstream names. The installer
+	// takes `releases/latest` only, so the fixture is each repo's latest list.
+	describe("asset names against the real latest release lists (#5624)", () => {
+		const fixture = JSON.parse(
+			readFileSync(
+				path.join(
+					import.meta.dirname,
+					"../../fixtures/installer-release-assets/latest-2026-11-15.json",
+				),
+				"utf8",
+			),
+		) as { tools: Record<string, { assets: string[] }> };
+
+		it.each([
+			["opengrep", "linux", "x64", "opengrep_linux_x86"],
+			["opengrep", "linux", "arm64", "opengrep_linux_aarch64"],
+			["opengrep", "darwin", "x64", "opengrep_osx_x86"],
+			["opengrep", "darwin", "arm64", "opengrep_osx_arm64"],
+			["opengrep", "win32", "x64", "opengrep_windows_x86.zip"],
+			["opengrep", "win32", "arm64", "opengrep_windows_x86.zip"],
+			["hadolint", "linux", "x64", "hadolint-linux-x86_64"],
+			["hadolint", "linux", "arm64", "hadolint-linux-arm64"],
+			["vale", "linux", "x64", "vale_3.27.0_Linux_64-bit.tar.gz"],
+			["vale", "linux", "arm64", "vale_3.27.0_Linux_arm64.tar.gz"],
+			["vale", "darwin", "x64", "vale_3.27.0_macOS_64-bit.tar.gz"],
+			["vale", "darwin", "arm64", "vale_3.27.0_macOS_arm64.tar.gz"],
+			["vale", "win32", "x64", "vale_3.27.0_Windows_64-bit.zip"],
+			["shfmt", "win32", "arm64", "shfmt_v3.14.1_windows_amd64.exe"],
+			["tflint", "win32", "arm64", "tflint_windows_amd64.zip"],
+		] as const)(
+			"%s %s/%s picks %s, never a .cert/.sig sidecar",
+			async (toolId, platform, arch, expected) => {
+				const { pickReleaseAsset, resolveGitHubAsset } =
+					await import("../../../clients/installer/index.js");
+				const assets = fixture.tools[toolId].assets.map((name) => ({ name }));
+				const substring = resolveGitHubAsset(toolId, platform, arch);
+				expect(substring).toBeDefined();
+				const picked = pickReleaseAsset(assets, substring as string);
+				expect(picked?.name).toBe(expected);
+				expect(picked?.name).not.toMatch(/\.(cert|sig)$/);
+			},
+		);
+
+		// Must-not-match: the sidecars are the only assets sharing the binary's
+		// name as a prefix, so an installer that fell back to a prefix match
+		// would write a 96-byte signature as the binary.
+		it("opengrep: a list holding only the .cert/.sig siblings picks nothing", async () => {
+			const { pickReleaseAsset, resolveGitHubAsset } =
+				await import("../../../clients/installer/index.js");
+			const sidecars = fixture.tools.opengrep.assets
+				.filter((name) => /\.(cert|sig)$/.test(name))
+				.map((name) => ({ name }));
+			expect(sidecars.length).toBeGreaterThan(0);
+			for (const [platform, arch] of [
+				["linux", "x64"],
+				["darwin", "arm64"],
+				["win32", "x64"],
+			] as const) {
+				const substring = resolveGitHubAsset("opengrep", platform, arch);
+				expect(pickReleaseAsset(sidecars, substring as string)).toBeUndefined();
+			}
+		});
+	});
+
 	describe("shellcheck asset patterns", () => {
 		it.each([
 			["linux", "x64", "linux.x86_64.tar.xz"],
@@ -160,7 +230,7 @@ describe("GitHub release asset selection", () => {
 			["darwin", "x64", "darwin_amd64"],
 			["darwin", "arm64", "darwin_arm64"],
 			["win32", "x64", "windows_amd64.exe"],
-			["win32", "arm64", "windows_arm64.exe"],
+			["win32", "arm64", "windows_amd64.exe"], // no upstream arm64 build; x64 via emulation
 		] as const)("%s/%s → %s", async (platform, arch, expected) => {
 			const { resolveGitHubAsset } =
 				await import("../../../clients/installer/index.js");

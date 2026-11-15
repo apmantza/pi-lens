@@ -1248,7 +1248,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/gzip-stage-write.ts": 2,
 		"clients/inline-blocker-dispositions.ts": 2,
 		"clients/install-diagnostics.ts": 11,
-		"clients/installer/index.ts": 104,
+		// 104 -> 107 (#5624): the opengrep zip's DLL move computes the extraction
+		// directory with `path.dirname` and each destination with `path.join`.
+		"clients/installer/index.ts": 107,
 		// 4 -> 9 (#4765): refreshOpengrepRulePack computes the candidate's
 		// scratch directory, cwd and sweep with `path.dirname`/`path.join`.
 		"clients/installer/managed-tool-refresh.ts": 9,
@@ -2060,7 +2062,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/oxlint.ts": 3,
 		"clients/grammar-source.ts": 5,
 		"clients/install-diagnostics.ts": 3,
-		"clients/installer/index.ts": 60,
+		// 60 -> 54 (#5624): vale's asset names drop their pinned `version` constant.
+		"clients/installer/index.ts": 54,
 		// 24 -> 29 (#4765): the pack refresh stamps the cached pack with a digest
 		// `version` in the refresh-state entry (the stamp's existing field) and passes
 		// `--disable-version-check` to the validate spawn: stamp/CLI vocabulary.

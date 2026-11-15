@@ -2588,7 +2588,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// land. Only the test helper registry calls it; no hook handler reaches it.
 	// #5561: 222 -> 227. The pip ladder now probes the selected interpreter's
 	// release after each failed candidate so the refusal names the real runtime.
-	"clients/installer/index.ts": 227,
+	// #5624: 227 -> 229. The opengrep Windows zip moves its sibling DLLs into the
+	// managed bin: one awaited readdir and one awaited rename per DLL, local
+	// filesystem calls inside the install the 120 s archive-command bound already
+	// frames. No hook handler reaches the install without its own deadline.
+	"clients/installer/index.ts": 229,
 	// 29 -> 56 (#4765): refreshOpengrepRulePack (the background registry-pack
 	// refresh) awaits the pack download, its temp-file write, the
 	// `opengrep --validate` spawn, a stat/read/rename of the cached file and a
