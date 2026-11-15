@@ -547,6 +547,26 @@ console.log(JSON.stringify(out));`,
 		}
 	});
 
+	// #5100 r3 N2: node's `exec` starts its child through
+	// `module.exports.execFile`, which is the wrapper too, so one exec counted
+	// twice in the gate's "started N real child process(es)".
+	it("counts one exec as one child, though node's exec calls the patched execFile", async () => {
+		const line = `${JSON.stringify(process.execPath)} -e "process.exit(0)"`;
+		const before = realSpawnLedgerView();
+		await new Promise<void>((resolve, reject) =>
+			cp.exec(line, (error) => (error ? reject(error) : resolve())),
+		);
+		await util.promisify(cp.exec)(line);
+		const after = realSpawnLedgerView();
+		const delta = (entry: string) =>
+			(after.entryPoints[entry] ?? 0) - (before.entryPoints[entry] ?? 0);
+		expect({
+			total: after.total - before.total,
+			exec: delta("exec"),
+			execFile: delta("execFile"),
+		}).toEqual({ total: 2, exec: 2, execFile: 0 });
+	});
+
 	it("counts a real child reached through vi.importActual (#5064 shape)", async () => {
 		const actual = await vi.importActual<RealSpawnTarget>("node:child_process");
 		const before = realSpawnLedgerView().total;

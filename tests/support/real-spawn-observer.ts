@@ -305,6 +305,13 @@ function callerFrames(depth: number): SpawnCallers {
 	return { frames, owner };
 }
 
+/** Runs one call of an observed entry point: notes it, then forwards. */
+type ObserveCall = (
+	entry: RealSpawnEntryPoint,
+	args: unknown[],
+	forward: () => unknown,
+) => unknown;
+
 /** A copy of `fn` that notes each call and forwards it unmodified. Every own
  *  property and symbol of `fn` is carried, so `util.promisify(wrapper)` finds
  *  the `[util.promisify.custom]` node put on `exec` and `execFile` and resolves
@@ -314,11 +321,10 @@ function callerFrames(depth: number): SpawnCallers {
 function observed(
 	fn: (...args: unknown[]) => unknown,
 	entry: RealSpawnEntryPoint,
-	note: (entry: RealSpawnEntryPoint, args: unknown[]) => void,
+	observe: ObserveCall,
 ): (...args: unknown[]) => unknown {
 	const wrapper = function (this: unknown, ...args: unknown[]): unknown {
-		note(entry, args);
-		return fn.apply(this, args);
+		return observe(entry, args, () => fn.apply(this, args));
 	};
 	for (const key of Reflect.ownKeys(fn)) {
 		const descriptor = Object.getOwnPropertyDescriptor(fn, key)!;
@@ -326,7 +332,7 @@ function observed(
 			descriptor.value = observed(
 				descriptor.value as (...args: unknown[]) => unknown,
 				entry,
-				note,
+				observe,
 			);
 		Object.defineProperty(wrapper, key, descriptor);
 	}
@@ -363,13 +369,27 @@ export function installRealSpawnObserver(
 			ledger.harnessCalls.push(call);
 		}
 	};
+	// Observed calls on the stack. Node's `exec` starts its child through
+	// `module.exports.execFile`, which is a wrapper too, so a call made while
+	// another observed call runs is that call's own machinery, not a second
+	// child: one exec counted twice in "started N" (#5100 r3 N2).
+	let depth = 0;
+	const observe: ObserveCall = (entry, args, forward) => {
+		if (depth === 0) note(entry, args);
+		depth += 1;
+		try {
+			return forward();
+		} finally {
+			depth -= 1;
+		}
+	};
 	for (const entry of REAL_SPAWN_ENTRY_POINTS) {
 		const original = target[entry];
 		if (typeof original !== "function") continue;
 		target[entry] = observed(
 			original as (...args: unknown[]) => unknown,
 			entry,
-			note,
+			observe,
 		);
 	}
 	const promises = target.promises;
@@ -380,7 +400,7 @@ export function installRealSpawnObserver(
 			promises[entry] = observed(
 				original as (...args: unknown[]) => unknown,
 				entry,
-				note,
+				observe,
 			);
 		}
 	}
