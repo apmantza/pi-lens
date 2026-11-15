@@ -5,6 +5,7 @@ import {
 	type ActionableWarningsReport,
 } from "../../clients/actionable-warnings.js";
 import { formatCodeQualityWarningsAdvisory } from "../../clients/code-quality-warnings.js";
+import type { Diagnostic } from "../../clients/dispatch/types.js";
 import { formatWithheldBlockerLine } from "../../clients/pipeline.js";
 import {
 	TOOL_REGISTRY,
@@ -86,10 +87,32 @@ describe("#2535 adapter-aware agent tool names", () => {
 	// #5108 (Greptile on #5114): the withheld-blocker line hard-coded the pi
 	// name, so an MCP agent would be sent to a tool it cannot call.
 	it("the withheld-blocker line names the diagnostics tool of its host", () => {
-		expect(formatWithheldBlockerLine(1, "a.ts", "pi")).toContain(
-			"lens_diagnostics mode=all",
+		const blocker = (line: number): Diagnostic => ({
+			id: `b${line}`,
+			message: "m",
+			filePath: "/p/a.ts",
+			line,
+			rule: "debugger-statement",
+			severity: "error",
+			semantic: "blocking",
+			tool: "ast-grep-napi",
+		});
+		expect(
+			formatWithheldBlockerLine(
+				[blocker(1)],
+				"/p/a.ts",
+				"a.ts",
+				"changed",
+				"pi",
+			),
+		).toContain("lens_diagnostics mode=all");
+		const mcp = formatWithheldBlockerLine(
+			[blocker(1), blocker(2)],
+			"/p/a.ts",
+			"a.ts",
+			"changed",
+			"mcp",
 		);
-		const mcp = formatWithheldBlockerLine(2, "a.ts", "mcp");
 		expect(mcp).toContain("pilens_diagnostics mode=all lists them");
 		expect(mcp).not.toMatch(/(?<!pi)lens_diagnostics/);
 	});

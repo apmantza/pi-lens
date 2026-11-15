@@ -76,7 +76,7 @@ export const MAX_BASELINE_FILES = 256;
 export const MAX_TABLE_FUNCTIONS = 512;
 /** The advisory's byte budget on the tool result (#5087 acceptance). */
 export const MAX_ADVISORY_BYTES = 240;
-/** A default-branch blob larger than this is not read. */
+/** A blob larger than this is not read ({@link readFileAtRef}). */
 const MAX_BLOB_BYTES = 2 * 1024 * 1024;
 /**
  * An edit's file, or a default-branch blob, over this many bytes is not
@@ -218,8 +218,8 @@ async function resolveDefaultBranch(
 
 /**
  * `filePath` as the default branch holds it. One `for-each-ref` and one
- * `git show`, from the file's own directory, so a file link answers its
- * target's repository (#4966).
+ * `git show` ({@link readFileAtRef}), from the file's own directory, so a file
+ * link answers its target's repository (#4966).
  */
 export async function readAtDefaultBranch(
 	filePath: string,
@@ -235,33 +235,57 @@ export async function readAtDefaultBranch(
 	const branch = await resolveDefaultBranch(cwd, signal);
 	if ("unavailable" in branch)
 		return { kind: "unavailable", reason: branch.unavailable };
+	const read = await readFileAtRef(
+		filePath,
+		branch.ref,
+		"complexity-main",
+		signal,
+	);
+	if (read.kind === "unavailable") return read;
+	return { ...read, ref: shortRef(branch.ref) };
+}
+
+/**
+ * `filePath` as git's `ref` holds it: one `git show <ref>:./<path>` from the
+ * file's own directory (its nearest existing one), so a file link answers its
+ * target's repository (#4966). `absent`: the ref holds no such path. A blob
+ * over {@link MAX_BLOB_BYTES} is `unavailable`.
+ */
+export async function readFileAtRef(
+	filePath: string,
+	ref: string,
+	resourceLabel: string,
+	signal?: AbortSignal,
+): Promise<
+	| { kind: "file"; content: string }
+	| { kind: "absent" }
+	| { kind: "unavailable"; reason: string }
+> {
+	const target = realpathOrResolve(filePath);
+	const cwd = existingDir(nodePath.dirname(target));
+	if (!cwd) return { kind: "unavailable", reason: "no-directory" };
 	const relative = nodePath.relative(cwd, target).split(nodePath.sep).join("/");
 	// `LC_ALL=C`: the absent-path check below reads git's English message, and
 	// a translated git would turn "absent" into `git-show-failed`.
-	const shown = await safeSpawnAsync(
-		"git",
-		["show", `${branch.ref}:./${relative}`],
-		{
-			cwd,
-			timeout: GIT_TIMEOUT_MS,
-			...(signal && { signal }),
-			maxOutputBytes: MAX_BLOB_BYTES,
-			env: { LC_ALL: "C" },
-			resourceLabel: "complexity-main",
-		},
-	);
-	const ref = shortRef(branch.ref);
+	const shown = await safeSpawnAsync("git", ["show", `${ref}:./${relative}`], {
+		cwd,
+		timeout: GIT_TIMEOUT_MS,
+		...(signal && { signal }),
+		maxOutputBytes: MAX_BLOB_BYTES,
+		env: { LC_ALL: "C" },
+		resourceLabel,
+	});
 	if (shown.status === 0) {
 		if (shown.outputTruncated)
 			return { kind: "unavailable", reason: "blob-too-large" };
-		return { kind: "file", ref, content: shown.stdout };
+		return { kind: "file", content: shown.stdout };
 	}
 	if (shown.failure)
 		return { kind: "unavailable", reason: `git-${shown.failure}` };
 	// git names a missing path two ways: absent from the tree, or present on
 	// disk but not in the ref.
 	if (/does not exist|exists on disk, but not in/.test(shown.stderr))
-		return { kind: "absent", ref };
+		return { kind: "absent" };
 	return { kind: "unavailable", reason: "git-show-failed" };
 }
 

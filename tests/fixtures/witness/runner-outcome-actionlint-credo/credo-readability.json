@@ -1,0 +1,28 @@
+{
+  "issues": [
+    {
+      "category": "readability",
+      "check": "Credo.Check.Readability.ModuleDoc",
+      "column": 11,
+      "column_end": 12,
+      "filename": "lib/c.ex",
+      "line_no": 1,
+      "message": "Modules should have a @moduledoc tag.",
+      "priority": 1,
+      "scope": "C",
+      "trigger": "C"
+    },
+    {
+      "category": "readability",
+      "check": "Credo.Check.Readability.SpaceAfterCommas",
+      "column": 11,
+      "column_end": 13,
+      "filename": "lib/c.ex",
+      "line_no": 2,
+      "message": "Space missing after comma.",
+      "priority": 2,
+      "scope": "C.f",
+      "trigger": ",d"
+    }
+  ]
+}

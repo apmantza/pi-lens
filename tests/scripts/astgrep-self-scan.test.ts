@@ -722,6 +722,19 @@ d("governance suite: turn-count-wait (#4865)", () => {
 		expect(out).toMatch(/PASS turn-count-wait-test-hook /);
 	});
 
+	// The awaited-loop rule ships disabled (rules-disabled/; 17 real-I/O waits
+	// among 669 members). Its rule tests still run, so the #5618 review's 35
+	// plants stay judged and the rule is correct on the day it is switched on.
+	it("the disabled awaited-loop-wait rule tests pass", () => {
+		const run = runRuleTests(repoRoot(), {
+			...governance,
+			sgConfig: "sgconfig-disabled.yml",
+		});
+		const out = `${run.stdout ?? ""}${run.stderr ?? ""}`;
+		expect(run.status, out).toBe(0);
+		expect(out).toMatch(/PASS awaited-loop-wait /);
+	});
+
 	it("the tree has no untriaged member, and every baseline row has a reason and a live member", () => {
 		const result = runSelfScan({ suite: governance });
 		const tracked = trackedSelfScanFileSet(repoRoot(), governance.scanPaths);

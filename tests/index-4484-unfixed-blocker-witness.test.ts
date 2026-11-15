@@ -327,6 +327,10 @@ const boundary = vi.hoisted(() => {
 				fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "",
 			);
 		}
+		// The fixture's `.git` is an empty directory, which real git answers with
+		// "not a git repository" (the commit gate's staged-delta read, #5553).
+		if (command === "git")
+			return { stdout: "", stderr: "fatal: not a git repository", status: 128 };
 		// Version and gate probes of the other doubled binaries succeed.
 		if (isDoubled(command) && !isHelm(command))
 			return { stdout: "version: 0.10.0", stderr: "", status: 0 };

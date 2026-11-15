@@ -368,9 +368,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :15
 	"clients/dispatch/integration.ts": {
 		silent: 7,
-		identities: "07e8090abd2c7f84",
+		identities: "33888a63294fe35f",
 		reason: PRE_RULE,
-	}, // :323, :976, :1625, :1635, :2320, :3345, :3371
+	}, // :347, :1039, :1735, :1745, :2481, :3579, :3660 (#5553: the unreadable-file handler moved into prepareSeedLaneRun; same seven handlers)
 	"clients/dispatch/pending-runner-findings.ts": {
 		silent: 2,
 		identities: "6376b0d0a47313f2",
@@ -978,6 +978,11 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		identities: "c6617487a0244394",
 		reason: PRE_RULE,
 	}, // :194, :216, :877, :1520, :1550, :1621, :1847, :2203, :2357, :2767
+	"clients/pre-edit-capture.ts": {
+		silent: 1,
+		identities: "2e966e69e019a6fa",
+		reason: PRE_RULE,
+	}, // :131 (#5616: the capture's catch moved here from runtime-tool-call.ts with `captureWriterSeeds`)
 	"clients/process-snapshot.ts": {
 		silent: 1,
 		identities: "d86d2439be475af1",
@@ -1120,10 +1125,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :403, :648, :901, :949, :956, :1042, :1069, :1146, :1181, :1183, :1208, :1238, :1371, :1422, :1592, :2189, :2782, :2814, :2922, :2999, :3004, :3414, :3428, :3501
 	"clients/runtime-tool-call.ts": {
-		silent: 10,
-		identities: "042e838b36502579",
+		silent: 9,
+		identities: "f53bc2b53b2f0a4f",
 		reason: PRE_RULE,
-	}, // :269, :502, :526, :1049, :1216, :1441, :1832 and the rest (11 -> 10, #5120: the partial-apply rejection catch went with the in-tool_call writer)
+	}, // :282, :525, :549, :934, :1095, :1101, :1306, :1565, :1963 (11 -> 10, #5120: the partial-apply rejection catch went with the in-tool_call writer; 10 -> 9, #5616: the pre-edit capture's catch moved to clients/pre-edit-capture.ts)
 	"clients/runtime-tool-result.ts": {
 		silent: 9,
 		identities: "b34b5e082d0b70b8",

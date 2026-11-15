@@ -624,7 +624,17 @@ Every logic change has relevant tests. New tests use fake clocks and
 processes. Real elapsed-time assertions belong in the serialized
 `wallClockBudgetInclude` lane. Real LSP child tests belong in
 `lsp-spawn-heavy`. Any admitted real spawn or timer carries the flake-shape
-header, baseline row, and lane membership. A new `vi.mock` of a module outside
+header, baseline row, and lane membership. Real `node:child_process` children are
+also caught at run time, not by name: `tests/support/real-spawn-observer.ts`,
+installed by `tests/support/vitest-setup.ts`, wraps every process-starting entry
+point and charges the child to the file whose call chain holds a `tests/` frame,
+so a helper, a `vi.importActual` spawn, a renamed import and a spawn reached
+through `clients/` all count. A file that started a child and holds no
+`flake-shape-baseline.json` row and no `tests/support/real-spawn-observed.json`
+row reds at its own teardown; the observed ledger is the promotion queue, and a
+row is deleted once the census carries the file. A child with no `tests/` frame
+anywhere in its chain (a module-level timer, vitest's own pool) is recorded and
+reported, never charged. A new `vi.mock` of a module outside
 `PROCESS_BOUNDARY_MODULES` (`tests/support/flake-shape-scan.ts`), or a new
 hand-rolled LSP client or service double, carries the flake-shape header for
 its detector, a baseline row, and an `ADMITTED_AFTER_BASELINE` entry.

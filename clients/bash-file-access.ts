@@ -225,7 +225,7 @@ interface ShellWord {
  * (`2>&1`, `>&2`, `&>f`), so the next segment is the same simple command; a
  * `|&` is a `pipe`; `end` is the end of the text.
  */
-type ShellSegmentExit =
+export type ShellSegmentExit =
 	| "and"
 	| "or"
 	| "pipe"
@@ -248,6 +248,10 @@ interface ShellSegmentRange {
 	exit: ShellSegmentExit;
 	/** An unquoted `(`, `)`, `{`, `}` or backtick appeared in the segment. */
 	grouping: boolean;
+	/** An unquoted `<` (a file, here-doc or here-string as input) appeared in it. */
+	input: boolean;
+	/** An unquoted `>` (a file written, a descriptor copied) appeared in it. */
+	output: boolean;
 	/** Per word: a redirection's descriptor or target, not an argument. */
 	redirectWords: readonly boolean[];
 	/**
@@ -283,6 +287,11 @@ function parseHeredocDelimiter(
 	let quoted = false;
 	while (i < command.length && !/[\s;&|<>]/.test(command[i] ?? "")) {
 		const ch = command[i];
+		// Bash drops the `$` of a `$'…'` or `$"…"` delimiter: `<<$'E'` ends at `E`.
+		if (ch === "$" && /['"]/.test(command[i + 1] ?? "")) {
+			i += 1;
+			continue;
+		}
 		if (ch === "'" || ch === '"') {
 			quoted = true;
 			const quote = ch;
@@ -308,54 +317,19 @@ function parseHeredocDelimiter(
 	return { heredoc: { delimiter, stripTabs, quoted }, end: i - 1 };
 }
 
-function heredocSubstitutionBodies(body: string): string[] {
-	const substitutions: string[] = [];
-	for (let i = 0; i < body.length; i += 1) {
-		if (body.startsWith("$(", i)) {
-			let depth = 1;
-			let quote: "single" | "double" | undefined;
-			for (let end = i + 2; end < body.length; end += 1) {
-				const ch = body[end];
-				if (quote === "single") {
-					if (ch === "'") quote = undefined;
-					continue;
-				}
-				if (quote === "double") {
-					if (ch === '"' && body[end - 1] !== "\\") quote = undefined;
-					continue;
-				}
-				if (ch === "'" || ch === '"') {
-					quote = ch === "'" ? "single" : "double";
-				} else if (body.startsWith("$(", end)) {
-					depth += 1;
-					end += 1;
-				} else if (ch === ")") {
-					depth -= 1;
-					if (depth === 0) {
-						substitutions.push(body.slice(i + 2, end));
-						i = end;
-						break;
-					}
-				}
-			}
-		} else if (body[i] === "`" && body[i - 1] !== "\\") {
-			const end = body.indexOf("`", i + 1);
-			if (end >= 0) {
-				substitutions.push(body.slice(i + 1, end));
-				i = end;
-			}
-		}
-	}
-	return substitutions;
-}
-
+/**
+ * The here-doc bodies that start at `start`, in order, and the index of the
+ * last character they take. `expanding` holds the bodies bash expands (an
+ * unquoted delimiter); a quoted one's text is literal. `terminated` is false
+ * when a body runs to the end without its delimiter line.
+ */
 function consumeHeredocBodies(
 	command: string,
 	start: number,
 	heredocs: PendingHeredoc[],
-): { end: number; substitutions: string[] } {
+): { end: number; expanding: string[]; terminated: boolean } {
 	let cursor = start;
-	const substitutions: string[] = [];
+	const expanding: string[] = [];
 	for (const heredoc of heredocs) {
 		const bodyStart = cursor;
 		let found = false;
@@ -365,10 +339,7 @@ function consumeHeredocBodies(
 			let line = command.slice(cursor, end);
 			if (heredoc.stripTabs) line = line.replace(/^\t+/, "");
 			if (line.replace(/\r$/, "") === heredoc.delimiter) {
-				if (!heredoc.quoted)
-					substitutions.push(
-						...heredocSubstitutionBodies(command.slice(bodyStart, cursor)),
-					);
+				if (!heredoc.quoted) expanding.push(command.slice(bodyStart, cursor));
 				cursor = lineEnd < 0 ? end : end + 1;
 				found = true;
 				break;
@@ -376,14 +347,220 @@ function consumeHeredocBodies(
 			cursor = lineEnd < 0 ? end : end + 1;
 		}
 		if (!found) {
-			if (!heredoc.quoted)
-				substitutions.push(
-					...heredocSubstitutionBodies(command.slice(bodyStart)),
-				);
-			return { end: command.length - 1, substitutions };
+			if (!heredoc.quoted) expanding.push(command.slice(bodyStart));
+			return { end: command.length - 1, expanding, terminated: false };
 		}
 	}
-	return { end: cursor - 1, substitutions };
+	return { end: cursor - 1, expanding, terminated: true };
+}
+
+/**
+ * Whether `source[i]` starts a word: bash removes each `\<newline>` before it
+ * reads words, so the character before those pairs decides (a blank, an
+ * operator, or nothing since `start`).
+ */
+function startsWord(source: string, i: number, start: number): boolean {
+	let before = i - 1;
+	while (source[before] === "\n" && source[before - 1] === "\\") before -= 2;
+	return before < start || /[\s;&|()]/.test(source[before] ?? "");
+}
+
+/** #5553: one command substitution bash runs, and how many it sits inside (1 is outermost). */
+export interface ShellSubstitution {
+	body: string;
+	depth: number;
+}
+
+/** Substitutions nested deeper than this are listed but leave the read incomplete. */
+const MAX_READ_SUBSTITUTION_DEPTH = 3;
+/** Past this the parser stops descending; the read is incomplete. */
+const MAX_PARSE_DEPTH = 32;
+
+/** Where a stretch of text sits: in a command, inside `"…"`, or in a here-doc bash expands. */
+type SubstitutionContext = "command" | "double" | "heredoc";
+
+/** Characters a backslash escapes inside `"…"` and an unquoted here-doc. */
+const DOUBLE_QUOTE_ESCAPES = '$`"\\\n';
+const HEREDOC_ESCAPES = "$`\\\n";
+
+/**
+ * #5553: every command substitution bash runs for `text` (`$(…)`, `` `…` ``,
+ * `<(…)`, `>(…)`), nested ones and those in an unquoted here-doc included, in
+ * the order they open. It reads quoting as bash does: inside `"…"` a `'` is a
+ * character, inside `'…'` nothing expands, `$'…'` ends at an unescaped `'`, a
+ * quoted here-doc is literal, and `#` at a word's start comments to the end of
+ * the line. `complete` is false when a quote, a body or a here-doc does not
+ * close (a here-doc still pending when its `$(…)` closes counts), a `<<`
+ * sits inside `${…}` or open parens, or the nesting passes three levels: a
+ * reader refuses that, never takes it as no substitution.
+ * `heredoc` reads `text` as the body of an unquoted here-doc.
+ */
+export function shellSubstitutions(
+	text: string,
+	options: { heredoc?: boolean } = {},
+): { bodies: ShellSubstitution[]; complete: boolean } {
+	const bodies: ShellSubstitution[] = [];
+	let complete = true;
+
+	/** Records the body between `open` and `close` and reads it as a command. */
+	const substitution = (
+		source: string,
+		bodyStart: number,
+		depth: number,
+	): number => {
+		const at = bodies.length;
+		bodies.push({ body: "", depth: depth + 1 });
+		if (depth + 1 > MAX_READ_SUBSTITUTION_DEPTH) complete = false;
+		const close = scan(source, bodyStart, "command", depth + 1, true);
+		bodies[at] = { body: source.slice(bodyStart, close), depth: depth + 1 };
+		if (close >= source.length) complete = false;
+		return close;
+	};
+
+	const backtick = (source: string, open: number, depth: number): number => {
+		let close = open + 1;
+		let body = "";
+		for (; close < source.length && source[close] !== "`"; close++) {
+			const next = source[close + 1] ?? "";
+			if (source[close] === "\\" && "$`\\".includes(next)) {
+				body += next;
+				close += 1;
+			} else body += source[close];
+		}
+		if (close >= source.length) complete = false;
+		const at = bodies.length;
+		bodies.push({ body, depth: depth + 1 });
+		if (depth + 1 > MAX_READ_SUBSTITUTION_DEPTH) complete = false;
+		if (depth + 1 < MAX_PARSE_DEPTH) scan(body, 0, "command", depth + 1, false);
+		else complete = false;
+		bodies[at] = { body, depth: depth + 1 };
+		return close;
+	};
+
+	/**
+	 * Reads `source` from `start` in `context`; returns the index of the
+	 * character that ends it (`)` for a `$(` body, `"` for a double quote) or
+	 * `source.length`.
+	 */
+	function scan(
+		source: string,
+		start: number,
+		context: SubstitutionContext,
+		depth: number,
+		closesAtParen: boolean,
+	): number {
+		if (depth >= MAX_PARSE_DEPTH) {
+			complete = false;
+			return source.length;
+		}
+		let parens = 0;
+		// Open `${` expansions: bash reads no here-doc inside one.
+		let braces = 0;
+		const heredocs: PendingHeredoc[] = [];
+		for (let i = start; i < source.length; i++) {
+			const ch = source[i] ?? "";
+			const next = source[i + 1] ?? "";
+			if (ch === "\\") {
+				const escapes =
+					context === "command"
+						? undefined
+						: context === "double"
+							? DOUBLE_QUOTE_ESCAPES
+							: HEREDOC_ESCAPES;
+				if (escapes === undefined || escapes.includes(next)) i += 1;
+				continue;
+			}
+			if (ch === "`") {
+				i = backtick(source, i, depth);
+				continue;
+			}
+			if (ch === "$" && next === "(") {
+				i = substitution(source, i + 2, depth);
+				continue;
+			}
+			if (context === "double") {
+				if (ch === '"') return i;
+				continue;
+			}
+			if (context === "heredoc") continue;
+			if (ch === "'") {
+				// In `$'…'` a backslash escapes the next character, a `'` included.
+				const ansiC = source[i - 1] === "$";
+				let close = i + 1;
+				for (; close < source.length && source[close] !== "'"; close++)
+					if (ansiC && source[close] === "\\") close += 1;
+				if (close >= source.length) {
+					complete = false;
+					return source.length;
+				}
+				i = close;
+				continue;
+			}
+			if (ch === '"') {
+				i = scan(source, i + 1, "double", depth, false);
+				if (i >= source.length) complete = false;
+				continue;
+			}
+			if ((ch === "<" || ch === ">") && next === "(") {
+				i = substitution(source, i + 2, depth);
+				continue;
+			}
+			if (ch === "$" && next === "{") {
+				braces += 1;
+				i += 1;
+				continue;
+			}
+			if (ch === "}" && braces > 0) {
+				braces -= 1;
+				continue;
+			}
+			if (ch === "<" && next === "<" && source[i + 2] !== "<") {
+				// Inside `${…}`, `((…))` or a subshell this reader cannot tell a
+				// here-doc from a shift or an operand, and a wrong guess swallows
+				// what follows (#5553 R5-1): the read is incomplete.
+				if (parens > 0 || braces > 0) complete = false;
+				const parsed = parseHeredocDelimiter(source, i + 2);
+				if (parsed) {
+					heredocs.push(parsed.heredoc);
+					i = parsed.end;
+				} else i += 1;
+				continue;
+			}
+			if (ch === "<" && next === "<") {
+				i += 2;
+				continue;
+			}
+			if (ch === "\n" && heredocs.length > 0) {
+				const consumed = consumeHeredocBodies(
+					source,
+					i + 1,
+					heredocs.splice(0),
+				);
+				if (!consumed.terminated) complete = false;
+				for (const body of consumed.expanding)
+					scan(body, 0, "heredoc", depth, false);
+				i = consumed.end;
+				continue;
+			}
+			if (ch === "#" && startsWord(source, i, start)) {
+				const lineEnd = source.indexOf("\n", i);
+				i = (lineEnd < 0 ? source.length : lineEnd) - 1;
+				continue;
+			}
+			if (ch === "(") parens += 1;
+			else if (ch === ")") {
+				if (parens > 0) parens -= 1;
+				else if (closesAtParen) {
+					if (heredocs.length > 0) complete = false;
+					return i;
+				}
+			}
+		}
+		return source.length;
+	}
+
+	scan(text, 0, options.heredoc ? "heredoc" : "command", 0, false);
+	return { bodies, complete };
 }
 
 /**
@@ -482,6 +659,94 @@ export function decodeShellWords(command: string): DecodedShellSegment[] {
 	}));
 }
 
+/**
+ * #5553: one simple command as bash runs it. `words` are its argv, each the
+ * value bash passes (quote removal, no path reading), without the words of a
+ * redirection. A `2>&1` does not end it.
+ */
+export interface DecodedSimpleCommand {
+	words: Array<
+		DecodedShellWord & {
+			/**
+			 * Bash expands this word only inside double quotes and not as `$@`,
+			 * `$*` or an array's `[@]`/`[*]`, so it stays one word.
+			 */
+			singleField?: true;
+		}
+	>;
+	/** The command has a redirection (`>`, `<`, `2>&1`, a here-string). */
+	redirected: boolean;
+	/** One of its redirections is an input: `<`, a here-doc, a here-string. */
+	input: boolean;
+	/** One of its redirections is an output: `>`, `>>`, `2>&1`. */
+	output: boolean;
+	/** How it ended: `and`, `or`, `pipe`, `seq`, `background` or `end`. */
+	exit: ShellSegmentExit;
+	/** An unquoted `(`, `)`, `{`, `}` or backtick appeared in it. */
+	grouping: boolean;
+	/**
+	 * It runs inside an unquoted here-doc's body (`$(…)` there), which bash
+	 * expands before the command that reads the here-doc starts.
+	 */
+	heredocSubstitution?: true;
+}
+
+const MULTI_FIELD_EXPANSION = /\$[@*]|\[[@*]\]/;
+
+/** #5553: the simple commands of `command`, in the order bash runs them. */
+export function decodeShellCommand(command: string): DecodedSimpleCommand[] {
+	const commands: DecodedSimpleCommand[] = [];
+	let open: DecodedSimpleCommand | undefined;
+	for (const range of tokenizeShellCommandWithRanges(command)) {
+		const current: DecodedSimpleCommand = open ?? {
+			words: [],
+			redirected: false,
+			input: false,
+			output: false,
+			exit: range.exit,
+			grouping: false,
+			// A here-doc's substitution has no range of its own in the command.
+			...(range.start < 0 && { heredocSubstitution: true as const }),
+		};
+		range.words.forEach((word, index) => {
+			if (word.syntax === true) return;
+			if (range.redirectWords[index] === true) {
+				current.redirected = true;
+				return;
+			}
+			const expanding = word.parts.filter((part) =>
+				EXPANDING_CHARS[part.kind]?.test(part.text),
+			);
+			const hidden = expanding.length > 0;
+			current.words.push({
+				text: wordValue(word),
+				...(hidden && { hidden: "expansion" as const }),
+				...(word.tildeExpands && { tildeExpands: true as const }),
+				...(hidden &&
+					expanding.every(
+						(part) =>
+							part.kind === "double" && !MULTI_FIELD_EXPANSION.test(part.text),
+					) && { singleField: true as const }),
+			});
+		});
+		current.grouping ||= range.grouping;
+		// A here-doc's delimiter leaves no redirection word behind.
+		current.input ||= range.input;
+		current.output ||= range.output;
+		current.redirected ||= range.input;
+		current.exit = range.exit;
+		if (range.exit === "redirect") {
+			current.redirected = true;
+			open = current;
+			continue;
+		}
+		open = undefined;
+		commands.push(current);
+	}
+	if (open) commands.push(open);
+	return commands;
+}
+
 function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 	const segments: ShellSegmentRange[] = [];
 	const pendingHeredocs: PendingHeredoc[] = [];
@@ -504,6 +769,8 @@ function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 	let atTokenStart = true;
 	let segmentStart = 0;
 	let grouping = false;
+	let input = false;
+	let output = false;
 	let redirectWords: boolean[] = [];
 	// The next word is a redirection's target (`> f`, `2>&1`'s `1`).
 	let redirectPending = false;
@@ -567,6 +834,8 @@ function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 				end,
 				exit,
 				grouping,
+				input,
+				output,
 				redirectWords,
 				words,
 			});
@@ -574,6 +843,8 @@ function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 		words = [];
 		redirectWords = [];
 		grouping = false;
+		input = false;
+		output = false;
 		unsupported = false;
 		atTokenStart = true;
 		segmentStart = end + 1;
@@ -618,15 +889,18 @@ function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 			continue;
 		}
 		if (escaped) {
-			// A backslash-newline is a shell line continuation, not part of the
-			// command argument. Keeping the newline here makes a continued git command
-			// visible to command guards.
-			if (ch !== "\n") {
-				word += ch;
-				addToPart("escaped", ch);
-			}
+			word += ch;
+			addToPart("escaped", ch);
 			escaped = false;
 			atTokenStart = false;
+			continue;
+		}
+		if (ch === "\\" && next === "\n") {
+			// A line continuation is not part of any word, so a continued git
+			// command stays visible to the guards. Bash removes it before it
+			// reads words, so it leaves the word-start state as it was:
+			// `a \<newline># x` is a comment (#5553 R4-2).
+			i += 1;
 			continue;
 		}
 		if (ch === "\\") {
@@ -634,7 +908,7 @@ function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 			// Windows routinely contain native paths (C:\\src\\file.ts). Preserve
 			// backslashes before ordinary path characters while still honoring
 			// shell escapes and line continuations.
-			if (next === "\n" || /[\s\\'";$|&<>]/.test(next ?? "")) {
+			if (/[\s\\'";$|&<>]/.test(next ?? "")) {
 				escaped = true;
 			} else {
 				// Bash removes this backslash; the token keeps it.
@@ -680,7 +954,13 @@ function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 				// here are relative to the substituted body, so a redirect inside one
 				// is not attributed to any of the command's segments (`-1`) rather
 				// than to whichever `cd` its accidental offset lands near.
-				for (const substitution of consumed.substitutions)
+				// What bash runs while it expands an unquoted body, outermost only.
+				const substitutions = consumed.expanding.flatMap((body) =>
+					shellSubstitutions(body, { heredoc: true }).bodies.flatMap((found) =>
+						found.depth === 1 ? [found.body] : [],
+					),
+				);
+				for (const substitution of substitutions)
 					segments.push(
 						...tokenizeShellCommandWithRanges(substitution).map((entry) => ({
 							...entry,
@@ -730,6 +1010,8 @@ function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 				redirectPending = true;
 			flushWord();
 			redirectPending = true;
+			if (ch === "<") input = true;
+			else output = true;
 			if (
 				ch === "<" &&
 				next === "<" &&

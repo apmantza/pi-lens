@@ -888,10 +888,17 @@ export const wallClockBudgetInclude = [
 	// #5108: a real bash write plus a handler held past the live 500 ms bound
 	// (flake-shape admission); the git children ride in the serialized lane.
 	"tests/index-5108-opaque-blocker-disclosure-witness.test.ts",
+	// #5552: real tool_result/dispatcher LSP wire traffic for mtime-preserving
+	// shell writes; serialized with the other child-process witnesses.
+	"tests/index-5552-lsp-resync-wire.test.ts",
 	// #5552: a real `mv`, `rsync` and `tar` write old-mtime files into a real git
 	// checkout behind a real pi session (flake-shape admission); the child
 	// processes ride in the serialized lane.
 	"tests/index-5552-shell-write-forms.test.ts",
+	// #5553: the commit gate's own `git` reads and the real tree-sitter and
+	// ast-grep lanes behind a real pi session (flake-shape admission); the git
+	// children ride in the serialized lane.
+	"tests/index-5553-staged-delta-gate.test.ts",
 	// #5553: real `sed`, ast-grep, git and fake-LSP children behind a real pi
 	// session; the gate reads the writers' baselines (flake-shape admission).
 	"tests/index-5553-writer-baselines.test.ts",
@@ -1119,6 +1126,10 @@ export const wallClockBudgetInclude = [
 	// #5146: the root afterEach's failing exit status is only observable from a
 	// separate Vitest process that deliberately leaks a session (flake-shape admission).
 	"tests/support/pi-mock.test.ts",
+	// #5100: the run-time spawn gate's own test. It calls the patched real
+	// `child_process` exports and drives a child Vitest run over its fixtures, so
+	// the gate's teardown red is produced by a real fork (flake-shape admission).
+	"tests/support/real-spawn-observer.test.ts",
 	// #3179: the guard's #3179 fix's one real, cross-process reproduction. A
 	// separately spawned process races node's own recursive-watch readdirSync
 	// against a directory removal — the same race PR #3178 hit in CI — which

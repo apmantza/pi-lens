@@ -1300,11 +1300,20 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	},
 	// 2026-10-31 (#5108): a script-written file's blocker must reach the model
 	// through a real bash tool call, and the abandonment is a real 500 ms wall
-	// bound racing a handler held open past it.
+	// bound racing a handler held open past it. 2026-11-15 (#5616): the credit
+	// cases drive the trigger's own `python3` form, so the file asks the host
+	// once whether `python3` runs.
 	"real-process-spawn:index-5108-opaque-blocker-disclosure-witness.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the subject is what a real bash tool call writes into a real git checkout and what the model receives for it, detected by git's own status; a stubbed shell answers only what it was told",
+			"the subject is what a real bash tool call writes into a real git checkout and what the model receives for it, detected by git's own status; a stubbed shell answers only what it was told, and only the host can say whether python3 runs for the trigger's own python form",
+	},
+	// 2026-11-14 (#5552): the real tool_result and dispatcher must carry
+	// mtime-preserving shell-write bytes onto a real child LSP wire.
+	"real-process-spawn:index-5552-lsp-resync-wire.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the subject is the real pi tool_result and dispatcher sending mv and cp -p bytes over a child LSP wire; a stubbed shell or client cannot prove the protocol payload",
 	},
 	// 2026-11-14 (#5552): a bash `mv`, `rsync` and `tar x` keep the source's old
 	// mtime, so only git's own status shows the write; the writers are real
@@ -1313,6 +1322,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"the subject is what a real mv, rsync and tar write into a real git checkout with an old mtime and whether git's own status, the dispatcher and the commit gate see it; a stub answers only what it was told",
+	},
+	// 2026-11-14 (#5553): the commit gate reads the staged delta itself, so the
+	// subject is a real `git` repository, the gate's own `git` children and the
+	// real lanes, behind a real pi session.
+	"real-process-spawn:index-5553-staged-delta-gate.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the subject is whether bytes nobody authored reach git's own commit judged on the staged delta, read by the gate's real git children and the real tree-sitter and ast-grep lanes; a stub answers only what it was told",
 	},
 	// 2026-11-14 (#5553): every writer that names a path must reach the commit
 	// gate with the inherited blocker already in its baseline; the writers are
@@ -1874,6 +1891,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"the root afterEach's failing exit status is only observable from a separate Vitest process that deliberately leaks a session",
+	},
+	// 2026-02-08 (#5100): the run-time spawn gate's own test. Its witnesses are
+	// the real patched `child_process` exports in this file's own module graph
+	// and a child Vitest run whose fork produces the gate's teardown red.
+	"real-process-spawn:support/real-spawn-observer.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the gate's red is produced by a fork's afterAll, so the seam is a real child process: the file calls the patched real child_process exports and runs a child Vitest run over its fixtures",
 	},
 	// 2026-09-17 (#3179): the race is cross-process by construction —
 	// readdirSync/statSync inside node's own recursive-watch polyfill are
