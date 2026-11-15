@@ -441,7 +441,17 @@ interface GitHubAssetSpec {
 	 * For bare .gz files (e.g. rust-analyzer) leave undefined — the asset IS the binary.
 	 */
 	binaryInArchive?: string;
-	hashiCorpReleaseProduct?: string;
+	/**
+	 * For a project whose GitHub release does not carry the archives (HashiCorp
+	 * publishes on releases.hashicorp.com, helm on get.helm.sh): build the asset
+	 * the tool downloads from the release tag and the `assetMatch` substring.
+	 * Consulted only when no release asset matches; return undefined when the
+	 * tag yields no usable version.
+	 */
+	derivedAsset?: (
+		tagName: string,
+		assetSubstring: string,
+	) => DownloadAsset | undefined;
 	/**
 	 * Additional release assets (EXACT names) to download as bare files alongside
 	 * the primary binary. Needed when the primary is a wrapper that references a
@@ -1065,6 +1075,15 @@ export const TOOLS: ToolDefinition[] = [
 		binaryName: "helm",
 		github: {
 			repo: "helm/helm",
+			// The GitHub release holds only `.asc` signatures (#5643); the
+			// archives are served from get.helm.sh under the same names.
+			derivedAsset: (tagName, assetSubstring) => {
+				const name = `helm-${tagName}-${assetSubstring}`;
+				return {
+					name,
+					browser_download_url: `https://get.helm.sh/${name}`,
+				};
+			},
 			assetMatch: (platform, arch) => {
 				// helm publishes per-OS archives: tar.gz for POSIX, zip for Windows.
 				const cpu = arch === "arm64" ? "arm64" : "amd64";
@@ -1895,7 +1914,15 @@ export const TOOLS: ToolDefinition[] = [
 		binaryName: "terraform-ls",
 		github: {
 			repo: "hashicorp/terraform-ls",
-			hashiCorpReleaseProduct: "terraform-ls",
+			derivedAsset: (tagName, assetSubstring) => {
+				const version = tagName.replace(/^v/, "").trim();
+				if (!version) return undefined;
+				const name = `terraform-ls_${version}_${assetSubstring}`;
+				return {
+					name,
+					browser_download_url: `https://releases.hashicorp.com/terraform-ls/${version}/${name}`,
+				};
+			},
 			assetMatch: archAssetMatch(OS_ARCH_ZIP_ASSETS),
 			binaryInArchive: "terraform-ls",
 		},
@@ -4190,7 +4217,7 @@ async function installGitHubTool(
 
 	const asset =
 		pickReleaseAsset(releaseJson.assets, assetSubstring) ??
-		deriveHashiCorpReleaseAsset(tool, releaseJson.tag_name, assetSubstring);
+		deriveReleaseAsset(tool, releaseJson.tag_name, assetSubstring);
 	if (!asset) {
 		logSessionStart(
 			`github-install ${tool.id}: no asset matched "${assetSubstring}"`,
@@ -7265,25 +7292,16 @@ export function pickReleaseAsset<T extends { name: string }>(
 	);
 }
 
-function deriveHashiCorpReleaseAsset(
+function deriveReleaseAsset(
 	tool: ToolDefinition,
 	tagName: string | undefined,
 	assetSubstring: string,
 ): DownloadAsset | undefined {
-	const product = tool.github?.hashiCorpReleaseProduct;
-	if (!product || !tagName) return undefined;
-
-	const version = tagName.replace(/^v/, "").trim();
-	if (!version) return undefined;
-
-	const assetName = `${product}_${version}_${assetSubstring}`;
-	return {
-		name: assetName,
-		browser_download_url: `https://releases.hashicorp.com/${product}/${version}/${assetName}`,
-	};
+	if (!tagName) return undefined;
+	return tool.github?.derivedAsset?.(tagName, assetSubstring);
 }
 
-export function resolveDerivedHashiCorpReleaseAsset(
+export function resolveDerivedReleaseAsset(
 	toolId: string,
 	tagName: string,
 	platform: string,
@@ -7293,5 +7311,5 @@ export function resolveDerivedHashiCorpReleaseAsset(
 	if (!tool) return undefined;
 	const assetSubstring = tool.github?.assetMatch(platform, arch);
 	if (!assetSubstring) return undefined;
-	return deriveHashiCorpReleaseAsset(tool, tagName, assetSubstring);
+	return deriveReleaseAsset(tool, tagName, assetSubstring);
 }
