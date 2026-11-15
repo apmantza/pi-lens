@@ -94,6 +94,22 @@ export const PRE_EDIT_SEED_SPANLESS_RUNNER_IDS: ReadonlySet<string> = new Set([
 	...PRE_EDIT_EDIT_GATED_RUNNER_IDS,
 ]);
 
+/**
+ * #5616: the seeded lanes that analyse the dispatch's `file.content` fact, not
+ * the file on disk. A capture of bytes the disk no longer holds (a credited
+ * script write's HEAD copy, `capturePreEditLinterFindings`' `before`) can run
+ * only these: a linter spawned on the path would read the new bytes and seed
+ * the write's own findings as pre-existing.
+ */
+export const PRE_EDIT_SEED_CONTENT_RUNNER_IDS: ReadonlySet<string> =
+	PRE_EDIT_EDIT_GATED_RUNNER_IDS;
+
+/**
+ * #5616: the bytes a file held before a write that already happened, for the
+ * capture's `before`: `absent` when it had none (the write created it).
+ */
+export type PreEditBytes = { content: string } | "absent" | "unreadable";
+
 /** Whether `runnerId`'s findings are seeded for a writer with or without a span. */
 export function isPreEditSeedRunner(
 	runnerId: string,

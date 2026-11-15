@@ -189,8 +189,11 @@ import {
 } from "./dispatch/rule-policy.js";
 import {
 	adviseOnEdit,
+	readFileAtRef,
 	type Thresholds,
 } from "./metrics/complexity-baseline.js";
+import { captureWriterSeeds } from "./pre-edit-capture.js";
+import type { PreEditBytes } from "./dispatch/pre-edit-seed.js";
 import { isComplexitySupportedFile } from "./tree-sitter-shared.js";
 import {
 	incrementDegradationCount,
@@ -771,7 +774,12 @@ interface ToolResultDeps {
 	_attachmentBudget?: { remaining: number };
 	/** Internal test seam for making missing observation evidence reachable. */
 	_opaqueCaptureOptions?: Pick<CaptureOptions, "forcedUnknownReason">;
-	/** Internal: synthetic dispatch inherits the parent's read-guard evidence. */
+	/**
+	 * Internal: synthetic dispatch inherits the parent's read-guard evidence.
+	 * #5616: the same verdict says the bytes are the agent's, not only their
+	 * blockers, so it also gates pi-lens's own writers (format, autofix and
+	 * their agent_end queues). A credited script write sets it false.
+	 */
 	_readGuardAuthorship?: boolean;
 	/** Internal: synthetic dispatch inherits the parent's ownership decision. */
 	_allowAutonomousWriters?: boolean;
@@ -1655,14 +1663,17 @@ async function dispatchPipelineAnalysis(args: {
 	// The original bash result can reach this helper without authorship
 	// evidence; synthetic opaque writes deliberately set this false. This
 	// identity gates all autonomous writer/instruction surfaces (#3226), and
-	// read-guard credit unless `readGuardCredit` says otherwise.
+	// read-guard credit and pi-lens's writers unless `bytesAuthored` says
+	// otherwise.
 	allowAutonomousWriters: boolean;
 	/**
-	 * #5616: whether the post-pipeline read-guard stamp may credit the bytes.
-	 * A script write credited for its blockers keeps them UNKNOWN to the read
-	 * guard, as no pre-write check covered them. Omitted: `allowAutonomousWriters`.
+	 * #5616: whether the authorship covers the bytes, not only their blockers:
+	 * the post-pipeline read-guard stamp and the pipeline's format and autofix
+	 * follow it. A script write credited for its blockers keeps its bytes
+	 * UNKNOWN to the read guard and unformatted, as no pre-write check covered
+	 * them. Omitted: `allowAutonomousWriters`.
 	 */
-	readGuardCredit?: boolean;
+	bytesAuthored?: boolean;
 	/** #5616: what the withheld line may say pi-lens knows of an uncredited write. */
 	withheldEvidence?: WithheldEvidence;
 	/**
@@ -1709,7 +1720,7 @@ async function dispatchPipelineAnalysis(args: {
 		toolResultStart,
 		nativeAppliedPairs,
 		allowAutonomousWriters,
-		readGuardCredit = allowAutonomousWriters,
+		bytesAuthored = allowAutonomousWriters,
 		withheldEvidence,
 		sessionGeneration,
 		ownFileTimeStamp = true,
@@ -1744,6 +1755,7 @@ async function dispatchPipelineAnalysis(args: {
 			toolName: event.toolName,
 			autofixMode,
 			allowAutonomousWriters,
+			bytesAuthored,
 			...(withheldEvidence !== undefined && { withheldEvidence }),
 			modifiedRanges,
 			// #4484 r2: read when the dispatch returns, so a collect-later answer
@@ -2037,7 +2049,7 @@ async function dispatchPipelineAnalysis(args: {
 	// The model's write/edit and pi-lens' own immediate format/autofix are now
 	// reflected on disk. Refresh read-guard staleness stamps so a follow-up edit
 	// is judged by read-range coverage, not by our own previous write.
-	if (!getFlag("no-read-guard") && readGuardCredit) {
+	if (!getFlag("no-read-guard") && bytesAuthored) {
 		const ownPath = path.resolve(filePath);
 		const changedForReadGuard = new Set([
 			ownPath,
@@ -2272,6 +2284,25 @@ function complexityThresholdsFor(
 			DEFAULT_HIGH_COMPLEXITY_THRESHOLD,
 		nesting: DEFAULT_HIGH_COMPLEXITY_DEPTH_THRESHOLD,
 	};
+}
+
+/**
+ * #5616: a credited script write's file as HEAD holds it. The call is
+ * credited only with a file that was clean before it, so these are the bytes
+ * the file held then; `absent` for a file the call created.
+ */
+function readHeadCopy(
+	filePath: string,
+	signal?: AbortSignal,
+): Promise<PreEditBytes> {
+	return readFileAtRef(filePath, "HEAD", "pre-edit-head-seed", signal).then(
+		(read) =>
+			read.kind === "file"
+				? { content: read.content }
+				: read.kind === "absent"
+					? "absent"
+					: "unreadable",
+	);
 }
 
 /**
@@ -2900,12 +2931,12 @@ export async function handleToolResult(
 								),
 								// #5616: a successful bash call may be credited with what it
 								// changed without naming it; a write pi-lens recorded since the
-								// call's baseline is another observed writer's.
+								// call's baseline is another observed writer's. Read after the
+								// status read, so a write recorded during it counts (F6).
 								...(scriptCreditable && {
 									scriptCredit: {
-										observedWriters: new Set(
-											runtime.getFilesChangedSince(pending.projectSeq),
-										),
+										observedWriters: () =>
+											new Set(runtime.getFilesChangedSince(pending.projectSeq)),
 									},
 								}),
 							},
@@ -3397,6 +3428,35 @@ export async function handleToolResult(
 		}
 		const recognizedAuthoredSet = new Set(recognizedAuthored);
 		bashAuthorshipConfirmed = recognizedAuthored.length > 0;
+		// #5616 review F1: a credited script write is judged against what its
+		// file held before the call, as an edit is against its pre-edit seed
+		// (#4483). The file was clean then, so that is its HEAD copy; the seed
+		// is installed before the file's first dispatch below.
+		const creditedWrites = written.filter((wp) => scriptCredited.has(wp));
+		// A name of its own: the primary resync above bounds with the same signal.
+		const seedSignal = deps.signal;
+		if (creditedWrites.length > 0)
+			await bounded(
+				(signal) =>
+					captureWriterSeeds(
+						creditedWrites,
+						{
+							projectRoot: workspaceRoot,
+							session: writeSession,
+							getFlag,
+							signal,
+							hook: "tool_result_edit",
+						},
+						true,
+						readHeadCopy,
+					),
+				{
+					ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
+					signal: seedSignal,
+					hook: "tool_result_edit",
+					label: "credited-script-seed",
+				},
+			);
 		for (const wp of written) {
 			// #3525: a parser-recognized bash write is whole-file authorship only
 			// after the tool_call preflight proved no foreign writer intervened.
@@ -3452,7 +3512,8 @@ export async function handleToolResult(
 				_mutationSourceOverride: isOpaque ? "opaque-script" : undefined,
 				// #5616: a credited script write is authored for the blocker channel
 				// and the gate, but no pre-write check covered its bytes, so the read
-				// guard keeps them UNKNOWN as before.
+				// guard keeps them UNKNOWN as before, and pi-lens's format and
+				// autofix (and their agent_end queues) leave them alone.
 				_readGuardAuthorship: recognizedAuthoredSet.has(wp),
 				_pathAlreadyResolved: true,
 				_ownWriteStamp: {
@@ -3461,8 +3522,8 @@ export async function handleToolResult(
 				},
 				// Opaque recovery is mutation evidence only. The synthetic call still
 				// records freshness and runs diagnostics, but it cannot format/autofix
-				// or issue an edit-directed blocker/actionable instruction, unless
-				// this call is credited with the write (#5616).
+				// or issue an edit-directed blocker/actionable instruction. A call
+				// credited with the write (#5616) gets the instructions, not the writers.
 				_allowAutonomousWriters:
 					recognizedAuthoredSet.has(wp) || scriptCredited.has(wp),
 				// #5616: what the withheld line may say pi-lens knows: a recovered
@@ -4435,10 +4496,10 @@ export async function handleToolResult(
 	// Refresh the read-guard's FileTime stamp so that the model's own write
 	// doesn't trigger a spurious "file_modified" block on the next edit.
 	// #5616: a credited script write is authored for its blockers only; the
-	// read guard follows `_readGuardAuthorship` when the parent set it.
-	const readGuardAuthored =
-		deps._readGuardAuthorship ?? bashAuthorshipConfirmed;
-	if (readGuardAuthored)
+	// read guard and pi-lens's writers follow `_readGuardAuthorship` when the
+	// parent set it.
+	const bytesAuthored = deps._readGuardAuthorship ?? bashAuthorshipConfirmed;
+	if (bytesAuthored)
 		deps.readGuard?.recordWritten(filePath, {
 			authorship:
 				mutation.kind === "write"
@@ -4502,7 +4563,7 @@ export async function handleToolResult(
 	// turn-state worklist, and dispatches nothing; the change-log receipt below
 	// stays, because the edit did land on disk.
 	const entryLive = writeSession.guardedWrite(filePath, () => true) === true;
-	if (!getFlag("no-read-guard") && readGuardAuthored) {
+	if (!getFlag("no-read-guard") && bytesAuthored) {
 		// #4942: the session's own guard (`deps.readGuard`), the one the write's
 		// other stamps above use; the coordinator's is another session's.
 		const readGuard = deps.readGuard;
@@ -4705,7 +4766,7 @@ export async function handleToolResult(
 		nativeAppliedPairs,
 		preserveNativeAuthorship: mutation.kind !== "write",
 		allowAutonomousWriters: bashAuthorshipConfirmed,
-		readGuardCredit: readGuardAuthored,
+		bytesAuthored,
 		...(deps._withheldEvidence !== undefined && {
 			withheldEvidence: deps._withheldEvidence,
 		}),
@@ -4746,7 +4807,7 @@ export async function handleToolResult(
 	if (
 		resultLive &&
 		!result.isError &&
-		bashAuthorshipConfirmed &&
+		bytesAuthored &&
 		mayDefer &&
 		autofixMode === "deferred" &&
 		nodeFs.existsSync(filePath)
@@ -4771,7 +4832,7 @@ export async function handleToolResult(
 	if (
 		resultLive &&
 		!result.isError &&
-		bashAuthorshipConfirmed &&
+		bytesAuthored &&
 		mayDefer &&
 		!getFlag("no-autoformat", filePath) &&
 		(autofixMode === "deferred" || !getFlag("immediate-format")) &&

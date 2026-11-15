@@ -143,6 +143,7 @@ import {
 	CLEAN_FILE,
 	GATE_BLOCK,
 	GUARDED_FLAGS,
+	MARKED_FILE,
 	RAN_MARKER,
 	commitAttempt,
 	endTurn,
@@ -1144,6 +1145,61 @@ describe("#5616: a script write the call is credited with", () => {
 		},
 	);
 
+	// #5616 review F1: a credited script write is judged against the bytes the
+	// file held before the call (its HEAD copy, as it was clean), the way an
+	// edit is judged against its pre-edit seed. Recurrence prevented: a
+	// formatter-shaped script over 8 committed files that each held an old
+	// blocker gave 8 STOP blocks and shut the gate; the edit tool gives none.
+	// The blocker is `ts-weak-hash`, which only the tree-sitter lane raises.
+	it(
+		"judges a credited script write against the file's HEAD copy: old blockers stay quiet, a new one stops",
+		{ timeout: 150_000 },
+		async () => {
+			const repo = initRepo("5616-head-seed");
+			const files = Array.from({ length: 8 }, (_, i) => `legacy${i}.ts`);
+			for (const file of [...files, "other.ts"])
+				fs.writeFileSync(path.join(repo, file), MARKED_FILE);
+			git(["add", "-A"], repo);
+			git(["commit", "-qm", "legacy"], repo);
+			const reformat = `node -e 'const fs = require("node:fs"); for (const f of ${JSON.stringify(files)}) fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/\\t/g, "    "))'`;
+			const added = `node -e 'require("node:fs").appendFileSync("other.ts", "export const h = crypto.createHash(\\"sha1\\").update(\\"x\\").digest(\\"hex\\");\\n")'`;
+			gate.results.length = 0;
+			const handle = await startPiSession({
+				root: fixture.root,
+				cwd: repo,
+				flags: new Map([...GUARDED_FLAGS, ["no-delta", false]]),
+				inlineFactory: async () => (await import("../index.js")).default,
+				responses: [
+					step(fauxToolCall("bash", { command: reformat }), "formatting"),
+					endTurn("turn 1 done"),
+					step(commitAttempt(), "committing"),
+					endTurn("turn 2 done"),
+					step(fauxToolCall("bash", { command: added }), "adding"),
+					endTurn("turn 3 done"),
+				],
+			});
+			await handle.prompt("reformat the files with a script");
+			await Promise.all(gate.pending);
+			expect(fs.readFileSync(path.join(repo, files[0] ?? ""), "utf8")).toBe(
+				MARKED_FILE.replace(/\t/g, "    "),
+			);
+			await handle.prompt("commit it");
+			const commit = toolResults(handle.requests.at(-1) ?? [], "bash").at(-1);
+			await handle.prompt("add a hash with a script");
+			await Promise.all(gate.pending);
+			const [reformatted, , addition] = gate.results.map((r) => r.text);
+			expect(reformatted).not.toContain("\u{1F534} STOP");
+			expect(commit?.text ?? "").toContain(RAN_MARKER);
+			// The new hash (L5) stops; the one HEAD held (L3) is pre-existing.
+			expect(addition).toContain("\u{1F534} STOP \u2014 1 issue(s)");
+			expect(addition).toContain("L5: Weak hash");
+			expect(addition).toMatch(/Pre-existing: 1 .*\(L3 ts-weak-hash\)/);
+			expect(await creditedCounts(repo)).toEqual([8, 1]);
+			expect(handle.errors).toEqual([]);
+			await handle.dispose();
+		},
+	);
+
 	it(
 		"credits a script write to a file an earlier call of the session wrote",
 		{ timeout: 90_000 },
@@ -1382,8 +1438,11 @@ describe("#5616: a script write the call is credited with", () => {
 				(_, i) => `export function f${i}() {\n\tdebugger;\n}\n`,
 			).join("");
 			const run = await writeThenCommit(repo, scriptWrite("many.ts", body));
+			// Exactly five `L<n> <rule>` places, then the count of the rest. The
+			// whole-file run renders more than seven findings here, so a bound of
+			// seven still ends in `+N more`; only the five-place prefix pins it.
 			expect(run.write).toMatch(
-				/in many\.ts \(L\d+ [^)]*\+\d+ more\) withheld/,
+				/in many\.ts \((?:L\d+ [\w-]+, ){5}\+\d+ more\) withheld/,
 			);
 		},
 	);

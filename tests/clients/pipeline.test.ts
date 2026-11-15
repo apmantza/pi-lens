@@ -807,6 +807,81 @@ describe("Pipeline", () => {
 			).toBe(true);
 		});
 
+		// #5616 review F10: a script write credited for its blockers gets the STOP
+		// and the gate, but pi-lens does not rewrite bytes no pre-write check
+		// covered. Recurrence prevented: the credit ran the formatter and autofix.
+		it("stops on a credited script write's blocker without formatting or fixing it", async () => {
+			const filePath = createTempFile(
+				tmpDir,
+				"credited-script.ts",
+				"(function(){\n  debugger;\n})();\n",
+			);
+			const before = fs.readFileSync(filePath, "utf8");
+			const blocker = {
+				id: "credited-blocker",
+				message: "CREDITED-BLOCKER",
+				filePath,
+				severity: "error" as const,
+				semantic: "blocking" as const,
+				tool: "tree-sitter",
+				line: 2,
+			};
+			vi.mocked(dispatchLintWithResult).mockResolvedValue({
+				diagnostics: [blocker],
+				blockers: [blocker],
+				warnings: [],
+				baselineWarningCount: 0,
+				fixed: [],
+				resolvedCount: 0,
+				output: "CREDITED-BLOCKER",
+				blockerOutput: "CREDITED-BLOCKER",
+				verdict: CHECKED_BY_FIXTURE,
+				hasBlockers: true,
+			});
+			const formatFile = vi.fn(async (fp: string) => {
+				fs.writeFileSync(fp, "(() => 1)();\n");
+				return {
+					filePath: fp,
+					formatters: [
+						{
+							name: "biome",
+							success: true,
+							changed: true,
+							outcome: "formatted" as const,
+						},
+					],
+					anyChanged: true,
+					allSucceeded: true,
+				};
+			});
+			const fixFileAsync = vi.fn(async () => {
+				fs.writeFileSync(filePath, "fixed\n");
+				return { success: true, changed: true, fixed: 1 };
+			});
+
+			const result = await runPipeline(
+				createMockContext(filePath, {
+					getFlag: (name) => name === "immediate-format",
+					allowAutonomousWriters: true,
+					bytesAuthored: false,
+				}),
+				createMockDeps({
+					getFormatService: () => ({ recordRead: vi.fn(), formatFile }) as any,
+					biomeClient: {
+						isSupportedFile: () => true,
+						ensureAvailable: async () => true,
+						fixFileAsync,
+					} as unknown as BiomeClient,
+				}),
+			);
+
+			expect(formatFile).not.toHaveBeenCalled();
+			expect(fixFileAsync).not.toHaveBeenCalled();
+			expect(fs.readFileSync(filePath, "utf8")).toBe(before);
+			expect(result.hasBlockers).toBe(true);
+			expect(result.output).toContain("CREDITED-BLOCKER");
+		});
+
 		it("keeps opaque findings advisory instead of directing an edit", async () => {
 			// The artifact remains analyzable, but blocker/actionable delivery must
 			// not turn third-party bytes into instructions for the model to edit.

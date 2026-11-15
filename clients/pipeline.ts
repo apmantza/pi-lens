@@ -286,6 +286,13 @@ export interface PipelineContext {
 	 */
 	allowAutonomousWriters?: boolean;
 	/**
+	 * #5616: whether the authorship covers the bytes and not only their
+	 * blockers. pi-lens's own writers (format, autofix) run only then. A script
+	 * write credited for its blockers sets it false: no pre-write check covered
+	 * its bytes. Omitted: `allowAutonomousWriters`.
+	 */
+	bytesAuthored?: boolean;
+	/**
 	 * #5616: for a run without authorship, what pi-lens knows of the write,
 	 * which the withheld line states. Omitted: `changed`.
 	 */
@@ -2327,17 +2334,11 @@ async function analysePipeline(
 		resolveAnalysisRoot(filePath, ctx.projectRoot ?? cwd) === "adopted" ||
 		!!getFlag("no-autoformat", filePath);
 	const immediateFormat = !!getFlag("immediate-format");
+	// #5616: the writers need the bytes authored, not only their blockers.
+	const writersAllowed = allowAutonomousWriters && ctx.bytesAuthored !== false;
 	const formatDeferred =
-		allowAutonomousWriters &&
-		!autoformatDisabled &&
-		!immediateFormat &&
-		!!fileContent;
-	if (
-		allowAutonomousWriters &&
-		!autoformatDisabled &&
-		immediateFormat &&
-		fileContent
-	) {
+		writersAllowed && !autoformatDisabled && !immediateFormat && !!fileContent;
+	if (writersAllowed && !autoformatDisabled && immediateFormat && fileContent) {
 		const formatResult = await runFormatPhase(
 			filePath,
 			getFormatService,
@@ -2382,7 +2383,7 @@ async function analysePipeline(
 		}
 	} else if (formatDeferred) {
 		dbg(`autoformat: deferred until agent_end for ${filePath}`);
-	} else if (!allowAutonomousWriters) {
+	} else if (!writersAllowed) {
 		dbg(`autoformat: skipped for ${filePath} (mutation ownership is unproven)`);
 	} else if (autoformatDisabled) {
 		const source = getFlagSource?.("no-autoformat", filePath);
@@ -2405,7 +2406,7 @@ async function analysePipeline(
 	let autofixRestoring: Promise<FixRunLoss> | undefined;
 	let fixRefresh = false;
 	let autofixSkipReason: string | undefined;
-	if (!allowAutonomousWriters) {
+	if (!writersAllowed) {
 		autofixSkipReason = "mutation_ownership_unproven";
 		dbg(`autofix: skipped for ${filePath} (mutation ownership is unproven)`);
 	} else if (ctx.autofixMode === "deferred") {

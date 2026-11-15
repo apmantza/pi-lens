@@ -804,7 +804,7 @@ describe("the writer table", () => {
 			"inline-stop": 3,
 			"change-log": 9,
 			"commit-gate": 7,
-			"pre-edit-baseline": 14,
+			"pre-edit-baseline": 13,
 			"fix-run-capture": 15,
 			"lsp-documents": 9,
 			"read-guard": 9,

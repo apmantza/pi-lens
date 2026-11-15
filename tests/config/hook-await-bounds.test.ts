@@ -2355,7 +2355,10 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// `dispatchForFile`; its only hook caller, the tool_call capture, holds it
 	// under bounded() with ctx.signal and PRE_EDIT_CAPTURE_BUDGET_MS, so a
 	// second bound here would add a timer for the same deadline.
-	"clients/dispatch/integration.ts": 22,
+	// 22 -> 23 (#5616): the capture awaits `before`, a credited script write's
+	// HEAD copy (one `git show` under its own leaf bound); its hook caller
+	// passes the capture's signal into it, under the same bounded() capture.
+	"clients/dispatch/integration.ts": 23,
 	// 2 → 3 (#4484 review F5): `settlePendingRunnerFindingsForTests` awaits
 	// the store's runs so a test joins a collect-later settle without polling.
 	// Only tests call it; no hook handler reaches it.
@@ -3129,12 +3132,13 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, BoundedSite>> = {
 			"absent only in a bare unit harness. PI_LENS_LSP_SYNC_BUDGET_MS is the " +
 			"bound that is always live.",
 	},
-	"call:clients/pre-edit-capture.ts#captureWriterSeeds:2dc2d1e2~efa038c8": {
+	"call:clients/pre-edit-capture.ts#captureWriterSeeds:2b57f8b9~21fd9eae": {
 		work: "threaded",
 		signal:
 			"The pre-edit linter capture (#4483, #5553) takes the thunk's signal into " +
 			"`capturePreEditLinterFindings`, which runs its linter spawns under it; that signal aborts on the " +
-			"tool_call's ctx.signal (absent only in a harness) or when the bound fires. " +
+			"hook's signal (`deps.signal`: the tool_call's ctx.signal, or #5616's credited-seed bound at " +
+			"tool_result; absent only in a harness) or when the bound fires. " +
 			"#2523 gives tool_call no budget of its own, so each capture carries " +
 			"PRE_EDIT_CAPTURE_BUDGET_MS (500 ms) or, for a writer that names no edit span, " +
 			"PRE_EDIT_SPANLESS_CAPTURE_BUDGET_MS (1500 ms), both measured in the PR; " +
@@ -3246,6 +3250,15 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, BoundedSite>> = {
 		signal:
 			"Each observed changed-file analysis uses ToolResultDeps.signal and the " +
 			"edit budget; the local alias keeps this call site distinct for the sweep.",
+	},
+	"call:clients/runtime-tool-result.ts#handleToolResult:963700a0~b4f8a98d": {
+		work: "threaded",
+		signal:
+			"#5616: the credited script write's HEAD-copy seed. The thunk's signal goes to " +
+			"`captureWriterSeeds`, whose per-file captures (and their `git show`) run under it; it " +
+			"aborts on the tool_result's own signal (`deps.signal`, absent only in a harness) or " +
+			"when HOOK_WALL_BUDGET_MS.tool_result_edit lapses. Each file's capture also carries " +
+			"PRE_EDIT_SPANLESS_CAPTURE_BUDGET_MS, so the wall bound is always live.",
 	},
 	"call:clients/runtime-tool-result.ts#handleToolResult:b9faf573~b4f8a98d": {
 		work: "outlives:delivery.abandoned late tail (the classified pipeline publishes when it settles, #5165)",

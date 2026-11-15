@@ -98,7 +98,7 @@ import {
 	resolveReadEvidenceCorrelationId,
 	resolveToolCallCorrelationId,
 } from "./tool-event.js";
-import { captureWriterSeeds } from "./pre-edit-capture.js";
+import { captureWriterSeeds, type WriterSeedDeps } from "./pre-edit-capture.js";
 
 // #5419 F1: the same positive-or-default read as lsp/index.ts
 // NAV_CLIENT_WAIT_TIMEOUT_MS. The tool-call knob wins when it is set, and the nav
@@ -687,7 +687,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 	if (writerPaths.length > 0)
 		await captureWriterSeeds(
 			namedWriterTargets(writerPaths, runtime.projectRoot),
-			deps,
+			writerSeedDeps(deps),
 			true,
 		);
 	// #2000 phase 2: opaque-command pre-snapshot. A bash command whose writes
@@ -1993,9 +1993,20 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 	if (isWriteOrEdit && !isExternalOrVendor)
 		await captureWriterSeeds(
 			[filePath],
-			deps,
+			writerSeedDeps(deps),
 			mutation.provenance === "learned",
 		);
+}
+
+/** The seed capture's view of a `tool_call`: its session, flags and signal. */
+function writerSeedDeps(deps: ToolCallDeps): WriterSeedDeps {
+	return {
+		projectRoot: deps.runtime.projectRoot,
+		session: deps.runtime.captureSessionGeneration(),
+		getFlag: deps.getFlag,
+		signal: deps.ctx.signal,
+		hook: "tool_call",
+	};
 }
 
 /**

@@ -43,6 +43,8 @@ import { resolveLanguageRootForFile } from "../language-profile.js";
 import { classifyObservedRunner } from "./collect-later-tier.js";
 import {
 	isPreEditSeedRunner,
+	PRE_EDIT_SEED_CONTENT_RUNNER_IDS,
+	type PreEditBytes,
 	preEditSeedFactKey,
 	seedFromCapture,
 } from "./pre-edit-seed.js";
@@ -3463,7 +3465,9 @@ export type PreEditCaptureSkip =
 	| "no-kind"
 	| "generated"
 	| "no-linter"
-	| "unreadable";
+	| "unreadable"
+	/** #5616: `before` found no earlier copy (a file the write created). */
+	| "absent-before";
 
 /** #4483: what one pre-edit capture did, for the `tool_call` record. */
 export type PreEditCaptureOutcome =
@@ -3501,6 +3505,12 @@ export type PreEditCaptureOutcome =
  * or seed exists yet, the file still holds the bytes the runs read, and the
  * session is the one that started the capture. A capture the caller stopped
  * waiting for therefore installs nothing once the host has written.
+ *
+ * #5616: `before` supplies the bytes when the write has already happened (a
+ * script write credited at `tool_result`, whose file was clean, so its HEAD
+ * copy is what it held). Only the lanes that read the content fact run then
+ * (`PRE_EDIT_SEED_CONTENT_RUNNER_IDS`), and the disk is not compared, as it
+ * holds the write.
  */
 export async function capturePreEditLinterFindings(
 	filePath: string,
@@ -3511,6 +3521,7 @@ export async function capturePreEditLinterFindings(
 	/** #5553: the writer names no edit span, so the edit-gated lanes read the
 	 *  whole file and are seeded with the linters. */
 	spanless = false,
+	before?: (signal?: AbortSignal) => Promise<PreEditBytes>,
 ): Promise<PreEditCaptureOutcome> {
 	if (pi.getFlag("no-delta")) return { outcome: "skipped", reason: "no-delta" };
 	const analysisRootMode = resolveAnalysisRoot(filePath, workspaceRoot);
@@ -3571,18 +3582,29 @@ export async function capturePreEditLinterFindings(
 		const runnerIds = group.runnerIds.filter(
 			(id) =>
 				isPreEditSeedRunner(id, spanless) &&
+				(before === undefined || PRE_EDIT_SEED_CONTENT_RUNNER_IDS.has(id)) &&
 				classifyObservedRunner(projectRoot, id) === "inline",
 		);
 		return runnerIds.length > 0 ? [{ ...group, runnerIds }] : [];
 	});
 	if (groups.length === 0) return { outcome: "skipped", reason: "no-linter" };
-	let before: Buffer;
-	try {
-		before = nodeFs.readFileSync(ctx.filePath);
-	} catch {
-		return { outcome: "skipped", reason: "unreadable" };
+	let read: Buffer | undefined;
+	let content: string;
+	if (before) {
+		const earlier = await before(signal);
+		if (earlier === "absent")
+			return { outcome: "skipped", reason: "absent-before" };
+		if (earlier === "unreadable")
+			return { outcome: "skipped", reason: "unreadable" };
+		content = earlier.content;
+	} else {
+		try {
+			read = nodeFs.readFileSync(ctx.filePath);
+		} catch {
+			return { outcome: "skipped", reason: "unreadable" };
+		}
+		content = read.toString("utf8");
 	}
-	const content = before.toString("utf8");
 	const controller = new AbortController();
 	const captureSignal = signal
 		? AbortSignal.any([signal, controller.signal])
@@ -3602,14 +3624,16 @@ export async function capturePreEditLinterFindings(
 			return { outcome: "discarded", reason: "session-replaced" };
 		if (dispatched())
 			return { outcome: "discarded", reason: "already-dispatched" };
-		let now: Buffer | undefined;
-		try {
-			now = nodeFs.readFileSync(ctx.filePath);
-		} catch {
-			now = undefined;
+		if (read) {
+			let now: Buffer | undefined;
+			try {
+				now = nodeFs.readFileSync(ctx.filePath);
+			} catch {
+				now = undefined;
+			}
+			if (!now?.equals(read))
+				return { outcome: "discarded", reason: "bytes-changed" };
 		}
-		if (!now?.equals(before))
-			return { outcome: "discarded", reason: "bytes-changed" };
 		const seed = seedFromCapture(result.blockers, content, spanless);
 		sessionFacts.setBoundedSessionFact(seedKey, seed);
 		return {

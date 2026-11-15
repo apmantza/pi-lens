@@ -1095,10 +1095,12 @@ export interface GitRecoveryOptions {
 	dirtyBefore?: readonly string[] | undefined;
 	/**
 	 * #5616: judge each changed path no named write claimed for credit to a
-	 * successful bash call. Set only for such a call; `observedWriters` holds
-	 * the map keys pi-lens recorded a write to since the call's baseline.
+	 * successful bash call. Set only for such a call; `observedWriters` returns
+	 * the map keys pi-lens recorded a write to since the call's baseline. It is
+	 * read once, after the status read and the stat checks, so a write another
+	 * tool records while they await is in it (review F6).
 	 */
-	scriptCredit?: { observedWriters: ReadonlySet<string> };
+	scriptCredit?: { observedWriters: () => ReadonlySet<string> };
 }
 
 interface GitStatusEntry {
@@ -1470,18 +1472,23 @@ export async function recoverOpaqueChangesViaGit(
 	}
 	const paths: string[] = [];
 	const namedCredited: string[] = [];
-	const scriptCredit: ScriptCreditVerdicts | undefined = options.scriptCredit
-		? { credited: [], withheld: [] }
-		: undefined;
+	// #5616: the paths no named write claimed. A named one was dirty before or
+	// has no dirty set, so it is never credited, and the caller drops its cause
+	// with the other named paths.
+	const unnamed: string[] = [];
 	for (const entry of candidates) {
 		if (!(await isChanged(entry))) continue;
 		const key = normalizeMapKey(entry.absPath);
 		paths.push(key);
 		if (isNamedWrite(entry.absPath)) namedCredited.push(key);
-		// #5616: a path no named write claimed. A named one reaching here was
-		// dirty before or has no dirty set, so it is never credited, and the
-		// caller drops its cause with the other named paths.
-		else if (scriptCredit && options.scriptCredit) {
+		else unnamed.push(key);
+	}
+	let scriptCredit: ScriptCreditVerdicts | undefined;
+	if (options.scriptCredit) {
+		// After every await above, so a write recorded meanwhile counts.
+		const observed = options.scriptCredit.observedWriters();
+		scriptCredit = { credited: [], withheld: [] };
+		for (const key of unnamed) {
 			const cause: ScriptCreditCause | undefined =
 				cleanBefore === undefined
 					? dirtySetCut
@@ -1489,7 +1496,7 @@ export async function recoverOpaqueChangesViaGit(
 						: "no-dirty-set"
 					: cleanBefore.has(key)
 						? "dirty-before"
-						: options.scriptCredit.observedWriters.has(key)
+						: observed.has(key)
 							? "other-writer"
 							: undefined;
 			if (cause === undefined) scriptCredit.credited.push(key);

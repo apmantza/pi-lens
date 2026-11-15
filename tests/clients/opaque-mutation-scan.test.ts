@@ -358,6 +358,23 @@ describe("recoverOpaqueChangesViaGit (real git repo)", () => {
 		).resolves.toMatchObject({ verdict: "recovered", paths: [] });
 	});
 
+	// #5616 review F4: the baseline's `git status` failed, timed out or hit its
+	// output cap, so it holds no dirty set and "clean before" is unknown. A file
+	// the call changed without naming it is not credited. The no-git witness
+	// drives the stat-diff branch, not this one.
+	it("withholds script credit when the baseline holds no dirty set (#5616)", async () => {
+		const target = path.join(repoDir, "src", "base.ts");
+		const startedAt = Date.now();
+		writeViaNodeChild(target, "script write\n");
+		const outcome = await recoverOpaqueChangesViaGit(repoDir, startedAt, {
+			scriptCredit: { observedWriters: () => new Set<string>() },
+		});
+		expect(outcome.scriptCredit).toEqual({
+			credited: [],
+			withheld: [{ key: normalizeMapKey(target), cause: "no-dirty-set" }],
+		});
+	});
+
 	// #5552 r2 F3: `cp -n` is recognized as a write but may write nothing. A
 	// named path that was already dirty before the command (the user's edit)
 	// keeps the mtime rule, and so does every named path when the baseline has
@@ -2240,6 +2257,79 @@ describe("parallel bash calls (#4137)", () => {
 		await Promise.all([recognizedResult, opaqueResult]);
 		expect(await dispatchLog()).toEqual([["par-a.ts", true]]);
 		expect(blockerFiles(runtime)).toEqual(["par-a.ts"]);
+	});
+
+	// #5616 review F6 (CodeRabbit): another tool's write that pi-lens records
+	// while the recovery waits on `git status` is another observed writer. The
+	// set was read before that await, so the bash call was credited with it.
+	it("does not credit a file another write recorded during the git status read", async () => {
+		const runtime = newRuntime("late-observed-writer");
+		(await pipelineMock()).mockClear();
+		await runHandlerExpectingNoThrow(() =>
+			handleToolCall(callDeps(runtime, opaqueCommand(), "opaque")),
+		);
+		append("par-a.ts", "debugger;\n");
+		const actual = await vi.importActual<
+			typeof import("../../clients/opaque-mutation-scan.js")
+		>("../../clients/opaque-mutation-scan.js");
+		vi.mocked(recoverOpaqueChangesViaGit).mockImplementationOnce(
+			async (root, startedAt, options) => {
+				runtime.recordProjectMutation({
+					filePath: path.join(repoDir, "par-a.ts"),
+					source: "agent-write",
+				});
+				return actual.recoverOpaqueChangesViaGit(root, startedAt, options);
+			},
+		);
+		await handleToolResult(resultDeps(runtime, opaqueCommand(), "opaque"));
+		expect(await dispatchLog()).toEqual([["par-a.ts", false]]);
+	});
+
+	// #5616 review F10/F11 (Qodo 1, 5): the credit is for the blocker channel
+	// and the gate. Recurrence prevented: the credited path also queued the
+	// deferred format and autofix, whose agent_end drain stamps whole-file
+	// read-guard authorship over bytes no pre-write check covered.
+	it.each([
+		{
+			cell: "a credited script write queues nothing and gets no stamp",
+			command: () => opaqueCommand(),
+			dirtyBefore: false,
+			authored: true,
+			queued: 0,
+			stamped: [] as string[],
+		},
+		{
+			cell: "control: a script write over a dirty file is unchanged",
+			command: () => opaqueCommand(),
+			dirtyBefore: true,
+			authored: false,
+			queued: 0,
+			stamped: [] as string[],
+		},
+		{
+			cell: "control: a named write queues the format and is stamped",
+			command: () => "echo 'debugger;' >> par-a.ts",
+			dirtyBefore: false,
+			authored: true,
+			queued: 1,
+			stamped: ["par-a.ts"],
+		},
+	])("$cell", async ({ command, dirtyBefore, authored, queued, stamped }) => {
+		const runtime = newRuntime("credited-writers");
+		(await pipelineMock()).mockClear();
+		if (dirtyBefore) append("par-a.ts", "// dirty\n");
+		await runHandlerExpectingNoThrow(() =>
+			handleToolCall(callDeps(runtime, command(), "call")),
+		);
+		append("par-a.ts", "debugger;\n");
+		await handleToolResult(resultDeps(runtime, command(), "call"));
+		expect(await dispatchLog()).toEqual([["par-a.ts", authored]]);
+		expect(runtime.pendingDeferredMutationCount).toBe(queued);
+		expect(
+			runtime.readGuard
+				.exportAuthorship()
+				.written.map((file) => path.basename(file)),
+		).toEqual(stamped);
 	});
 });
 

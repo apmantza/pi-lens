@@ -348,7 +348,8 @@ export const WRITERS: readonly WriterRoute[] = [
 		writes:
 			"a file clean before the call (or absent), changed in its window, that no other writer pi-lens recorded touched (#5616)",
 		// No pre-write check covered the bytes, so the read guard keeps them
-		// UNKNOWN; the credit moves the blocker channel and the gate only.
+		// UNKNOWN; the credit moves the blocker channel and the gate only, and
+		// pi-lens's format and autofix leave the bytes alone (review F10).
 		authorship: "unknown",
 		attribution: "disk-recovery",
 		recorders: ["tool-result"],
@@ -359,7 +360,9 @@ export const WRITERS: readonly WriterRoute[] = [
 				"settle: read the change log after #5616's credited witness; the row keeps the opaque-script label",
 			),
 			"commit-gate": reaches("[credits a node script that creates a new file]"),
-			"pre-edit-baseline": unprobed(NOT_SEEDED),
+			"pre-edit-baseline": reaches(
+				"[judges a credited script write against the file's HEAD copy: old blockers stay quiet, a new one stops]",
+			),
 			"fix-run-capture": unprobed(FIX_RUN_UNPROBED),
 			"lsp-documents": unprobed(
 				"settle: the wire trace after #5616's credited witness; the publish is bash-opaque's",

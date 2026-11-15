@@ -6,17 +6,21 @@
  * `tool_result` hook can reach it without importing the `tool_call` module
  * (which imports `runtime-tool-result.ts`).
  */
-import { bounded } from "./deadline-utils.js";
+import { bounded, type BoundedOptions } from "./deadline-utils.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { loadDispatchIntegration } from "./dispatch/lazy.js";
+import type { PreEditBytes } from "./dispatch/pre-edit-seed.js";
 import { logLatency } from "./latency-logger.js";
-import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 
 /** What a seed capture reads from the hook that runs it. */
-interface SeedCaptureDeps {
-	runtime: Pick<RuntimeCoordinator, "captureSessionGeneration" | "projectRoot">;
+export interface WriterSeedDeps {
+	projectRoot: string;
+	/** The session the seed belongs to, captured by the hook (#5616). */
+	session: { isCurrent(): boolean };
 	getFlag: (name: string) => boolean | string | undefined;
-	ctx: { signal?: AbortSignal | undefined };
+	signal: AbortSignal | undefined;
+	/** The hook whose wait a lapsed bound names. */
+	hook: BoundedOptions["hook"];
 }
 
 /**
@@ -46,12 +50,15 @@ function captureBudgetMs(spanless: boolean): number {
  * file after another, each under its own bound (`captureBudgetMs`).
  * `spanless` is a writer whose dispatch gets no edit span, so the edit-gated
  * lanes read the whole file and are seeded too
- * (`PRE_EDIT_SEED_SPANLESS_RUNNER_IDS`). Never rejects.
+ * (`PRE_EDIT_SEED_SPANLESS_RUNNER_IDS`). #5616: `before` supplies each file's
+ * earlier bytes when the write already happened (a credited script write's
+ * HEAD copy, read at `tool_result`). Never rejects.
  */
 export async function captureWriterSeeds(
 	filePaths: readonly string[],
-	deps: SeedCaptureDeps,
+	deps: WriterSeedDeps,
 	spanless: boolean,
+	before?: (filePath: string, signal?: AbortSignal) => Promise<PreEditBytes>,
 ): Promise<void> {
 	for (const filePath of filePaths) {
 		const started = Date.now();
@@ -59,11 +66,18 @@ export async function captureWriterSeeds(
 		// lapses or `ctx.signal` fires (#5550; this site hand-built the same
 		// controller, then aborted it after the await).
 		const outcome = await bounded(
-			(signal) => capturePreEditSeed(filePath, deps, signal, spanless),
+			(signal) =>
+				capturePreEditSeed(
+					filePath,
+					deps,
+					signal,
+					spanless,
+					before && ((beforeSignal) => before(filePath, beforeSignal)),
+				),
 			{
 				ms: captureBudgetMs(spanless),
-				signal: deps.ctx.signal,
-				hook: "tool_call",
+				signal: deps.signal,
+				hook: deps.hook,
 				label: "pre-edit-linter-capture",
 			},
 		);
@@ -95,12 +109,12 @@ type PreEditCaptureResult =
  */
 function capturePreEditSeed(
 	filePath: string,
-	deps: SeedCaptureDeps,
+	deps: WriterSeedDeps,
 	signal: AbortSignal,
 	spanless: boolean,
+	before: ((signal?: AbortSignal) => Promise<PreEditBytes>) | undefined,
 ): Promise<PreEditCaptureResult> {
-	const session = deps.runtime.captureSessionGeneration();
-	const workspaceRoot = deps.runtime.projectRoot || process.cwd();
+	const workspaceRoot = deps.projectRoot || process.cwd();
 	const pi = { getFlag: (flag: string) => deps.getFlag(flag) };
 	return loadDispatchIntegration()
 		.then(({ capturePreEditLinterFindings }) =>
@@ -108,9 +122,10 @@ function capturePreEditSeed(
 				filePath,
 				workspaceRoot,
 				pi,
-				session,
+				deps.session,
 				signal,
 				spanless,
+				before,
 			),
 		)
 		.catch((cause: unknown): PreEditCaptureResult => {
@@ -135,7 +150,8 @@ function recordPreEditCapture(
 		outcome?.outcome === "skipped" &&
 		(outcome.reason === "already-dispatched" ||
 			outcome.reason === "no-delta" ||
-			outcome.reason === "in-flight")
+			outcome.reason === "in-flight" ||
+			outcome.reason === "absent-before")
 	)
 		return;
 	logLatency({
