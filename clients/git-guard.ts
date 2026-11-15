@@ -24,6 +24,8 @@ import {
 	decodeShellWords,
 	type DecodedShellWord,
 	type DecodedSimpleCommand,
+	type ShellSubstitution,
+	shellSubstitutions,
 } from "./bash-file-access.js";
 import {
 	incrementDegradationCount,
@@ -486,52 +488,6 @@ function expandGuardVerbToken(value: string): string[] {
 	return normalizeGuardVerbToken(value).trim().split(/\s+/).filter(Boolean);
 }
 
-function delimitedSubstitutionBody(
-	command: string,
-	start: number,
-	opener: string,
-	closer: string,
-): { body: string; end: number } | undefined {
-	let depth = 1;
-	let quote: "single" | "double" | undefined;
-	let ansiC = false;
-	let escaped = false;
-	for (let i = start + opener.length; i < command.length; i++) {
-		const ch = command[i];
-		if (quote === "single") {
-			if (ansiC && ch === "\\") i += 1;
-			else if (ch === "'") quote = undefined;
-			continue;
-		}
-		if (quote === "double" && ch === '"') {
-			quote = undefined;
-			continue;
-		}
-		if (escaped) {
-			escaped = false;
-			continue;
-		}
-		if (ch === "\\") {
-			escaped = true;
-			continue;
-		}
-		if (ch === "'" || ch === '"') {
-			quote = ch === "'" ? "single" : "double";
-			ansiC = ch === "'" && opensAnsiC(command, i);
-			continue;
-		}
-		if (command.startsWith(opener, i)) {
-			depth += 1;
-			i += opener.length - 1;
-			continue;
-		}
-		if (command.startsWith(closer, i) && --depth === 0) {
-			return { body: command.slice(start + opener.length, i), end: i };
-		}
-	}
-	return undefined;
-}
-
 /**
  * Which git verbs a guard cares about (#2007).
  *
@@ -584,80 +540,29 @@ const COMMIT_PUSH_MATCHER: GitVerbMatcher = {
 };
 
 /** One command substitution's body (canonicalized) and its nesting depth. */
-interface CommandSubstitution {
-	body: string;
-	depth: number;
-}
-
 /**
- * Every command substitution `command` runs (`$(…)`, `` `…` ``, `<(…)`,
- * `>(…)`), nested ones included, in the order they open. A body at depth 4 is
- * listed but not read further, and `complete` is then false.
+ * Every command substitution `command` runs, each body put through the same
+ * canonical pass as the command (the one parser: `shellSubstitutions`).
  */
-function commandSubstitutions(
-	command: string,
-	depth = 0,
-): { bodies: CommandSubstitution[]; complete: boolean } {
-	const bodies: CommandSubstitution[] = [];
-	if (depth > 3) return { bodies, complete: false };
-	let complete = true;
-	let quote: "single" | "double" | undefined;
-	let ansiC = false;
-	let escaped = false;
-	for (let i = 0; i < command.length; i++) {
-		const ch = command[i];
-		if (quote === "single") {
-			if (ansiC && ch === "\\") i += 1;
-			else if (ch === "'") quote = undefined;
-			continue;
-		}
-		if (quote === "double" && ch === '"') {
-			quote = undefined;
-			continue;
-		}
-		if (escaped) {
-			escaped = false;
-			continue;
-		}
-		if (ch === "\\") {
-			escaped = true;
-			continue;
-		}
-		if (ch === '"' || ch === "'") {
-			quote = ch === "'" ? "single" : "double";
-			ansiC = ch === "'" && opensAnsiC(command, i);
-			continue;
-		}
-		const substitution = command.startsWith("$(", i)
-			? delimitedSubstitutionBody(command, i, "$(", ")")
-			: command.startsWith("<(", i)
-				? delimitedSubstitutionBody(command, i, "<(", ")")
-				: command.startsWith(">(", i)
-					? delimitedSubstitutionBody(command, i, ">(", ")")
-					: ch === "`"
-						? {
-								body: command.slice(i + 1, command.indexOf("`", i + 1)),
-								end: command.indexOf("`", i + 1),
-							}
-						: undefined;
-		if (substitution && substitution.end >= 0) {
-			const nested = canonicalizeGuardCommand(substitution.body);
-			bodies.push({ body: nested, depth: depth + 1 });
-			const inner = commandSubstitutions(nested, depth + 1);
-			bodies.push(...inner.bodies);
-			complete &&= inner.complete;
-			i = substitution.end;
-		}
-	}
-	return { bodies, complete };
+function guardSubstitutions(command: string): {
+	bodies: ShellSubstitution[];
+	complete: boolean;
+} {
+	const found = shellSubstitutions(command);
+	return {
+		bodies: found.bodies.map(({ body, depth }) => ({
+			body: canonicalizeGuardCommand(body),
+			depth,
+		})),
+		complete: found.complete,
+	};
 }
 
 function containsGuardedSubstitution(
 	command: string,
-	depth: number,
 	matcher: GitVerbMatcher,
 ): boolean {
-	return commandSubstitutions(command, depth).bodies.some((substitution) =>
+	return guardSubstitutions(command).bodies.some((substitution) =>
 		decodeShellWords(substitution.body).some((segment) =>
 			containsGuardedGitVerb(segment.words, substitution.depth, matcher),
 		),
@@ -1077,7 +982,7 @@ export function detectGuardedGitVerb(
 	const command = getShellCommand(input);
 	if (!command) return false;
 	const canonical = canonicalizeGuardCommand(command);
-	if (containsGuardedSubstitution(canonical, 0, matcher)) return true;
+	if (containsGuardedSubstitution(canonical, matcher)) return true;
 	return decodeShellWords(canonical).some((segment) =>
 		containsGuardedGitVerb(segment.words, 0, matcher),
 	);
@@ -1181,7 +1086,7 @@ export function resolveCommitScope(
 	const command = getShellCommand(input);
 	if (!command) return undefined;
 	const canonical = canonicalizeGuardCommand(command);
-	if (containsGuardedSubstitution(canonical, 0, COMMIT_PUSH_MATCHER)) {
+	if (containsGuardedSubstitution(canonical, COMMIT_PUSH_MATCHER)) {
 		return undefined;
 	}
 	const trees: GitCheckout[] = [];
@@ -1570,16 +1475,20 @@ export function planStagedCommit(
 ): StagedCommitPlan {
 	if (toolName !== "bash") return { unresolved: `the ${toolName} tool` };
 	const canonical = canonicalizeGuardCommand(getShellCommand(input));
-	const substitutions = commandSubstitutions(canonical);
+	const substitutions = guardSubstitutions(canonical);
 	if (!substitutions.complete)
-		return { unresolved: "command substitutions nested past three levels" };
-	// bash expands an unquoted here-doc before the command that reads it.
+		return {
+			unresolved:
+				"a quote or command substitution that does not close, or substitutions nested past three levels",
+		};
+	// Every substitution, an unquoted here-doc's included, comes from the one
+	// parser; the decoder's own here-doc commands are not steps of the chain.
 	const commands: DecodedSimpleCommand[] = [];
+	for (const simple of decodeShellCommand(canonical))
+		if (!simple.heredocSubstitution) commands.push(simple);
 	const substituted = substitutions.bodies.flatMap(({ body }) =>
 		decodeShellCommand(body),
 	);
-	for (const simple of decodeShellCommand(canonical))
-		(simple.heredocSubstitution ? substituted : commands).push(simple);
 	for (const simple of substituted) {
 		const writes = substitutionWrites(simple);
 		if (writes) return { unresolved: `a command substitution runs ${writes}` };

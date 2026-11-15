@@ -49,6 +49,7 @@ import {
 	isExternalOrVendorFile,
 	realpathOrResolve,
 	toProjectRelativePath,
+	walkUpDirs,
 } from "./path-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { truncatedByOutputCap } from "./spawn-output-cap.js";
@@ -617,6 +618,17 @@ async function judgeCarried(
 	};
 }
 
+/**
+ * The nearest directory above `file` that exists: a replayed `git mv` names a
+ * destination whose directory the real move has not made yet.
+ */
+function existingDirOf(file: string): string {
+	const start = path.dirname(file);
+	for (const dir of walkUpDirs(start, { spelling: true }))
+		if (nodeFs.existsSync(dir)) return dir;
+	return start;
+}
+
 async function judgeFile(
 	candidate: Candidate,
 	repo: Repo,
@@ -663,7 +675,7 @@ async function judgeFile(
 	const copy = candidate.fromWork
 		? undefined
 		: path.join(
-				path.dirname(abs),
+				existingDirOf(abs),
 				`pi-lens-staged-${randomBytes(4).toString("hex")}.${path.basename(abs)}`,
 			);
 	try {

@@ -945,6 +945,37 @@ describe("#5553 the common agent command shapes", () => {
 		expect(git(proj, "diff", "--cached", "--name-status")).toBe(`M\t${A}`);
 	});
 
+	// Recurrence prevented (verify r3 R3-4): the read wrote a moved file's
+	// staged copy beside its destination, in a directory the move has not made
+	// yet, and refused a clean directory move as lane_incomplete (ENOENT).
+	it(
+		"judges the files of a moved directory",
+		{ timeout: 120_000 },
+		async () => {
+			const clean = seedProject(`moved-dir-${seeded++}`, {
+				[A]: CLEAN,
+				[B]: CLEAN,
+			});
+			write(clean, A, B_EDITED);
+			git(clean, "add", A);
+			expectOutcome(
+				await decide(clean, 'git mv src lib && git commit -m "x"'),
+				"commits",
+			);
+			const dirty = seedProject(`moved-dir-${seeded++}`, {
+				[A]: CLEAN,
+				[B]: CLEAN,
+			});
+			write(dirty, A, ADDED);
+			git(dirty, "add", A);
+			expectOutcome(
+				await decide(dirty, 'git mv src lib && git commit -m "x"'),
+				"refuses lib/a.ts",
+			);
+			expect(fs.existsSync(path.join(dirty, "lib"))).toBe(false);
+		},
+	);
+
 	// The replay judges a moved file's index blob; with unstaged changes its
 	// working bytes are what `-a` would carry, so the move refuses.
 	it(
@@ -982,6 +1013,40 @@ describe("#5553 the common agent command shapes", () => {
 		);
 		expect(fs.readFileSync(path.join(proj, A), "utf8")).toBe(ADDED);
 	});
+});
+
+describe("#5553 a command substitution the commit's message runs", () => {
+	// Recurrence prevented (verify r3 R3-1): a `'` inside a double-quoted
+	// string hid every later substitution from the gate's scan, so a message
+	// that ran `git add -A` committed an untracked `debugger;` unjudged.
+	it.each([
+		`git commit -m "don't $(git add -A)"`,
+		`git commit -m "it's" -m "$(git add -A)"`,
+		`git commit -m "$(cat <<EOF\nit's $(git add -A)\nEOF\n)"`,
+		'git commit -m "it\'s `git add -A`"',
+		`# don't\ngit commit -m "$(git add -A)"`,
+	])("refuses %s", { timeout: 120_000 }, async (command) => {
+		const proj = seedProject(`substituted-${seeded++}`, { [B]: CLEAN });
+		write(proj, B, B_EDITED);
+		git(proj, "add", B);
+		write(proj, "src/new.ts", ADDED);
+		expectOutcome(await decide(proj, command), "unknown unresolved_command");
+	});
+
+	it(
+		"replays a message whose substitution only reads",
+		{ timeout: 120_000 },
+		async () => {
+			const proj = seedProject(`substituted-${seeded++}`, { [B]: CLEAN });
+			write(proj, B, B_EDITED);
+			git(proj, "add", B);
+			write(proj, "src/new.ts", ADDED);
+			expectOutcome(
+				await decide(proj, `git commit -m "don't $(git log -1 --format=%s)"`),
+				"commits",
+			);
+		},
+	);
 });
 
 describe("#5553 a submodule pointer the commit carries", () => {
@@ -1188,7 +1253,11 @@ describe("#5553 a read that gives no answer refuses, recorded once", () => {
 			expectOutcome(decision, "unknown lane_incomplete");
 			expect(decision.reason).toContain("threw");
 		} finally {
-			process.env.TMPDIR = saved;
+			// Recurrence prevented (verify r3 R3-2): with TMPDIR unset (CI),
+			// assigning `saved` back wrote the string "undefined", and the next
+			// tests' mkdtemp failed under a directory of that name.
+			if (saved === undefined) delete process.env.TMPDIR;
+			else process.env.TMPDIR = saved;
 		}
 	});
 

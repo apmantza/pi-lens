@@ -15,7 +15,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { decodeShellCommand } from "../../clients/bash-file-access.js";
-import { planStagedCommit, REPLAYED_MESSAGE } from "../../clients/git-guard.js";
+import {
+	isGitCommitOrPushAttempt,
+	planStagedCommit,
+	REPLAYED_MESSAGE,
+} from "../../clients/git-guard.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 describe("planStagedCommit", () => {
@@ -304,6 +308,65 @@ describe("planStagedCommit", () => {
 		expect(planStagedCommit("edit", { path: "a.ts" }, dir())).toEqual({
 			unresolved: "the edit tool",
 		});
+	});
+});
+
+describe("command substitutions, read with bash's quoting", () => {
+	const dir = () => process.cwd();
+	const plan = (command: string) =>
+		planStagedCommit("bash", { command }, dir());
+
+	// Recurrence prevented (verify r3 R3-1): the gate's own text scanner took a
+	// `'` inside "…" for a quote, and every later substitution went unread, so
+	// a message that ran `git add -A` replayed as if it only read.
+	it.each([
+		`git commit -m "don't $(git add -A)"`,
+		`git commit -m "it's" -m "$(git add -A)"`,
+		`git commit -m "$(cat <<EOF\nit's $(git add -A)\nEOF\n)"`,
+		`git commit -m "a \\"it's\\" $(git add -A)"`,
+		`git commit -m $'it\\'s' -m "$(git add -A)"`,
+		`git commit -m "$( echo "$(git add -A)" )"`,
+		'git commit -m "it\'s `git add -A`"',
+		`# don't\ngit commit -m "$(git add -A)"`,
+		`git commit -m "$(echo ')' ; git add -A)"`,
+		`git commit -m "$(echo it\\'s; git add -A)"`,
+		// A subshell's `)` inside the body is not the body's end.
+		`git commit -m "$( (echo a); git add -A)"`,
+	])("does not replay %s", (command) => {
+		const answer = plan(command);
+		expect(answer).toHaveProperty("unresolved");
+		expect((answer as { unresolved: string }).unresolved).toContain(
+			"substitution runs `git`",
+		);
+	});
+
+	it.each([
+		`git commit -m "$(git add -A`,
+		`git commit -m "it's $(git log`,
+		'git commit -m "`git add -A"',
+	])("does not replay an unterminated substitution: %s", (command) => {
+		expect(plan(command)).toHaveProperty("unresolved");
+	});
+
+	it.each([
+		`git commit -m "don't $(git log -1 --format=%s)"`,
+		`git commit -m 'it'"'"'s' -m "$(git log -1)"`,
+		`git commit -m $'it\\'s ok' -m "$(git log -1)"`,
+		`git commit -m "$(cat <<'EOF'\nit's $(not run)\nEOF\n)"`,
+		// Inside `$(…)` an escaped backtick is a character echo prints.
+		'git commit -m "$(echo \\`git add -A\\`)"',
+	])("replays %s, whose substitutions only read", (command) => {
+		expect(plan(command)).toHaveProperty("commit");
+	});
+
+	// The same scan decides whether a command commits at all: missed, the
+	// whole commit gate stood aside.
+	it.each([
+		`echo "it's $(git commit -m x)"`,
+		`echo "it's $(git push)"`,
+		'echo "it\'s `git commit -m x`"',
+	])("reads %s as a commit or push", (command) => {
+		expect(isGitCommitOrPushAttempt("bash", { command })).toBe(true);
 	});
 });
 

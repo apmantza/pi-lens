@@ -312,54 +312,18 @@ function parseHeredocDelimiter(
 	return { heredoc: { delimiter, stripTabs, quoted }, end: i - 1 };
 }
 
-function heredocSubstitutionBodies(body: string): string[] {
-	const substitutions: string[] = [];
-	for (let i = 0; i < body.length; i += 1) {
-		if (body.startsWith("$(", i)) {
-			let depth = 1;
-			let quote: "single" | "double" | undefined;
-			for (let end = i + 2; end < body.length; end += 1) {
-				const ch = body[end];
-				if (quote === "single") {
-					if (ch === "'") quote = undefined;
-					continue;
-				}
-				if (quote === "double") {
-					if (ch === '"' && body[end - 1] !== "\\") quote = undefined;
-					continue;
-				}
-				if (ch === "'" || ch === '"') {
-					quote = ch === "'" ? "single" : "double";
-				} else if (body.startsWith("$(", end)) {
-					depth += 1;
-					end += 1;
-				} else if (ch === ")") {
-					depth -= 1;
-					if (depth === 0) {
-						substitutions.push(body.slice(i + 2, end));
-						i = end;
-						break;
-					}
-				}
-			}
-		} else if (body[i] === "`" && body[i - 1] !== "\\") {
-			const end = body.indexOf("`", i + 1);
-			if (end >= 0) {
-				substitutions.push(body.slice(i + 1, end));
-				i = end;
-			}
-		}
-	}
-	return substitutions;
-}
-
+/**
+ * The here-doc bodies that start at `start`, in order, and the index of the
+ * last character they take. `expanding` holds the bodies bash expands (an
+ * unquoted delimiter); a quoted one's text is literal.
+ */
 function consumeHeredocBodies(
 	command: string,
 	start: number,
 	heredocs: PendingHeredoc[],
-): { end: number; substitutions: string[] } {
+): { end: number; expanding: string[] } {
 	let cursor = start;
-	const substitutions: string[] = [];
+	const expanding: string[] = [];
 	for (const heredoc of heredocs) {
 		const bodyStart = cursor;
 		let found = false;
@@ -369,10 +333,7 @@ function consumeHeredocBodies(
 			let line = command.slice(cursor, end);
 			if (heredoc.stripTabs) line = line.replace(/^\t+/, "");
 			if (line.replace(/\r$/, "") === heredoc.delimiter) {
-				if (!heredoc.quoted)
-					substitutions.push(
-						...heredocSubstitutionBodies(command.slice(bodyStart, cursor)),
-					);
+				if (!heredoc.quoted) expanding.push(command.slice(bodyStart, cursor));
 				cursor = lineEnd < 0 ? end : end + 1;
 				found = true;
 				break;
@@ -380,14 +341,191 @@ function consumeHeredocBodies(
 			cursor = lineEnd < 0 ? end : end + 1;
 		}
 		if (!found) {
-			if (!heredoc.quoted)
-				substitutions.push(
-					...heredocSubstitutionBodies(command.slice(bodyStart)),
-				);
-			return { end: command.length - 1, substitutions };
+			if (!heredoc.quoted) expanding.push(command.slice(bodyStart));
+			return { end: command.length - 1, expanding };
 		}
 	}
-	return { end: cursor - 1, substitutions };
+	return { end: cursor - 1, expanding };
+}
+
+/** #5553: one command substitution bash runs, and how many it sits inside (1 is outermost). */
+export interface ShellSubstitution {
+	body: string;
+	depth: number;
+}
+
+/** Substitutions nested deeper than this are listed but leave the read incomplete. */
+const MAX_READ_SUBSTITUTION_DEPTH = 3;
+/** Past this the parser stops descending; the read is incomplete. */
+const MAX_PARSE_DEPTH = 32;
+
+/** Where a stretch of text sits: in a command, inside `"…"`, or in a here-doc bash expands. */
+type SubstitutionContext = "command" | "double" | "heredoc";
+
+/** Characters a backslash escapes inside `"…"` and an unquoted here-doc. */
+const DOUBLE_QUOTE_ESCAPES = '$`"\\\n';
+const HEREDOC_ESCAPES = "$`\\\n";
+
+/**
+ * #5553: every command substitution bash runs for `text` (`$(…)`, `` `…` ``,
+ * `<(…)`, `>(…)`), nested ones and those in an unquoted here-doc included, in
+ * the order they open. It reads quoting as bash does: inside `"…"` a `'` is a
+ * character, inside `'…'` nothing expands, `$'…'` ends at an unescaped `'`, a
+ * quoted here-doc is literal, and `#` at a word's start comments to the end of
+ * the line. `complete` is false when a quote or a body does not close or the
+ * nesting passes three levels: a reader refuses that, never takes it as no
+ * substitution. `heredoc` reads `text` as the body of an unquoted here-doc.
+ */
+export function shellSubstitutions(
+	text: string,
+	options: { heredoc?: boolean } = {},
+): { bodies: ShellSubstitution[]; complete: boolean } {
+	const bodies: ShellSubstitution[] = [];
+	let complete = true;
+
+	/** Records the body between `open` and `close` and reads it as a command. */
+	const substitution = (
+		source: string,
+		bodyStart: number,
+		depth: number,
+	): number => {
+		const at = bodies.length;
+		bodies.push({ body: "", depth: depth + 1 });
+		if (depth + 1 > MAX_READ_SUBSTITUTION_DEPTH) complete = false;
+		const close = scan(source, bodyStart, "command", depth + 1, true);
+		bodies[at] = { body: source.slice(bodyStart, close), depth: depth + 1 };
+		if (close >= source.length) complete = false;
+		return close;
+	};
+
+	const backtick = (source: string, open: number, depth: number): number => {
+		let close = open + 1;
+		let body = "";
+		for (; close < source.length && source[close] !== "`"; close++) {
+			const next = source[close + 1] ?? "";
+			if (source[close] === "\\" && "$`\\".includes(next)) {
+				body += next;
+				close += 1;
+			} else body += source[close];
+		}
+		if (close >= source.length) complete = false;
+		const at = bodies.length;
+		bodies.push({ body, depth: depth + 1 });
+		if (depth + 1 > MAX_READ_SUBSTITUTION_DEPTH) complete = false;
+		if (depth + 1 < MAX_PARSE_DEPTH) scan(body, 0, "command", depth + 1, false);
+		else complete = false;
+		bodies[at] = { body, depth: depth + 1 };
+		return close;
+	};
+
+	/**
+	 * Reads `source` from `start` in `context`; returns the index of the
+	 * character that ends it (`)` for a `$(` body, `"` for a double quote) or
+	 * `source.length`.
+	 */
+	function scan(
+		source: string,
+		start: number,
+		context: SubstitutionContext,
+		depth: number,
+		closesAtParen: boolean,
+	): number {
+		if (depth >= MAX_PARSE_DEPTH) {
+			complete = false;
+			return source.length;
+		}
+		let parens = 0;
+		const heredocs: PendingHeredoc[] = [];
+		for (let i = start; i < source.length; i++) {
+			const ch = source[i] ?? "";
+			const next = source[i + 1] ?? "";
+			if (ch === "\\") {
+				const escapes =
+					context === "command"
+						? undefined
+						: context === "double"
+							? DOUBLE_QUOTE_ESCAPES
+							: HEREDOC_ESCAPES;
+				if (escapes === undefined || escapes.includes(next)) i += 1;
+				continue;
+			}
+			if (ch === "`") {
+				i = backtick(source, i, depth);
+				continue;
+			}
+			if (ch === "$" && next === "(") {
+				i = substitution(source, i + 2, depth);
+				continue;
+			}
+			if (context === "double") {
+				if (ch === '"') return i;
+				continue;
+			}
+			if (context === "heredoc") continue;
+			if (ch === "'") {
+				// In `$'…'` a backslash escapes the next character, a `'` included.
+				const ansiC = source[i - 1] === "$";
+				let close = i + 1;
+				for (; close < source.length && source[close] !== "'"; close++)
+					if (ansiC && source[close] === "\\") close += 1;
+				if (close >= source.length) {
+					complete = false;
+					return source.length;
+				}
+				i = close;
+				continue;
+			}
+			if (ch === '"') {
+				i = scan(source, i + 1, "double", depth, false);
+				if (i >= source.length) complete = false;
+				continue;
+			}
+			if ((ch === "<" || ch === ">") && next === "(") {
+				i = substitution(source, i + 2, depth);
+				continue;
+			}
+			if (ch === "<" && next === "<" && source[i + 2] !== "<") {
+				const parsed = parseHeredocDelimiter(source, i + 2);
+				if (parsed) {
+					heredocs.push(parsed.heredoc);
+					i = parsed.end;
+				} else i += 1;
+				continue;
+			}
+			if (ch === "<" && next === "<") {
+				i += 2;
+				continue;
+			}
+			if (ch === "\n" && heredocs.length > 0) {
+				const consumed = consumeHeredocBodies(
+					source,
+					i + 1,
+					heredocs.splice(0),
+				);
+				for (const body of consumed.expanding)
+					scan(body, 0, "heredoc", depth, false);
+				i = consumed.end;
+				continue;
+			}
+			if (
+				ch === "#" &&
+				(i === start || /[\s;&|()]/.test(source[i - 1] ?? ""))
+			) {
+				const lineEnd = source.indexOf("\n", i);
+				i = (lineEnd < 0 ? source.length : lineEnd) - 1;
+				continue;
+			}
+			if (ch === "(") parens += 1;
+			else if (ch === ")") {
+				if (parens > 0) parens -= 1;
+				else if (closesAtParen) return i;
+			}
+		}
+		return source.length;
+	}
+
+	scan(text, 0, options.heredoc ? "heredoc" : "command", 0, false);
+	return { bodies, complete };
 }
 
 /**
@@ -778,7 +916,13 @@ function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 				// here are relative to the substituted body, so a redirect inside one
 				// is not attributed to any of the command's segments (`-1`) rather
 				// than to whichever `cd` its accidental offset lands near.
-				for (const substitution of consumed.substitutions)
+				// What bash runs while it expands an unquoted body, outermost only.
+				const substitutions = consumed.expanding.flatMap((body) =>
+					shellSubstitutions(body, { heredoc: true }).bodies.flatMap((found) =>
+						found.depth === 1 ? [found.body] : [],
+					),
+				);
+				for (const substitution of substitutions)
 					segments.push(
 						...tokenizeShellCommandWithRanges(substitution).map((entry) => ({
 							...entry,
