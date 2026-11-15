@@ -283,6 +283,83 @@ describe("resolveToolCwd (#2777)", () => {
 			).toBe(nested());
 		});
 
+		// #5631: `createDispatchContext` hands runners `ctx.cwd` = the file's own
+		// package (its language root) and `ctx.projectRoot` = the workspace. The
+		// config climb stops at the session's root, which is the project root, not
+		// the package.
+		it.each([
+			["oxlint", ".oxlintrc.json"],
+			["eslint", "eslint.config.mjs"],
+		])(
+			"anchors %s at the workspace's config when ctx.cwd is the file's package (#5631)",
+			(tool, configName) => {
+				fs.mkdirSync(nested(), { recursive: true });
+				fs.writeFileSync(path.join(workspace(), configName), "{}\n");
+				fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+				expect(
+					toolCwd.resolveToolCwd("runner", tool, fileAt(nested()), {
+						cwd: nested(),
+						projectRoot: workspace(),
+					}),
+				).toEqual({
+					cwd: workspace(),
+					marker: configName,
+					packageDir: nested(),
+				});
+			},
+		);
+
+		it("ignores a config above the project root when ctx.cwd is the file's package (#5631)", () => {
+			// A session started inside the package: the root config is outside the
+			// session even though `ctx.cwd` is the package.
+			fs.mkdirSync(nested(), { recursive: true });
+			fs.writeFileSync(path.join(workspace(), ".oxlintrc.json"), "{}\n");
+			fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "oxlint", fileAt(nested()), {
+					cwd: nested(),
+					projectRoot: nested(),
+				}).cwd,
+			).toBe(nested());
+		});
+
+		it("keeps the dispatch root as the ceiling when the project root does not contain it (#5631)", () => {
+			// A project root that is not an ancestor of `ctx.cwd` says nothing about
+			// where this file's session starts, so it must not move the ceiling.
+			fs.mkdirSync(nested(), { recursive: true });
+			fs.writeFileSync(path.join(workspace(), ".oxlintrc.json"), "{}\n");
+			fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "oxlint", fileAt(nested()), {
+					cwd: nested(),
+					projectRoot: path.join(home, "elsewhere"),
+				}).cwd,
+			).toBe(nested());
+		});
+
+		it("ignores a config above a project root that sits strictly above ctx.cwd (#5631)", () => {
+			// Recurrence: #5631 F1. The cells above set `projectRoot` equal to
+			// `ctx.cwd` or to a sibling, so a ceiling one level too high (the root's
+			// parent) was never reached. Here the root is an ancestor of the package,
+			// and a config sits above the root, outside the session.
+			const outer = path.join(home, "outer");
+			const project = path.join(outer, "repo");
+			const pkg = path.join(project, "apps", "web");
+			fs.mkdirSync(pkg, { recursive: true });
+			fs.writeFileSync(path.join(outer, ".oxlintrc.json"), "{}\n");
+			fs.writeFileSync(path.join(pkg, "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "oxlint", fileAt(pkg), {
+					cwd: pkg,
+					projectRoot: project,
+				}).cwd,
+			).toBe(pkg);
+		});
+
 		it("does not anchor at a config in the home directory", () => {
 			// The seam's $HOME ceiling is exclusive: a home-level config is the
 			// user's, not this project's, even though the config seam climbs to it.
