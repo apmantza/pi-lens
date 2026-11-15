@@ -1286,9 +1286,17 @@ describe("#5616: a script write the call is credited with", () => {
 			expect(seeds.map(([result]) => result)).toEqual(Array(4).fill("seeded"));
 			for (const [, runners] of seeds)
 				expect(runners.split(",")).toContain("biome-check-json");
+			// The copy outlives no run: git sees no pi-lens-seed- file.
 			expect(
-				fs.readdirSync(repo).filter((name) => name.startsWith("pi-lens-seed-")),
-			).toEqual([]);
+				execFileSync(
+					"git",
+					["status", "--porcelain", "--untracked-files=all"],
+					{
+						cwd: repo,
+						encoding: "utf8",
+					},
+				),
+			).not.toContain("pi-lens-seed-");
 			expect(handle.errors).toEqual([]);
 			await handle.dispose();
 		},
