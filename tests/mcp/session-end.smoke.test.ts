@@ -1,5 +1,4 @@
 // mutation-lane: exclude
-// flake-shape: raw-timer-wait — poll the real child extension-log writer after session_end
 /**
  * Real MCP session-end telemetry probe (#2800).
  *
@@ -13,32 +12,47 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { McpHarness } from "./harness.js";
+import { waitFor } from "../clients/interleaving-kit.js";
 
 async function readDeadWeight(home: string): Promise<Record<string, unknown>> {
-	// One poll loop for both readers (flake-shape ratchet: one raw timer wait
-	// per file); the single-row reader is the first row of the multi-row one.
+	// One wait for both readers, so the file keeps a single poll loop; the
+	// single-row reader is the first row of the multi-row one. (#4865 r1 F5: the
+	// note here pointed at the flake-shape ratchet's one-raw-timer-wait-per-file
+	// allowance, and after #4865 this file's wait is `waitFor`, not a raw timer.)
 	const [row] = await readDeadWeightRows(home);
 	return row as Record<string, unknown>;
 }
 
+/**
+ * The dead-weight rows the child wrote, waiting for the first one to land.
+ * Shape 86 (#4865): this was a 40 x 25 ms sleep count; the read is now split
+ * out of the loop so `waitFor` owns a real-clock deadline that follows
+ * `PI_LENS_TEST_TIMEOUT_SCALE` and names this caller when it gives up.
+ */
 async function readDeadWeightRows(
 	home: string,
 ): Promise<Record<string, unknown>[]> {
-	for (let attempt = 0; attempt < 40; attempt++) {
-		const logPath = path.join(home, "extension.log");
-		if (fs.existsSync(logPath)) {
-			const rows = fs
-				.readFileSync(logPath, "utf8")
-				.trim()
-				.split("\n")
-				.filter(Boolean)
-				.map((line) => JSON.parse(line) as Record<string, unknown>)
-				.filter((row) => row.message === "situational tool dead weight");
-			if (rows.length > 0) return rows;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 25));
-	}
-	throw new Error("MCP dead-weight rows were not written");
+	return waitFor(
+		() => deadWeightRowsIn(home),
+		(rows) => rows.length > 0,
+		{
+			timeoutMs: 1_000,
+			intervalMs: 25,
+		},
+	);
+}
+
+/** Every dead-weight row in the child's log; empty until the log exists. */
+function deadWeightRowsIn(home: string): Record<string, unknown>[] {
+	const logPath = path.join(home, "extension.log");
+	if (!fs.existsSync(logPath)) return [];
+	return fs
+		.readFileSync(logPath, "utf8")
+		.trim()
+		.split("\n")
+		.filter(Boolean)
+		.map((line) => JSON.parse(line) as Record<string, unknown>)
+		.filter((row) => row.message === "situational tool dead weight");
 }
 
 describe("MCP situational dead-weight session end", () => {

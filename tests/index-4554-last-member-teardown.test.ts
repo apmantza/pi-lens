@@ -48,6 +48,7 @@ import {
 	readInstanceRegistry,
 } from "../clients/instance-registry.js";
 import { _resetProcessSingletonsForTests } from "../clients/process-singletons.js";
+import { scaledTestTimeout } from "./support/test-timeout-scale.js";
 import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx, STALE_CTX_MESSAGE } from "./support/pi-mock.js";
 import { makeLspServiceDouble } from "./support/lsp-service-double.js";
@@ -207,7 +208,13 @@ async function sidecarFor(
 ): Promise<SessionSidecar> {
 	const { loadSessionState } =
 		await import("../clients/session-state-store.js");
-	for (let turn = 0; turn < 50; turn += 1) {
+	// Shape 86 (#4865): the bound was 50 setImmediate turns. `loadSessionState`
+	// reads the file asynchronously, so `waitFor`'s synchronous read does not
+	// fit; the loop stays and the ceiling becomes a real-clock deadline, scaled
+	// by the lane like every other wait here. An exhausted wait still returns
+	// undefined, so the caller's assertion (present or absent) names the defect.
+	const deadlineAt = Date.now() + scaledTestTimeout(2_000);
+	while (Date.now() < deadlineAt) {
 		const state = await loadSessionState(cwd, sessionId);
 		if (state !== undefined) return state;
 		await new Promise<void>((resolve) => setImmediate(resolve));

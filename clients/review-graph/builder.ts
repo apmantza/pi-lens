@@ -3574,14 +3574,19 @@ export function flushReviewGraphPersistsForTests(): void {
 	}
 }
 
+/** How long {@link waitForReviewGraphPersistsForTests} waits, in ms. */
+const REVIEW_GRAPH_PERSIST_WAIT_MS = 2_000;
+
 /** Test-only: wait until worker requests (authoritative persist AND offloaded
  * checkpoint) have either landed or degraded. */
 export async function waitForReviewGraphPersistsForTests(): Promise<void> {
-	for (
-		let attempts = 0;
-		attempts < 200 &&
-		(_workerRequests.size > 0 || _checkpointWorkerRequests.size > 0);
-		attempts++
+	// Shape 86 (#4865): the bound was `attempts < 200` of 10 ms sleeps -- a turn
+	// count, not a duration. Same poll interval, real-clock ceiling, and the same
+	// silent return a caller file that wedges a worker depends on in teardown.
+	const deadlineAt = Date.now() + REVIEW_GRAPH_PERSIST_WAIT_MS;
+	while (
+		Date.now() < deadlineAt &&
+		(_workerRequests.size > 0 || _checkpointWorkerRequests.size > 0)
 	) {
 		await new Promise((resolve) => setTimeout(resolve, 10));
 	}
