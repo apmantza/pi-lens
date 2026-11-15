@@ -25,7 +25,6 @@
  * cut, a file it cannot read, a lane that gives no answer, a throw, and the
  * bound each refuse as degraded, never allow.
  */
-import { randomBytes } from "node:crypto";
 import * as nodeFs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -49,7 +48,6 @@ import {
 	isExternalOrVendorFile,
 	realpathOrResolve,
 	toProjectRelativePath,
-	walkUpDirs,
 } from "./path-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { truncatedByOutputCap } from "./spawn-output-cap.js";
@@ -618,17 +616,6 @@ async function judgeCarried(
 	};
 }
 
-/**
- * The nearest directory above `file` that exists: a replayed `git mv` names a
- * destination whose directory the real move has not made yet.
- */
-function existingDirOf(file: string): string {
-	const start = path.dirname(file);
-	for (const dir of walkUpDirs(start, { spelling: true }))
-		if (nodeFs.existsSync(dir)) return dir;
-	return start;
-}
-
 async function judgeFile(
 	candidate: Candidate,
 	repo: Repo,
@@ -670,47 +657,43 @@ async function judgeFile(
 	}
 	const added = addedLines(committed, bases, deps.getFlag("no-delta") === true);
 	if (added !== "all" && added.size === 0) return { judged: false, file };
-	// The lanes read a file: an index blob the working file does not hold is
-	// written beside it for one read, so the project's config applies to it.
-	const copy = candidate.fromWork
-		? undefined
-		: path.join(
-				existingDirOf(abs),
-				`pi-lens-staged-${randomBytes(4).toString("hex")}.${path.basename(abs)}`,
-			);
-	try {
-		if (copy) nodeFs.writeFileSync(copy, committed, { flag: "wx" });
-		const integration = await loadDispatchIntegration();
-		const run = await integration.collectStagedLaneBlockers(
-			abs,
-			deps.projectRoot,
-			{ getFlag: deps.getFlag },
-			copy,
-		);
-		if (run.outcome === "skipped")
-			return run.reason === "unreadable"
-				? degraded("file_unreadable", file)
-				: { judged: false, file };
-		if (run.unanswered.length > 0)
+	// An index blob the working file does not hold is handed to the lanes as
+	// given bytes (`collectStagedLaneBlockers`, #5621).
+	const integration = await loadDispatchIntegration();
+	const run = await integration.collectStagedLaneBlockers(
+		abs,
+		deps.projectRoot,
+		{ getFlag: deps.getFlag },
+		candidate.fromWork ? undefined : committed,
+	);
+	if (run.outcome === "skipped") {
+		if (run.reason === "unreadable") return degraded("file_unreadable", file);
+		// The blob could not be put where its lanes read it: no verdict, and a
+		// commit nobody judged must not pass as one.
+		if (run.reason === "copy-unwritable")
 			return degraded(
 				"lane_incomplete",
-				`${file}: ${run.unanswered.join(", ")} gave no answer`,
+				`${file}: its staged bytes could not be written beside it for the linters`,
 			);
-		const blockers = run.blockers.filter(
-			(blocker) =>
-				added === "all" ||
-				(blocker.line !== undefined && added.has(blocker.line)),
-		);
-		if (blockers.length === 0) return { judged: true, file };
-		const policy = applyInlineBlockerPolicy(
-			{ filePath: abs, summary: "", diagnostics: blockers as Diagnostic[] },
-			deps.projectRoot,
-		);
-		if (policy.kept === 0) return { judged: true, file };
-		return { judged: true, file, body: policy.body ?? "" };
-	} finally {
-		if (copy) nodeFs.rmSync(copy, { force: true });
+		return { judged: false, file };
 	}
+	if (run.unanswered.length > 0)
+		return degraded(
+			"lane_incomplete",
+			`${file}: ${run.unanswered.join(", ")} gave no answer`,
+		);
+	const blockers = run.blockers.filter(
+		(blocker) =>
+			added === "all" ||
+			(blocker.line !== undefined && added.has(blocker.line)),
+	);
+	if (blockers.length === 0) return { judged: true, file };
+	const policy = applyInlineBlockerPolicy(
+		{ filePath: abs, summary: "", diagnostics: blockers as Diagnostic[] },
+		deps.projectRoot,
+	);
+	if (policy.kept === 0) return { judged: true, file };
+	return { judged: true, file, body: policy.body ?? "" };
 }
 
 /** What clears each degraded read: each names an action the next attempt reads afresh. */

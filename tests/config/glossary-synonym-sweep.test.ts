@@ -1598,7 +1598,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// the target with `path.basename`, the same call every walker path uses.
 		"clients/source-walker.ts": 4,
 		"clients/spawn-timeout-cooldown.ts": 3,
-		"clients/staged-delta.ts": 13,
+		"clients/staged-delta.ts": 10,
 		"clients/startup-scan.ts": 7,
 		// 61 -> 66: filesystem ownership/discovery operations plus the alias
 		// exception's physical policy-relative path (R4). These remain filesystem

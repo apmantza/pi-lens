@@ -822,6 +822,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"a real ast-grep child applies ignore rules through its own file matcher",
 	},
+	// 2026-11-15 (#5621): the cells run the real ruff and eslint on given bytes
+	// and ask the real biome and oxlint CLIs whether they lint stdin at all; a
+	// double encodes the premise the cells check.
+	"real-process-spawn:clients/dispatch/seed-content-mode-5621.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"whether given bytes reach a real linter through stdin, and whether a sibling copy of them ever exists beside the file, are facts of the tool and the tree; a double would encode the premise (#5621 found biome's stdin lint reports nothing)",
+	},
 	// #4522: the census must know which fixture inputs git hides; its
 	// collectUntrackedIgnoredIds call spawns the real `git ls-files` that
 	// decides, and no stub reproduces git's own index state.

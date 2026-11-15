@@ -2379,7 +2379,12 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// 24 -> 25 (#5616): the capture awaits `before`, a credited script write's
 	// HEAD copy (one `git show` under its own leaf bound); its hook caller
 	// passes the capture's signal into it, under the same bounded() capture.
-	"clients/dispatch/integration.ts": 25,
+	// 25 -> 27 (#5621): `prepareSeedLaneRun` awaits the given bytes
+	// (`given.read()`, the same `before` read, moved into it) and
+	// `collectStagedLaneBlockers` awaits `prepareSeedLaneRun`; the capture's own
+	// await of it replaces its old await of `before`. Both callers keep their
+	// bounded() holds (the capture's budget, the gate's `gateStagedDelta`).
+	"clients/dispatch/integration.ts": 27,
 	// 2 → 3 (#4484 review F5): `settlePendingRunnerFindingsForTests` awaits
 	// the store's runs so a test joins a collect-later settle without polling.
 	// Only tests call it; no hook handler reaches it.

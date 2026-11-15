@@ -14,6 +14,7 @@
 		"clients/dispatch/runner-spawn-timeout-cooldown.test.ts": 7,
 		"clients/dispatch/runners/ast-grep-playground-verify.test.ts": 1,
 		"clients/dispatch/runners/ast-grep-rule-ignores.test.ts": 1,
+		"clients/dispatch/seed-content-mode-5621.test.ts": 6,
 		"clients/dispatch/smoke-fixture-coverage.test.ts": 1,
 		"clients/format-service-tab-width-real-biome.test.ts": 1,
 		"clients/formatter-template-preserve.test.ts": 2,

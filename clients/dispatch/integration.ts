@@ -128,6 +128,7 @@ import {
 	isExternalOrVendorFile,
 	normalizeMapKey,
 	toPosix,
+	walkUpDirs,
 } from "../path-utils.js";
 import { getProjectIgnoreMatcher } from "../file-utils.js";
 import {
@@ -3518,10 +3519,8 @@ export type PreEditCaptureOutcome =
  *
  * #5616: `before` supplies the bytes when the write has already happened (a
  * script write credited at `tool_result`, whose file was clean, so its HEAD
- * copy is what it held). They are written beside the file under a
- * `pi-lens-seed-` name for the one run, as the commit gate writes a staged
- * blob, so a linter that reads the disk reads them under the project's
- * config; the file itself holds the write.
+ * copy is what it held); the file itself holds the write. The lanes lint
+ * those bytes as `prepareSeedLaneRun` says (#5621).
  */
 export async function capturePreEditLinterFindings(
 	filePath: string,
@@ -3564,14 +3563,8 @@ export async function capturePreEditLinterFindings(
 	// tier has moved to collect-later stays out of it.
 	const admit = (id: string): boolean =>
 		classifyObservedRunner(projectRoot, id) === "inline";
-	let run: SeedLaneRun;
-	let copy: string | undefined;
-	if (before) {
-		const beside = nodePath.join(
-			nodePath.dirname(filePath),
-			`pi-lens-seed-${randomBytes(4).toString("hex")}.${nodePath.basename(filePath)}`,
-		);
-		const lanes = selectSeedLanes(
+	const prepared = await prepareSeedLaneRun(
+		[
 			filePath,
 			dispatchCwd,
 			projectRoot,
@@ -3580,41 +3573,11 @@ export async function capturePreEditLinterFindings(
 			spanless,
 			preEditCaptureFacts,
 			admit,
-			beside,
-		);
-		if ("skip" in lanes) return { outcome: "skipped", reason: lanes.skip };
-		const earlier = await before(signal);
-		if (earlier === "absent")
-			return { outcome: "skipped", reason: "absent-before" };
-		if (earlier === "unreadable")
-			return { outcome: "skipped", reason: "unreadable" };
-		try {
-			nodeFs.writeFileSync(beside, earlier.content, { flag: "wx" });
-		} catch {
-			// none: the skip reason is the record; recordPreEditCapture logs it.
-			return { outcome: "skipped", reason: "copy-unwritable" };
-		}
-		copy = beside;
-		run = {
-			...lanes,
-			before: Buffer.from(earlier.content, "utf8"),
-			content: earlier.content,
-		};
-	} else {
-		const prepared = prepareSeedLaneRun(
-			filePath,
-			dispatchCwd,
-			projectRoot,
-			analysisRootMode,
-			pi,
-			spanless,
-			preEditCaptureFacts,
-			admit,
-		);
-		if ("skip" in prepared)
-			return { outcome: "skipped", reason: prepared.skip };
-		run = prepared.run;
-	}
+		],
+		before && { dir: nodePath.dirname(filePath), read: () => before(signal) },
+	);
+	if ("skip" in prepared) return { outcome: "skipped", reason: prepared.skip };
+	const run = prepared.run;
 	const { ctx, content } = run;
 	const controller = new AbortController();
 	const captureSignal = signal
@@ -3631,15 +3594,18 @@ export async function capturePreEditLinterFindings(
 			return { outcome: "discarded", reason: "session-replaced" };
 		if (dispatched())
 			return { outcome: "discarded", reason: "already-dispatched" };
-		// The bytes the lanes read, still there (a `before` run read its copy).
-		let now: Buffer | undefined;
-		try {
-			now = nodeFs.readFileSync(ctx.filePath);
-		} catch {
-			now = undefined;
+		// The bytes the lanes read, still there (a copy's lanes read the copy; a
+		// content run read bytes the file never held).
+		if (run.bytesOnDisk) {
+			let now: Buffer | undefined;
+			try {
+				now = nodeFs.readFileSync(ctx.filePath);
+			} catch {
+				now = undefined;
+			}
+			if (!now?.equals(run.before))
+				return { outcome: "discarded", reason: "bytes-changed" };
 		}
-		if (!now?.equals(run.before))
-			return { outcome: "discarded", reason: "bytes-changed" };
 		const seed = seedFromCapture(result.blockers, content, spanless);
 		sessionFacts.setBoundedSessionFact(seedKey, seed);
 		return {
@@ -3649,9 +3615,21 @@ export async function capturePreEditLinterFindings(
 		};
 	} finally {
 		preEditCapturesInFlight.delete(keyPath);
-		if (copy) nodeFs.rmSync(copy, { force: true });
+		dropSeedCopy(run);
 	}
 }
+
+/** What {@link selectSeedLanes} takes, but the copy's place. */
+type SeedLaneArgs = [
+	filePath: string,
+	dispatchCwd: string,
+	projectRoot: string,
+	analysisRootMode: AnalysisRootMode,
+	pi: PiAgentAPI,
+	spanless: boolean,
+	facts: FactStore,
+	admit: (runnerId: string) => boolean,
+];
 
 /** One file's run of the seeded lanes, built by {@link prepareSeedLaneRun}. */
 interface SeedLaneRun {
@@ -3660,16 +3638,33 @@ interface SeedLaneRun {
 	/** The bytes the lanes read. */
 	before: Buffer;
 	content: string;
+	/** Whether the lanes read them from `ctx.filePath` (the file or its copy). */
+	bytesOnDisk: boolean;
+	/** The copy written beside the file for the run; the caller removes it. */
+	copy?: string;
+}
+
+/**
+ * #5616, #5621: bytes the file does not hold, for a run that lints them.
+ * `read` supplies them (HEAD's copy of a credited write, an index blob), and
+ * `dir` is where a copy would sit when a lane needs one.
+ */
+interface GivenBytes {
+	dir: string;
+	read(): Promise<PreEditBytes>;
 }
 
 /**
  * #4483, #5553: the lanes a capture runs over one file's bytes. The pre-edit
  * capture seeds with their blockers; the commit gate's staged-delta read
  * (`collectStagedLaneBlockers`) judges them. `admit` keeps a runner (the
- * capture keeps the inline tier); `bytesPath` is the file the lanes read when
- * it is not `filePath` itself (a staged copy), judged with `filePath`'s kind
- * and lanes. `skip` is why no lane applies. Reads no bytes (#5616: a credited
- * script write's seed reads its HEAD copy only once a lane applies).
+ * capture keeps the inline tier); `copyAt` is where a copy of given bytes
+ * would be written, judged with `filePath`'s kind and lanes. It is returned
+ * as `copyAt` only when a selected runner reads the disk (no
+ * `lintsGivenContent`, #5621) and takes the lanes' path then; otherwise the
+ * lanes keep `filePath` and take the bytes as content. `skip` is why no lane
+ * applies. Reads no bytes (#5616: a credited script write's seed reads its
+ * HEAD copy only once a lane applies).
  */
 function selectSeedLanes(
 	filePath: string,
@@ -3680,10 +3675,14 @@ function selectSeedLanes(
 	spanless: boolean,
 	facts: FactStore,
 	admit: (runnerId: string) => boolean,
-	bytesPath?: string,
+	copyAt?: string,
 ):
 	| { skip: PreEditCaptureSkip }
-	| { ctx: DispatchContext; groups: SeedLaneRun["groups"] } {
+	| {
+			ctx: DispatchContext;
+			groups: SeedLaneRun["groups"];
+			copyAt?: string;
+	  } {
 	const created = createDispatchContext(
 		filePath,
 		dispatchCwd,
@@ -3699,20 +3698,19 @@ function selectSeedLanes(
 		undefined,
 		analysisRootMode,
 	);
-	const ctx: DispatchContext = {
+	const base: DispatchContext = {
 		...created,
-		...(bytesPath !== undefined && { filePath: normalizeMapKey(bytesPath) }),
 		deltaMode: false,
 		preEditCapture: true,
 		hasTool: (command) => checkToolAvailability(command),
 	};
-	const kind = ctx.kind;
+	const kind = base.kind;
 	if (!kind) return { skip: "no-kind" };
-	if (ctx.fileRole === "generated") return { skip: "generated" };
+	if (base.fileRole === "generated") return { skip: "generated" };
 	const groups = withSpotbugsGroup(
 		kind,
 		getDispatchGroupsForKind(kind, pi),
-		ctx,
+		base,
 	).flatMap((group) => {
 		const runnerIds = group.runnerIds.filter(
 			(id) => isPreEditSeedRunner(id, spanless) && admit(id),
@@ -3720,25 +3718,101 @@ function selectSeedLanes(
 		return runnerIds.length > 0 ? [{ ...group, runnerIds }] : [];
 	});
 	if (groups.length === 0) return { skip: "no-linter" };
-	return { ctx, groups };
+	// An unregistered id reads the disk too: refusing it content is the safe side.
+	const readsDisk =
+		copyAt !== undefined &&
+		groups.some((group) =>
+			group.runnerIds.some(
+				(id) => sessionRunnerRegistry.get(id)?.lintsGivenContent !== true,
+			),
+		);
+	return readsDisk
+		? { ctx: { ...base, filePath: normalizeMapKey(copyAt) }, groups, copyAt }
+		: { ctx: base, groups };
 }
 
 /**
- * {@link selectSeedLanes}, then the bytes the lanes read, from disk (or the
- * staged copy), read once.
+ * The nearest directory above `file` that exists: a replayed `git mv` names a
+ * destination whose directory the real move has not made yet.
  */
-function prepareSeedLaneRun(
-	...args: Parameters<typeof selectSeedLanes>
-): { skip: PreEditCaptureSkip } | { run: SeedLaneRun } {
-	const lanes = selectSeedLanes(...args);
+function existingDirOf(file: string): string {
+	const start = nodePath.dirname(file);
+	for (const dir of walkUpDirs(start, { spelling: true }))
+		if (nodeFs.existsSync(dir)) return dir;
+	return start;
+}
+
+/** Remove the copy a run wrote beside the file, if it wrote one. */
+function dropSeedCopy(run: SeedLaneRun): void {
+	if (run.copy) nodeFs.rmSync(run.copy, { force: true });
+}
+
+/** A name for a copy of given bytes in `dir`, for the one run. */
+function seedCopyName(dir: string, filePath: string): string {
+	return nodePath.join(
+		dir,
+		`pi-lens-seed-${randomBytes(4).toString("hex")}.${nodePath.basename(filePath)}`,
+	);
+}
+
+/**
+ * {@link selectSeedLanes}, then the bytes the lanes lint, read once. From
+ * disk, or `given` (#5616, #5621): handed to the lanes as `ctx.givenContent`
+ * when every runner takes content (`lintsGivenContent`), so nothing is written
+ * beside the file; otherwise written beside it under a `pi-lens-seed-` name
+ * for the one run, which a linter that reads the disk reads under the
+ * project's config. The caller removes `run.copy`.
+ */
+async function prepareSeedLaneRun(
+	args: SeedLaneArgs,
+	given?: GivenBytes,
+): Promise<{ skip: PreEditCaptureSkip } | { run: SeedLaneRun }> {
+	const [filePath] = args;
+	const lanes = selectSeedLanes(
+		...args,
+		given && seedCopyName(given.dir, filePath),
+	);
 	if ("skip" in lanes) return lanes;
-	let before: Buffer;
-	try {
-		before = nodeFs.readFileSync(lanes.ctx.filePath);
-	} catch {
-		return { skip: "unreadable" };
+	if (!given) {
+		let before: Buffer;
+		try {
+			before = nodeFs.readFileSync(lanes.ctx.filePath);
+		} catch {
+			return { skip: "unreadable" };
+		}
+		return {
+			run: {
+				...lanes,
+				before,
+				content: before.toString("utf8"),
+				bytesOnDisk: true,
+			},
+		};
 	}
-	return { run: { ...lanes, before, content: before.toString("utf8") } };
+	const earlier = await given.read();
+	if (earlier === "absent") return { skip: "absent-before" };
+	if (earlier === "unreadable") return { skip: "unreadable" };
+	const { content } = earlier;
+	const before = Buffer.from(content, "utf8");
+	if (lanes.copyAt === undefined)
+		return {
+			run: {
+				...lanes,
+				ctx: { ...lanes.ctx, givenContent: content },
+				before,
+				content,
+				bytesOnDisk: false,
+			},
+		};
+	try {
+		nodeFs.writeFileSync(lanes.copyAt, content, { flag: "wx" });
+	} catch {
+		// none: the skip reason is the record; recordPreEditCapture logs it.
+		return { skip: "copy-unwritable" };
+	}
+	return {
+		run: { ...lanes, before, content, bytesOnDisk: true, copy: lanes.copyAt },
+	};
 }
 
 /** Dispatch the lanes of a prepared run, releasing the file's facts after. */
@@ -3766,8 +3840,9 @@ async function dispatchSeedLanes(
 /**
  * #5553: the blocking findings of the seeded lanes (linters, and the
  * edit-gated ast-grep and tree-sitter lanes read whole) over the bytes
- * `filePath` holds now, or over `stagedCopy` (an index blob written beside it)
- * judged as `filePath`: the commit gate's own read of a file the commit
+ * `filePath` holds now, or over `stagedContent` (an index blob) judged as
+ * `filePath` (#5621: through stdin where every lane takes content, else a copy
+ * beside the file, as `prepareSeedLaneRun` says): the commit gate's own read of a file the commit
  * carries, whoever wrote it. Read-only: it installs no seed and takes no delta
  * baseline, and runs on a fact store of its own so a capture of the same file
  * never shares its facts. Every seeded runner runs, a collect-later one
@@ -3781,7 +3856,7 @@ export async function collectStagedLaneBlockers(
 	filePath: string,
 	workspaceRoot: string,
 	pi: PiAgentAPI,
-	stagedCopy?: string,
+	stagedContent?: string,
 ): Promise<
 	| { outcome: "ran"; blockers: Diagnostic[]; unanswered: string[] }
 	| { outcome: "skipped"; reason: PreEditCaptureSkip }
@@ -3790,19 +3865,31 @@ export async function collectStagedLaneBlockers(
 	if (analysisRootMode === "none" || analysisRootMode === "adopted")
 		return { outcome: "skipped", reason: "outside-session-root" };
 	const projectRoot = nodePath.resolve(workspaceRoot);
-	const prepared = prepareSeedLaneRun(
-		filePath,
-		resolveLanguageRootForFile(filePath, workspaceRoot),
-		projectRoot,
-		analysisRootMode,
-		pi,
-		true,
-		stagedDeltaFacts,
-		() => true,
-		stagedCopy,
+	const prepared = await prepareSeedLaneRun(
+		[
+			filePath,
+			resolveLanguageRootForFile(filePath, workspaceRoot),
+			projectRoot,
+			analysisRootMode,
+			pi,
+			true,
+			stagedDeltaFacts,
+			() => true,
+		],
+		stagedContent === undefined
+			? undefined
+			: {
+					dir: existingDirOf(filePath),
+					read: async () => ({ content: stagedContent }),
+				},
 	);
 	if ("skip" in prepared) return { outcome: "skipped", reason: prepared.skip };
-	const result = await dispatchSeedLanes(prepared.run, stagedDeltaFacts);
+	let result: DispatchResult;
+	try {
+		result = await dispatchSeedLanes(prepared.run, stagedDeltaFacts);
+	} finally {
+		dropSeedCopy(prepared.run);
+	}
 	const rows = new Map(
 		(result.latencyReport?.runners ?? []).map((row) => [row.runnerId, row]),
 	);
