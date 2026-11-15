@@ -60,6 +60,7 @@ import { getProcessSingleton } from "../../clients/process-singletons.js";
 import { beginScope } from "../../clients/session-scope.js";
 import {
 	type MutationBridgeDeps,
+	recordMutationOutcome,
 	recordMutationThroughSeam,
 } from "../../clients/mutation-bridge.js";
 import { countFileLines } from "../../clients/read-guard-tool-lines.js";
@@ -1347,6 +1348,51 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 
 		expect(fs.readFileSync(aRs, "utf-8")).toBe("let BRIDGED = 1;\n");
 		expect(noticeText()).toContain("a.rs");
+	});
+
+	/**
+	 * #5551: the agent_end drain records its own format and fix writes through
+	 * the bridge's body as a `drain` writer. Recurrence it prevents: before the
+	 * fold the drain never reached `noteAgentMutation`, and the fold's default
+	 * writer does, so a drain record during a running fixer was captured as
+	 * the agent's and restored over the fixer's output, with a loss notice.
+	 */
+	it("leaves a drain's write to the fixer: it is pi-lens's, not the agent's", async () => {
+		const aRs = path.join(srcDir, "a.rs");
+		const started = gate();
+		const proceed = gate();
+		fake.clippy = async () => {
+			started.open();
+			await proceed.p;
+			fs.writeFileSync(aRs, TOOL_FIXED);
+			return 0;
+		};
+
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
+		await started.p;
+		fs.writeFileSync(aRs, "let DRAINED = 1;\n");
+		const runtime = new RuntimeCoordinator();
+		runtime.projectRoot = tmpDir;
+		runtime.setTelemetryIdentity({ sessionId: "fix-run-restore-drain" });
+		runtime.beginTurn();
+		recordMutationOutcome(
+			{ filePath: aRs, kind: "write", consumer: "deferred-format" },
+			{
+				getRuntime: () => runtime as never,
+				getCacheManager: () => new CacheManager(false),
+				getProjectRoot: () => tmpDir,
+				getDispatchCwd: () => tmpDir,
+				countFileLines,
+				isRecordable: () => true,
+				dbg: () => {},
+			},
+			{ writer: "drain", source: "format" },
+		);
+		proceed.open();
+		await run;
+
+		expect(fs.readFileSync(aRs, "utf-8")).toBe(TOOL_FIXED);
+		expect(noticeText()).not.toContain("a.rs");
 	});
 
 	it("reports a deletion-only edit the tool overwrote before the capture", async () => {

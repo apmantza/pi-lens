@@ -393,21 +393,20 @@ function rejectedOutcome(
 }
 
 /**
- * Who wrote the bytes, and the two answers that follow from it (#5551, the
- * writer table in `clients/writers.ts`).
+ * Who wrote the bytes, and the answers that follow from it (#5551, the writer
+ * table in `clients/writers.ts`).
  *
  * - `agent` (the default): a producer's own call wrote them. The receipt and
  *   the handled mark are facts about the bytes, so they land even after the
- *   session was replaced, and authorship advances by the entry's provenance.
+ *   session was replaced; authorship advances by the entry's provenance; a
+ *   running whole-package fixer must not erase them (#3598).
  * - `drain`: pi-lens's own agent_end drain rewrote a file the session queued.
  *   It belongs to that session (#3528), so every record, the receipt and the
  *   handled mark included, lands only while it lives. It carries an
  *   authorship forward, because the drain retired a changed one immediately
- *   before writing (`retireChangedAuthorshipBeforeDrain`, #4131).
- *
- * A drain is also never an agent mutation (#3598) and never queues another
- * deferred pass; it says so through the knobs the direct LSP branch already
- * uses (`deps.noteAgentMutation`, `entry.deferAutofix`).
+ *   before writing (`retireChangedAuthorshipBeforeDrain`, #4131). Its bytes
+ *   are pi-lens's, not the agent's, so a fix run never captures them: its own
+ *   fixer's restore is still running when the drain records what it changed.
  */
 export type MutationWriter = "agent" | "drain";
 
@@ -717,16 +716,18 @@ function runAdmittedMutation(
 	deps: MutationBridgeDeps,
 	opts: MutationRecordOptions | undefined,
 ): MutationRecordOutcome {
+	const writer = opts?.writer ?? "agent";
 	// #3598: an observed or bridged producer's write is an agent mutation a
 	// running whole-package fixer must not erase. Read it before the bookkeeping.
-	(deps.noteAgentMutation ?? noteAgentMutation)(entry.filePath);
+	if (writer === "agent")
+		(deps.noteAgentMutation ?? noteAgentMutation)(entry.filePath);
 
 	const classification = classifyBridgeMutation(entry);
 	const ctx: MutationBookkeepingContext = {
 		entry,
 		classification,
 		deps,
-		writer: opts?.writer ?? "agent",
+		writer,
 		source: opts?.source ?? `agent-tool:${classification.toolName}`,
 		runtime: deps.getRuntime(),
 		filePath: entry.filePath,

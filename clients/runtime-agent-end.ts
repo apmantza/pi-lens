@@ -176,11 +176,10 @@ function recordDrainWrite(args: {
 			consumer: `deferred-${args.source}`,
 			lineage: args.session,
 			readGuardBranchEpoch: args.branchEpoch,
-			// The drain is the deferred pass: it queues no other.
-			deferAutofix: false,
 			...(args.sessionId !== undefined && { sessionId: args.sessionId }),
 		},
 		{
+			// No `deferMutation`: the drain is the deferred pass and queues none.
 			getRuntime: () => ({
 				turnIndex: runtime.turnIndex,
 				telemetrySessionId: runtime.telemetrySessionId,
@@ -205,9 +204,6 @@ function recordDrainWrite(args: {
 			// The drain's queue holds only files a recorded write put there.
 			isRecordable: () => true,
 			shouldStampReadGuard: () => !args.getFlag("no-read-guard"),
-			// #3598: pi-lens's own pass is not an agent mutation, so a fix-run
-			// restore never takes its bytes for the agent's.
-			noteAgentMutation: () => undefined,
 			dbg: args.dbg,
 		},
 		{ writer: "drain", source: args.source },
