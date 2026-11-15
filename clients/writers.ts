@@ -82,15 +82,13 @@ export type WriterCell =
 
 /**
  * Where a route's post-write record runs. `recordMutationOutcome`
- * (`clients/mutation-bridge.ts`) is the one body; the others are the
- * hand-copied recorders still to fold onto it (the direct LSP branch folded
- * in #5551).
+ * (`clients/mutation-bridge.ts`) is the one body; the direct LSP branch and
+ * the agent_end drain (its `drain` writer) folded onto it in #5551.
+ * `tool-result` is the classified chain's own recorder in `handleToolResult`:
+ * its stamp, turn-state ranges and receipt range are inputs only that chain
+ * computes, so it stays apart until the maintainer decides #5551's verdict.
  */
-export type WriterRecorder =
-	| "recordMutationOutcome"
-	| "tool-result"
-	| "agent-end-drain"
-	| "none";
+export type WriterRecorder = "recordMutationOutcome" | "tool-result" | "none";
 
 /**
  * How a `tool_result` learns which files this call wrote (shape 88).
@@ -156,6 +154,8 @@ const G6_PROBE =
 	"[skips noteAgentMutation for a direct LSP edit and reaches it through the bridge]";
 const G6_SKIP =
 	"the direct LSP branch passes recordMutationOutcome a no-op noteAgentMutation, as it never called it before #5551 (G6); reaching it needs the maintainer's buy-in";
+const DRAIN_NOT_AGENT =
+	"pi-lens's own format or fix is not an agent mutation: capturing it would let a fix-run restore undo the pass itself (#3598); the drain records as the `drain` writer, which skips it";
 
 /** The cells every route leaves unprobed today, for the consumers no probe read. */
 function unread(settle: string): Record<WriterConsumer, WriterCell> {
@@ -649,7 +649,7 @@ export const WRITERS: readonly WriterRoute[] = [
 		writes: "the formatted or fixed file",
 		authorship: "whole-file",
 		attribution: "none",
-		recorders: ["tool-result", "agent-end-drain"],
+		recorders: ["tool-result", "recordMutationOutcome"],
 		cells: {
 			...unread(
 				"settle: an agent_end hold on a blocker-free file (py-format-autofix was inconclusive)",
@@ -657,6 +657,13 @@ export const WRITERS: readonly WriterRoute[] = [
 			"inline-stop": na(
 				"a format or autofix pass has no tool result of its own",
 			),
+			"change-log": reaches(
+				"[the format's recordWritten, change log, modified range and turn summary land in its own session] (the drain's row allocates the file's seq)",
+			),
+			"read-guard": reaches(
+				"[carries the authorship through the autofix when no other writer intervened (no-drop)]",
+			),
+			"fix-run-capture": na(DRAIN_NOT_AGENT),
 			"pre-edit-baseline": na(
 				"the pass rewrites a file the agent's write already seeded",
 			),
