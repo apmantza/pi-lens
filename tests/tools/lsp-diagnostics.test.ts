@@ -529,7 +529,11 @@ describe("lsp_diagnostics tool", () => {
 
 	it("bounds an in-flight file and the whole batch on abort (#837)", async () => {
 		const previous = process.env.PI_LENS_LSP_BATCH_FILE_MS;
-		process.env.PI_LENS_LSP_BATCH_FILE_MS = "1000";
+		// #5645: far past the test's own 5 s budget, so only the abort can release
+		// the in-flight file. The bound is read from the outcome's reason below,
+		// not from elapsed time: a wall-clock `< 500` margin read 512 on a loaded
+		// shard because the abort was released correctly but late.
+		process.env.PI_LENS_LSP_BATCH_FILE_MS = "30000";
 		const tool = createLspDiagnosticsTool();
 		const controller = new AbortController();
 		const tmpDir = fs.mkdtempSync(
@@ -546,7 +550,6 @@ describe("lsp_diagnostics tool", () => {
 			setTimeout(() => controller.abort(), 0);
 			return new Promise(() => {});
 		});
-		const started = Date.now();
 		const pending = tool.execute(
 			"diag-abort-contract",
 			{ paths: files, concurrency: 1, waitMs: 1 },
@@ -556,9 +559,11 @@ describe("lsp_diagnostics tool", () => {
 		);
 		try {
 			const result = (await pending) as any;
-			// Below the 1000 ms per-file deadline, so the abort is what released the
-			// in-flight file rather than the deadline expiring.
-			expect(Date.now() - started).toBeLessThan(500);
+			// The abort, not the per-file deadline, released the in-flight file: the
+			// deadline path words its reason `File check exceeded <n>ms.`.
+			expect(result.details?.outcomes?.[0]?.reason).toBe(
+				"Batch aborted before this file completed.",
+			);
 			expect(result.details?.outcomeCounts?.inconclusive).toBe(1);
 			expect(result.details?.incompleteFiles).toBe(1);
 		} finally {
