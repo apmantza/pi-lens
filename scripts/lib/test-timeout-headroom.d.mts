@@ -31,8 +31,10 @@ export interface AssessCounts {
 	tests: number;
 	undated: number;
 	emitted: number;
-	over: number;
-	unknown: number;
+	/** Emitted rows whose cap did not resolve; judged against the file floor. */
+	floored: number;
+	/** Every judged test with no resolved cap, emitted or not (#5311 r1 F4). */
+	unresolved: number;
 	byReason: Record<string, number>;
 	maxRatio: number;
 }
@@ -93,11 +95,14 @@ export function resolveCap(
 	row: { chain: string[]; title: string },
 ): CapResolution;
 
-export function fileDefaultMs(table: FileTable): { ms: number | undefined };
+export function fileDefaultMs(table: FileTable): {
+	ms: number | undefined;
+	reason: string;
+};
 
 export function fileFloorMs(table: FileTable): {
 	ms: number | undefined;
-	source: string;
+	reason: string;
 };
 
 export interface ParsedReport {

@@ -787,7 +787,10 @@ describe("suite budget written last", () => {
 		expect(loaded.entries.size).toBeGreaterThan(0);
 		for (const entry of loaded.entries.values())
 			expect(entry.file.startsWith("tests/")).toBe(true);
-		// The check that ran on the run the baseline came from reads clean.
+		// One fabricated passing test against the committed ledger: what this shows
+		// is that the shipped file parses and the run reports nothing for it. That a
+		// baseline row still matches a real offender is `names a baseline row whose
+		// test the reports no longer carry` and the CI run's own ledger (r1 F10).
 		const reportFile = writeJson(
 			"reports/committed.json",
 			JSON.stringify({
