@@ -533,6 +533,15 @@ node scripts/guard-bash-probe.mjs <matrix.jsonl> [--head <ref|file>] [--base <re
                                         prints only the rows that changed head vs base
 ```
 
+`node scripts/check-test-timeout-headroom.mjs --report <vitest-results.json>` reads a
+shard's report, folds each test's effective timeout out of its source (the `it`
+value, the enclosing `describe`, `vi.setConfig`, `scaledTestTimeout`, else the
+Vitest default), and annotates the assertions past 60% of it (#5311). Each
+Unit tests shard runs it advisory against the ratchet in
+`scripts/test-timeout-headroom-baseline.json`, so a new offender is visible
+without gating the merge;
+`--fail-on-new` makes the same check block locally.
+
 CI jobs, required contexts, the Windows leg, caches, smoke paths, shard weights
 and the pre-push base-range logic are in [docs/ci.md](docs/ci.md). Two rules
 bind an agent who edits a workflow or a hook:

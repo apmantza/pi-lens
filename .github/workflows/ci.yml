@@ -672,6 +672,19 @@ jobs:
           echo "dead-owner census: ${fails:-0} scans did not run"
           grep -m3 '^scanfail ' "$log" 2>/dev/null || true
 
+      # #5311: a test that spends most of the timeout that would kill it is the
+      # flake one run before it goes red, so the ratio gets a line before the
+      # flake. Advisory by default (exit 0 unless the check itself could not
+      # measure), and `scripts/test-timeout-headroom-baseline.json` carries the
+      # offenders this already knows, so the annotation surface is the new ones.
+      # `PI_LENS_TEST_TIMEOUT_SCALE` must match `Run tests` above: the caps the
+      # script folds are the caps that run applied.
+      - name: Test timeout headroom
+        if: always()
+        env:
+          PI_LENS_TEST_TIMEOUT_SCALE: '3'
+        run: node scripts/check-test-timeout-headroom.mjs --report "${RUNNER_TEMP}/vitest-results.json"
+
       # Listener input for #3215. The default reporter remains explicit above,
       # so this adds a file reporter in the same invocation and preserves the
       # existing result sections and npm/vitest exit status. Vitest also emits
