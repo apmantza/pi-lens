@@ -370,7 +370,11 @@ describe("#4941: resolveCommitScope reads only forms it can place in a tree", ()
 		// RECURRENCE GUARDED: #4941's fail-closed side. Each row moves the
 		// commit's directory or environment, or hides where it goes, in a way a
 		// scope read from the cwd would miss: `cd B && git commit` from a clean
-		// repository would commit over B's blocker.
+		// repository would commit over B's blocker. #5638: `git rev-parse
+		// --show-toplevel` names the work tree, not the repository whose git dir
+		// the commit lands in, so the `--git-dir`, `GIT_DIR` and `--work-tree`
+		// rows must stay unscoped: a scope taken from rev-parse would exempt the
+		// repository committed into.
 		const env = setupTestEnvironment("pi-lens-4941-scope-open-");
 		try {
 			const repoA = repo(env.tmpDir, "a");
