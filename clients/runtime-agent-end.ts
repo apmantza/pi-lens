@@ -47,6 +47,7 @@ import { renderFixRunLoss } from "./fix-run-restore.js";
 import { getAmbientAbortSignal } from "./safe-spawn.js";
 import { recordMutationOutcome } from "./mutation-bridge.js";
 import { countFileLines } from "./read-guard-tool-lines.js";
+import { readFileContent } from "./dispatch/runners/utils.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import {
 	type LineageHandle,
@@ -160,14 +161,9 @@ function recordDrainWrite(args: {
 	dbg: (msg: string) => void;
 }): boolean {
 	const { runtime, filePath } = args;
-	let content: string | undefined;
-	try {
-		content = nodeFs.readFileSync(filePath, "utf-8");
-	} catch (err) {
-		// none: the write is still recorded below; an unreadable file counts its
-		// lines through `countFileLines` and reports no import change.
-		args.dbg(`agent_end ${args.source}: read failed for ${filePath}: ${err}`);
-	}
+	// An unreadable file is still recorded: its lines count through
+	// `countFileLines` and it reports no import change.
+	const content = readFileContent(filePath);
 	recordMutationOutcome(
 		{
 			filePath,
