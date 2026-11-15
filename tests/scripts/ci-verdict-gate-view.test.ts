@@ -40,8 +40,22 @@ const gateRow = (
 	name: string,
 	status = "COMPLETED",
 	conclusion: string | null = "SUCCESS",
-) => ({ __typename: "CheckRun", name, status, conclusion });
+	startedAt?: string,
+) => ({
+	__typename: "CheckRun",
+	name,
+	status,
+	conclusion,
+	...(startedAt ? { startedAt } : {}),
+});
+// A required name rolled up with extra rows beside its green entry.
 const allRequiredGreen = () => REQUIRED.map((name) => gateRow(name));
+const withRows = (...rows: ReturnType<typeof gateRow>[]) => [
+	...allRequiredGreen().filter(
+		(entry) => !rows.some((row) => row.name === entry.name),
+	),
+	...rows,
+];
 
 interface Probe {
 	rollup: unknown[] | "throws";
@@ -189,6 +203,129 @@ describe("ci-verdict gate view (#5629)", () => {
 		expect(
 			(await verdictFor("5623", { rollup: asStatus("FAILURE") })).code,
 		).toBe(EXIT_FAILURE);
+	});
+
+	// #5629 r1 F1: the rollup keeps every run of a name. PR #5600's `PR metadata`
+	// was [CANCELLED 11:01:09, SUCCESS 11:01:17, SUCCESS 11:03:20] while GitHub's
+	// own aggregate read SUCCESS; the any-entry-red reading failed that shape.
+	it("reads a required name by its newest entry: older CANCELLED beside newer SUCCESS rows is green (the #5600 shape)", async () => {
+		const result = await verdictFor("5623", {
+			rollup: withRows(
+				gateRow("Unit tests", "COMPLETED", "CANCELLED", "2026-11-14T11:01:09Z"),
+				gateRow("Unit tests", "COMPLETED", "SUCCESS", "2026-11-14T11:01:17Z"),
+				gateRow("Unit tests", "COMPLETED", "SUCCESS", "2026-11-14T11:03:20Z"),
+			),
+		});
+		expect(result.code).toBe(EXIT_SUCCESS);
+	});
+
+	it("reads a land.sh-style rerun by its newest entry: FAILURE then SUCCESS on one head is green", async () => {
+		const result = await verdictFor("5623", {
+			rollup: withRows(
+				gateRow(
+					"Lint & type-check",
+					"COMPLETED",
+					"FAILURE",
+					"2026-11-14T10:00:00Z",
+				),
+				gateRow(
+					"Lint & type-check",
+					"COMPLETED",
+					"SUCCESS",
+					"2026-11-14T10:20:00Z",
+				),
+			),
+		});
+		expect(result.code).toBe(EXIT_SUCCESS);
+	});
+
+	it("stays red when the NEWEST entry of a required name is not a success, however old the success is", async () => {
+		const failed = await verdictFor("5623", {
+			rollup: withRows(
+				gateRow("Unit tests", "COMPLETED", "SUCCESS", "2026-11-14T10:00:00Z"),
+				gateRow("Unit tests", "COMPLETED", "FAILURE", "2026-11-14T10:20:00Z"),
+			),
+		});
+		expect(failed.code).toBe(EXIT_FAILURE);
+		expect(failed.out).toContain("Unit tests (failure)");
+		const running = await verdictFor("5623", {
+			rollup: withRows(
+				gateRow("Unit tests", "COMPLETED", "SUCCESS", "2026-11-14T10:00:00Z"),
+				gateRow("Unit tests", "IN_PROGRESS", null, "2026-11-14T10:20:00Z"),
+			),
+		});
+		expect(running.code).toBe(EXIT_PENDING);
+	});
+
+	it("never supersedes an entry whose timestamp is unusable: a gh zero-time queued rerun beside an older success is pending", async () => {
+		const result = await verdictFor("5623", {
+			rollup: withRows(
+				gateRow("Unit tests", "COMPLETED", "SUCCESS", "2026-11-14T10:00:00Z"),
+				gateRow("Unit tests", "QUEUED", null, "0001-01-01T00:00:00Z"),
+			),
+		});
+		expect(result.code).toBe(EXIT_PENDING);
+		expect(result.out).toContain(
+			"not finished in the PR's statusCheckRollup: Unit tests",
+		);
+	});
+
+	it("judges tied newest entries together: a FAILURE and a SUCCESS started in the same second is red", async () => {
+		const result = await verdictFor("5623", {
+			rollup: withRows(
+				gateRow("Unit tests", "COMPLETED", "SUCCESS", "2026-11-14T10:00:00Z"),
+				gateRow("Unit tests", "COMPLETED", "FAILURE", "2026-11-14T10:00:00Z"),
+			),
+		});
+		expect(result.code).toBe(EXIT_FAILURE);
+	});
+
+	// #5629 r1 F4 (survivors of three review mutations): precedence, EXPECTED,
+	// and the queue short-circuit.
+	it("fails, not pends, when one required name is red and another is absent (red outranks missing)", async () => {
+		const rollup = allRequiredGreen()
+			.filter((entry) => entry.name !== "knip")
+			.map((entry) =>
+				entry.name === "Unit tests"
+					? gateRow("Unit tests", "COMPLETED", "FAILURE")
+					: entry,
+			);
+		const result = await verdictFor("5623", { rollup });
+		expect(result.code).toBe(EXIT_FAILURE);
+		expect(result.out).toContain("Unit tests (failure)");
+	});
+
+	it("is pending for a required commit-status context in the EXPECTED state", async () => {
+		const rollup = allRequiredGreen().map((entry) =>
+			entry.name === "knip"
+				? { __typename: "StatusContext", context: "knip", state: "EXPECTED" }
+				: entry,
+		);
+		const result = await verdictFor("5623", { rollup });
+		expect(result.code).toBe(EXIT_PENDING);
+		expect(result.out).toContain(
+			"not finished in the PR's statusCheckRollup: knip",
+		);
+	});
+
+	it("does not read the merge queue once the gate view is not clean", () => {
+		let queueReads = 0;
+		const verdict = computeVerdict(
+			CHECK_RUNS,
+			REQUIRED,
+			null,
+			null,
+			null,
+			null,
+			null,
+			() => {
+				queueReads += 1;
+				return null;
+			},
+			new Map(),
+		);
+		expect(verdict.exitCode).toBe(EXIT_PENDING);
+		expect(queueReads).toBe(0);
 	});
 
 	it("does not consult a PR rollup for a bare SHA, which has no PR gate to read", async () => {

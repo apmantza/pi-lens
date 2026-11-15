@@ -1740,6 +1740,15 @@ function graphqlFieldArgs(query, fields) {
  * never green). A check-run entry carries `name`/`status`/`conclusion`; a
  * commit-status entry carries `context`/`state`, where `PENDING` and
  * `EXPECTED` are unfinished and every other state is its own conclusion.
+ *
+ * The rollup keeps every run of a name, a superseded CANCELLED or FAILURE row
+ * beside the newer SUCCESS (PR #5600's `PR metadata`: [CANCELLED, SUCCESS,
+ * SUCCESS], GitHub's own aggregate SUCCESS), so each name keeps only its
+ * newest entries by `startedAt` (`completedAt` when absent). An entry with no
+ * usable timestamp (absent, unparseable, or gh's zero time for a run not yet
+ * started) is never superseded, and tied newest entries are all kept: the
+ * verdict stays fail-closed, any kept entry not a concluded success is not
+ * green.
  */
 export function readGateView(
 	target,
@@ -1753,7 +1762,7 @@ export function readGateView(
 			}),
 		)?.statusCheckRollup;
 		if (!Array.isArray(rollup)) return null;
-		const view = new Map();
+		const byName = new Map();
 		for (const entry of rollup) {
 			const name = String(entry?.name ?? entry?.context ?? "");
 			const state = String(entry?.state ?? "").toUpperCase();
@@ -1763,7 +1772,21 @@ export function readGateView(
 					: "COMPLETED"
 				: String(entry?.status ?? "").toUpperCase();
 			const conclusion = String(entry?.conclusion ?? state).toUpperCase();
-			view.set(name, [...(view.get(name) ?? []), { status, conclusion }]);
+			const stamp = Date.parse(entry?.startedAt ?? entry?.completedAt);
+			byName.set(name, [
+				...(byName.get(name) ?? []),
+				{ status, conclusion, at: stamp > 0 ? stamp : null },
+			]);
+		}
+		const view = new Map();
+		for (const [name, entries] of byName) {
+			const newest = Math.max(...entries.map((entry) => entry.at ?? 0));
+			view.set(
+				name,
+				entries
+					.filter((entry) => entry.at === null || entry.at === newest)
+					.map(({ status, conclusion }) => ({ status, conclusion })),
+			);
 		}
 		return view;
 	} catch {
