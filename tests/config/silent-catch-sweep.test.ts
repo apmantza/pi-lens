@@ -368,9 +368,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :15
 	"clients/dispatch/integration.ts": {
 		silent: 7,
-		identities: "07e8090abd2c7f84",
+		identities: "33888a63294fe35f",
 		reason: PRE_RULE,
-	}, // :323, :976, :1625, :1635, :2320, :3345, :3371
+	}, // :347, :1039, :1735, :1745, :2481, :3579, :3660 (#5553: the unreadable-file handler moved into prepareSeedLaneRun; same seven handlers)
 	"clients/dispatch/pending-runner-findings.ts": {
 		silent: 2,
 		identities: "6376b0d0a47313f2",

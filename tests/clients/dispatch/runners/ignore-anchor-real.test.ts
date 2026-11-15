@@ -117,9 +117,9 @@ function plantCredo(project: string, config: string = CREDO_TOP_LEVEL): void {
 			verbatimSymlinks: true,
 		});
 	}
-	// A Design finding: credo's exit status is a per-category bitmask, and the
-	// runner's exit table admits 0, 1 and 2 only, so a Readability finding (4)
-	// would be read as a rejected invocation and hide what this file proves.
+	// A Design finding (TagTODO, exit 2). Credo's exit status is a per-category
+	// bitmask, and the runner admits 1 to 127 as completed analyses (#5608), so a
+	// finding of any category reads as a completed run.
 	const module = (name: string) =>
 		`defmodule ${name} do\n  @moduledoc "m"\n  # TODO: later\n  def f(x), do: x\nend\n`;
 	fs.mkdirSync(path.join(project, "lib/gen"), { recursive: true });

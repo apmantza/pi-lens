@@ -809,6 +809,16 @@ export const DELIVERY_SURFACES: Record<string, DeliverySurfaceEntry> = {
 			"cannot block.",
 		"live",
 	),
+	"staged-delta:commit-blocked": labeled(
+		"clients/staged-delta.ts",
+		"Staged-delta 🔴 COMMIT BLOCKED verdict (--lens-guard) for blockers the " +
+			"commit adds, and the degraded refusal when that read gave no answer (#5553).",
+		"Synchronous preflight rejection returned inline with the failed git " +
+			"command. The gate lists the staged set and runs the lanes over the " +
+			"bytes at decision time, so nothing stored is replayed and a finding " +
+			"cannot go stale between detection and delivery.",
+		"live",
+	),
 	"shared-checkout-guard:worktree-mutation-blocked": labeled(
 		"clients/shared-checkout-guard.ts",
 		"Shared-checkout 🔴 WORKING-TREE CHANGE BLOCKED verdict (--lens-checkout-guard).",

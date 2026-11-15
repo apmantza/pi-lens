@@ -1,0 +1,14 @@
+# The disabled governance rules (#4865). rules-disabled/ is the catalog's off
+# switch too (rules/ast-grep-rules/rules-disabled/): a rule there is never
+# scanned. This config exists only so that `ast-grep test -c
+# scripts/governance-rules/sgconfig-disabled.yml --skip-snapshot-tests`
+# (tests/scripts/astgrep-self-scan.test.ts) keeps the planted members of an
+# off rule red and its admitted forms clean, ready to be switched on.
+ruleDirs:
+  - ./rules-disabled
+utilDirs:
+  - ./utils
+languageGlobs:
+  typescript: ["*.mjs", "*.cjs", "*.js"]
+testConfigs:
+  - testDir: ./rule-tests-disabled

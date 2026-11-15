@@ -1306,6 +1306,29 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the subject is what a real bash tool call writes into a real git checkout and what the model receives for it, detected by git's own status; a stubbed shell answers only what it was told",
 	},
+	// 2026-11-14 (#5552): the real tool_result and dispatcher must carry
+	// mtime-preserving shell-write bytes onto a real child LSP wire.
+	"real-process-spawn:index-5552-lsp-resync-wire.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the subject is the real pi tool_result and dispatcher sending mv and cp -p bytes over a child LSP wire; a stubbed shell or client cannot prove the protocol payload",
+	},
+	// 2026-11-14 (#5552): a bash `mv`, `rsync` and `tar x` keep the source's old
+	// mtime, so only git's own status shows the write; the writers are real
+	// children and the gate reads a real repo.
+	"real-process-spawn:index-5552-shell-write-forms.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the subject is what a real mv, rsync and tar write into a real git checkout with an old mtime and whether git's own status, the dispatcher and the commit gate see it; a stub answers only what it was told",
+	},
+	// 2026-11-14 (#5553): the commit gate reads the staged delta itself, so the
+	// subject is a real `git` repository, the gate's own `git` children and the
+	// real lanes, behind a real pi session.
+	"real-process-spawn:index-5553-staged-delta-gate.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the subject is whether bytes nobody authored reach git's own commit judged on the staged delta, read by the gate's real git children and the real tree-sitter and ast-grep lanes; a stub answers only what it was told",
+	},
 	// 2026-11-14 (#5553): every writer that names a path must reach the commit
 	// gate with the inherited blocker already in its baseline; the writers are
 	// real `sed`, ast-grep and fake-LSP children and the gate reads a real repo.

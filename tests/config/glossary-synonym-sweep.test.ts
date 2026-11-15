@@ -519,6 +519,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/shared-checkout-guard.ts": 1,
 		"clients/single-flight.ts": 3,
 		"clients/smells-rollup.ts": 2,
+		// #5553: the `error` of a git spawn result, read as a failed listing.
+		"clients/staged-delta.ts": 1,
 		// 21 -> 23 (#5257): `isCompletedPassResult` reads the result's `error`,
 		// and the JSON parser sets the unreadable-output and load-failure errors.
 		"clients/test-runner-client.ts": 23,
@@ -566,7 +568,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/atomic-write-staging.ts": 1,
 		// 5 -> 2 (#5378): the three inline "last non-flag operand" move parses fold
 		// onto `moveOperands`, so their `args.filter(...)` calls are gone.
-		"clients/bash-file-access.ts": 2,
+		// 2 -> 3 (#5553): `decodeShellCommand` keeps a word's expanding parts,
+		// one `Array.prototype.filter`.
+		"clients/bash-file-access.ts": 3,
 		"clients/blocker-past-eof.ts": 2,
 		// 2 -> 3 (#4250): the secondary turn-state partition adds one bounded
 		// read/filter path; retain the semantic census rather than hiding it.
@@ -643,7 +647,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// linter runner ids, an `Array.prototype.filter` call.
 		// 20 -> 21 (#5055): the unplaced-referrer check drops the files edited this
 		// turn with one `Array.prototype.filter`.
-		"clients/dispatch/integration.ts": 21,
+		// 21 -> 22 (#5553): the staged read keeps the runners that reached no
+		// verdict, one `Array.prototype.filter`.
+		"clients/dispatch/integration.ts": 22,
 		// #4483: the seed's runner and line selection, `Array.prototype.filter`
 		// calls, not a delivery filter. 4 -> 5 (#5553 r2): the seed entries of the
 		// edit-gated lanes a dispatch with an edit span leaves out.
@@ -692,7 +698,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// delivery filter: the per-session partition trim, the turn-end
 		// composer's read of the other sessions' sections, and the settled turn
 		// end's rewrite keep the sections and files nothing re-checked.
-		"clients/git-guard.ts": 14,
+		// 14 -> 15 (#5553): the staged-delta planner keeps the commands that
+		// may commit, one `Array.prototype.filter`.
+		"clients/git-guard.ts": 15,
 		"clients/gitleaks-client.ts": 1,
 		"clients/govulncheck-client.ts": 1,
 		"clients/gradle-ktfmt-style.ts": 1,
@@ -872,6 +880,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/session-state-store.ts": 1,
 		"clients/sgconfig.ts": 3,
 		"clients/situational-tool-telemetry.ts": 2,
+		// #5553: array `.filter` over the dry run's entries, the merge heads, the
+		// carried files, the hashes and the lane blockers (the shared helper name
+		// is not a retired term here).
+		"clients/staged-delta.ts": 6,
 		"clients/test-runner-client.ts": 8,
 		"clients/tool-cwd.ts": 1,
 		"clients/tool-policy.ts": 2,
@@ -1222,7 +1234,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/formatters.ts": 14,
 		"clients/generated-artifacts.ts": 4,
 		"clients/generation-lock.ts": 7,
-		"clients/git-guard.ts": 7,
+		// 7 -> 8 (#5553): the staged-delta planner follows a literal `cd` with
+		// `path.resolve`, as bash resolves it against the directory before it.
+		"clients/git-guard.ts": 8,
 		"clients/git-tracked-ignore.ts": 3,
 		// 20 -> 19 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
 		"clients/gitleaks-client.ts": 18,
@@ -1584,6 +1598,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// the target with `path.basename`, the same call every walker path uses.
 		"clients/source-walker.ts": 4,
 		"clients/spawn-timeout-cooldown.ts": 3,
+		"clients/staged-delta.ts": 13,
 		"clients/startup-scan.ts": 7,
 		// 61 -> 66: filesystem ownership/discovery operations plus the alias
 		// exception's physical policy-relative path (R4). These remain filesystem
@@ -1853,7 +1868,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/collect-later-tier.ts": 1,
 		// 34 -> 35 (#5413): the spawn-timeout cooldown skip in `runRunner`.
 		"clients/dispatch/dispatcher.ts": 36,
-		"clients/dispatch/integration.ts": 1,
+		// 1 -> 3 (#5553): the staged read leaves out a lane row whose `status`
+		// is skipped for a stated cause, and names the others' `status`.
+		"clients/dispatch/integration.ts": 3,
 		"clients/dispatch/pending-runner-findings.ts": 1,
 		"clients/dispatch/runners/actionlint.ts": 1,
 		"clients/dispatch/runners/ast-grep-napi.ts": 11,
@@ -2001,6 +2018,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/shared-checkout-guard.ts": 2,
 		"clients/skills-resolver.ts": 6,
 		"clients/spawn-timeout-cooldown.ts": 1,
+		// #5553: each git read's exit `status`, the dry run's "nothing to commit"
+		// exit and the no-repository exit. 11 -> 16 (round 3): the exit of the
+		// git rm replay and of the git mv replay's five reads.
+		"clients/staged-delta.ts": 16,
 		// 15 -> 16 (#5257): the JSON parser reads the failed suite that explains an unsuccessful run.
 		"clients/test-runner-client.ts": 16,
 		"clients/tree-sitter-logger.ts": 2,

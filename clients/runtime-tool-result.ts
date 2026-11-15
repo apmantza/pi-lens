@@ -23,6 +23,7 @@ import {
 	opaquePrescanRoot,
 	readGitHead,
 	readSameHeadDiscards,
+	recordGuessedWriteScope,
 	recordOpaqueCaptureRefused,
 	recoverOpaqueChangesViaGit,
 	resolveOpaqueRecoveryRoots,
@@ -2794,6 +2795,8 @@ export async function handleToolResult(
 					root: string;
 					verdict: "observed";
 					keys: string[];
+					/** Recovered keys a named file or directory credited (#5552). */
+					credited: string[];
 					excluded: number;
 					unknownPairs: number;
 			  }
@@ -2821,6 +2824,11 @@ export async function handleToolResult(
 			// empty array that the tree was clean. Only the second says "no discard".
 			dirtyBefore = baselines.find((entry) => entry.root === scanRoot)?.pending
 				?.dirtyPaths;
+			// #5552: a scope the scan could not read (`"$D"`) is the working
+			// directory, and what it credits rests on that guess. A failed command
+			// credits no scope, so it has nothing to say.
+			if (recoveryScopes.scopeGuessed && event.isError !== true)
+				recordGuessedWriteScope(scanRoot);
 			// The roots recover in PARALLEL. Each is an independent `git status`
 			// (or stat capture), and a bash result the host classed READ-ONLY has a
 			// 500 ms bound, so summing two spawns would spend the budget the
@@ -2844,7 +2852,13 @@ export async function handleToolResult(
 							root,
 							pending.startedAt,
 							{
-								namedPaths: recognizedWritten,
+								// #5552: a directory the command fills (`rsync`, `tar x`) is
+								// named like a file; a failed command's partial writes stay on
+								// the mtime rule, as its recognized files do.
+								namedPaths: [
+									...recognizedWritten,
+									...(event.isError !== true ? recoveryScopes.writtenDirs : []),
+								],
 								dirtyBefore: pending.dirtyPaths,
 								excludeIndexOnlyWhenUnmerged: isFailedGitIntegrationCommand(
 									command,
@@ -2858,19 +2872,19 @@ export async function handleToolResult(
 								verdict: "unknown",
 								reason: recovery.unknownReason ?? "git-failed",
 							};
+						// A clean git verdict is complete evidence that no path changed
+						// IN THIS CHECKOUT; it is not missing evidence. Both branches
+						// therefore record the root as observed, and only the recovered
+						// paths earn authorship.
+						const keys =
+							recovery.verdict === "recovered"
+								? recovery.paths.filter((p) => isRecordableProjectPath(p, root))
+								: [];
 						return {
 							root,
 							verdict: "observed",
-							// A clean git verdict is complete evidence that no path changed
-							// IN THIS CHECKOUT; it is not missing evidence. Both branches
-							// therefore record the root as observed, and only the recovered
-							// paths earn authorship.
-							keys:
-								recovery.verdict === "recovered"
-									? recovery.paths.filter((p) =>
-											isRecordableProjectPath(p, root),
-										)
-									: [],
+							keys,
+							credited: recovery.namedCredited ?? [],
 							excluded: recovery.excludedIncomingCount ?? 0,
 							unknownPairs: recovery.unknownStatusCount ?? 0,
 						};
@@ -2893,6 +2907,7 @@ export async function handleToolResult(
 							root,
 							verdict: "observed",
 							keys: diffFileContent(pending.stats, outcome.snapshot),
+							credited: [],
 							excluded: 0,
 							unknownPairs: 0,
 						};
@@ -2944,6 +2959,20 @@ export async function handleToolResult(
 			opaquePaths = recoveryScopes.roots.flatMap((root) => [
 				...(recoveredByRoot.get(root) ?? []),
 			]);
+			// #5552: a file a named directory credited (`rsync` into a tree, `tar
+			// x`) is the command's own write, as `cp` into a named file is: it joins
+			// the recognized set, so it is authored and the opaque half below
+			// subtracts it. Only a path clean before the command is credited.
+			const recognizedKeys = new Set(
+				recognizedWritten.map((p) => normalizeMapKey(realpathOrResolve(p))),
+			);
+			for (const outcome of outcomes)
+				if (outcome.verdict === "observed")
+					for (const key of outcome.credited)
+						if (!recognizedKeys.has(key)) {
+							recognizedKeys.add(key);
+							recognizedWritten.push(key);
+						}
 			// A file the extractor already recognized must not be dispatched twice
 			// through the opaque half: recovery's `git status` names it too. The
 			// OBSERVATION keeps it (`recoveredByRoot`), because that is the evidence
