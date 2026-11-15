@@ -116,13 +116,20 @@ export function createRealSpawnLedger(): RealSpawnLedger {
 	};
 }
 
-/** The command a spawn names: `argv[0]` of a spawn/spawnSync/exec/execFile/
- *  fork call, empty when the argument is not a string (a URL or an options
- *  object first is rare, and the count, not the name, carries the judgment). */
-function commandOf(args: unknown[]): string {
+/** The command a spawn names: the basename of `argv[0]` of a
+ *  spawn/spawnSync/execFile/fork call, or of the first word of an `exec`
+ *  shell line (`getconf CLK_TCK` names `getconf`: a route is `entry:command`
+ *  and holds no space). Empty-ish when the argument is not a string (a URL or an
+ *  options object first is rare, and the count, not the name, carries the
+ *  judgment). */
+function commandOf(entry: RealSpawnEntryPoint, args: unknown[]): string {
 	const first = args[0];
-	if (typeof first === "string") return first.split(/[\\/]/).pop() ?? first;
-	return "<non-string>";
+	if (typeof first !== "string") return "<non-string>";
+	const word =
+		entry === "exec" || entry === "execSync"
+			? (first.trim().split(/\s+/)[0] ?? first)
+			: first;
+	return word.split(/[\\/]/).pop() ?? word;
 }
 
 /**
@@ -334,7 +341,7 @@ export function installRealSpawnObserver(
 		ledger.total += 1;
 		ledger.calls.set(entry, (ledger.calls.get(entry) ?? 0) + 1);
 		if (ledger.commands.length < MAX_RECORDED_COMMANDS) {
-			const command = `${entry}:${commandOf(args)}`;
+			const command = `${entry}:${commandOf(entry, args)}`;
 			if (!ledger.commands.includes(command)) ledger.commands.push(command);
 		} else {
 			ledger.droppedCommands += 1;
@@ -342,7 +349,11 @@ export function installRealSpawnObserver(
 		const { frames, owner } = callerFrames(MAX_RECORDED_FRAMES);
 		const cls = owner === "none" ? "other" : owner;
 		ledger.byClass.set(cls, (ledger.byClass.get(cls) ?? 0) + 1);
-		const call: RealSpawnCall = { entry, command: commandOf(args), frames };
+		const call: RealSpawnCall = {
+			entry,
+			command: commandOf(entry, args),
+			frames,
+		};
 		if (ledger.samples.length < MAX_RECORDED_COMMANDS)
 			ledger.samples.push(call);
 		if (

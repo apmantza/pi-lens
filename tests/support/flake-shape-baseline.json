@@ -207,7 +207,7 @@
 		"support/git-fixture-env.test.ts": 9,
 		"support/path-probe-stub.test.ts": 3,
 		"support/pi-mock.test.ts": 2,
-		"support/real-spawn-observer.test.ts": 4,
+		"support/real-spawn-observer.test.ts": 6,
 		"support/tests-tree-write-guard-race.test.ts": 1,
 		"support/tmp-root-teardown.test.ts": 2,
 		"support/vitest-setup-registry-teardown.test.ts": 2,

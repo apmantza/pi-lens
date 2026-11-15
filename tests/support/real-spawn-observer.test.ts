@@ -184,6 +184,18 @@ describe("installRealSpawnObserver", () => {
 		expect(target.spawnSync).toBeUndefined();
 	});
 
+	// #5100 r3: the memory sampler's `exec("getconf CLK_TCK")` was recorded as
+	// `exec:getconf CLK_TCK`, which no `entry:command` route can hold.
+	it("names an exec shell line by its first word", () => {
+		const { target } = makeTarget();
+		const ledger = createRealSpawnLedger();
+		installRealSpawnObserver(target, ledger);
+		const exec = target.exec as (this: unknown, ...a: unknown[]) => unknown;
+		exec.call(target, "getconf CLK_TCK");
+		exec.call(target, "/usr/bin/git -C /a/b status");
+		expect(ledger.commands).toEqual(["exec:getconf", "exec:git"]);
+	});
+
 	it("records the entry point, the basename of the command, and the dropped count", () => {
 		const { target } = makeTarget();
 		const ledger = createRealSpawnLedger();
