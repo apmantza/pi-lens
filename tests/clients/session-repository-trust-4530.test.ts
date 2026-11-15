@@ -1014,11 +1014,16 @@ describe.skipIf(!POSIX)("package-manager global lookups (#4530)", () => {
 			cleanups.push(withEnv({ PNPM_HOME: "${HOME}/Library/pnpm" }));
 			setProjectTrustState(trust);
 
-			await allAvailableGlobalBinDirs();
+			const dirs = await allAvailableGlobalBinDirs();
 
 			expect(fs.existsSync(path.join(layout.main, "${HOME}"))).toBe(false);
 			expect(readLog(log)).toEqual([layout.home]);
 			if (pm === "pnpm") {
+				// #5632 review F1: the answer is relative, so it resolves against the
+				// query cwd (HOME), the dir the side effect landed in, not the session.
+				expect(dirs).toEqual([
+					path.join(layout.home, "${HOME}", "Library", "pnpm", "bin"),
+				]);
 				// The probe still runs; its side effect lands in the pinned HOME.
 				expect(
 					fs.existsSync(

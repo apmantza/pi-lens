@@ -467,7 +467,9 @@ export async function allAvailableGlobalBinDirs(
 	for (const pm of PREFERENCE) {
 		if (!(await isAvailable(pm, onTransient))) continue;
 		for (const dir of await globalBinDirsFor(pm)) {
-			const normalized = path.resolve(dir);
+			// #5632 F1: a relative answer resolves against HOME, the cwd the query
+			// ran from, not against the session cwd.
+			const normalized = path.resolve(os.homedir(), dir);
 			if (seen.has(normalized)) continue;
 			seen.add(normalized);
 			dirs.push(normalized);
