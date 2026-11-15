@@ -252,11 +252,19 @@ describe("mutation bridge bookkeeping", () => {
 				"/project/a.ts",
 				"/project/b.ts",
 			]);
-			expect(runtime.takeCallWrites(readerKey ?? "")).toEqual([
+			// One normalisation at the store's boundary: either spelling of the
+			// id reads and claims the same set, so a reader that holds the raw
+			// id cannot reopen the split.
+			expect(runtime.peekCallWrites(rawId)).toEqual([
+				"/project/a.ts",
+				"/project/b.ts",
+			]);
+			expect(runtime.takeCallWrites(rawId)).toEqual([
 				"/project/a.ts",
 				"/project/b.ts",
 			]);
 			expect(runtime.takeCallWrites(readerKey ?? "")).toEqual([]);
+			expect(runtime.peekCallWrites(rawId)).toEqual([]);
 		},
 	);
 

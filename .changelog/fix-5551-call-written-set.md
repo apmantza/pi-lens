@@ -1,6 +1,7 @@
 ---
 section: Changed
-audience: internal
+audience: user
+area: blockers
 ---
 
-- The `tool_result` handler learns which files a call wrote from the mutation bridge's per-call written set (`RuntimeCoordinator.takeCallWrites`) instead of a `details.appliedFiles` list admitted by tool name; the pre-edit seed takes its "before" bytes from one supplier per route, and the WRITERS table gains a `deferred-queue` column and the staged-delta gate cells. (refs #5551)
+- **A `lens_diagnostic_mark` suppress now dispatches the file it wrote.** The files a call wrote through the mutation bridge, such as an `ast_grep_replace` or an `lsp_navigation` rename, reach the dispatcher and the commit gate whatever the tool is named, and under any host call id, including OpenAI Responses ids that contain a pipe or pass 64 characters. (refs #5551)
