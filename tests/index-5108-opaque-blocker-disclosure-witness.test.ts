@@ -163,8 +163,8 @@ import {
 
 const fixture = piSessionFixture();
 
-function git(args: string[], cwd: string): void {
-	execFileSync("git", args, { cwd, encoding: "utf8" });
+function git(args: string[], cwd: string): string {
+	return execFileSync("git", args, { cwd, encoding: "utf8" });
 }
 
 /**
@@ -1288,14 +1288,7 @@ describe("#5616: a script write the call is credited with", () => {
 				expect(runners.split(",")).toContain("biome-check-json");
 			// The copy outlives no run: git sees no pi-lens-seed- file.
 			expect(
-				execFileSync(
-					"git",
-					["status", "--porcelain", "--untracked-files=all"],
-					{
-						cwd: repo,
-						encoding: "utf8",
-					},
-				),
+				git(["status", "--porcelain", "--untracked-files=all"], repo),
 			).not.toContain("pi-lens-seed-");
 			expect(handle.errors).toEqual([]);
 			await handle.dispose();
