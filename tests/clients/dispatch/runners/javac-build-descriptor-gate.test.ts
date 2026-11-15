@@ -121,6 +121,31 @@ describe("javac build-descriptor gate (#1877)", () => {
 		}
 	});
 
+	it("ignores a descriptor above the project when the project root does not contain cwd (#5631)", async () => {
+		// Recurrence: #5631 F3. javac asked the config seam with
+		// `ctx.projectRoot ?? ctx.cwd`, so a project root that did not contain the
+		// file's cwd moved the ceiling out of the project, and a pom.xml above the
+		// project marked it as a Maven project. The same question asked through
+		// `configCeiling` stops at the cwd here.
+		const env = setupTestEnvironment("pi-lens-javac-gate-noncontain-");
+		try {
+			const project = path.join(env.tmpDir, "work", "app");
+			const filePath = path.join(project, "src", "App.java");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, "class App {}\n");
+			fs.writeFileSync(path.join(env.tmpDir, "pom.xml"), "<project />\n");
+			const elsewhere = path.join(env.tmpDir, "elsewhere");
+			fs.mkdirSync(elsewhere, { recursive: true });
+
+			const result = await runJavac(filePath, project, elsewhere);
+
+			expect(result.status).not.toBe("skipped");
+			expect(safeSpawn).toHaveBeenCalledTimes(1);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("still compiles standalone files with no build descriptor", async () => {
 		const env = setupTestEnvironment("pi-lens-javac-gate-standalone-");
 		try {

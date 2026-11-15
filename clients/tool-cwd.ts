@@ -284,15 +284,15 @@ function configAnchorOf(
 }
 
 /**
- * Where the config climb stops (#5631). `ctx.cwd` is the file's language root,
- * so a root config above a nested package sits outside it; the session's root
- * is `ctx.projectRoot`. A project root that does not contain `cwd` says nothing
- * about this file's session, so the ceiling stays at `cwd`.
+ * Where the config climb stops (#5631). `cwd` is the file's language root, so a
+ * root config above a nested package sits outside it; the session's root is
+ * `projectRoot`. A project root that does not contain `cwd` says nothing about
+ * this file's session, so the ceiling stays at `cwd`. One rule for every config
+ * climb that bounds by the session (oxlint, ESLint, javac).
  */
-function configCeiling(ctx: ToolCwdContext, dispatchRoot: string): string {
-	const { projectRoot } = ctx;
-	if (!projectRoot) return dispatchRoot;
-	return isUnderDir(dispatchRoot, projectRoot) ? projectRoot : dispatchRoot;
+export function configCeiling(cwd: string, projectRoot?: string): string {
+	if (!projectRoot) return cwd;
+	return isUnderDir(cwd, projectRoot) ? projectRoot : cwd;
 }
 
 /** Resolve every child process cwd/root through one bounded, synchronous seam. */
@@ -343,7 +343,7 @@ export function resolveToolCwd(
 				? configAnchorOf(tool, markerRoot, {
 						homeDir,
 						...(insideDispatch
-							? { ceiling: configCeiling(ctx, dispatchRoot) }
+							? { ceiling: configCeiling(dispatchRoot, ctx.projectRoot) }
 							: {}),
 					})
 				: undefined;
