@@ -545,7 +545,7 @@ describe("touchFile capability-aware AGGREGATE wait (#814)", () => {
 			// Stamped by the settlement observer below, and only a resolved settlement
 			// reaches the elapsed assertion (a rejection throws at `await touch`), so the
 			// initial value never reaches a comparison.
-			let finishedAt = startedAt;
+			let finishedAt: number | undefined;
 			// Recorded on EITHER side of the settlement, so a rejection leaves the pump
 			// immediately (and carries an observer) instead of spinning the whole real
 			// budget and surfacing a pump-timeout message over the rejection reason.
@@ -593,7 +593,7 @@ describe("touchFile capability-aware AGGREGATE wait (#814)", () => {
 				);
 			}
 			const result = await touch;
-			const elapsedMs = finishedAt - startedAt;
+			const elapsedMs = (finishedAt ?? Number.NaN) - startedAt;
 
 			expect(Array.isArray(result?.diags)).toBe(true);
 			expect(result?.diags).toHaveLength(0);
