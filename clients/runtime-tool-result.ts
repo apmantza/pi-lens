@@ -3954,10 +3954,26 @@ export async function handleToolResult(
 	// `observedChangedPaths` name that seam, not a provenance). Claimed after
 	// the settle, whose own replays land in the set too, so it never outlives
 	// its call; their files are already in the settle's changed paths.
+	//
+	// #5551 r1b: the set is the HOST call's. The opaque recovery above
+	// re-enters this handler once per file under the same call id (the
+	// synthetic event spreads this one), so a re-entry that claimed it sent
+	// the first recovered path's dispatch to the call's recorded file and the
+	// path it was for went undispatched. A tool with an opaque baseline
+	// (`opaqueNonBash`) has every file it changed in that recovery already,
+	// recorded or not: its set is claimed, so it never outlives the call, and
+	// takes no observed return that would skip the recovery's disclosure.
 	const callWrites =
-		toolCallId !== undefined ? runtime.takeCallWrites(toolCallId) : [];
-	observedReplayed += callWrites.length;
-	observedChangedPaths = [...new Set([...observedChangedPaths, ...callWrites])];
+		toolCallId !== undefined &&
+		event[PI_LENS_SYNTHETIC_MUTATION_FIELD] === undefined
+			? runtime.takeCallWrites(toolCallId)
+			: [];
+	if (!opaqueNonBash) {
+		observedReplayed += callWrites.length;
+		observedChangedPaths = [
+			...new Set([...observedChangedPaths, ...callWrites]),
+		];
+	}
 	// #2464 review round 2 (S5): ONE clock, started above BOTH exits, so
 	// `edit_batch_summary.durationMs` and the `tool_result` latency row measure
 	// the same span whichever provenance a tool takes. The observed path used to
