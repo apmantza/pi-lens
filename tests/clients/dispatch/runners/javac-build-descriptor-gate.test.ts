@@ -41,6 +41,34 @@ async function runJavac(filePath: string, cwd: string, projectRoot?: string) {
 	);
 }
 
+/**
+ * Run javac on the context production builds for a file in a nested module
+ * (`runPipeline`): `cwd` is the module's language root, `projectRoot` the
+ * workspace (#5631).
+ */
+async function runJavacOnDispatchContext(
+	filePath: string,
+	languageRoot: string,
+	workspace: string,
+) {
+	const { createDispatchContext } =
+		await import("../../../../clients/dispatch/dispatcher.js");
+	const { FactStore } =
+		await import("../../../../clients/dispatch/fact-store.js");
+	const runner = (await import("../../../../clients/dispatch/runners/javac.js"))
+		.default;
+	const ctx = createDispatchContext(
+		filePath,
+		languageRoot,
+		{ getFlag: () => undefined } as never,
+		new FactStore(),
+		false,
+		undefined,
+		workspace,
+	);
+	return runner.run(ctx);
+}
+
 describe("javac build-descriptor gate (#1877)", () => {
 	beforeEach(() => {
 		vi.resetModules();
@@ -141,6 +169,64 @@ describe("javac build-descriptor gate (#1877)", () => {
 
 			expect(result.status).not.toBe("skipped");
 			expect(safeSpawn).toHaveBeenCalledTimes(1);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("skips a descriptor at cwd when the project root sits below cwd (#5631)", async () => {
+		// Recurrence: #5631 F3, the other direction of the non-containing pair.
+		// The project root `src` lies below cwd `workspace` and does not contain
+		// it, so the shared ceiling stays at cwd and the pom.xml there marks a
+		// Maven project. The pre-fix javac expression (`projectRoot ?? cwd`) stops
+		// at `src`, misses the pom and spawns javac. The disjoint cell above pins
+		// the opposite direction.
+		const env = setupTestEnvironment("pi-lens-javac-gate-belowcwd-");
+		try {
+			const filePath = path.join(env.tmpDir, "src", "App.java");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, "class App {}\n");
+			fs.writeFileSync(path.join(env.tmpDir, "pom.xml"), "<project />\n");
+
+			const result = await runJavac(
+				filePath,
+				env.tmpDir,
+				path.join(env.tmpDir, "src"),
+			);
+
+			expect(result.status).toBe("skipped");
+			expect(result.diagnostics).toEqual([]);
+			expect(safeSpawn).not.toHaveBeenCalled();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("skips an Eclipse module under a Maven workspace on the dispatch context (#5631)", async () => {
+		// Recurrence: #5631 F3 on the production shape. `runPipeline` hands javac
+		// `cwd` = the module's language root (its `.classpath`) and `projectRoot` =
+		// the workspace, whose pom.xml marks the Maven project. A ceiling of
+		// `ctx.cwd` (the module) stops the walk below the pom and runs javac on a
+		// Maven project. This cell reds under that mutation.
+		const env = setupTestEnvironment("pi-lens-javac-gate-eclipse-");
+		try {
+			const workspace = env.tmpDir;
+			const moduleDir = path.join(workspace, "module");
+			const filePath = path.join(moduleDir, "src", "App.java");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, "class App {}\n");
+			fs.writeFileSync(path.join(moduleDir, ".classpath"), "<classpath />\n");
+			fs.writeFileSync(path.join(workspace, "pom.xml"), "<project />\n");
+
+			const result = await runJavacOnDispatchContext(
+				filePath,
+				moduleDir,
+				workspace,
+			);
+
+			expect(result.status).toBe("skipped");
+			expect(result.diagnostics).toEqual([]);
+			expect(safeSpawn).not.toHaveBeenCalled();
 		} finally {
 			env.cleanup();
 		}
