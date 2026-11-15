@@ -99,7 +99,7 @@ async function verdictFor(target: string, probe: Probe) {
 }
 
 describe("ci-verdict gate view (#5629)", () => {
-	it("is not green when the head's check-runs hold every required name but the PR rollup lists only CodeRabbit and SonarCloud", async () => {
+	it("is not green when the PR rollup lists none of the required names", async () => {
 		const result = await verdictFor("5623", { rollup: ROLLUP });
 		expect(result.code).toBe(EXIT_PENDING);
 		expect(result.kind).toBe("pending");
@@ -145,7 +145,7 @@ describe("ci-verdict gate view (#5629)", () => {
 		);
 	});
 
-	it("fails, naming the check, when the rollup shows a required name red though the head's newest check-run is green", async () => {
+	it("fails when the rollup shows a required name red", async () => {
 		const rollup = allRequiredGreen().map((entry) =>
 			entry.name === "Unit tests"
 				? gateRow("Unit tests", "COMPLETED", "FAILURE")
