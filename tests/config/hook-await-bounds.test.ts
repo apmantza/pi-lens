@@ -1174,7 +1174,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 				"budget many times over.",
 			owner: "#2523 slice 2",
 		},
-	"clients/runtime-tool-call.ts#captureOpaqueBaseline:1b678fc6~6558e937": {
+	"clients/runtime-tool-call.ts#captureOpaqueBaseline:1b678fc6~ea7b1937": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
 		reason:
@@ -2376,7 +2376,10 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// call under bounded(); the staged read's only hook caller, the commit gate's
 	// `gateStagedDelta`, holds the whole read under bounded() with ctx.signal, so
 	// a second bound here would add a timer for the same deadline.
-	"clients/dispatch/integration.ts": 24,
+	// 24 -> 25 (#5616): the capture awaits `before`, a credited script write's
+	// HEAD copy (one `git show` under its own leaf bound); its hook caller
+	// passes the capture's signal into it, under the same bounded() capture.
+	"clients/dispatch/integration.ts": 25,
 	// 2 → 3 (#4484 review F5): `settlePendingRunnerFindingsForTests` awaits
 	// the store's runs so a test joins a collect-later settle without polling.
 	// Only tests call it; no hook handler reaches it.
@@ -2426,7 +2429,10 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// parse) and two leaf-bounded `git` spawns (GIT_TIMEOUT_MS); its hook
 	// caller holds the whole delta under bounded() with the hook's signal, so
 	// a second bound here would add a timer for the same deadline.
-	"clients/metrics/complexity-baseline.ts": 9,
+	// #5616: 9 -> 10. The default-branch read's `git show` moved into
+	// `readFileAtRef`, which `readAtDefaultBranch` awaits; same spawn, same
+	// leaf bound, one more frame.
+	"clients/metrics/complexity-baseline.ts": 10,
 	// #4238 R8: the shutdown drain is intentionally owned by the shared NDJSON
 	// writer registry. Its per-writer awaits cannot receive pi's hook signal;
 	// the caller applies the session_shutdown wall bound around the whole drain.
@@ -3156,6 +3162,19 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, BoundedSite>> = {
 			"absent only in a bare unit harness. PI_LENS_LSP_SYNC_BUDGET_MS is the " +
 			"bound that is always live.",
 	},
+	"call:clients/pre-edit-capture.ts#captureWriterSeeds:2b57f8b9~21fd9eae": {
+		work: "threaded",
+		signal:
+			"The pre-edit linter capture (#4483, #5553) takes the thunk's signal into " +
+			"`capturePreEditLinterFindings`, which runs its linter spawns under it; that signal aborts on the " +
+			"hook's signal (`deps.signal`: the tool_call's ctx.signal, or #5616's credited-seed bound at " +
+			"tool_result; absent only in a harness) or when the bound fires. " +
+			"#2523 gives tool_call no budget of its own, so each capture carries " +
+			"PRE_EDIT_CAPTURE_BUDGET_MS (500 ms) or, for a writer that names no edit span, " +
+			"PRE_EDIT_SPANLESS_CAPTURE_BUDGET_MS (1500 ms), both measured in the PR; " +
+			"that wall bound is always live, and a capture it abandons installs nothing " +
+			"once the writer has written.",
+	},
 	"call:clients/project-trust.ts#readAdoptedProjectTrust:8d9498e9~136c8ea4": {
 		work: "pure-read",
 		signal:
@@ -3200,18 +3219,6 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, BoundedSite>> = {
 				"wall budget and its timer is armed first, so the inner arm ends the wait " +
 				"and owns the recovery (the deferred reseed and the #1785 hydration).",
 		},
-	"call:clients/runtime-tool-call.ts#captureWriterSeeds:2dc2d1e2~efa038c8": {
-		work: "threaded",
-		signal:
-			"The pre-edit linter capture (#4483, #5553) takes the thunk's signal into " +
-			"`capturePreEditLinterFindings`, which runs its linter spawns under it; that signal aborts on the " +
-			"tool_call's ctx.signal (absent only in a harness) or when the bound fires. " +
-			"#2523 gives tool_call no budget of its own, so each capture carries " +
-			"PRE_EDIT_CAPTURE_BUDGET_MS (500 ms) or, for a writer that names no edit span, " +
-			"PRE_EDIT_SPANLESS_CAPTURE_BUDGET_MS (1500 ms), both measured in the PR; " +
-			"that wall bound is always live, and a capture it abandons installs nothing " +
-			"once the writer has written.",
-	},
 	"call:clients/runtime-tool-call.ts#handleToolCallImpl:2dc2d1e2~37e44a1d": {
 		work: "threaded",
 		signal:
@@ -3273,6 +3280,15 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, BoundedSite>> = {
 		signal:
 			"Each observed changed-file analysis uses ToolResultDeps.signal and the " +
 			"edit budget; the local alias keeps this call site distinct for the sweep.",
+	},
+	"call:clients/runtime-tool-result.ts#handleToolResult:963700a0~b4f8a98d": {
+		work: "threaded",
+		signal:
+			"#5616: the credited script write's HEAD-copy seed. The thunk's signal goes to " +
+			"`captureWriterSeeds`, whose per-file captures (and their `git show`) run under it; it " +
+			"aborts on the tool_result's own signal (`deps.signal`, absent only in a harness) or " +
+			"when HOOK_WALL_BUDGET_MS.tool_result_edit lapses. Each file's capture also carries " +
+			"PRE_EDIT_SPANLESS_CAPTURE_BUDGET_MS, so the wall bound is always live.",
 	},
 	"call:clients/runtime-tool-result.ts#handleToolResult:b9faf573~b4f8a98d": {
 		work: "outlives:delivery.abandoned late tail (the classified pipeline publishes when it settles, #5165)",

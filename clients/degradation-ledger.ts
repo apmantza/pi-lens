@@ -1993,6 +1993,14 @@ export type DegradationKind =
 	 */
 	| "scan-worktree-exclusion-skipped"
 	/**
+	 * `script-write-credit-withheld`: A file a bash call changed without naming it (a script's
+	 * write, #5616) was not credited to the call, so its blockers went out as
+	 * the withheld line, not a STOP. Subject: `<cause>:<normalized root>`, the
+	 * cause one of `dirty-before`, `other-writer`, `dirty-set-cut`,
+	 * `no-dirty-set` or `failed-command`; once per session each.
+	 */
+	| "script-write-credit-withheld"
+	/**
 	 * `security-scan-report-failed`: A report-file security scanner (gitleaks, trivy) could not produce a result:
 	 * its CLI failed to spawn, exited non-zero without writing its report, or
 	 * the scan threw. Subject is the tool; counted, with the latest message kept.

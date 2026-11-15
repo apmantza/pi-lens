@@ -321,7 +321,8 @@ export const WRITERS: readonly WriterRoute[] = [
 			symbol: "recoverOpaqueChangesViaGit",
 		},
 		names: "a command that names no path (node -e)",
-		writes: "whatever the script writes",
+		writes:
+			"whatever the script writes over a file that was dirty before the call, that another writer pi-lens recorded touched in its window, or after a failed call or a cut dirty set (#5616)",
 		authorship: "none",
 		attribution: "disk-recovery",
 		recorders: ["tool-result"],
@@ -334,6 +335,41 @@ export const WRITERS: readonly WriterRoute[] = [
 			"fix-run-capture": unprobed(FIX_RUN_UNPROBED),
 			"lsp-documents": reaches("bash-opaque: didChange and external resync"),
 			"read-guard": silent("bash-opaque: written=[]", UNAUTHORED),
+			"word-index": unprobed(WORD_INDEX_UNPROBED),
+		},
+	},
+	{
+		id: "bash-script-credited",
+		anchor: {
+			file: "clients/opaque-mutation-scan.ts",
+			symbol: "recoverOpaqueChangesViaGit",
+		},
+		names: "a successful command that names no path (node -e, python3 f.py)",
+		writes:
+			"a file clean before the call (or absent), changed in its window, that no other writer pi-lens recorded touched (#5616)",
+		// No pre-write check covered the bytes, so the read guard keeps them
+		// UNKNOWN; the credit moves the blocker channel and the gate only, and
+		// pi-lens's format and autofix leave the bytes alone (review F10).
+		authorship: "unknown",
+		attribution: "disk-recovery",
+		recorders: ["tool-result"],
+		cells: {
+			dispatch: reaches("[credits a node script that creates a new file]"),
+			"inline-stop": reaches("[credits a node script that creates a new file]"),
+			"change-log": unprobed(
+				"settle: read the change log after #5616's credited witness; the row keeps the opaque-script label",
+			),
+			"commit-gate": reaches("[credits a node script that creates a new file]"),
+			"pre-edit-baseline": reaches(
+				"[judges a credited script write against the file's HEAD copy: old blockers stay quiet, a new one stops]",
+			),
+			"fix-run-capture": unprobed(FIX_RUN_UNPROBED),
+			"lsp-documents": unprobed(
+				"settle: the wire trace after #5616's credited witness; the publish is bash-opaque's",
+			),
+			"read-guard": unprobed(
+				"settle: the authorship sidecar after #5616's credited witness; the bytes stay UNKNOWN by design",
+			),
 			"word-index": unprobed(WORD_INDEX_UNPROBED),
 		},
 	},

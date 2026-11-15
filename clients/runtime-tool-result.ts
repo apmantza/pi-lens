@@ -25,8 +25,10 @@ import {
 	readSameHeadDiscards,
 	recordGuessedWriteScope,
 	recordOpaqueCaptureRefused,
+	recordScriptCreditWithheld,
 	recoverOpaqueChangesViaGit,
 	resolveOpaqueRecoveryRoots,
+	type ScriptCreditVerdicts,
 	serializeHeadLook,
 	shouldRunOpaqueRecovery,
 	takeHeadDiscards,
@@ -124,7 +126,11 @@ import {
 	notifyExternalFileChange,
 	peekLSPService,
 } from "./lsp/capabilities.js";
-import { type PipelineResult, runPipeline } from "./pipeline.js";
+import {
+	type PipelineResult,
+	runPipeline,
+	type WithheldEvidence,
+} from "./pipeline.js";
 import {
 	type AuthoritativeAttachmentDecision,
 	renderPostAutofixNotice,
@@ -183,8 +189,11 @@ import {
 } from "./dispatch/rule-policy.js";
 import {
 	adviseOnEdit,
+	readFileAtRef,
 	type Thresholds,
 } from "./metrics/complexity-baseline.js";
+import { captureWriterSeeds } from "./pre-edit-capture.js";
+import type { PreEditBytes } from "./dispatch/pre-edit-seed.js";
 import { isComplexitySupportedFile } from "./tree-sitter-shared.js";
 import {
 	incrementDegradationCount,
@@ -765,10 +774,21 @@ interface ToolResultDeps {
 	_attachmentBudget?: { remaining: number };
 	/** Internal test seam for making missing observation evidence reachable. */
 	_opaqueCaptureOptions?: Pick<CaptureOptions, "forcedUnknownReason">;
-	/** Internal: synthetic dispatch inherits the parent's read-guard evidence. */
+	/**
+	 * Internal: synthetic dispatch inherits the parent's read-guard evidence.
+	 * #5616: the same verdict says the bytes are the agent's, not only their
+	 * blockers, so it also gates pi-lens's own writers (format, autofix and
+	 * their agent_end queues). A credited script write sets it false.
+	 */
 	_readGuardAuthorship?: boolean;
 	/** Internal: synthetic dispatch inherits the parent's ownership decision. */
 	_allowAutonomousWriters?: boolean;
+	/**
+	 * Internal (#5616): for an uncredited synthetic write, what the parent knows
+	 * of it. `changed`: recovery saw the file change in the call's window.
+	 * `named`: the command names it, and no observation confirmed a change.
+	 */
+	_withheldEvidence?: WithheldEvidence;
 	/** Internal (#3568): synthetic dispatch inherits the parent's session. */
 	_sessionGeneration?: LineageHandle;
 	/** Internal (#3525): the debounce re-entry keeps its call's stamp decision. */
@@ -1641,10 +1661,21 @@ async function dispatchPipelineAnalysis(args: {
 	 */
 	nativeAppliedPairs: Array<{ oldText: string; newText: string | undefined }>;
 	// The original bash result can reach this helper without authorship
-	// evidence; synthetic opaque writes deliberately set this false. This same
-	// identity gates read-guard credit and all autonomous writer/instruction
-	// surfaces (#3226).
+	// evidence; synthetic opaque writes deliberately set this false. This
+	// identity gates all autonomous writer/instruction surfaces (#3226), and
+	// read-guard credit and pi-lens's writers unless `bytesAuthored` says
+	// otherwise.
 	allowAutonomousWriters: boolean;
+	/**
+	 * #5616: whether the authorship covers the bytes, not only their blockers:
+	 * the post-pipeline read-guard stamp and the pipeline's format and autofix
+	 * follow it. A script write credited for its blockers keeps its bytes
+	 * UNKNOWN to the read guard and unformatted, as no pre-write check covered
+	 * them. Omitted: `allowAutonomousWriters`.
+	 */
+	bytesAuthored?: boolean;
+	/** #5616: what the withheld line may say pi-lens knows of an uncredited write. */
+	withheldEvidence?: WithheldEvidence;
 	/**
 	 * #3512: the session this dispatch belongs to, captured by the caller
 	 * at handler entry (#3568), before its first await. The deferred cascade's tier-3
@@ -1689,6 +1720,8 @@ async function dispatchPipelineAnalysis(args: {
 		toolResultStart,
 		nativeAppliedPairs,
 		allowAutonomousWriters,
+		bytesAuthored = allowAutonomousWriters,
+		withheldEvidence,
 		sessionGeneration,
 		ownFileTimeStamp = true,
 		preserveNativeAuthorship = false,
@@ -1722,6 +1755,8 @@ async function dispatchPipelineAnalysis(args: {
 			toolName: event.toolName,
 			autofixMode,
 			allowAutonomousWriters,
+			bytesAuthored,
+			...(withheldEvidence !== undefined && { withheldEvidence }),
 			modifiedRanges,
 			// #4484 r2: read when the dispatch returns, so a collect-later answer
 			// absorbed meanwhile is part of what the run carries forward.
@@ -2014,7 +2049,7 @@ async function dispatchPipelineAnalysis(args: {
 	// The model's write/edit and pi-lens' own immediate format/autofix are now
 	// reflected on disk. Refresh read-guard staleness stamps so a follow-up edit
 	// is judged by read-range coverage, not by our own previous write.
-	if (!getFlag("no-read-guard") && allowAutonomousWriters) {
+	if (!getFlag("no-read-guard") && bytesAuthored) {
 		const ownPath = path.resolve(filePath);
 		const changedForReadGuard = new Set([
 			ownPath,
@@ -2249,6 +2284,25 @@ function complexityThresholdsFor(
 			DEFAULT_HIGH_COMPLEXITY_THRESHOLD,
 		nesting: DEFAULT_HIGH_COMPLEXITY_DEPTH_THRESHOLD,
 	};
+}
+
+/**
+ * #5616: a credited script write's file as HEAD holds it. The call is
+ * credited only with a file that was clean before it, so these are the bytes
+ * the file held then; `absent` for a file the call created.
+ */
+function readHeadCopy(
+	filePath: string,
+	signal?: AbortSignal,
+): Promise<PreEditBytes> {
+	return readFileAtRef(filePath, "HEAD", "pre-edit-head-seed", signal).then(
+		(read) =>
+			read.kind === "file"
+				? { content: read.content }
+				: read.kind === "absent"
+					? "absent"
+					: "unreadable",
+	);
 }
 
 /**
@@ -2776,6 +2830,10 @@ export async function handleToolResult(
 		/** Each root's own surviving recovery: what git reported AND we claim. */
 		const recoveredByRoot = new Map<string, Set<string>>();
 		let recognizedAuthored: string[] = [];
+		// #5616: the opaque paths this call is credited with (clean before, changed
+		// in its window, no other observed writer): authored for the blocker
+		// channel and the commit gate, still UNKNOWN to the read guard.
+		const scriptCredited = new Set<string>();
 		// #4502: the pre-command dirty set, taken from this call's own baseline
 		// and compared with the post-command status below. Held here (not inside
 		// the recovery block) because the head look after it is what publishes it.
@@ -2797,6 +2855,8 @@ export async function handleToolResult(
 					keys: string[];
 					/** Recovered keys a named file or directory credited (#5552). */
 					credited: string[];
+					/** #5616: the unnamed recovered keys, credited or not and why. */
+					script?: ScriptCreditVerdicts;
 					excluded: number;
 					unknownPairs: number;
 			  }
@@ -2824,6 +2884,11 @@ export async function handleToolResult(
 			// empty array that the tree was clean. Only the second says "no discard".
 			dirtyBefore = baselines.find((entry) => entry.root === scanRoot)?.pending
 				?.dirtyPaths;
+			// #5616: only the agent's own successful bash call is credited with a
+			// file it changed without naming it. Another tool's writes (#4732) and
+			// a failed command's stay uncredited.
+			const scriptCreditable =
+				bashCommand !== undefined && event.isError !== true;
 			// #5552: a scope the scan could not read (`"$D"`) is the working
 			// directory, and what it credits rests on that guess. A failed command
 			// credits no scope, so it has nothing to say.
@@ -2864,6 +2929,16 @@ export async function handleToolResult(
 									command,
 									event.isError,
 								),
+								// #5616: a successful bash call may be credited with what it
+								// changed without naming it; a write pi-lens recorded since the
+								// call's baseline is another observed writer's. Read after the
+								// status read, so a write recorded during it counts (F6).
+								...(scriptCreditable && {
+									scriptCredit: {
+										observedWriters: () =>
+											new Set(runtime.getFilesChangedSince(pending.projectSeq)),
+									},
+								}),
 							},
 						);
 						if (recovery.verdict === "unknown")
@@ -2885,6 +2960,7 @@ export async function handleToolResult(
 							verdict: "observed",
 							keys,
 							credited: recovery.namedCredited ?? [],
+							...(recovery.scriptCredit && { script: recovery.scriptCredit }),
 							excluded: recovery.excludedIncomingCount ?? 0,
 							unknownPairs: recovery.unknownStatusCount ?? 0,
 						};
@@ -2903,11 +2979,23 @@ export async function handleToolResult(
 									pending.statsUnknownReason ??
 									"walk-failed",
 							};
+						const keys = diffFileContent(pending.stats, outcome.snapshot);
 						return {
 							root,
 							verdict: "observed",
-							keys: diffFileContent(pending.stats, outcome.snapshot),
+							keys,
 							credited: [],
+							// #5616: a checkout with no git holds no dirty set, so nothing
+							// it recovers can be shown clean before the call.
+							...(scriptCreditable && {
+								script: {
+									credited: [],
+									withheld: keys.map((key) => ({
+										key,
+										cause: "no-dirty-set" as const,
+									})),
+								},
+							}),
 							excluded: 0,
 							unknownPairs: 0,
 						};
@@ -3005,6 +3093,21 @@ export async function handleToolResult(
 				}
 			}
 			hadOpaqueRecovery = opaquePaths.length > 0;
+			// #5616: each uncredited cause leaves one record per root per session.
+			// A path a write form names is the named route's, even where the scan
+			// judged it (dirty before, no dirty set, a checkout with no git), so a
+			// cause speaks only for a path still opaque here.
+			const opaqueKeys = new Set(opaquePaths);
+			for (const outcome of outcomes) {
+				if (outcome.verdict !== "observed") continue;
+				if (outcome.script) {
+					for (const key of outcome.script.credited) scriptCredited.add(key);
+					for (const { key, cause } of outcome.script.withheld)
+						if (opaqueKeys.has(key))
+							recordScriptCreditWithheld(cause, outcome.root);
+				} else if (bashCommand !== undefined && outcome.keys.length > 0)
+					recordScriptCreditWithheld("failed-command", outcome.root);
+			}
 			if (recoveredByRoot.size > 0 || unknownRoots.size > 0) {
 				// The scan speaks only for the checkout it ran in (#4504 r1, #2050):
 				// a recognized write is judged by ITS OWN root's verdict, so a clean
@@ -3054,13 +3157,20 @@ export async function handleToolResult(
 				// The row's path field names at most five of them.
 				const listed = [...keys];
 				listed.length = Math.min(listed.length, 5);
+				// #5616: the decision record of the credit, beside what it is about.
+				let credited = 0;
+				for (const key of keys) if (scriptCredited.has(key)) credited += 1;
 				logLatency({
 					type: "phase",
 					phase: "opaque_mutation_recovered",
 					filePath: listed.join(","),
 					durationMs: Date.now() - started,
 					result: `changed:${keys.size}`,
-					metadata: { root, roots: recoveryScopes.roots.length },
+					metadata: {
+						root,
+						roots: recoveryScopes.roots.length,
+						...(credited > 0 && { credited }),
+					},
 				});
 			}
 		}
@@ -3318,6 +3428,44 @@ export async function handleToolResult(
 		}
 		const recognizedAuthoredSet = new Set(recognizedAuthored);
 		bashAuthorshipConfirmed = recognizedAuthored.length > 0;
+		// #5616 review F1: a credited script write is judged against what its
+		// file held before the call, as an edit is against its pre-edit seed
+		// (#4483). The file was clean then, so that is its HEAD copy; the seed
+		// is installed before the file's first dispatch below.
+		const creditedWrites: string[] = [];
+		for (const wp of written)
+			if (scriptCredited.has(wp)) creditedWrites.push(wp);
+		// A name of its own: the primary resync above bounds with the same signal.
+		const seedSignal = deps.signal;
+		if (creditedWrites.length > 0) {
+			const unseeded = await bounded(
+				(signal) =>
+					captureWriterSeeds(
+						creditedWrites,
+						{
+							projectRoot: workspaceRoot,
+							session: writeSession,
+							getFlag,
+							signal,
+							hook: "tool_result_edit",
+						},
+						true,
+						readHeadCopy,
+					),
+				{
+					ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
+					signal: seedSignal,
+					hook: "tool_result_edit",
+					label: "credited-script-seed",
+				},
+			);
+			// #5616 F-B: a file whose HEAD copy could not be written beside it has
+			// no seed, so its old blockers would read as new: a false STOP that
+			// shuts the gate. Its credit is withheld, and the withheld line
+			// discloses its blockers as for any uncredited write. A bound that
+			// lapsed names no file, so it withholds nothing.
+			for (const wp of unseeded ?? []) scriptCredited.delete(wp);
+		}
 		for (const wp of written) {
 			// #3525: a parser-recognized bash write is whole-file authorship only
 			// after the tool_call preflight proved no foreign writer intervened.
@@ -3371,6 +3519,10 @@ export async function handleToolResult(
 				_autofixMode: autofixMode,
 				_attachmentBudget: syntheticAttachmentBudget,
 				_mutationSourceOverride: isOpaque ? "opaque-script" : undefined,
+				// #5616: a credited script write is authored for the blocker channel
+				// and the gate, but no pre-write check covered its bytes, so the read
+				// guard keeps them UNKNOWN as before, and pi-lens's format and
+				// autofix (and their agent_end queues) leave them alone.
 				_readGuardAuthorship: recognizedAuthoredSet.has(wp),
 				_pathAlreadyResolved: true,
 				_ownWriteStamp: {
@@ -3379,8 +3531,13 @@ export async function handleToolResult(
 				},
 				// Opaque recovery is mutation evidence only. The synthetic call still
 				// records freshness and runs diagnostics, but it cannot format/autofix
-				// or issue an edit-directed blocker/actionable instruction.
-				_allowAutonomousWriters: recognizedAuthoredSet.has(wp),
+				// or issue an edit-directed blocker/actionable instruction. A call
+				// credited with the write (#5616) gets the instructions, not the writers.
+				_allowAutonomousWriters:
+					recognizedAuthoredSet.has(wp) || scriptCredited.has(wp),
+				// #5616: what the withheld line may say pi-lens knows: a recovered
+				// path changed in this call's window; any other was named by it.
+				_withheldEvidence: isOpaque ? "changed" : "named",
 				_sessionGeneration: writeSession,
 			});
 			if (syntheticResult) {
@@ -4347,7 +4504,11 @@ export async function handleToolResult(
 
 	// Refresh the read-guard's FileTime stamp so that the model's own write
 	// doesn't trigger a spurious "file_modified" block on the next edit.
-	if (bashAuthorshipConfirmed)
+	// #5616: a credited script write is authored for its blockers only; the
+	// read guard and pi-lens's writers follow `_readGuardAuthorship` when the
+	// parent set it.
+	const bytesAuthored = deps._readGuardAuthorship ?? bashAuthorshipConfirmed;
+	if (bytesAuthored)
 		deps.readGuard?.recordWritten(filePath, {
 			authorship:
 				mutation.kind === "write"
@@ -4411,7 +4572,7 @@ export async function handleToolResult(
 	// turn-state worklist, and dispatches nothing; the change-log receipt below
 	// stays, because the edit did land on disk.
 	const entryLive = writeSession.guardedWrite(filePath, () => true) === true;
-	if (!getFlag("no-read-guard") && bashAuthorshipConfirmed) {
+	if (!getFlag("no-read-guard") && bytesAuthored) {
 		// #4942: the session's own guard (`deps.readGuard`), the one the write's
 		// other stamps above use; the coordinator's is another session's.
 		const readGuard = deps.readGuard;
@@ -4614,6 +4775,10 @@ export async function handleToolResult(
 		nativeAppliedPairs,
 		preserveNativeAuthorship: mutation.kind !== "write",
 		allowAutonomousWriters: bashAuthorshipConfirmed,
+		bytesAuthored,
+		...(deps._withheldEvidence !== undefined && {
+			withheldEvidence: deps._withheldEvidence,
+		}),
 		// #3512: one capture for the whole dispatch, the same one the
 		// inline verdict below writes through.
 		sessionGeneration: writeSession,
@@ -4651,7 +4816,7 @@ export async function handleToolResult(
 	if (
 		resultLive &&
 		!result.isError &&
-		bashAuthorshipConfirmed &&
+		bytesAuthored &&
 		mayDefer &&
 		autofixMode === "deferred" &&
 		nodeFs.existsSync(filePath)
@@ -4676,7 +4841,7 @@ export async function handleToolResult(
 	if (
 		resultLive &&
 		!result.isError &&
-		bashAuthorshipConfirmed &&
+		bytesAuthored &&
 		mayDefer &&
 		!getFlag("no-autoformat", filePath) &&
 		(autofixMode === "deferred" || !getFlag("immediate-format")) &&

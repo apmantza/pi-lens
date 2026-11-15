@@ -878,7 +878,7 @@ const ROWS: Readonly<Record<string, Row>> = {
 			sites: 2,
 			pins: [
 				`"git" ["for-each-ref", "--format=%(refname)%09%(symref)", "refs/remotes/origin/HEAD", ...DEFAULT_BRANCH_REFS] {cwd, timeout: GIT_TIMEOUT_MS, ...(signal && {signal}), resourceLabel: "complexity-main"}`,
-				'"git" ["show", `${branch.ref}:./${relative}`] {cwd, timeout: GIT_TIMEOUT_MS, ...(signal && {signal}), maxOutputBytes: MAX_BLOB_BYTES, env: {LC_ALL: "C"}, resourceLabel: "complexity-main"}',
+				'"git" ["show", `${ref}:./${relative}`] {cwd, timeout: GIT_TIMEOUT_MS, ...(signal && {signal}), maxOutputBytes: MAX_BLOB_BYTES, env: {LC_ALL: "C"}, resourceLabel}',
 			],
 		},
 		"clients/opaque-mutation-scan.ts#safeSpawnAsync": {

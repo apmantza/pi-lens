@@ -1300,11 +1300,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	},
 	// 2026-10-31 (#5108): a script-written file's blocker must reach the model
 	// through a real bash tool call, and the abandonment is a real 500 ms wall
-	// bound racing a handler held open past it.
+	// bound racing a handler held open past it. 2026-11-15 (#5616): the credit
+	// cases drive the trigger's own `python3` form, so the file asks the host
+	// once whether `python3` runs.
 	"real-process-spawn:index-5108-opaque-blocker-disclosure-witness.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the subject is what a real bash tool call writes into a real git checkout and what the model receives for it, detected by git's own status; a stubbed shell answers only what it was told",
+			"the subject is what a real bash tool call writes into a real git checkout and what the model receives for it, detected by git's own status; a stubbed shell answers only what it was told, and only the host can say whether python3 runs for the trigger's own python form",
 	},
 	// 2026-11-14 (#5552): the real tool_result and dispatcher must carry
 	// mtime-preserving shell-write bytes onto a real child LSP wire.

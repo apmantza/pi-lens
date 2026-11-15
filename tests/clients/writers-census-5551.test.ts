@@ -393,6 +393,11 @@ const WRITE_SITES: Record<string, SiteRow> = {
 		cls: "no-write",
 		why: 'the string "fs" is a boundary-category label, not a module',
 	},
+	"clients/dispatch/integration.ts": {
+		sites: 2,
+		cls: "scratch",
+		why: "a credited script write's HEAD copy, written beside the file under a pi-lens-seed- name for one seed run and removed when the run ends (#5616)",
+	},
 	"clients/dispatch/rules/error-swallowing.ts": {
 		sites: 1,
 		cls: "no-write",
@@ -785,6 +790,7 @@ describe("the writer table", () => {
 				"bash-recognised",
 				"bash-mtime-preserving",
 				"bash-opaque",
+				"bash-script-credited",
 				"foreign-path-less",
 				"runner-format-autofix",
 			],
@@ -806,13 +812,13 @@ describe("the writer table", () => {
 		expect(unprobed).toEqual({
 			dispatch: 7,
 			"inline-stop": 3,
-			"change-log": 8,
+			"change-log": 9,
 			"commit-gate": 7,
 			"pre-edit-baseline": 13,
-			"fix-run-capture": 14,
-			"lsp-documents": 8,
-			"read-guard": 8,
-			"word-index": 22,
+			"fix-run-capture": 15,
+			"lsp-documents": 9,
+			"read-guard": 9,
+			"word-index": 23,
 		});
 	});
 });
