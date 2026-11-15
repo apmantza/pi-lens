@@ -3,6 +3,13 @@ if [ -n "$PI_LENS_SKIP_HOOKS" ]; then
   exit 0
 fi
 
+# husky's runner (.husky/_/h) prepends a RELATIVE node_modules/.bin to PATH
+# (#5630). A child spawned from another directory resolves that entry against
+# its own cwd: index-5239's ast-grep spawn runs in a test project with no
+# node_modules and fails ENOENT. Put this checkout's bin dir first, absolute,
+# and drop the relative entry husky wrote.
+PATH="$(pwd)/node_modules/.bin:${PATH#node_modules/.bin:}"
+
 # Bounds how long a push waits on the shared machine-wide test-suite lock
 # (#1101, ~10 agents can share one dev machine). A wait that reaches the bound
 # FAILS the push (#3717); pre-push-targeted-tests.mjs owns that decision and the

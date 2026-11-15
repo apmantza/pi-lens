@@ -2008,6 +2008,96 @@ describe(".husky hooks — PI_LENS_SKIP_HOOKS accepts any non-empty value (F8)",
 	);
 });
 
+// #5630 recurrence: husky's runner (`.husky/_/h`) prepends a RELATIVE
+// `node_modules/.bin` to PATH. index-5239's ast-grep spawn runs in a test
+// project with no node_modules, so the relative entry resolved against that cwd
+// and the spawn failed ENOENT, reddening real pushes. The runner's generated
+// copy is gitignored and absent in CI, so these cases write the one PATH line
+// the runner writes, then run the real `.husky/pre-push`. Only the driver it
+// hands off to is a stub: a child that records the PATH it received and spawns
+// `ast-grep` from a directory with no node_modules, as the 5239 case does.
+describe.skipIf(process.platform === "win32")(
+	".husky pre-push — PATH handed to the test run (#5630)",
+	() => {
+		// POSIX shell hook: the Unit tests lane on ubuntu runs it; the Windows leg skips it.
+		const roots: string[] = [];
+
+		afterEach(() => {
+			for (const root of roots.splice(0))
+				fs.rmSync(root, { recursive: true, force: true });
+		});
+
+		const STUB_DRIVER = `import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+const project = path.join(process.cwd(), "project");
+fs.mkdirSync(project, { recursive: true });
+const astGrep = spawnSync("ast-grep", ["--version"], { cwd: project, encoding: "utf8" });
+fs.writeFileSync("probe.json", JSON.stringify({
+	PATH: process.env.PATH,
+	error: astGrep.error ? astGrep.error.code : null,
+	stdout: astGrep.stdout,
+}));
+`;
+
+		function runHook() {
+			const root = fs.realpathSync(
+				fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-prepush-path-")),
+			);
+			roots.push(root);
+			fs.mkdirSync(path.join(root, ".husky"));
+			fs.copyFileSync(
+				path.join(repoRoot, ".husky/pre-push"),
+				path.join(root, ".husky/pre-push"),
+			);
+			fs.mkdirSync(path.join(root, "scripts"));
+			fs.writeFileSync(
+				path.join(root, "scripts/pre-push-targeted-tests.mjs"),
+				STUB_DRIVER,
+			);
+			const bin = path.join(root, "node_modules", ".bin");
+			fs.mkdirSync(bin, { recursive: true });
+			fs.writeFileSync(
+				path.join(bin, "ast-grep"),
+				"#!/bin/sh\necho fixture-ast-grep\n",
+				{ mode: 0o755 },
+			);
+			// Only `node` is reachable beyond the checkout's bin: an ambient
+			// ast-grep (npx puts an absolute node_modules/.bin on PATH) would
+			// mask the relative entry this case exists to catch.
+			const hostBin = path.join(root, "host-bin");
+			fs.mkdirSync(hostBin);
+			fs.symlinkSync(process.execPath, path.join(hostBin, "node"));
+			const result = spawnSync("/bin/sh", ["-e", ".husky/pre-push"], {
+				cwd: root,
+				encoding: "utf8",
+				env: {
+					PI_LENS_SKIP_HOOKS: "",
+					PATH: `node_modules/.bin:${hostBin}`,
+				},
+			});
+			expect(result.status, result.stderr).toBe(0);
+			const probe = JSON.parse(
+				fs.readFileSync(path.join(root, "probe.json"), "utf8"),
+			) as { PATH: string; error: string | null; stdout: string };
+			return { root, ...probe };
+		}
+
+		it("puts this checkout's bin dir first, absolute, and leaves no relative node_modules/.bin entry", () => {
+			const { root, PATH } = runHook();
+			const entries = PATH.split(path.delimiter);
+			expect(entries[0]).toBe(path.join(root, "node_modules", ".bin"));
+			expect(entries).not.toContain("node_modules/.bin");
+		});
+
+		it("resolves the checkout's ast-grep from a test project cwd with no node_modules (index-5239 spawn)", () => {
+			const { error, stdout } = runHook();
+			expect(error).toBeNull();
+			expect(stdout).toBe("fixture-ast-grep\n");
+		});
+	},
+);
+
 // #3886: the pre-push self-scan now lives INSIDE scripts/pre-push-targeted-tests.mjs,
 // after its build (the scan imports compiled `clients/` modules) and after the
 // deletion-only early return, and is skipped under --skip-build. These cases
