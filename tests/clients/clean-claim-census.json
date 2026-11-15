@@ -1626,7 +1626,7 @@
 			"\"settled-sweep\"": 2,
 			"\"observed\"": 3,
 			"\"tool-result-analysis\"": 1,
-			"\"tool_result_edit\"": 11,
+			"\"tool_result_edit\"": 13,
 			"\"tool-result-bootstrap-demand\"": 1,
 			"\"\\n\"": 7,
 			"`${stateHash}#unauthored`": 1,
@@ -1755,7 +1755,12 @@
 			"\"no-dirty-set\"": 1,
 			"\"failed-command\"": 1,
 			"\"changed\"": 1,
-			"\"named\"": 1
+			"\"named\"": 1,
+			"\"HEAD\"": 1,
+			"\"pre-edit-head-seed\"": 1,
+			"\"absent\"": 1,
+			"\"unreadable\"": 1,
+			"\"credited-script-seed\"": 1
 		}
 	}
 }

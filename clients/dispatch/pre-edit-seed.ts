@@ -101,8 +101,10 @@ export const PRE_EDIT_SEED_SPANLESS_RUNNER_IDS: ReadonlySet<string> = new Set([
  * only these: a linter spawned on the path would read the new bytes and seed
  * the write's own findings as pre-existing.
  */
-export const PRE_EDIT_SEED_CONTENT_RUNNER_IDS: ReadonlySet<string> =
-	PRE_EDIT_EDIT_GATED_RUNNER_IDS;
+export const PRE_EDIT_SEED_CONTENT_RUNNER_IDS: ReadonlySet<string> = new Set([
+	"ast-grep-napi",
+	"tree-sitter",
+]);
 
 /**
  * #5616: the bytes a file held before a write that already happened, for the

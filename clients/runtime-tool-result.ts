@@ -3432,7 +3432,9 @@ export async function handleToolResult(
 		// file held before the call, as an edit is against its pre-edit seed
 		// (#4483). The file was clean then, so that is its HEAD copy; the seed
 		// is installed before the file's first dispatch below.
-		const creditedWrites = written.filter((wp) => scriptCredited.has(wp));
+		const creditedWrites: string[] = [];
+		for (const wp of written)
+			if (scriptCredited.has(wp)) creditedWrites.push(wp);
 		// A name of its own: the primary resync above bounds with the same signal.
 		const seedSignal = deps.signal;
 		if (creditedWrites.length > 0)
