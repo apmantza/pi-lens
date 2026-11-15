@@ -1859,6 +1859,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the root afterEach's failing exit status is only observable from a separate Vitest process that deliberately leaks a session",
 	},
+	// 2026-02-08 (#5100): the run-time spawn gate's own test. Its witnesses are
+	// the real patched `child_process` exports in this file's own module graph
+	// and a child Vitest run whose fork produces the gate's teardown red.
+	"real-process-spawn:support/real-spawn-observer.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the gate's red is produced by a fork's afterAll, so the seam is a real child process: the file calls the patched real child_process exports and runs a child Vitest run over its fixtures",
+	},
 	// 2026-09-17 (#3179): the race is cross-process by construction —
 	// readdirSync/statSync inside node's own recursive-watch polyfill are
 	// blocking syscalls on one thread, so only a separately spawned process

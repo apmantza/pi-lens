@@ -1111,6 +1111,10 @@ export const wallClockBudgetInclude = [
 	// #5146: the root afterEach's failing exit status is only observable from a
 	// separate Vitest process that deliberately leaks a session (flake-shape admission).
 	"tests/support/pi-mock.test.ts",
+	// #5100: the run-time spawn gate's own test. It calls the patched real
+	// `child_process` exports and drives a child Vitest run over its fixtures, so
+	// the gate's teardown red is produced by a real fork (flake-shape admission).
+	"tests/support/real-spawn-observer.test.ts",
 	// #3179: the guard's #3179 fix's one real, cross-process reproduction. A
 	// separately spawned process races node's own recursive-watch readdirSync
 	// against a directory removal — the same race PR #3178 hit in CI — which

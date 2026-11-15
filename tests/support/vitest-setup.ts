@@ -5,9 +5,19 @@ import { syncBuiltinESMExports } from "node:module";
 import { spawnSync } from "node:child_process";
 import * as os from "node:os";
 import * as path from "node:path";
+import nodeCp from "node:child_process";
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
+import { fileURLToPath } from "node:url";
 import { installGitFixtureEnv } from "./git-fixture-env.js";
 import { installKillGuard, killGuardReport } from "./kill-guard.js";
+import {
+	createRealSpawnLedger,
+	formatRealSpawnEvidence,
+	installRealSpawnObserver,
+	REAL_SPAWN_EVIDENCE_ENV,
+	type RealSpawnLedger,
+} from "./real-spawn-observer.js";
+import { realSpawnGateFailure } from "./real-spawn-admission.js";
 import { recordCensusWorker, runDeadOwnerCensus } from "./dead-owner-census.js";
 import { currentPeakRssMb, reportPeakRss } from "./worker-peak-rss.js";
 import {
@@ -475,6 +485,87 @@ afterEach(() => touchTmpHygieneOwnerMarker());
  * just removed is seen absent, which is what marks a later reappearance as a
  * straggler.
  */
+// #5100: the ledger the running file's real `child_process` calls land in. One
+// per worker, and `isolate: true` gives every test file its own worker, so the
+// ledger IS that file's record: no cross-file state and no reset owner.
+const realSpawnLedger: RealSpawnLedger = createRealSpawnLedger();
+// #5100: a const copy of the pre-patch `spawnSync`, so this file's own repo-root
+// git census is not attributed to the file that happens to be running.
+const harnessSpawnSync = spawnSync;
+
+// #5100: the run-time real-spawn observer, patched onto the real
+// `node:child_process` exports before the test module graph loads. The
+// `syncBuiltinESMExports()` call under the tmp-root interposer publishes it to
+// every importer shape at once — `import { spawn } from "node:child_process"`,
+// `import * as cp`, `require("node:child_process")`, and `vi.importActual` — so
+// the observation does not depend on which name a file spelled, which is the
+// hole #5100 reports in the name-based census. A file that `vi.mock`s the
+// module is exempt by construction: its calls reach the mock, not these exports.
+//
+// This file's own `spawnSync` (the repo-root git census, reached only from
+// `tests/config/tmp-fixture-hygiene.test.ts`) is called through
+// `harnessSpawnSync`, a const copy of the pre-patch function, so harness work
+// is never attributed to the running file.
+installRealSpawnObserver(
+	nodeCp as unknown as Parameters<typeof installRealSpawnObserver>[0],
+	realSpawnLedger,
+);
+
+// #5100: the run-time real-spawn gate. Registered with the other per-worker
+// teardown owners, and under the default `stack` hook order a setup hook runs
+// after the test file's own hooks, so a child the file started in its own
+// `afterAll` is already in the ledger when this reads it.
+//
+// A file whose OWN code started a real child and that holds no
+// `real-process-spawn` admission fails HERE, in its own run: that is the
+// fail-closed arm #5100 asks for, and it does not care which name the spawn was
+// spelled under. Only a HARNESS route is charged — production code that reaches
+// `child_process` on its own account (a formatter probe, a git call, the memory
+// sampler's `getconf`) is what the code under test does, and the census has
+// never made its caller a real-spawn member: in a 189-file stratified sample,
+// 39 of the 57 files that started a child were production-route callers, and
+// charging them would serialize most of the suite.
+//
+// The static census stays the deterministic floor the baseline is derived from:
+// a run-time count is not derivable (a skipped case, a platform branch, or a
+// targeted run moves it), and `tests/support/real-spawn-observer.test.ts` pins
+// that the observer sees every importer shape the name list had to enumerate.
+afterAll(() => {
+	const evidence = formatRealSpawnEvidence(tmpHygieneOwnFile, realSpawnLedger);
+	if (evidence === undefined) return;
+	const evidencePath = process.env[REAL_SPAWN_EVIDENCE_ENV];
+	if (evidencePath) {
+		try {
+			fs.appendFileSync(evidencePath, evidence);
+		} catch {
+			// A measurement record that cannot be written costs the census one
+			// line; the gate below still judges this file.
+		}
+	}
+	const failure = realSpawnGateFailure(tmpHygieneOwnFile, realSpawnLedger, {
+		supportDir: path.dirname(fileURLToPath(import.meta.url)),
+		readFile: (target: string): string => fs.readFileSync(target, "utf8"),
+	});
+	if (failure !== undefined) throw new Error(failure);
+});
+
+/** The running file's observed real-spawn ledger, for the observer's own test
+ *  (#5100): it witnesses that the patch reached THIS file's module graph, which
+ *  is the part of the seam a unit test over a hand-built target cannot show. */
+export function realSpawnLedgerView(): {
+	total: number;
+	byClass: Record<string, number>;
+	entryPoints: Record<string, number>;
+	commands: string[];
+} {
+	return {
+		total: realSpawnLedger.total,
+		byClass: Object.fromEntries(realSpawnLedger.byClass),
+		entryPoints: Object.fromEntries(realSpawnLedger.calls),
+		commands: [...realSpawnLedger.commands],
+	};
+}
+
 const tmpRootRegistry = getTmpRootRegistry();
 installTmpRootInterposer(
 	tmpRootRegistry,
@@ -1015,7 +1106,7 @@ export function untrackedUnignoredEntries(
 		return stat?.isDirectory() ? `${name}/` : name;
 	});
 	const run = (args: string[], input?: string) =>
-		spawnSync("git", args, {
+		harnessSpawnSync("git", args, {
 			cwd: root,
 			encoding: "utf8",
 			timeout: 15_000,

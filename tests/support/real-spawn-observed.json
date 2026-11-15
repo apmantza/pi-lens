@@ -1,0 +1,205 @@
+{
+  "config/parameter-schema-structure.test.ts": {
+    "reason": "constructs McpHarness (tests/mcp/harness.ts, direct or through tests/support/diagnostics-route-matrix-kit.ts) so the tool calls answer from the in-place-compiled MCP server: the parity under test is between the pi tool registry and the server's real responses, and a mocked child_process would compare the registry with itself. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "config/result-contract-governance.test.ts": {
+    "reason": "constructs McpHarness (tests/mcp/harness.ts, direct or through tests/support/diagnostics-route-matrix-kit.ts) so the tool calls answer from the in-place-compiled MCP server: the parity under test is between the pi tool registry and the server's real responses, and a mocked child_process would compare the registry with itself. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "config/tool-roster-budget.test.ts": {
+    "reason": "constructs McpHarness (tests/mcp/harness.ts, direct or through tests/support/diagnostics-route-matrix-kit.ts) so the tool calls answer from the in-place-compiled MCP server: the parity under test is between the pi tool registry and the server's real responses, and a mocked child_process would compare the registry with itself. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "fixtures/tmp-teardown/child-entry-leak.fixture.ts": {
+    "reason": "runs inside the child Vitest run that tests/support/tmp-root-teardown.test.ts drives; its subject is a real child process that outlives the file, which is the leaked tmp root the sweep must still report. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/analyze-coverage-repeat.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/analyze-graph.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/auto-session.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/build-staleness.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/harness-socket-teardown.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/jscpd-report-root.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/module-report.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/paths-glob-5371.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/project-report-text-parity.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/read-enclosing-maxlines.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/root-eviction.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/schema-projection.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/server.readiness-5487.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/server.smoke-fallback-5014.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/server.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/session-end.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/stale-json-advisory.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/symbol-search.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/turn-end-route.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "tools/diagnostics-route-switch-matrix-cols-1.test.ts": {
+    "reason": "constructs McpHarness (tests/mcp/harness.ts, direct or through tests/support/diagnostics-route-matrix-kit.ts) so the tool calls answer from the in-place-compiled MCP server: the parity under test is between the pi tool registry and the server's real responses, and a mocked child_process would compare the registry with itself. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "tools/diagnostics-route-switch-matrix-cols-2.test.ts": {
+    "reason": "constructs McpHarness (tests/mcp/harness.ts, direct or through tests/support/diagnostics-route-matrix-kit.ts) so the tool calls answer from the in-place-compiled MCP server: the parity under test is between the pi tool registry and the server's real responses, and a mocked child_process would compare the registry with itself. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "tools/diagnostics-route-switch-matrix-cols-3.test.ts": {
+    "reason": "constructs McpHarness (tests/mcp/harness.ts, direct or through tests/support/diagnostics-route-matrix-kit.ts) so the tool calls answer from the in-place-compiled MCP server: the parity under test is between the pi tool registry and the server's real responses, and a mocked child_process would compare the registry with itself. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "tools/diagnostics-route-switch-matrix-cols-4.test.ts": {
+    "reason": "constructs McpHarness (tests/mcp/harness.ts, direct or through tests/support/diagnostics-route-matrix-kit.ts) so the tool calls answer from the in-place-compiled MCP server: the parity under test is between the pi tool registry and the server's real responses, and a mocked child_process would compare the registry with itself. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "tools/diagnostics-route-switch-matrix-cols-5.test.ts": {
+    "reason": "constructs McpHarness (tests/mcp/harness.ts, direct or through tests/support/diagnostics-route-matrix-kit.ts) so the tool calls answer from the in-place-compiled MCP server: the parity under test is between the pi tool registry and the server's real responses, and a mocked child_process would compare the registry with itself. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "tools/tool-contract-pins.test.ts": {
+    "reason": "constructs McpHarness (tests/mcp/harness.ts, direct or through tests/support/diagnostics-route-matrix-kit.ts) so the tool calls answer from the in-place-compiled MCP server: the parity under test is between the pi tool registry and the server's real responses, and a mocked child_process would compare the registry with itself. tests/support/process-tree.ts reads the process table (ps) at teardown for the #2042 kill guard.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  }
+}
