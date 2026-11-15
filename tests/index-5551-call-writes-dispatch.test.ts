@@ -85,14 +85,23 @@ function dispatchedFiles(rows: readonly DispatchRow[]): string[] {
 	].sort();
 }
 
+/** How many times the dispatcher started on `file` (one per dispatch). */
+function dispatchStarts(rows: readonly DispatchRow[], file: string): number {
+	return rows.filter(
+		(row) =>
+			row.type === "phase" &&
+			(row as { phase?: string }).phase === "dispatch_start" &&
+			row.filePath === file,
+	).length;
+}
+
 describe("#5551 a call's written set reaches its tool_result dispatch", () => {
 	// Recurrence prevented (#5551 r1b probe, against d43b4dd): the opaque
 	// recovery's per-file re-entries share the host call's id, so the first
 	// one claimed the call's written set and dispatched the recorded file in
-	// place of the one it was for (other.ts went undispatched); and a host
-	// call that took the observed return for its set lost the recovery's
-	// withheld-blocker line. On a88ac1a87 both files were dispatched and
-	// disclosed; the written set must not take that away.
+	// place of the one it was for, and other.ts went undispatched. A host call
+	// with an opaque baseline that also merged its set dispatched the recorded
+	// file twice. On a88ac1a87 each file was dispatched once and disclosed.
 	it("still recovers and discloses a file the bridging call wrote but did not record", async () => {
 		const { proj, target } = seed(fixture.root, "bridge-other", CLEAN_FILE);
 		const other = path.join(proj, "src", "other.ts");
@@ -115,9 +124,16 @@ describe("#5551 a call's written set reaches its tool_result dispatch", () => {
 		expect(read.skipped).toBe(0);
 		const rows = read.rows as DispatchRow[];
 		expect(dispatchedFiles(rows)).toEqual(["other.ts", "target.ts"]);
+		// Once each: the recovery dispatched the bridged file, so the call's
+		// written set must not send it through the observed path again.
+		expect(dispatchStarts(rows, other)).toBe(1);
+		expect(dispatchStarts(rows, target)).toBe(1);
 		const [result] = toolResults(handle.requests.at(-1) ?? [], "bridge_writer");
-		expect(result?.text).toContain(
-			"src/other.ts (L3 debugger-statement) withheld",
+		// Which runners report before the result settles varies with load (a
+		// late biome adds its own rule), so the line is matched by its file,
+		// one rule and its withheld wording.
+		expect(result?.text).toMatch(
+			/in src\/other\.ts \([^)]*debugger-statement[^)]*\) withheld/,
 		);
 		expect(handle.errors).toEqual([]);
 	});

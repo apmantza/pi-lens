@@ -3962,7 +3962,7 @@ export async function handleToolResult(
 	// path it was for went undispatched. A tool with an opaque baseline
 	// (`opaqueNonBash`) has every file it changed in that recovery already,
 	// recorded or not: its set is claimed, so it never outlives the call, and
-	// takes no observed return that would skip the recovery's disclosure.
+	// is not merged, which would dispatch its recorded files a second time.
 	const callWrites =
 		toolCallId !== undefined &&
 		event[PI_LENS_SYNTHETIC_MUTATION_FIELD] === undefined
