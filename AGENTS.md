@@ -536,7 +536,7 @@ node scripts/guard-bash-probe.mjs <matrix.jsonl> [--head <ref|file>] [--base <re
 `node scripts/check-test-timeout-headroom.mjs --report <vitest-results.json>` reads a
 shard's report, folds each test's effective timeout out of its source (the `it`
 value, the enclosing `describe`, `vi.setConfig`, `scaledTestTimeout`, else the
-Vitest default), and annotates the assertions past 60% of it (#5311). Each
+Vitest default), and annotates the assertions past 60% of it. Each
 Unit tests shard runs it advisory against the ratchet in
 `scripts/test-timeout-headroom-baseline.json`, so a new offender is visible
 without gating the merge;

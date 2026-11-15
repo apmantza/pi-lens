@@ -39,6 +39,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parse } from "@ast-grep/napi";
+import { escapeRegExp } from "../../clients/string-utils.js";
 import { normalizeTestFile } from "../test-history-rollup.mjs";
 
 /** Vitest's resolved default `testTimeout` for a non-browser project. */
@@ -75,11 +76,6 @@ function numberLiteral(node) {
 	return Number.isFinite(value) ? value : undefined;
 }
 
-/** Escape literal text for embedding in a RegExp. */
-function escapeRe(text) {
-	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 /**
  * A declaration title: the exact string vitest will report, a pattern when the
  * title interpolates (`${…}`) or templates (`it.each` writes `%s` into the
@@ -99,7 +95,7 @@ function titleOf(node) {
 		return {
 			kind: "pattern",
 			regex: new RegExp(
-				`^${parts.map((part) => escapeRe(part)).join("[\\s\\S]+?")}$`,
+				`^${parts.map((part) => escapeRegExp(part)).join("[\\s\\S]+?")}$`,
 			),
 		};
 	}
@@ -120,7 +116,7 @@ function eachPattern(title) {
 	return {
 		kind: "pattern",
 		regex: new RegExp(
-			`^${parts.map((part) => escapeRe(part)).join("[\\s\\S]+?")}$`,
+			`^${parts.map((part) => escapeRegExp(part)).join("[\\s\\S]+?")}$`,
 		),
 	};
 }

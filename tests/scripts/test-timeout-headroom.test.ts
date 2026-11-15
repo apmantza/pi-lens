@@ -148,6 +148,32 @@ function pickMs(): number {
 it("has a budget the fold cannot reach", async () => {}, { timeout: pickMs() });
 `,
 		);
+		// Comments are named nodes in the tree, so a comment inside a test call is
+		// the one thing that can sit in an argument slot without being an argument.
+		source(
+			"tests/comment/gated.test.ts",
+			`import { it } from "vitest";
+
+it("has a comment before its handler", /* ci-only gate */ async () => {}, 2_000);
+
+it("has a comment inside its options", async () => {}, {
+		timeout: /* widened on the cold cache */ 2_000,
+});
+`,
+		);
+		// Two budgets of one file folded through the same imported constant: the
+		// second fold reuses the cached table, so an import budget kept on the table
+		// would starve it.
+		source("tests/imported/caps.ts", `export const CAP_MS = 2_000;\n`);
+		source(
+			"tests/imported/shared-cap.test.ts",
+			`import { it } from "vitest";
+import { CAP_MS } from "./caps.js";
+
+it("first test on the shared cap", async () => {}, CAP_MS);
+it("second test on the shared cap", async () => {}, CAP_MS);
+`,
+		);
 	});
 
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -347,6 +373,68 @@ it("has a budget the fold cannot reach", async () => {}, { timeout: pickMs() });
 				line.startsWith("::warning title=test-timeout-headroom::"),
 			),
 		).toBe(true);
+	});
+
+	it("reads the budget past a comment standing in a test call's argument slot", () => {
+		const file = "tests/comment/gated.test.ts";
+		const reportFile = report("reports/comment.json", file, [
+			{ title: "has a comment before its handler", duration: 4_000 },
+			{ title: "has a comment inside its options", duration: 4_000 },
+		]);
+		const { lines } = run([
+			"--report",
+			reportFile,
+			"--baseline",
+			at("none.json"),
+		]);
+		// Both caps are 2000 ms, so both rows are 200% of their own budget. Read the
+		// comment as an argument and the budget is gone, and 4000 ms lands on the
+		// file default of 5000 instead: 80%, a different row and a wrong cap.
+		expect(summary(lines)).toContain(
+			"2 over 60% (0 known, 2 new), 0 with an unresolved cap",
+		);
+		expect(
+			lines.filter(
+				(line) =>
+					line.startsWith("NEW  ") && line.includes("of the 2000 ms cap"),
+			),
+		).toHaveLength(2);
+		expect(lines.join("\n")).not.toContain("floor");
+	});
+
+	it("folds every cap of a file through one imported constant, not just the first", () => {
+		const file = "tests/imported/shared-cap.test.ts";
+		const table = indexTestFile(at(file), { scale: 1 });
+		// One cached table, two resolutions: the import budget belongs to a single
+		// fold, so the second test's cap still resolves to the imported constant.
+		for (const title of [
+			"first test on the shared cap",
+			"second test on the shared cap",
+		]) {
+			expect(resolveCap(table, { chain: [], title })).toEqual({
+				status: "resolved",
+				capMs: 2_000,
+			});
+		}
+		const reportFile = report("reports/imported.json", file, [
+			{ title: "first test on the shared cap", duration: 4_000 },
+			{ title: "second test on the shared cap", duration: 4_000 },
+		]);
+		const { lines } = run([
+			"--report",
+			reportFile,
+			"--baseline",
+			at("none.json"),
+		]);
+		expect(summary(lines)).toContain(
+			"2 over 60% (0 known, 2 new), 0 with an unresolved cap",
+		);
+		expect(
+			lines.filter(
+				(line) =>
+					line.startsWith("NEW  ") && line.includes("of the 2000 ms cap"),
+			),
+		).toHaveLength(2);
 	});
 
 	it("counts a duration exactly at the ratio as inside the budget, and one ms past as over", () => {
