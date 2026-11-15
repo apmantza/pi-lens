@@ -102,7 +102,7 @@ function replace(
 /**
  * A tool pi-lens never met: it writes nothing and only names `target` in its
  * result's `details.appliedFiles`. Only that claim could make pi-lens dispatch
- * the file, so a dispatch here is the tool-name gate failing.
+ * the file, so a dispatch here is a result's own claim being admitted.
  */
 function foreignClaimTool(target: string): ToolDefinition {
 	return {
@@ -266,7 +266,7 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 
 	// Recurrence prevented (Greptile T3 on #5244 r3): the structural apply loops
 	// over `paths`, rewrites a matching file, then a later path that is stale or
-	// fails returned early with no `appliedFiles`, so the rewritten file never
+	// fails returned early with no list of its files, so the rewritten file never
 	// reached the dispatcher or the commit gate. The first path writes before
 	// the second is checked, so the failure is real on disk, not a mock. The CLI
 	// error exit has no real-CLI trigger (a missing path is a stale preview), so
@@ -311,10 +311,10 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 		},
 	);
 
-	// Recurrence prevented: the tool-result feed reads `details.appliedFiles`
-	// from ANY tool's result, so a tool another extension registers could make
-	// pi-lens dispatch a file it never wrote. The name check in
-	// `appliedFilesOfOwnTool` is the only barrier (review r1 F1 on #5244).
+	// Recurrence prevented: a tool-result feed that reads a file list from ANY
+	// tool's result lets a tool another extension registers make pi-lens
+	// dispatch a file it never wrote (review r1 F1 on #5244). Since #5551 the
+	// feed is the call's written set, which only the mutation bridge fills.
 	it(
 		"dispatches nothing for a tool pi-lens does not own that names a file in details.appliedFiles",
 		{ timeout: 180_000 },

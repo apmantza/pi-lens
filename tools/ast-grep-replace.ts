@@ -365,11 +365,7 @@ export function createAstGrepReplaceTool(
 							},
 						],
 						isError: true,
-						// #5244 r4: files an earlier path already rewrote still dispatch.
-						details: {
-							stalePreview: true,
-							appliedFiles: ruleResult.appliedFiles ?? [],
-						},
+						details: { stalePreview: true },
 					};
 				}
 				if (ruleResult.error) {
@@ -387,7 +383,7 @@ export function createAstGrepReplaceTool(
 							},
 						],
 						isError: true,
-						details: { appliedFiles: ruleResult.appliedFiles ?? [] },
+						details: {},
 					};
 				}
 				const output = astGrepClient.formatMatches(
@@ -404,9 +400,6 @@ export function createAstGrepReplaceTool(
 					details: {
 						matchCount: ruleResult.matches.length,
 						applied: applyFlag,
-						// #5239: the files the apply rewrote, for the `tool_result`
-						// handler's dispatch.
-						appliedFiles: ruleResult.appliedFiles ?? [],
 					},
 				};
 			}
@@ -446,9 +439,7 @@ export function createAstGrepReplaceTool(
 				return {
 					content: [{ type: "text" as const, text: failureText(result) }],
 					isError: true,
-					// #5417: an interrupted `--update-all` rewrote files before it
-					// failed; they still dispatch, as the structural path's do.
-					details: { appliedFiles: result.appliedFiles ?? [] },
+					details: {},
 				};
 			}
 
@@ -472,9 +463,6 @@ export function createAstGrepReplaceTool(
 					totalMatches: result.totalMatches,
 					truncated: result.truncated,
 					applied: applyFlag,
-					// #5239: the files the apply rewrote, for the `tool_result`
-					// handler's dispatch.
-					appliedFiles: result.appliedFiles ?? [],
 				},
 			};
 		},

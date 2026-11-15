@@ -85,7 +85,6 @@ import { PathKeyedMap } from "./path-keyed-map.js";
 import { resolveLanguageRootForFile } from "./language-profile.js";
 import { logLatency } from "./latency-logger.js";
 import {
-	appliedFilesOfOwnTool,
 	classifyMutatingTool,
 	isBashDerivedReplay,
 	isProviderReplayCall,
@@ -189,11 +188,9 @@ import {
 } from "./dispatch/rule-policy.js";
 import {
 	adviseOnEdit,
-	readFileAtRef,
 	type Thresholds,
 } from "./metrics/complexity-baseline.js";
 import { captureWriterSeeds } from "./pre-edit-capture.js";
-import type { PreEditBytes } from "./dispatch/pre-edit-seed.js";
 import { isComplexitySupportedFile } from "./tree-sitter-shared.js";
 import {
 	incrementDegradationCount,
@@ -2287,25 +2284,6 @@ function complexityThresholdsFor(
 }
 
 /**
- * #5616: a credited script write's file as HEAD holds it. The call is
- * credited only with a file that was clean before it, so these are the bytes
- * the file held then; `absent` for a file the call created.
- */
-function readHeadCopy(
-	filePath: string,
-	signal?: AbortSignal,
-): Promise<PreEditBytes> {
-	return readFileAtRef(filePath, "HEAD", "pre-edit-head-seed", signal).then(
-		(read) =>
-			read.kind === "file"
-				? { content: read.content }
-				: read.kind === "absent"
-					? "absent"
-					: "unreadable",
-	);
-}
-
-/**
  * #5120: the agent-facing result of a partial apply. The host edit wrote the
  * matched subset, so the edits that applied lead the message and the
  * preflight's per-edit bodies follow unchanged: they describe exactly the
@@ -2602,11 +2580,11 @@ export async function handleToolResult(
 			durationMs: 0,
 			metadata: { toolCallId, rawFilePath, guessedPath },
 		});
-		// #5239, #5248 r5: an admitted pi-lens writer (`appliedFilesOfOwnTool`)
-		// reports the ABSOLUTE files it wrote, so the refused relative path
+		// #5239, #5248 r5: a call the bridge recorded writes for names their
+		// ABSOLUTE files (`peekCallWrites`, #5551), so the refused relative path
 		// stays refused as a path (`filePath` unset below, every step keyed on it
-		// closed) while the applied-files feed still dispatches what was written.
-		if (!opaqueNonBash && appliedFilesOfOwnTool(event).length === 0)
+		// closed) while the call's written set still dispatches what it wrote.
+		if (!opaqueNonBash && runtime.peekCallWrites(toolCallId).length === 0)
 			return readNote.length > 0
 				? {
 						content: [...readNote, ...event.content],
@@ -3450,7 +3428,7 @@ export async function handleToolResult(
 							hook: "tool_result_edit",
 						},
 						true,
-						readHeadCopy,
+						"head",
 					),
 				{
 					ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
@@ -3970,16 +3948,16 @@ export async function handleToolResult(
 	// its targets in a `paths` array the classified chain cannot read and the
 	// second writes files its `path` never named (a rename's importers), so an
 	// applied rewrite reached the bridge's bookkeeping and nothing else: no
-	// dispatch, no blocker, no commit-gate verdict. The tool reports the files
-	// the bridge accepted in its result details; they take the SAME dispatch the settle's changed
-	// paths take below (`observedReplayed` / `observedChangedPaths` name that
-	// seam, not a provenance). The tool is never armed, so the settle above
-	// recorded nothing for this call and the two sources cannot both dispatch.
-	const ownApplied = appliedFilesOfOwnTool(event);
-	if (ownApplied.length > 0) {
-		observedReplayed = ownApplied.length;
-		observedChangedPaths = ownApplied;
-	}
+	// dispatch, no blocker, no commit-gate verdict. #5551: the bridge notes
+	// each file it recorded under the call's id, so they take the SAME
+	// dispatch the settle's changed paths take below (`observedReplayed` /
+	// `observedChangedPaths` name that seam, not a provenance). Claimed after
+	// the settle, whose own replays land in the set too, so it never outlives
+	// its call; their files are already in the settle's changed paths.
+	const callWrites =
+		toolCallId !== undefined ? runtime.takeCallWrites(toolCallId) : [];
+	observedReplayed += callWrites.length;
+	observedChangedPaths = [...new Set([...observedChangedPaths, ...callWrites])];
 	// #2464 review round 2 (S5): ONE clock, started above BOTH exits, so
 	// `edit_batch_summary.durationMs` and the `tool_result` latency row measure
 	// the same span whichever provenance a tool takes. The observed path used to

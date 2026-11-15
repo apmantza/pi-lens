@@ -133,6 +133,12 @@ export interface MutationBridgeDeps {
 			originCwd?: string,
 			readGuardBranchEpoch?: number,
 		) => boolean;
+		/**
+		 * #5551: the per-call written set (`RuntimeCoordinator.noteCallWrite`).
+		 * A recorded entry that names its call lands here, so the call's
+		 * `tool_result` dispatches it.
+		 */
+		noteCallWrite?: (toolCallId: string, filePath: string) => void;
 	};
 	getCacheManager(): {
 		addModifiedRange?: (
@@ -696,6 +702,10 @@ function runAdmittedMutation(
 			queued,
 		};
 	}
+	// #5551: the receipt was taken, so the call that wrote this file learns of
+	// it at its `tool_result`, the one channel every producer's write reaches.
+	if (entry.toolCallId !== undefined)
+		ctx.runtime.noteCallWrite?.(entry.toolCallId, ctx.filePath);
 	const accepted = sessionLive || opts?.rejectStaleLineage !== true;
 	return accepted
 		? { recorded: true, accepted: true, queued }

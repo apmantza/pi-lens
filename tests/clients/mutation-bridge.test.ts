@@ -155,6 +155,74 @@ describe("mutation bridge bookkeeping", () => {
 		}
 	});
 
+	/**
+	 * #5551. Recurrence it prevents: a tool's `tool_result` learned which
+	 * files it wrote from `details.appliedFiles`, admitted by tool NAME, so a
+	 * new pi-lens writer dispatched nothing until someone added its name, and
+	 * the list was built beside the bridge from the bridge's own answers. The
+	 * bridge now notes each file it records under the entry's call id; the
+	 * call's `tool_result` takes the set once. A refused or out-of-scope entry,
+	 * and an entry that names no call, note nothing.
+	 */
+	it("notes each recorded file under its call id, once, and nothing it refused", () => {
+		const env = setupTestEnvironment("pi-lens-5551-call-writes-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const [kept, outside, unnamed] = [
+				"kept.ts",
+				"outside.ts",
+				"unnamed.ts",
+			].map((name) => path.join(env.tmpDir, name));
+			for (const file of [kept, outside, unnamed])
+				fs.writeFileSync(file, SOURCE);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.beginTurn();
+			const deps = makeDeps({
+				tmpDir: env.tmpDir,
+				runtime,
+				cacheManager: new CacheManager(false),
+				isRecordable: (filePath) => filePath !== outside,
+			});
+			for (const filePath of [kept, outside, kept])
+				recordMutationOutcome(
+					{ filePath, kind: "edit", consumer: "any_tool", toolCallId: "c1" },
+					deps,
+				);
+			recordMutationOutcome(
+				{ filePath: unnamed, kind: "edit", consumer: "any_tool" },
+				deps,
+			);
+			recordMutationOutcome(
+				{ filePath: "", kind: "edit", consumer: "any_tool", toolCallId: "c2" },
+				deps,
+			);
+
+			expect(runtime.peekCallWrites("c1")).toEqual([kept]);
+			expect(runtime.takeCallWrites("c1")).toEqual([kept]);
+			expect(runtime.takeCallWrites("c1")).toEqual([]);
+			expect(runtime.takeCallWrites("c2")).toEqual([]);
+		} finally {
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
+			env.cleanup();
+		}
+	});
+
+	/**
+	 * #5551: a call whose `tool_result` never comes (blocked, aborted, or run
+	 * by a host with no `tool_result`) must not keep its set past a session.
+	 * Recurrence it prevents: a per-call map with no reset grows for the life
+	 * of the process and hands a later session a dead call's files.
+	 */
+	it("drops every call's written set at the session reset", () => {
+		const runtime = new RuntimeCoordinator();
+		runtime.noteCallWrite("c-dead", "/project/a.ts");
+		runtime.resetForSession();
+		expect(runtime.takeCallWrites("c-dead")).toEqual([]);
+	});
+
 	it("treats a write with no stated range as the whole file", () => {
 		const env = setupTestEnvironment("pi-lens-2423-bridge-write-");
 		const previousDataDir = process.env.PILENS_DATA_DIR;

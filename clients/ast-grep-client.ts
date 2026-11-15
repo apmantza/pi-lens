@@ -94,9 +94,9 @@ function matchedFilePath(file: string): string {
  * range that file's matches covered, because the bridge's contract is
  * per-file — the same shape a multi-hunk edit produces.
  *
- * Returns the files the bridge ACCEPTED (#5239): the tool reports them in its
- * result details so the `tool_result` handler dispatches exactly those, never a
- * path the bridge refused (out of scope, ignored, or no bridge mounted).
+ * The bridge notes each file it records under `toolCallId` (#5551), so the
+ * call's `tool_result` dispatches exactly those, never a path it refused (out
+ * of scope, ignored, or no bridge mounted).
  *
  * Exported for tests: they drive it against a registered bridge instead of
  * spawning ast-grep.
@@ -104,9 +104,9 @@ function matchedFilePath(file: string): string {
 function recordAstGrepApply(
 	matches: AstGrepMatch[],
 	{ lineage, toolCallId, sessionId }: AstGrepApplyProvenance = {},
-): string[] {
+): void {
 	const bridge = getMutationBridge();
-	if (!bridge || matches.length === 0) return [];
+	if (!bridge || matches.length === 0) return;
 	const rangesByFile = new Map<string, Array<[number, number]>>();
 	for (const match of matches) {
 		const start = (match.range?.start?.line ?? 0) + 1;
@@ -115,13 +115,12 @@ function recordAstGrepApply(
 		if (existing) existing.push([start, end]);
 		else rangesByFile.set(match.file, [[start, end]]);
 	}
-	const accepted: string[] = [];
 	for (const [filePath, editRanges] of rangesByFile) {
 		// ast-grep echoes the spelling passed to its CLI. Resolve that
 		// tool-relative spelling at the producer boundary, then use the
 		// existing canonical path seam before recordability is checked (#4140).
 		const resolved = matchedFilePath(filePath);
-		const recorded = bridge.recordMutation({
+		bridge.recordMutation({
 			filePath: resolved,
 			kind: "edit",
 			editRanges,
@@ -138,9 +137,7 @@ function recordAstGrepApply(
 			// #4943: the calling session owns the deferred pass of what it rewrote.
 			...(sessionId !== undefined && { sessionId }),
 		});
-		if (recorded) accepted.push(resolved);
 	}
-	return accepted;
 }
 
 /** Who an apply ran for: the call's session scope, its id, and its session. */
@@ -187,7 +184,7 @@ async function applyRewrite<R extends { error?: string | undefined }>(
 	matches: AstGrepMatch[],
 	options: AstGrepApplyProvenance | undefined,
 	write: () => Promise<R>,
-): Promise<{ refused: string[] } | { result: R; appliedFiles: string[] }> {
+): Promise<{ refused: string[] } | { result: R }> {
 	const files = [
 		...new Set(matches.map((match) => matchedFilePath(match.file))),
 	];
@@ -215,7 +212,6 @@ async function applyRewrite<R extends { error?: string | undefined }>(
 	);
 	if (refused.length > 0) return { refused };
 	const before = new Map<string, string | undefined>();
-	let appliedFiles: string[] = [];
 	const result = await writeSourceFile(
 		{
 			filePaths: files,
@@ -224,7 +220,7 @@ async function applyRewrite<R extends { error?: string | undefined }>(
 				const changed = clean
 					? files
 					: files.filter((file) => hashOf(file) !== before.get(file));
-				appliedFiles = recordAstGrepApply(
+				recordAstGrepApply(
 					matches.filter((match) =>
 						changed.includes(matchedFilePath(match.file)),
 					),
@@ -237,7 +233,7 @@ async function applyRewrite<R extends { error?: string | undefined }>(
 			return write();
 		},
 	);
-	return { result, appliedFiles };
+	return { result };
 }
 
 // --- Client ---
@@ -474,8 +470,6 @@ export class AstGrepClient {
 		aborted?: boolean;
 		/** #5097: the error came from a `--update-all` that may have written files. */
 		writeStarted?: boolean;
-		/** #5239: the files an apply rewrote and the bridge accepted. */
-		appliedFiles?: string[];
 	}> {
 		const allMatches: AstGrepMatch[] = [];
 		const sg: SgExecutionOptions = options?.signal
@@ -493,9 +487,8 @@ export class AstGrepClient {
 			}
 		}
 		// #5244 r4: each path is written as its own scan finishes, so a later
-		// path that is stale or fails still leaves the earlier ones on disk. Every
-		// exit reports what was rewritten so far, never only the loop's last one.
-		const appliedFiles: string[] = [];
+		// path that is stale or fails still leaves the earlier ones on disk; the
+		// bridge noted each under the call's id as it was written (#5551).
 		for (const scanPath of paths) {
 			let previewed: AstGrepMatch[] = [];
 			if (apply) {
@@ -512,7 +505,6 @@ export class AstGrepClient {
 						applied: false,
 						error: preCheck.error ?? "ast-grep preview failed",
 						...(preCheck.failure === "aborted" ? { aborted: true } : {}),
-						appliedFiles,
 					};
 				}
 				if (preCheck.matches.length === 0) {
@@ -521,7 +513,6 @@ export class AstGrepClient {
 						totalMatches: 0,
 						applied: false,
 						stalePreview: true,
-						appliedFiles,
 					};
 				}
 				previewed = preCheck.matches;
@@ -550,10 +541,8 @@ export class AstGrepClient {
 					totalMatches: allMatches.length,
 					applied: false,
 					error: outsideRootsText(applied.refused),
-					appliedFiles,
 				};
 			}
-			if (applied !== null) appliedFiles.push(...applied.appliedFiles);
 			const result = applied === null ? await scan() : applied.result;
 			if (result.error) {
 				return {
@@ -563,7 +552,6 @@ export class AstGrepClient {
 					error: result.error,
 					...(result.aborted ? { aborted: true } : {}),
 					...(result.writeStarted ? { writeStarted: true } : {}),
-					appliedFiles,
 				};
 			}
 			allMatches.push(...result.matches);
@@ -572,7 +560,6 @@ export class AstGrepClient {
 			matches: allMatches,
 			totalMatches: allMatches.length,
 			applied: apply,
-			appliedFiles,
 		};
 	}
 
@@ -923,8 +910,6 @@ export class AstGrepClient {
 		aborted?: boolean;
 		/** #5097: the error came from a `--update-all` that may have written files. */
 		writeStarted?: boolean;
-		/** #5239: the files an apply rewrote and the bridge accepted. */
-		appliedFiles?: string[];
 	}> {
 		const baseArgs = ["run", "-p", pattern, "-r", rewrite, "--lang", lang];
 		if (options?.strictness) {
@@ -1026,7 +1011,6 @@ export class AstGrepClient {
 				error: outsideRootsText(applied.refused),
 			};
 		}
-		const { appliedFiles } = applied;
 		if (applied.result.error) {
 			return {
 				matches: [],
@@ -1035,7 +1019,6 @@ export class AstGrepClient {
 				applied: false,
 				error: applied.result.error,
 				writeStarted: true,
-				appliedFiles,
 			};
 		}
 		return {
@@ -1044,7 +1027,6 @@ export class AstGrepClient {
 			truncated: preCheck.truncated,
 			applied: true,
 			error: undefined,
-			appliedFiles,
 		};
 	}
 

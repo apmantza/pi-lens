@@ -816,6 +816,7 @@ describe("the writer table", () => {
 			"commit-gate": 7,
 			"pre-edit-baseline": 13,
 			"fix-run-capture": 15,
+			"deferred-queue": 12,
 			"lsp-documents": 9,
 			"read-guard": 9,
 			"word-index": 23,

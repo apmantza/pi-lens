@@ -788,6 +788,17 @@ export class RuntimeCoordinator {
 		TOOL_CALL_ATTRIBUTION_CAPACITY,
 	);
 	/**
+	 * #5551: per tool call, the files `recordMutationOutcome` recorded for it
+	 * while its tool ran. Its `tool_result` takes the set and dispatches each
+	 * file, whatever the tool is named, so no producer reports its own writes
+	 * and no table admits it by name. A call with no `tool_result` (a blocked
+	 * call, a tool run outside pi) is evicted by the same bound as an
+	 * attribution; a set holds the files of one call.
+	 */
+	private readonly _callWrites = new BoundedLruCache<string, Set<string>>(
+		TOOL_CALL_ATTRIBUTION_CAPACITY,
+	);
+	/**
 	 * #5120: a call whose `edits` were rewritten to the matched subset of a
 	 * partly matching batch, keyed by that call's own `event.input`. pi hands
 	 * both hooks one `args` object per call (a fresh clone), so only that
@@ -928,6 +939,7 @@ export class RuntimeCoordinator {
 		// not let a NEW session inherit a DEAD session's recorded skip verdict.
 		this._toolCallAttributions.clear();
 		this._readWidenings.clear();
+		this._callWrites.clear();
 		this._lspReadWarmState.clear();
 		this._pendingInlineBlockers.clear();
 		this._owedRunners.clear();
@@ -3106,6 +3118,25 @@ export class RuntimeCoordinator {
 		const widening = this._readWidenings.get(toolCallId);
 		this._readWidenings.delete(toolCallId);
 		return widening;
+	}
+
+	/** #5551: `recordMutationOutcome` recorded `filePath` for this call. */
+	noteCallWrite(toolCallId: string, filePath: string): void {
+		const written = this._callWrites.get(toolCallId);
+		if (written) written.add(filePath);
+		else this._callWrites.set(toolCallId, new Set([filePath]));
+	}
+
+	/** #5551: the files recorded for this call so far, in record order. */
+	peekCallWrites(toolCallId: string): string[] {
+		return [...(this._callWrites.get(toolCallId) ?? [])];
+	}
+
+	/** #5551: one-shot claim of a call's files, as with an attribution. */
+	takeCallWrites(toolCallId: string): string[] {
+		const written = this.peekCallWrites(toolCallId);
+		this._callWrites.delete(toolCallId);
+		return written;
 	}
 
 	/** #3523: see {@link ToolCallAttribution.editInPlace}. */

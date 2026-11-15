@@ -261,19 +261,19 @@ describe("bookkeepLspMutation — direct path and bridge fallback are equivalent
 	});
 
 	/**
-	 * #5248. Recurrence it prevents: `lsp_navigation` reported `appliedFiles`
-	 * from the files it ASKED to write, so a path the bookkeeping dropped
-	 * (`isRecordable` skipping it; the no-bridge case is pinned in
-	 * lsp-mutation-bridge-unmounted.test.ts) was still dispatched, and a path both branches recorded was dispatched twice.
-	 * `acceptedFiles` collects only what each branch recorded, once.
+	 * #5248, #5551. Recurrence it prevents: `lsp_navigation` reported the files
+	 * it ASKED to write, so a path the bookkeeping dropped (`isRecordable`
+	 * skipping it; the no-bridge case is pinned in
+	 * lsp-mutation-bridge-unmounted.test.ts) was still dispatched, and a path
+	 * both branches recorded was dispatched twice. Each branch's record notes
+	 * the file under the call's id (`takeCallWrites`), once, and only what it
+	 * recorded; the direct branch reaches the runtime it was threaded.
 	 */
-	it("collect the files each branch recorded, once, and not the ones it dropped (#5248)", () => {
+	it("note the files each branch recorded under the call, once, and not the ones it dropped (#5248)", () => {
 		const directFile = writeFixture(dirDirect, "collected.ts");
 		const bridgeFile = writeFixture(dirBridge, "collected.ts");
 		// The direct branch's `isRecordable` skips it.
 		const outside = writeFixture(dirDirect, "outside.ts");
-		const direct: string[] = [];
-		const viaBridge: string[] = [];
 		const directContext: LspMutationContext = {
 			cwd: dirDirect,
 			correlationId: "collect-direct",
@@ -284,7 +284,7 @@ describe("bookkeepLspMutation — direct path and bridge fallback are equivalent
 			readGuard: runtimeDirect.readGuard,
 			emitSummary: false,
 			isRecordable: (filePath) => !filePath.endsWith("outside.ts"),
-			acceptedFiles: direct,
+			toolCallId: "call-collect-direct",
 		};
 		const bridgeContext: LspMutationContext = {
 			cwd: dirBridge,
@@ -292,7 +292,7 @@ describe("bookkeepLspMutation — direct path and bridge fallback are equivalent
 			tool: "lsp_navigation:rename",
 			source: "lsp-rename",
 			emitSummary: false,
-			acceptedFiles: viaBridge,
+			toolCallId: "call-collect-bridge",
 		};
 		for (const [context, files] of [
 			[directContext, [directFile, outside, directFile]],
@@ -300,8 +300,12 @@ describe("bookkeepLspMutation — direct path and bridge fallback are equivalent
 		] as const)
 			for (const filePath of files)
 				recordLspMutation(context, { results: resultsFor(filePath) });
-		expect(direct).toEqual([directFile]);
-		expect(viaBridge).toEqual([bridgeFile]);
+		expect(runtimeDirect.takeCallWrites("call-collect-direct")).toEqual([
+			directFile,
+		]);
+		expect(runtimeBridge.takeCallWrites("call-collect-bridge")).toEqual([
+			bridgeFile,
+		]);
 	});
 
 	it("enqueue no deferred autofix/format pass on either branch (F3)", () => {
@@ -685,12 +689,12 @@ describe("bookkeepLspMutation — direct path and bridge fallback are equivalent
 
 	// #5592 review r1 F1: the direct branch caught each stage on its own, so
 	// a turn-state write that throws (the data dir cannot be created) still
-	// left the receipt, the handled mark and `acceptedFiles`. The fold put all
-	// stages under the seam's one catch and lost all three. Recurrence: a
-	// stage throw in `recordMutationOutcome` that ends the whole record, so
-	// the settled sweep reports the edit as drift (#2465) and its
-	// `appliedFiles` dispatch drops (#5248).
-	it("keeps the receipt, the handled mark and acceptedFiles when the turn-state write throws", () => {
+	// left the receipt, the handled mark and the call's written set. The fold
+	// put all stages under the seam's one catch and lost all three.
+	// Recurrence: a stage throw in `recordMutationOutcome` that ends the whole
+	// record, so the settled sweep reports the edit as drift (#2465) and its
+	// `tool_result` dispatch drops (#5248).
+	it("keeps the receipt, the handled mark and the call's written set when the turn-state write throws", () => {
 		resetObservedMutationNet();
 		resetDegradationLedger();
 		const filePath = writeFixture(dirDirect, "unusable.ts");
@@ -700,7 +704,6 @@ describe("bookkeepLspMutation — direct path and bridge fallback are equivalent
 		fs.rmSync(dataDir, { recursive: true, force: true });
 		fs.mkdirSync(path.dirname(dataDir), { recursive: true });
 		fs.writeFileSync(dataDir, "not a directory");
-		const acceptedFiles: string[] = [];
 		const receiptsBefore = runtimeDirect.getMutationsSince(0).length;
 		recordLspMutation(
 			{
@@ -711,13 +714,13 @@ describe("bookkeepLspMutation — direct path and bridge fallback are equivalent
 				runtime: runtimeDirect as never,
 				cacheManager: cacheManagerDirect,
 				readGuard: runtimeDirect.readGuard,
-				acceptedFiles,
+				toolCallId: "call-eexist-direct",
 				emitSummary: false,
 			},
 			{ results: resultsFor(filePath) },
 		);
 		expect({
-			accepted: acceptedFiles,
+			accepted: runtimeDirect.takeCallWrites("call-eexist-direct"),
 			receipts: runtimeDirect.getMutationsSince(0).length - receiptsBefore,
 			handled: _observedMutationStateForTests().handled.some((key) =>
 				key.endsWith("unusable.ts"),
