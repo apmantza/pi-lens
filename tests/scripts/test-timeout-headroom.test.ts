@@ -1149,4 +1149,51 @@ describe("narrower inside", () => {
 			);
 		}
 	});
+
+	it("refuses a scale or ratio that would judge every test against zero", () => {
+		const file = "tests/near/zero-budget.test.ts";
+		source(
+			file,
+			`import { it } from "vitest";
+it("runs once", async () => {}, 2_000);
+`,
+		);
+		const reportFile = report("reports/zero-budget.json", file, [
+			{ title: "runs once", ancestors: [], duration: 10 },
+		]);
+		// A zero scale folded every cap to 0 ms and a zero ratio flagged every test
+		// at any duration: both print a run that measured nothing, so the values are
+		// refused rather than served.
+		const degenerate: Array<[string, string]> = [
+			["--scale", "--scale must be a positive number: 0"],
+			["--ratio", "--ratio must be a fraction in (0, 1): 0"],
+		];
+		for (const [flag, message] of degenerate) {
+			const { code, lines } = run([
+				"--report",
+				reportFile,
+				flag,
+				"0",
+				"--baseline",
+				at("baseline-none.json"),
+			]);
+			expect(code, flag).toBe(2);
+			expect(lines.join("\n"), flag).toContain(
+				`::warning title=test-timeout-headroom::could not measure: ${message}`,
+			);
+		}
+		// The guard is on the degenerate value, not on the flags.
+		expect(
+			run([
+				"--report",
+				reportFile,
+				"--scale",
+				"2",
+				"--ratio",
+				"0.5",
+				"--baseline",
+				at("baseline-none.json"),
+			]).code,
+		).toBe(0);
+	});
 });
