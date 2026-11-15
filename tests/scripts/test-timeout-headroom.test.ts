@@ -284,15 +284,19 @@ it("spends most of the default", async () => {});
 it("stays inside the default", async () => {});
 `,
 		);
-		// The suite spelling that keeps the third-argument options read: the suite API
-		// accepts options after the factory, unlike `it`.
+		// The suite-level budget, in the spelling the runner takes: options before
+		// the factory. Probed against the pinned vitest 5.1.0, that shape collects
+		// and enforces the budget (a 600 ms test under `{ timeout: 300 }` fails
+		// "Test timed out in 300ms"), while options written AFTER the factory are
+		// refused on both `describe` and `it` -- the file reports zero tests -- so
+		// the fold reads the suite's options from the slot the runner reads (r2 F8).
 		source(
 			"tests/inherited/describe-tail-options.test.ts",
 			`import { describe, it } from "vitest";
 
-describe("suite budget written last", () => {
+describe("suite budget written last", { timeout: 8_000 }, () => {
 	it("inherits the tail options budget", async () => {});
-}, { timeout: 8_000 });
+});
 `,
 		);
 	});
@@ -1261,7 +1265,63 @@ describe("narrower inside", () => {
 		expect(summary(lines)).toContain("1 with an unresolved cap");
 	});
 
-	it("resolves a suite budget written after the factory", () => {
+	it("resolves a test budget written after the handler", () => {
+		// `it(name, fn, 300)` is the other half of the boundary: the runner keeps it
+		// (probed: a 600 ms test under `it(name, fn, 300)` fails "Test timed out in
+		// 300ms"), and the in-tree
+		// `tests/clients/dispatch/fact-store-session-bound.test.ts` uses it, so the
+		// trailing expression stays a budget expression.
+		const file = "tests/inherited/it-tail-number.test.ts";
+		source(
+			file,
+			`import { it } from "vitest";
+
+it("runs under a trailing number", async () => {}, 20_000);
+`,
+		);
+		const reportFile = report("reports/it-tail-number.json", file, [
+			{ title: "runs under a trailing number", duration: 15_000 },
+		]);
+		const rows = rowLines(
+			run(["--report", reportFile, "--baseline", at("none.json")]).lines,
+			file,
+		);
+		expect(rows.length).toBe(1);
+		expect(rows[0]).toContain("15000 ms is 75% of the 20000 ms cap");
+	});
+
+	it("refuses the trailing options the runner refuses", () => {
+		const file = "tests/inherited/tail-options-refused.test.ts";
+		source(
+			file,
+			`import { it } from "vitest";
+
+it("declares its budget where the runner will not read it", async () => {}, {
+	timeout: 20_000,
+});
+`,
+		);
+		const reportFile = report("reports/tail-options-refused.json", file, [
+			{
+				title: "declares its budget where the runner will not read it",
+				duration: 4_500,
+			},
+		]);
+		const rows = rowLines(
+			run(["--report", reportFile, "--baseline", at("none.json")]).lines,
+			file,
+		);
+		// vitest 5.1.0 rejects this signature at collection and reports zero tests,
+		// so no real row can carry this cap: reading the object would invent a 20 s
+		// budget for a file the runner never runs. The fold judges the test against
+		// the file chain it would get with no options at all (r2 F8).
+		expect(rows.length).toBe(1);
+		expect(rows[0]).toContain(
+			`4500 ms is 90% of the ${DEFAULT_TEST_TIMEOUT_MS} ms cap`,
+		);
+	});
+
+	it("resolves a suite budget written before the factory", () => {
 		const file = "tests/inherited/describe-tail-options.test.ts";
 		const reportFile = report("reports/tail-options.json", file, [
 			{

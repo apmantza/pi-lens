@@ -172,8 +172,9 @@ const isHandler = (node) =>
 
 /**
  * The timeout expression the runner would read from a test call, in the order
- * `parseArguments` reads it: the trailing argument when one follows the
- * handler, else the options object's `timeout` member.
+ * `parseArguments` reads it: the options or budget expression in the second slot,
+ * or the expression that follows the handler. A slot the runner does not read for
+ * a budget -- the handler itself, or options written after it -- declares none.
  */
 function timeoutExpressionOf(argNodes) {
 	const second = argNodes[1];
@@ -182,8 +183,17 @@ function timeoutExpressionOf(argNodes) {
 	// in either shape an object is read for its `timeout:` member, because the
 	// object itself is not a number and `it(title, fn, { retry: 2 })` has no
 	// budget of its own.
+	// A handler in the second slot means a trailing budget: `it(title, fn, 30_000)`.
+	// The runner still takes a trailing number -- probed against the pinned vitest
+	// 5.1.0, the file collects and enforces it (a 600 ms test under `it(name, fn,
+	// 300)` fails "Test timed out in 300ms"), and
+	// `tests/clients/dispatch/fact-store-session-bound.test.ts` uses that shape
+	// today. A trailing OBJECT is the half of the signature the runner refuses:
+	// `it(name, fn, { timeout })` and `describe(name, fn, { timeout })` are rejected
+	// at collection and report zero tests, so there is no row whose cap could come
+	// from it and the object is not read here (r2 F8).
 	if (third !== undefined && isHandler(second))
-		return objectTimeout(third) ?? { node: third };
+		return objectTimeout(third) === null ? { node: third } : null;
 	// A second argument that is not the handler, with a handler after it, is the
 	// options slot: `it(name, LANE, fn)`. Read it as options rather than skipping
 	// to the file chain, so a name bound to `{ timeout: 180_000 }` resolves and a
