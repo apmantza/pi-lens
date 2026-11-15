@@ -32,6 +32,10 @@ import eslintRunner from "../../../clients/dispatch/runners/eslint.js";
 import oxlintRunner from "../../../clients/dispatch/runners/oxlint.js";
 import ruffRunner from "../../../clients/dispatch/runners/ruff.js";
 import type { RunnerResult } from "../../../clients/dispatch/types.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../../clients/degradation-ledger.js";
 import { setProjectTrustState } from "../../../clients/project-trust.js";
 import { gateStagedDelta } from "../../../clients/staged-delta.js";
 import { execFileSync } from "../../support/git-fixture-env.js";
@@ -352,5 +356,196 @@ describe("#5621 the tools whose CLI cannot lint stdin stay on the copy", () => {
 		expect(named.status).not.toBe(0);
 		expect(named.stderr).toContain("not expected in this context");
 		expect(oxlintRunner.lintsGivenContent).toBeUndefined();
+	}, 60_000);
+});
+
+/**
+ * #5621: a run with a disk-reading lane still writes the copy. The copy is
+ * excluded from `git add -A` first, through the repository's local exclude
+ * file (`info/exclude` of the common dir, so linked worktrees share it).
+ *
+ * Recurrence prevented: #5619's seed copy (`pi-lens-seed-<hex>.<name>`) beside
+ * a TypeScript file, with biome and oxlint selected, was staged by a
+ * concurrent `git add -A` and the next commit was refused naming it (#5621,
+ * reproduced).
+ */
+const SEED_PATTERN = "pi-lens-seed-*";
+const TS_HEAD = "debugger;\n";
+const TS_WRITTEN = "export const a = 1;\n";
+
+describe("#5621 the seed copy is excluded from git before it is written", () => {
+	const cells = setupTestEnvironment("pi-lens-5621-exclude-");
+
+	afterAll(() => removeTempDirSync(cells.tmpDir));
+
+	function gitIn(cwd: string, args: string[]): string {
+		return execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
+	}
+
+	/** A repo with one committed TypeScript file whose write is credited. */
+	function tsRepo(name: string): { dir: string; file: string } {
+		const dir = path.join(cells.tmpDir, name);
+		fs.mkdirSync(dir, { recursive: true });
+		gitIn(dir, ["init", "-q"]);
+		gitIn(dir, ["config", "user.name", "t"]);
+		gitIn(dir, ["config", "user.email", "t@t.local"]);
+		fs.writeFileSync(path.join(dir, "biome.json"), "{}\n");
+		fs.writeFileSync(path.join(dir, ".gitignore"), "node_modules\n");
+		fs.symlinkSync(
+			path.join(repoRoot, "node_modules"),
+			path.join(dir, "node_modules"),
+			"dir",
+		);
+		const file = path.join(dir, "a.ts");
+		fs.writeFileSync(file, TS_HEAD);
+		gitIn(dir, ["add", "-A"]);
+		gitIn(dir, ["commit", "-qm", "base"]);
+		fs.writeFileSync(file, TS_WRITTEN);
+		return { dir, file };
+	}
+
+	/** The production seed of a credited write whose HEAD copy is `TS_HEAD`. */
+	function seed(dir: string, file: string) {
+		resetDispatchBaselines();
+		return capturePreEditLinterFindings(
+			file,
+			dir,
+			pi,
+			{ isCurrent: () => true },
+			undefined,
+			true,
+			async () => ({ content: TS_HEAD }),
+		);
+	}
+
+	const exclude = (gitDir: string): string => {
+		const file = path.join(gitDir, "info", "exclude");
+		return fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+	};
+
+	it("keeps a concurrent `git add -A` from staging the copy while it exists", async () => {
+		const { dir, file } = tsRepo("add-all");
+		const staged: string[] = [];
+		let copySeen = false;
+		const watcher = fs.watch(dir, (_event, name) => {
+			if (!name?.toString().startsWith("pi-lens-seed-")) return;
+			copySeen = true;
+			// The reproduced case: another tool stages the whole tree meanwhile.
+			gitIn(dir, ["add", "-A"]);
+			staged.push(
+				...gitIn(dir, ["diff", "--cached", "--name-only"]).split("\n"),
+			);
+		});
+		try {
+			await seed(dir, file);
+		} finally {
+			watcher.close();
+		}
+		// The copy existed (a vacuous run cannot pass) and was not staged.
+		expect(copySeen).toBe(true);
+		expect(staged.filter((n) => n.includes("pi-lens-seed-"))).toEqual([]);
+		// The commit that follows is not refused for the copy.
+		const gate = await gateStagedDelta(
+			"bash",
+			{ command: 'git commit -m "wip"' },
+			{ cwd: dir, projectRoot: dir, getFlag: () => undefined },
+			undefined,
+		);
+		expect(gate.reason ?? "").not.toContain("pi-lens-seed-");
+	}, 60_000);
+
+	it("writes the line once for two seeds and leaves a tracked .gitignore alone", async () => {
+		const { dir, file } = tsRepo("twice");
+		await seed(dir, file);
+		await seed(dir, file);
+		const lines = exclude(path.join(dir, ".git"))
+			.split("\n")
+			.filter((l) => l === SEED_PATTERN);
+		expect(lines).toEqual([SEED_PATTERN]);
+		expect(fs.readFileSync(path.join(dir, ".gitignore"), "utf8")).toBe(
+			"node_modules\n",
+		);
+		expect(gitIn(dir, ["status", "--porcelain"])).not.toContain("pi-lens-");
+	}, 60_000);
+
+	it("keeps what the exclude file already holds, with and without a final newline", async () => {
+		const first = tsRepo("keep-newline");
+		fs.mkdirSync(path.join(first.dir, ".git", "info"), { recursive: true });
+		fs.writeFileSync(
+			path.join(first.dir, ".git", "info", "exclude"),
+			"# mine\n*.bak\n",
+		);
+		await seed(first.dir, first.file);
+		expect(exclude(path.join(first.dir, ".git"))).toBe(
+			"# mine\n*.bak\n" + SEED_PATTERN + "\n",
+		);
+		const second = tsRepo("keep-bare");
+		fs.mkdirSync(path.join(second.dir, ".git", "info"), { recursive: true });
+		fs.writeFileSync(path.join(second.dir, ".git", "info", "exclude"), "*.bak");
+		await seed(second.dir, second.file);
+		expect(exclude(path.join(second.dir, ".git"))).toBe(
+			"*.bak\n" + SEED_PATTERN + "\n",
+		);
+	}, 60_000);
+
+	it("writes the line into the common dir for a linked worktree", async () => {
+		const main = tsRepo("wt-main");
+		const linked = path.join(cells.tmpDir, "wt-linked");
+		gitIn(main.dir, ["worktree", "add", "-q", linked, "-b", "wt"]);
+		fs.symlinkSync(
+			path.join(repoRoot, "node_modules"),
+			path.join(linked, "node_modules"),
+			"dir",
+		);
+		const file = path.join(linked, "a.ts");
+		fs.writeFileSync(file, TS_WRITTEN);
+		await seed(linked, file);
+		expect(exclude(path.join(main.dir, ".git"))).toContain(SEED_PATTERN + "\n");
+		// The worktree's own git dir holds no second copy of the rule.
+		const own = gitIn(linked, ["rev-parse", "--absolute-git-dir"]).trim();
+		expect(exclude(own)).toBe("");
+	}, 60_000);
+
+	it("still writes the copy and records one failure per session when the exclude cannot be written", async () => {
+		const { dir, file } = tsRepo("unwritable");
+		// A directory where the file belongs: neither read nor appended to, for
+		// root as well.
+		const held = path.join(dir, ".git", "info", "exclude");
+		fs.rmSync(held, { force: true });
+		fs.mkdirSync(held, { recursive: true });
+		resetDegradationLedger();
+		let copySeen = false;
+		const watcher = fs.watch(dir, (_event, name) => {
+			if (name?.toString().startsWith("pi-lens-seed-")) copySeen = true;
+		});
+		try {
+			await seed(dir, file);
+			await seed(dir, file);
+		} finally {
+			watcher.close();
+		}
+		expect(copySeen).toBe(true);
+		const rows = getDegradationSummary().filter(
+			(row) => row.kind === "seed-exclude-unwritable",
+		);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.count).toBe(1);
+	}, 60_000);
+
+	it("does nothing outside a git repository", async () => {
+		const dir = path.join(cells.tmpDir, "no-repo");
+		fs.mkdirSync(dir);
+		fs.writeFileSync(path.join(dir, "biome.json"), "{}\n");
+		const file = path.join(dir, "a.ts");
+		fs.writeFileSync(file, TS_WRITTEN);
+		resetDegradationLedger();
+		await seed(dir, file);
+		expect(fs.existsSync(path.join(dir, ".git"))).toBe(false);
+		expect(
+			getDegradationSummary().filter(
+				(row) => row.kind === "seed-exclude-unwritable",
+			),
+		).toEqual([]);
+		expect(fs.readdirSync(dir).sort()).toEqual(["a.ts", "biome.json"]);
 	}, 60_000);
 });

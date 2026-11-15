@@ -31,7 +31,7 @@ import {
 	type RunnerResultSink,
 	skipGeneratedFile,
 } from "./dispatcher.js";
-import { spawnAbortScope } from "../safe-spawn.js";
+import { safeSpawnAsync, spawnAbortScope } from "../safe-spawn.js";
 import { emitBounded } from "../bounded-telemetry.js";
 import {
 	incrementDegradationCount,
@@ -3755,6 +3755,52 @@ function seedCopyName(dir: string, filePath: string): string {
 	);
 }
 
+/** The name every seed copy starts with, as one git exclude pattern. */
+const SEED_COPY_EXCLUDE = "pi-lens-seed-*";
+
+/**
+ * #5621: keep a seed copy out of `git add -A`. Adds {@link SEED_COPY_EXCLUDE}
+ * to the repository's local exclude file (`info/exclude` of the common git
+ * dir, which a linked worktree shares), once and only when absent: never a
+ * tracked `.gitignore`, never committed. Outside a repository there is nothing
+ * to do. A file that cannot be read or written does not stop the copy (the run
+ * is worth more than the exclusion); the failure is one record per session.
+ * The read and the append run with no await between them, so two seeds of one
+ * process cannot both append.
+ */
+async function ensureSeedCopyExcluded(dir: string): Promise<void> {
+	try {
+		const found = await safeSpawnAsync(
+			"git",
+			["rev-parse", "--path-format=absolute", "--git-common-dir"],
+			{ cwd: dir, timeout: 5000, resourceLabel: "seed-copy-exclude" },
+		);
+		// git missing or timed out is no answer: the record below says so.
+		if (found.error) throw found.error;
+		// A non-zero exit is "not a repository": nothing to exclude from.
+		if (found.status !== 0) return;
+		const excludeFile = nodePath.join(found.stdout.trim(), "info", "exclude");
+		const held = nodeFs.existsSync(excludeFile)
+			? nodeFs.readFileSync(excludeFile, "utf8")
+			: "";
+		if (held.split(/\r?\n/).some((line) => line.trim() === SEED_COPY_EXCLUDE))
+			return;
+		nodeFs.mkdirSync(nodePath.dirname(excludeFile), { recursive: true });
+		nodeFs.appendFileSync(
+			excludeFile,
+			(held === "" || held.endsWith("\n") ? "" : "\n") +
+				SEED_COPY_EXCLUDE +
+				"\n",
+		);
+	} catch (error) {
+		recordDegradationOnce({
+			kind: "seed-exclude-unwritable",
+			subject: "info/exclude",
+			reason: `the seed copy is not excluded from git: ${error instanceof Error ? error.message : String(error)}`,
+		});
+	}
+}
+
 /**
  * {@link selectSeedLanes}, then the bytes the lanes lint, read once. From
  * disk, or `given` (#5616, #5621): handed to the lanes as `ctx.givenContent`
@@ -3804,6 +3850,7 @@ async function prepareSeedLaneRun(
 				bytesOnDisk: false,
 			},
 		};
+	await ensureSeedCopyExcluded(given.dir);
 	try {
 		nodeFs.writeFileSync(lanes.copyAt, content, { flag: "wx" });
 	} catch {
