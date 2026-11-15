@@ -419,7 +419,7 @@ describe("#5621 the seed copy is excluded from git before it is written", () => 
 		return fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
 	};
 
-	it("keeps a concurrent `git add -A` from staging the copy while it exists", async () => {
+	it("keeps a concurrent git add -A from staging the copy while it exists", async () => {
 		const { dir, file } = tsRepo("add-all");
 		const staged: string[] = [];
 		let copySeen = false;
