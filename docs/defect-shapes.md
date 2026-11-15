@@ -778,8 +778,8 @@ file-scoped worklist and receives no project-wide scanner output.
     clock value for some other purpose. The broader `awaited-loop-wait` rule,
     which admits an awaited loop only on a real-clock deadline or a lone
     `waitFor`, sees all of these but ships disabled
-    (`scripts/governance-rules/rules-disabled/`, #4865): 17 of its 669 members
-    on the tree were real-I/O waits.
+    (`scripts/governance-rules/rules-disabled/`, #4865): at least 17 of its 669
+    members on the tree, among the members read, were real-I/O waits.
     Instances and dates: `HISTORY.md`.
 
 92. **Test double with a result shape the real producer never returns:** a

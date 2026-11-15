@@ -154,15 +154,7 @@ function spawnAstGrep(args, root) {
 			)
 			.join(path.delimiter);
 	}
-	// The JSON report carries each match's whole text. With the disabled
-	// awaited-loop-wait governance rule switched on (#4865), the report on the
-	// tree is about 1.5 MB, past spawnSync's 1 MB default, which fails the scan
-	// with ENOBUFS.
-	return safeSpawn("ast-grep", args, {
-		cwd: root,
-		env,
-		maxBuffer: 64 * 1024 * 1024,
-	});
+	return safeSpawn("ast-grep", args, { cwd: root, env });
 }
 
 /**
