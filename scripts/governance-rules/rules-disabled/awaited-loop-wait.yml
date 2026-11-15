@@ -1,0 +1,28 @@
+# Shipped disabled (#4865, PR #5620): rules-disabled/ is not in sgconfig.yml's
+# ruleDirs, so neither the scan nor its baseline sees this rule. Only
+# sgconfig-disabled.yml loads it, to run its rule tests
+# (rule-tests-disabled/awaited-loop-wait-test.yml). The fixer's own judgement
+# of all 669 members on the tree (2026-11-15) found 17 real-I/O waits (2.5%,
+# at most 29 counting the uncertain ones), with no outside sample, and about
+# 47 new members a week, nearly all drive loops. Turning it on means moving
+# it into rules/, which retires turn-count-wait and utils/turn-count-loop.yml.
+# The test-hook twin then switches to `matches: awaited-loop`, and every
+# member gets a baseline row with its reason.
+id: awaited-loop-wait
+language: TypeScript
+severity: error
+message: >-
+  Awaited loop without a known-good exit (shape 86): a test loop that awaits
+  may end only on a real-clock deadline, or await nothing but waitFor
+  (tests/clients/interleaving-kit.ts), which reads a real-clock deadline scaled
+  by PI_LENS_TEST_TIMEOUT_SCALE. A count, a poll and a for-of all run out on a
+  loaded CI runner, whatever the loop awaits.
+note: >-
+  The rule cannot tell N rounds of the work under test from N yields. A loop
+  that is not a wait (a drive loop, an in-process flush) is exempted with
+  `// ast-grep-ignore: awaited-loop-wait -- <reason>`, or recorded in
+  scripts/governance-rules/baseline.json with its own reason.
+files:
+  - "tests/**"
+rule:
+  matches: awaited-loop
