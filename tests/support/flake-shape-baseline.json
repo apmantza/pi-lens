@@ -115,6 +115,7 @@
 		"index-5108-opaque-blocker-disclosure-witness.test.ts": 3,
 		"index-5552-lsp-resync-wire.test.ts": 4,
 		"index-5552-shell-write-forms.test.ts": 8,
+		"index-5553-staged-delta-gate.test.ts": 1,
 		"index-5553-writer-baselines.test.ts": 3,
 		"mcp/analyze-cli.test.ts": 1,
 		"mcp/build-graph-cli.test.ts": 1,

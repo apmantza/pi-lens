@@ -675,14 +675,14 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 		id: "dispatch-integration:sessionCaches",
 		module: "dispatch/integration.ts",
 		state:
-			"primaryFilesThisTurn, sessionSlopRuleCounts, sessionFacts, preEditCaptureFacts",
+			"primaryFilesThisTurn, sessionSlopRuleCounts, sessionFacts, preEditCaptureFacts, stagedDeltaFacts",
 		policy: "session_start",
 		ownerKey: "session",
 		sessionSeamException:
 			"FactStore keeps one process-wide session-fact map and file-fact map keyed by fact id and path, plus per-process slop counters, with no session in any key (shape 72 member, no open issue)",
 		resetName: "resetDispatchBaselines",
 		reason:
-			"Every one of these is a claim about the tree as this session found it; `sessionFacts` and `preEditCaptureFacts` (#4483) are cleared by a method call inside this same reset, so the reset is the registered seam.",
+			"Every one of these is a claim about the tree as this session found it; `sessionFacts`, `preEditCaptureFacts` (#4483) and `stagedDeltaFacts` (#5553) are cleared by a method call inside this same reset, so the reset is the registered seam.",
 	},
 	{
 		id: "dispatcher:coverageNoticeSeen",
@@ -2472,7 +2472,10 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// `preEditCapturesInFlight`, which holds an entry only while that file's
 	// capture runs (at most four); reset aborts each controller and each capture
 	// releases its slot after teardown, preventing overlap across resets.
-	"dispatch/integration.ts": 8,
+	// #5553 (8 -> 9): `stagedDeltaFacts`, the commit gate's staged read's own
+	// file facts, cleared by `resetDispatchBaselines` (the sessionCaches entry);
+	// each file's facts are released when its lane run settles.
+	"dispatch/integration.ts": 9,
 	// #3968: the runner-id identity leaf beside the dispatcher — one Set fed
 	// by `RunnerRegistry.register` and re-derived at every process start
 	// (registration state, not session state); see the file-level exemption

@@ -895,6 +895,10 @@ export const wallClockBudgetInclude = [
 	// checkout behind a real pi session (flake-shape admission); the child
 	// processes ride in the serialized lane.
 	"tests/index-5552-shell-write-forms.test.ts",
+	// #5553: the commit gate's own `git` reads and the real tree-sitter and
+	// ast-grep lanes behind a real pi session (flake-shape admission); the git
+	// children ride in the serialized lane.
+	"tests/index-5553-staged-delta-gate.test.ts",
 	// #5553: real `sed`, ast-grep, git and fake-LSP children behind a real pi
 	// session; the gate reads the writers' baselines (flake-shape admission).
 	"tests/index-5553-writer-baselines.test.ts",
