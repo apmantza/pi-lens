@@ -168,6 +168,8 @@ describe("GitHub release asset selection", () => {
 			["hadolint", "linux", "x64", "hadolint-linux-x86_64"],
 			["hadolint", "linux", "arm64", "hadolint-linux-arm64"],
 			["vale", "linux", "x64", "vale_3.27.0_Linux_64-bit.tar.gz"],
+			["vale", "linux", "arm64", "vale_3.27.0_Linux_arm64.tar.gz"],
+			["vale", "darwin", "x64", "vale_3.27.0_macOS_64-bit.tar.gz"],
 			["vale", "darwin", "arm64", "vale_3.27.0_macOS_arm64.tar.gz"],
 			["vale", "win32", "x64", "vale_3.27.0_Windows_64-bit.zip"],
 			["shfmt", "win32", "arm64", "shfmt_v3.14.1_windows_amd64.exe"],

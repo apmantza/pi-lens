@@ -83,6 +83,7 @@ const ASSET_NAMES = [
 	"opengrep_windows_x86.zip",
 	"opengrep_windows_x86.zip.cert",
 	"opengrep_windows_x86.zip.sig",
+	"tflint_windows_amd64.zip",
 ];
 
 const downloaded: string[] = [];
@@ -169,6 +170,19 @@ describe("opengrep on Windows installs from the v2.0.0 zip with its DLLs (#5624)
 		expect(fs.readdirSync(path.join(root, "bin")).sort()).toEqual(
 			[...ZIP_MEMBERS].sort(),
 		);
+	});
+
+	// The DLL move is opt-in (`bundleArchiveDlls`): any other zip tool's
+	// sibling DLLs stay behind rather than landing in the shared managed bin.
+	it("a zip tool that does not opt in leaves its sibling DLLs out of the bin", async () => {
+		extractedMembers.splice(0, extractedMembers.length, "tflint.exe", "x.dll");
+		const root = pinnedHome();
+
+		vi.resetModules();
+		const installer = await import("../../../clients/installer/index.js");
+		expect(await installer.installTool("tflint")).toBe(true);
+		expect(downloaded).toEqual(["tflint_windows_amd64.zip"]);
+		expect(fs.readdirSync(path.join(root, "bin"))).toEqual(["tflint.exe"]);
 	});
 
 	it("a zip that carries no DLLs still installs the exe alone", async () => {
