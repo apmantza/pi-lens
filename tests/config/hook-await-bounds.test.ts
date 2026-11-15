@@ -2405,7 +2405,10 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// parse) and two leaf-bounded `git` spawns (GIT_TIMEOUT_MS); its hook
 	// caller holds the whole delta under bounded() with the hook's signal, so
 	// a second bound here would add a timer for the same deadline.
-	"clients/metrics/complexity-baseline.ts": 9,
+	// #5616: 9 -> 10. The default-branch read's `git show` moved into
+	// `readFileAtRef`, which `readAtDefaultBranch` awaits; same spawn, same
+	// leaf bound, one more frame.
+	"clients/metrics/complexity-baseline.ts": 10,
 	// #4238 R8: the shutdown drain is intentionally owned by the shared NDJSON
 	// writer registry. Its per-writer awaits cannot receive pi's hook signal;
 	// the caller applies the session_shutdown wall bound around the whole drain.
@@ -3126,6 +3129,18 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, BoundedSite>> = {
 			"absent only in a bare unit harness. PI_LENS_LSP_SYNC_BUDGET_MS is the " +
 			"bound that is always live.",
 	},
+	"call:clients/pre-edit-capture.ts#captureWriterSeeds:2dc2d1e2~efa038c8": {
+		work: "threaded",
+		signal:
+			"The pre-edit linter capture (#4483, #5553) takes the thunk's signal into " +
+			"`capturePreEditLinterFindings`, which runs its linter spawns under it; that signal aborts on the " +
+			"tool_call's ctx.signal (absent only in a harness) or when the bound fires. " +
+			"#2523 gives tool_call no budget of its own, so each capture carries " +
+			"PRE_EDIT_CAPTURE_BUDGET_MS (500 ms) or, for a writer that names no edit span, " +
+			"PRE_EDIT_SPANLESS_CAPTURE_BUDGET_MS (1500 ms), both measured in the PR; " +
+			"that wall bound is always live, and a capture it abandons installs nothing " +
+			"once the writer has written.",
+	},
 	"call:clients/project-trust.ts#readAdoptedProjectTrust:8d9498e9~136c8ea4": {
 		work: "pure-read",
 		signal:
@@ -3170,18 +3185,6 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, BoundedSite>> = {
 				"wall budget and its timer is armed first, so the inner arm ends the wait " +
 				"and owns the recovery (the deferred reseed and the #1785 hydration).",
 		},
-	"call:clients/runtime-tool-call.ts#captureWriterSeeds:2dc2d1e2~efa038c8": {
-		work: "threaded",
-		signal:
-			"The pre-edit linter capture (#4483, #5553) takes the thunk's signal into " +
-			"`capturePreEditLinterFindings`, which runs its linter spawns under it; that signal aborts on the " +
-			"tool_call's ctx.signal (absent only in a harness) or when the bound fires. " +
-			"#2523 gives tool_call no budget of its own, so each capture carries " +
-			"PRE_EDIT_CAPTURE_BUDGET_MS (500 ms) or, for a writer that names no edit span, " +
-			"PRE_EDIT_SPANLESS_CAPTURE_BUDGET_MS (1500 ms), both measured in the PR; " +
-			"that wall bound is always live, and a capture it abandons installs nothing " +
-			"once the writer has written.",
-	},
 	"call:clients/runtime-tool-call.ts#handleToolCallImpl:2dc2d1e2~37e44a1d": {
 		work: "threaded",
 		signal:
