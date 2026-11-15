@@ -340,6 +340,26 @@ describe("resolveToolCwd (#2777)", () => {
 			).toBe(nested());
 		});
 
+		it("ignores a config above a project root that sits strictly above ctx.cwd (#5631)", () => {
+			// Recurrence: #5631 F1. The cells above set `projectRoot` equal to
+			// `ctx.cwd` or to a sibling, so a ceiling one level too high (the root's
+			// parent) was never reached. Here the root is an ancestor of the package,
+			// and a config sits above the root, outside the session.
+			const outer = path.join(home, "outer");
+			const project = path.join(outer, "repo");
+			const pkg = path.join(project, "apps", "web");
+			fs.mkdirSync(pkg, { recursive: true });
+			fs.writeFileSync(path.join(outer, ".oxlintrc.json"), "{}\n");
+			fs.writeFileSync(path.join(pkg, "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "oxlint", fileAt(pkg), {
+					cwd: pkg,
+					projectRoot: project,
+				}).cwd,
+			).toBe(pkg);
+		});
+
 		it("does not anchor at a config in the home directory", () => {
 			// The seam's $HOME ceiling is exclusive: a home-level config is the
 			// user's, not this project's, even though the config seam climbs to it.

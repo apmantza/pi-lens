@@ -263,6 +263,56 @@ describe("oxlint runner cwd follows the config (#5541)", () => {
 		}
 	}, 60_000);
 
+	it("anchors a nested package's own config in that package on the context dispatch builds (#5631)", async () => {
+		// Recurrence: #5631 F2. The anchor climb starts at the file's marker root,
+		// the package. Starting it at the session root let the workspace's root
+		// config answer first, so a package with its own config ran from the
+		// workspace, where its cwd-relative plugin path does not resolve.
+		const env = setupTestEnvironment("pi-lens-oxlint-nested-own-prod-");
+		try {
+			createTempFile(env.tmpDir, "package.json", '{"name":"root"}');
+			createTempFile(env.tmpDir, "apps/web/package.json", '{"name":"web"}');
+			createTempFile(env.tmpDir, "apps/web/theme.css", "/* theme */\n");
+			createTempFile(env.tmpDir, "cwd-plugin.mjs", CWD_PROBE_PLUGIN);
+			createTempFile(
+				env.tmpDir,
+				".oxlintrc.json",
+				probeConfig("./cwd-plugin.mjs", "does/not/exist.css"),
+			);
+			createTempFile(
+				env.tmpDir,
+				"apps/web/.oxlintrc.json",
+				probeConfig("../../cwd-plugin.mjs", "theme.css"),
+			);
+			const filePath = createTempFile(
+				env.tmpDir,
+				"apps/web/src/x.js",
+				"const a = 1;\nconsole.log(a);\n",
+			);
+			plantOxlint(env.tmpDir);
+			plantOxlint(path.join(env.tmpDir, "apps", "web"));
+
+			const { ctx, result } = await runOxlintOnDispatchContext(
+				filePath,
+				env.tmpDir,
+			);
+
+			// The premise: the production shape, a package file under the workspace.
+			expect(fs.realpathSync(ctx.cwd)).toBe(
+				fs.realpathSync(path.join(env.tmpDir, "apps", "web")),
+			);
+			expect(result.diagnostics.map((d) => d.rule)).not.toContain(
+				"entry-exists",
+			);
+			expect(shippedOxlint.lintSpawns).toHaveLength(1);
+			expect(fs.realpathSync(shippedOxlint.lintSpawns[0]?.cwd ?? "")).toBe(
+				fs.realpathSync(path.join(env.tmpDir, "apps", "web")),
+			);
+		} finally {
+			env.cleanup();
+		}
+	}, 60_000);
+
 	it("still runs a nested package's own config from that package", async () => {
 		const env = setupTestEnvironment("pi-lens-oxlint-nested-config-cwd-");
 		try {
