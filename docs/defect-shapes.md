@@ -775,7 +775,11 @@ file-scoped worklist and receives no project-wide scanner output.
     count (a pure `for (N) await yield` flush), a wait spelled as recursion, a
     count written as iteration over a generated range
     (`for (const _ of Array.from({ length: N }))`), or a loop that compares a
-    clock value for some other purpose.
+    clock value for some other purpose. The broader `awaited-loop-wait` rule,
+    which admits an awaited loop only on a real-clock deadline or a lone
+    `waitFor`, sees all of these but ships disabled
+    (`scripts/governance-rules/rules-disabled/`, #4865): at least 17 of its 669
+    members on the tree, among the members read, were real-I/O waits.
     Instances and dates: `HISTORY.md`.
 
 92. **Test double with a result shape the real producer never returns:** a
