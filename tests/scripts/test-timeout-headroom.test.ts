@@ -49,6 +49,29 @@ function source(rel: string, body: string): string {
 	return rel;
 }
 
+/**
+ * Create `<rel>` as a directory under the fixture root and return its path.
+ * Every case calls this for the directories it writes into, so no case depends
+ * on a directory an earlier one happened to create (the shuffled-seed reds).
+ */
+function dirAt(rel: string): string {
+	const path = at(rel);
+	mkdirSync(path, { recursive: true });
+	return path;
+}
+
+/**
+ * Write `text` to `<rel>` under the fixture root, creating its parent, and
+ * return the path. The bare `writeFileSync` would lean on whichever earlier
+ * case happened to create the directory.
+ */
+function writeJson(rel: string, text: string): string {
+	const file = at(rel);
+	mkdirSync(dirname(file), { recursive: true });
+	writeFileSync(file, text);
+	return file;
+}
+
 /** Write a one-file Vitest JSON report and return its path. */
 function report(rel: string, file: string, assertions: Assertion[]): string {
 	const path = at(rel);
@@ -244,9 +267,8 @@ it("second test on the shared cap", async () => {}, CAP_MS);
 			capMs: 30_000,
 		});
 
-		const reportFile = at("reports/fact-store.json");
-		writeFileSync(
-			reportFile,
+		const reportFile = writeJson(
+			"reports/fact-store.json",
 			JSON.stringify({
 				testResults: [
 					{
@@ -524,10 +546,8 @@ it("second test on the shared cap", async () => {}, CAP_MS);
 
 	it("keeps a baselined offender quiet and calls only the new one NEW", () => {
 		const file = "tests/near/timeout-near.test.ts";
-		const baselineFile = at("baseline/offenders.json");
-		mkdirSync(at("baseline"), { recursive: true });
-		writeFileSync(
-			baselineFile,
+		const baselineFile = writeJson(
+			"baseline/offenders.json",
 			JSON.stringify({
 				schema: 1,
 				entries: [
@@ -592,9 +612,8 @@ it("second test on the shared cap", async () => {}, CAP_MS);
 				status: "skipped",
 			},
 		]);
-		const baselineFile = at("baseline/stale.json");
-		writeFileSync(
-			baselineFile,
+		const baselineFile = writeJson(
+			"baseline/stale.json",
 			JSON.stringify({
 				schema: 1,
 				entries: [
@@ -662,7 +681,7 @@ it("second test on the shared cap", async () => {}, CAP_MS);
 				duration: 29_600,
 			},
 		]);
-		const written = at("baseline/written.json");
+		const written = join(dirAt("baseline"), "written.json");
 		expect(
 			run(["--report", reportFile, "--baseline", written, "--write-baseline"])
 				.code,
@@ -689,9 +708,8 @@ it("second test on the shared cap", async () => {}, CAP_MS);
 		for (const entry of loaded.entries.values())
 			expect(entry.file.startsWith("tests/")).toBe(true);
 		// The check that ran on the run the baseline came from reads clean.
-		const reportFile = at("reports/committed.json");
-		writeFileSync(
-			reportFile,
+		const reportFile = writeJson(
+			"reports/committed.json",
 			JSON.stringify({
 				testResults: [
 					{
@@ -720,21 +738,24 @@ it("second test on the shared cap", async () => {}, CAP_MS);
 		expect(missing.code).toBe(2);
 		expect(missing.lines[0]).toContain("--report path does not exist");
 
-		const malformed = at("reports/malformed.json");
-		writeFileSync(malformed, "{ not json");
+		const malformed = writeJson("reports/malformed.json", "{ not json");
 		expect(run(["--report", malformed]).lines[0]).toContain(
 			"is not readable JSON",
 		);
 		expect(run(["--report", malformed]).code).toBe(2);
 
-		const wrongShape = at("reports/wrong-shape.json");
-		writeFileSync(wrongShape, JSON.stringify({ results: [] }));
+		const wrongShape = writeJson(
+			"reports/wrong-shape.json",
+			JSON.stringify({ results: [] }),
+		);
 		expect(run(["--report", wrongShape]).lines[0]).toContain(
 			"not a vitest JSON report",
 		);
 
-		const badBaseline = at("reports/bad-baseline.json");
-		writeFileSync(badBaseline, JSON.stringify({ schema: 99, entries: [] }));
+		const badBaseline = writeJson(
+			"reports/bad-baseline.json",
+			JSON.stringify({ schema: 99, entries: [] }),
+		);
 		const reportFile = report(
 			"reports/ok.json",
 			"tests/default/no-declaration.test.ts",
@@ -744,9 +765,8 @@ it("second test on the shared cap", async () => {}, CAP_MS);
 			run(["--report", reportFile, "--baseline", badBaseline]).lines[0],
 		).toContain("unsupported schema");
 
-		const duplicate = at("reports/dup-baseline.json");
-		writeFileSync(
-			duplicate,
+		const duplicate = writeJson(
+			"reports/dup-baseline.json",
 			JSON.stringify({
 				schema: 1,
 				entries: [
@@ -779,15 +799,18 @@ it("second test on the shared cap", async () => {}, CAP_MS);
 	});
 
 	it("reads every .json under a directory and counts both shards", () => {
-		const shardDir = at("reports/shards");
-		mkdirSync(shardDir, { recursive: true });
-		writeFileSync(
-			join(shardDir, "shard-2.json"),
-			readFileSync(at("reports/default.json"), "utf8"),
+		// Both shard reports are this case's own input: copying a file an earlier
+		// case happened to write is what made the run order-dependent.
+		const shardDir = dirAt("reports/shards");
+		report(
+			"reports/shards/shard-2.json",
+			"tests/default/no-declaration.test.ts",
+			[{ title: "has no declared budget", duration: 4_000 }],
 		);
-		writeFileSync(
-			join(shardDir, "shard-1.json"),
-			readFileSync(at("reports/setconfig.json"), "utf8"),
+		report(
+			"reports/shards/shard-1.json",
+			"tests/setconfig/vitest-set-config.test.ts",
+			[{ title: "runs under the file config", duration: 6_300 }],
 		);
 		const { lines } = run([
 			"--report",
@@ -796,12 +819,11 @@ it("second test on the shared cap", async () => {}, CAP_MS);
 			at("none.json"),
 		]);
 		expect(summary(lines)).toContain("2 tests read, 2 over 60%");
+		expect(lines.join("\n")).toContain("4000 ms is 80% of the 5000 ms cap");
+		expect(lines.join("\n")).toContain("6300 ms is 70% of the 9000 ms cap");
 		// A stray non-report in the directory is refused by name, never skipped
 		// silently: a truncated artifact must not read as a clean shard.
-		writeFileSync(
-			join(shardDir, "sidecar.json"),
-			JSON.stringify({ headSha: "x" }),
-		);
+		writeJson("reports/shards/sidecar.json", JSON.stringify({ headSha: "x" }));
 		const stray = run(["--report", shardDir, "--baseline", at("none.json")]);
 		expect(stray.code).toBe(2);
 		expect(stray.lines[0]).toContain("sidecar.json");
