@@ -34,6 +34,12 @@ export type ToolCwdKind = "runner" | "formatter" | "lsp";
 
 export interface ToolCwdContext {
 	cwd?: string;
+	/**
+	 * The session's workspace root, when `cwd` is the file's own nested package:
+	 * `createDispatchContext` sets `cwd` to the file's language root and keeps the
+	 * workspace here (#5631).
+	 */
+	projectRoot?: string;
 	rootMarkers?: readonly string[];
 	/** Root already computed by a caller-owned resolver. */
 	serverRoot?: string;
@@ -277,6 +283,18 @@ function configAnchorOf(
 	return anchored ? findToolConfig(anchored, fromDir, options) : undefined;
 }
 
+/**
+ * Where the config climb stops (#5631). `ctx.cwd` is the file's language root,
+ * so a root config above a nested package sits outside it; the session's root
+ * is `ctx.projectRoot`. A project root that does not contain `cwd` says nothing
+ * about this file's session, so the ceiling stays at `cwd`.
+ */
+function configCeiling(ctx: ToolCwdContext, dispatchRoot: string): string {
+	const { projectRoot } = ctx;
+	if (!projectRoot) return dispatchRoot;
+	return isUnderDir(dispatchRoot, projectRoot) ? projectRoot : dispatchRoot;
+}
+
 /** Resolve every child process cwd/root through one bounded, synchronous seam. */
 export function resolveToolCwd(
 	kind: ToolCwdKind,
@@ -316,14 +334,17 @@ export function resolveToolCwd(
 		(insideDispatch ? isUnderDir(markerRoot, dispatchRoot) : true)
 	) {
 		// #5541: a caller-owned marker table still decides; a config outside the
-		// dispatch root is not the session's, so the climb stops at that root. The
-		// config seam climbs through `$HOME`, but the ceiling here is exclusive: a
+		// session is not the project's, so the climb stops at the session's root
+		// (#5631: the project root, not the package `ctx.cwd` names). The config
+		// seam climbs through `$HOME`, but the ceiling here is exclusive: a
 		// home-level config is the user's, never this project's.
 		const anchor =
 			kind === "runner" && !ctx.rootMarkers
 				? configAnchorOf(tool, markerRoot, {
 						homeDir,
-						...(insideDispatch ? { ceiling: dispatchRoot } : {}),
+						...(insideDispatch
+							? { ceiling: configCeiling(ctx, dispatchRoot) }
+							: {}),
 					})
 				: undefined;
 		if (
@@ -401,14 +422,14 @@ export function resolveToolCwd(
 
 /** Runner-shaped adapter kept at the same seam for every runner consumer. */
 export function resolveRunnerCwd(
-	ctx: { cwd: string; filePath: string },
+	ctx: { cwd: string; filePath: string; projectRoot?: string },
 	tool: string,
 ): string {
 	return resolveToolCwd("runner", tool, ctx.filePath, ctx).cwd;
 }
 
 export function resolveRunnerCwdWithReason(
-	ctx: { cwd: string; filePath: string },
+	ctx: { cwd: string; filePath: string; projectRoot?: string },
 	tool: string,
 ): ToolCwdResolution {
 	return resolveToolCwd("runner", tool, ctx.filePath, ctx);

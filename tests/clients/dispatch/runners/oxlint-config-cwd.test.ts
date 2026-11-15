@@ -141,6 +141,30 @@ async function runOxlintResult(filePath: string, dispatchRoot: string) {
 	return runner.run(makeRunnerCtx(filePath, dispatchRoot) as never);
 }
 
+/**
+ * Run the runner on the context production builds: `createDispatchContext`
+ * sets `ctx.cwd` to the file's own package (its language root) and keeps the
+ * workspace in `ctx.projectRoot`. `makeRunnerCtx(file, root)` puts the workspace
+ * in `ctx.cwd`, which production never does for a file under a nested package.
+ */
+async function runOxlintOnDispatchContext(filePath: string, workspace: string) {
+	const { createDispatchContext } =
+		await import("../../../../clients/dispatch/dispatcher.js");
+	const { FactStore } =
+		await import("../../../../clients/dispatch/fact-store.js");
+	const runner = (
+		await import("../../../../clients/dispatch/runners/oxlint.js")
+	).default;
+	const ctx = createDispatchContext(
+		filePath,
+		workspace,
+		{ getFlag: () => undefined } as never,
+		new FactStore(),
+	);
+	const result = await runner.run(ctx);
+	return { ctx, result };
+}
+
 async function runOxlint(filePath: string, dispatchRoot: string) {
 	const result = await runOxlintResult(filePath, dispatchRoot);
 	return result.diagnostics.map((diagnostic) => diagnostic.rule);
@@ -185,6 +209,54 @@ describe("oxlint runner cwd follows the config (#5541)", () => {
 
 			expect(await runOxlint(filePath, env.tmpDir)).not.toContain(
 				"entry-exists",
+			);
+		} finally {
+			env.cleanup();
+		}
+	}, 60_000);
+
+	it("resolves a root config's cwd-relative setting on the context dispatch builds for a nested package (#5631)", async () => {
+		// Recurrence: #5543 proved the anchor on `ctx.cwd` = the workspace, but
+		// `createDispatchContext` sets `ctx.cwd` to the file's package, so the
+		// config climb stopped at the package and the anchor never fired for a
+		// package edit in production.
+		const env = setupTestEnvironment("pi-lens-oxlint-config-cwd-prod-");
+		try {
+			createTempFile(env.tmpDir, "package.json", '{"name":"root"}');
+			createTempFile(env.tmpDir, "apps/web/package.json", '{"name":"web"}');
+			createTempFile(env.tmpDir, "shared/theme.css", "/* theme */\n");
+			createTempFile(env.tmpDir, "cwd-plugin.mjs", CWD_PROBE_PLUGIN);
+			createTempFile(
+				env.tmpDir,
+				".oxlintrc.json",
+				probeConfig("./cwd-plugin.mjs", "shared/theme.css"),
+			);
+			const filePath = createTempFile(
+				env.tmpDir,
+				"apps/web/src/x.js",
+				"const a = 1;\nconsole.log(a);\n",
+			);
+			plantOxlint(env.tmpDir);
+			plantOxlint(path.join(env.tmpDir, "apps", "web"));
+
+			const { ctx, result } = await runOxlintOnDispatchContext(
+				filePath,
+				env.tmpDir,
+			);
+
+			// The premise: this is the production shape, not the workspace.
+			expect(fs.realpathSync(ctx.cwd)).toBe(
+				fs.realpathSync(path.join(env.tmpDir, "apps", "web")),
+			);
+			expect(fs.realpathSync(ctx.projectRoot ?? "")).toBe(
+				fs.realpathSync(env.tmpDir),
+			);
+			expect(result.diagnostics.map((d) => d.rule)).not.toContain(
+				"entry-exists",
+			);
+			expect(shippedOxlint.lintSpawns).toHaveLength(1);
+			expect(fs.realpathSync(shippedOxlint.lintSpawns[0]?.cwd ?? "")).toBe(
+				fs.realpathSync(env.tmpDir),
 			);
 		} finally {
 			env.cleanup();
