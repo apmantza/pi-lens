@@ -1089,6 +1089,10 @@ export const wallClockBudgetInclude = [
 	// #2586 review F1: proves the ACTUAL stdout bytes supply-host-provided-deps.mjs
 	// prints (real child process, flake-shape admission).
 	"tests/scripts/supply-host-provided-deps.test.ts",
+	// #5311: the CLI's advisory exit code is the CI step's own contract, so one
+	// witness spawns the committed script and reads the process status; runCli's
+	// return value cannot show what the step sees (flake-shape admission).
+	"tests/scripts/test-timeout-headroom.test.ts",
 	// #2628: the warm-loader's install-log home resolution spawns a real child
 	// under a fully pinned env; the child's own os.homedir() fallback decides
 	// where the record lands and is unobservable in-process (flake-shape

@@ -702,17 +702,24 @@ export function parseTestReport(value, { source = "<report>" } = {}) {
 			`${source}: not a vitest JSON report (no testResults array)`,
 		);
 	const rows = [];
+	// Every identity the report carries, including the assertions that never ran:
+	// a baseline row whose test has gone is stale whether the test was skipped or
+	// deleted, and the two look the same from the judged rows alone.
+	const reported = new Map();
 	let undated = 0;
 	for (const result of value.testResults) {
 		if (!result || typeof result !== "object") continue;
 		const file = normalizeTestFile(String(result.name ?? ""));
 		for (const assertion of result.assertionResults ?? []) {
 			if (!assertion || typeof assertion !== "object") continue;
-			if (NOT_RUN.has(assertion.status)) continue;
 			const chain = Array.isArray(assertion.ancestorTitles)
 				? assertion.ancestorTitles.map(String)
 				: [];
 			if (typeof assertion.title !== "string") continue;
+			const labels = reported.get(file) ?? new Set();
+			labels.add(testLabel(chain, assertion.title));
+			reported.set(file, labels);
+			if (NOT_RUN.has(assertion.status)) continue;
 			if (!Number.isFinite(assertion.duration)) {
 				undated += 1;
 				continue;
@@ -726,12 +733,33 @@ export function parseTestReport(value, { source = "<report>" } = {}) {
 			});
 		}
 	}
-	return { rows, undated };
+	return { rows, undated, reported };
+}
+
+/**
+ * Baseline rows that name a test the reports did not carry. A row whose test has
+ * been renamed or deleted excuses nothing, and a ledger of such rows is a ratchet
+ * that has stopped measuring: the row is reported only when its own file was in
+ * the run, so a partial shard never calls a row stale.
+ */
+export function staleBaselineEntries(baseline, reported) {
+	const stale = [];
+	for (const entry of baseline.entries.values()) {
+		const labels = reported.get(entry.file);
+		if (!labels || labels.has(entry.test)) continue;
+		stale.push(entry);
+	}
+	return stale;
+}
+
+/** How a report spells one test: its suite chain and title, joined. */
+function testLabel(chain, title) {
+	return [...chain, title].join(" > ");
 }
 
 /** The stable identity a baseline entry admits. */
 export function rowId({ file, chain, title, capLabel }) {
-	return `${file}\u0000${[...chain, title].join(" > ")}\u0000${capLabel}`;
+	return `${file}\u0000${testLabel(chain, title)}\u0000${capLabel}`;
 }
 
 export function capLabelOf(resolution) {
@@ -742,8 +770,9 @@ export function capLabelOf(resolution) {
 
 /**
  * Assess reports against the ratio. Returns the emitted rows (sorted), the
- * counts behind the summary line, and the per-file resolution failures worth
- * naming even when no row was emitted for them.
+ * counts behind the summary line, and every identity the reports carried per
+ * file, which is what tells a stale baseline row from a shard that never ran
+ * its file.
  */
 export function assessReports({
 	reportValues,
@@ -758,12 +787,18 @@ export function assessReports({
 		);
 	const tables = new Map();
 	const rows = [];
+	const reported = new Map();
 	let tests = 0;
 	let undated = 0;
 	for (const { value, source } of reportValues) {
 		const parsed = parseTestReport(value, { source });
 		tests += parsed.rows.length;
 		undated += parsed.undated;
+		for (const [file, labels] of parsed.reported) {
+			const into = reported.get(file) ?? new Set();
+			for (const label of labels) into.add(label);
+			reported.set(file, into);
+		}
 		for (const row of parsed.rows) {
 			const tableFile = path.resolve(root, row.file);
 			const table =
@@ -796,6 +831,7 @@ export function assessReports({
 		byReason[row.reason] = (byReason[row.reason] ?? 0) + 1;
 	return {
 		rows,
+		reported,
 		counts: {
 			tests,
 			undated,

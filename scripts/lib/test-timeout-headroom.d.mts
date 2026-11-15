@@ -100,10 +100,17 @@ export function fileFloorMs(table: FileTable): {
 	source: string;
 };
 
+export interface ParsedReport {
+	rows: ReportRow[];
+	undated: number;
+	/** Every identity the report carried per file, including the never-run ones. */
+	reported: Map<string, Set<string>>;
+}
+
 export function parseTestReport(
 	value: unknown,
 	options?: { source?: string },
-): { rows: ReportRow[]; undated: number };
+): ParsedReport;
 
 export function rowId(row: {
 	file: string;
@@ -120,9 +127,19 @@ export function assessReports(options: {
 	ratio?: number;
 	scale?: number;
 	readFile?: (path: string) => string | null;
-}): { rows: HeadroomRow[]; counts: AssessCounts };
+}): {
+	rows: HeadroomRow[];
+	counts: AssessCounts;
+	reported: Map<string, Set<string>>;
+};
 
 export function loadBaseline(file: string): Baseline;
+
+/** Baseline rows whose test is absent from a file the reports did carry. */
+export function staleBaselineEntries(
+	baseline: Baseline,
+	reported: Map<string, Set<string>>,
+): BaselineEntry[];
 
 export function baselineEntries(
 	value: unknown,

@@ -1,58 +1,28 @@
 {
 	"schema": 1,
-	"generatedAt": "2026-11-15T01:40:35.134Z",
-	"generatedFrom": "GitHub Actions linux unit shards 1-5 (main, artifacts read for #5311), PI_LENS_TEST_TIMEOUT_SCALE=3",
+	"generatedFrom": "union of run 43450550304 shards 1-5 and run 43659748144 shards 1-5",
 	"ratio": 0.6,
-	"scale": 3,
 	"entries": [
-		{
-			"file": "tests/clients/cascade-compute.test.ts",
-			"test": "computeCascadeForFile > reads jsts neighbors from passive snapshot instead of active touching",
-			"capStatus": "resolved",
-			"capMs": 5000,
-			"durationMs": 3166
-		},
-		{
-			"file": "tests/clients/formatters-live-flight.test.ts",
-			"test": "formatFile live child flight > spawns one child for three simultaneous calls over a wedged shim, then cools it (#5549)",
-			"capStatus": "resolved",
-			"capMs": 25000,
-			"durationMs": 15029
-		},
-		{
-			"file": "tests/clients/loop-block-stall-discrimination.test.ts",
-			"test": "#1980 injected stalls classify by CPU, not by duration > the two blocks are the same length and differ only on the CPU axis",
-			"capStatus": "resolved",
-			"capMs": 5000,
-			"durationMs": 3443
-		},
-		{
-			"file": "tests/clients/ts-family-alias-members.test.ts",
-			"test": "TypeScript family: one registry fact, four extensions (shape 42) > scans the same findings in .mts and .cts as in .ts through the project scan",
-			"capStatus": "resolved",
-			"capMs": 5000,
-			"durationMs": 3204
-		},
-		{
-			"file": "tests/config/lsp-idle-eviction-measurement.test.ts",
-			"test": "idle-eviction probe population (#3645) > prepares every server the recorded run measured but marked tool-unavailable (#5323)",
-			"capStatus": "resolved",
-			"capMs": 5000,
-			"durationMs": 3486
-		},
-		{
-			"file": "tests/index-4698-mark-only-turn-gate.test.ts",
-			"test": "#4698: a mark-only turn clears the commit gate it marked > lets the commit through on the turn AFTER a mark that wrote no file",
-			"capStatus": "resolved",
-			"capMs": 5000,
-			"durationMs": 3997
-		},
 		{
 			"file": "tests/index-4913-cli-flag-timing.test.ts",
 			"test": "#4913: --no-lens reaches the lens decision pi makes after the factory > runs the dispatch and language-server seams when the flag is absent (control)",
 			"capStatus": "resolved",
 			"capMs": 5000,
-			"durationMs": 5867
+			"durationMs": 4810.314185
+		},
+		{
+			"file": "tests/scripts/bot-refresh-pr-body-lint.test.ts",
+			"test": "the LSP-docs refresh PR body passes the body lint (#5062) > with more flips than the fence cap, naming how many are not listed",
+			"capStatus": "resolved",
+			"capMs": 5000,
+			"durationMs": 4053
+		},
+		{
+			"file": "tests/tools/lens-diagnostics-groovy-row-5123.test.ts",
+			"test": "#5123 the built-in Groovy row through lens_diagnostics source=lsp > reads a file the server never published for as inconclusive, never clean or unsupported",
+			"capStatus": "resolved",
+			"capMs": 30000,
+			"durationMs": 23556.481919
 		},
 		{
 			"file": "tests/scripts/astgrep-self-scan.test.ts",
@@ -62,18 +32,11 @@
 			"durationMs": 3615
 		},
 		{
-			"file": "tests/scripts/astgrep-self-scan.test.ts",
-			"test": "pi-lens self-scan (#1718) > clients/ + tests/ scan has no untriaged finding",
+			"file": "tests/tools/lsp-diagnostics-opengrep-pre-rules-4763.test.ts",
+			"test": "#4763 opengrep's empty publish before its rules load > does not report a scanner whose rules never load as having found nothing",
 			"capStatus": "resolved",
 			"capMs": 5000,
-			"durationMs": 3266
-		},
-		{
-			"file": "tests/scripts/astgrep-self-scan.test.ts",
-			"test": "pi-lens self-scan (#1718) > every self-scan baseline row has a live finding",
-			"capStatus": "resolved",
-			"capMs": 5000,
-			"durationMs": 3264
+			"durationMs": 3587.5862099999995
 		},
 		{
 			"file": "tests/scripts/astgrep-self-scan.test.ts",
@@ -84,45 +47,101 @@
 		},
 		{
 			"file": "tests/scripts/bot-refresh-pr-body-lint.test.ts",
-			"test": "the idle-eviction promotion PR body passes the body lint (#5062) > many servers, a skipped list and a run link",
-			"capStatus": "resolved",
-			"capMs": 5000,
-			"durationMs": 3504
-		},
-		{
-			"file": "tests/scripts/bot-refresh-pr-body-lint.test.ts",
 			"test": "the LSP-docs refresh PR body passes the body lint (#5062) > flip-free, landing automerge",
 			"capStatus": "resolved",
 			"capMs": 5000,
 			"durationMs": 3551
 		},
 		{
+			"file": "tests/config/env-path-key-composition-sweep.test.ts",
+			"test": "#4590 env PATH composition > keeps the seeded baseline exact in both directions",
+			"capStatus": "resolved",
+			"capMs": 30000,
+			"durationMs": 21026.226131
+		},
+		{
 			"file": "tests/scripts/bot-refresh-pr-body-lint.test.ts",
-			"test": "the LSP-docs refresh PR body passes the body lint (#5062) > with more flips than the fence cap, naming how many are not listed",
+			"test": "the idle-eviction promotion PR body passes the body lint (#5062) > many servers, a skipped list and a run link",
 			"capStatus": "resolved",
 			"capMs": 5000,
-			"durationMs": 4053
+			"durationMs": 3504
+		},
+		{
+			"file": "tests/config/lsp-idle-eviction-measurement.test.ts",
+			"test": "idle-eviction probe population (#3645) > prepares every server the recorded run measured but marked tool-unavailable (#5323)",
+			"capStatus": "resolved",
+			"capMs": 5000,
+			"durationMs": 3486
 		},
 		{
 			"file": "tests/scripts/red-on-base.test.ts",
 			"test": "red-on-base interruption > a runner that ignores SIGTERM is SIGKILLed rather than waited out",
 			"capStatus": "resolved",
 			"capMs": 5000,
-			"durationMs": 3328
+			"durationMs": 3468.326793
 		},
 		{
-			"file": "tests/tools/lens-diagnostics-groovy-row-5123.test.ts",
-			"test": "#5123 the built-in Groovy row through lens_diagnostics source=lsp > reads a file the server never published for as inconclusive, never clean or unsupported",
-			"capStatus": "resolved",
-			"capMs": 30000,
-			"durationMs": 23531
-		},
-		{
-			"file": "tests/tools/lsp-diagnostics-opengrep-pre-rules-4763.test.ts",
-			"test": "#4763 opengrep's empty publish before its rules load > does not report a scanner whose rules never load as having found nothing",
+			"file": "tests/clients/loop-block-stall-discrimination.test.ts",
+			"test": "#1980 injected stalls classify by CPU, not by duration > the two blocks are the same length and differ only on the CPU axis",
 			"capStatus": "resolved",
 			"capMs": 5000,
-			"durationMs": 3599
+			"durationMs": 3443.204863
+		},
+		{
+			"file": "tests/index-4698-mark-only-turn-gate.test.ts",
+			"test": "#4698: a mark-only turn clears the commit gate it marked > lets the commit through on the turn AFTER a mark that wrote no file",
+			"capStatus": "resolved",
+			"capMs": 5000,
+			"durationMs": 3324.91931
+		},
+		{
+			"file": "tests/scripts/astgrep-self-scan.test.ts",
+			"test": "pi-lens self-scan (#1718) > every self-scan baseline row has a live finding",
+			"capStatus": "resolved",
+			"capMs": 5000,
+			"durationMs": 3264
+		},
+		{
+			"file": "tests/index-4913-cli-flag-timing.test.ts",
+			"test": "#4913: --no-lens reaches the lens decision pi makes after the factory > lets /lens-toggle turn a session started with --no-lens back on",
+			"capStatus": "resolved",
+			"capMs": 5000,
+			"durationMs": 3207.349583
+		},
+		{
+			"file": "tests/clients/ts-family-alias-members.test.ts",
+			"test": "TypeScript family: one registry fact, four extensions (shape 42) > scans the same findings in .mts and .cts as in .ts through the project scan",
+			"capStatus": "resolved",
+			"capMs": 5000,
+			"durationMs": 3204
+		},
+		{
+			"file": "tests/clients/prompt-cache-prefix-writers.test.ts",
+			"test": "#4687 prefix writers keep the provider's cached head > blocker repeat: the repeat rides the new prompt's tail and neither head moves (#5240)",
+			"capStatus": "resolved",
+			"capMs": 5000,
+			"durationMs": 3179.082812
+		},
+		{
+			"file": "tests/clients/cascade-compute.test.ts",
+			"test": "computeCascadeForFile > reads jsts neighbors from passive snapshot instead of active touching",
+			"capStatus": "resolved",
+			"capMs": 5000,
+			"durationMs": 3166
+		},
+		{
+			"file": "tests/scripts/astgrep-self-scan.test.ts",
+			"test": "pi-lens self-scan (#1718) > clients/ + tests/ scan has no untriaged finding",
+			"capStatus": "resolved",
+			"capMs": 5000,
+			"durationMs": 3049.1472710000003
+		},
+		{
+			"file": "tests/clients/formatters-live-flight.test.ts",
+			"test": "formatFile live child flight > spawns one child for three simultaneous calls over a wedged shim, then cools it (#5549)",
+			"capStatus": "resolved",
+			"capMs": 25000,
+			"durationMs": 15034.967469000001
 		}
 	]
 }

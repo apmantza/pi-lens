@@ -540,7 +540,13 @@ Vitest default), and annotates the assertions past 60% of it (#5311). Each
 Unit tests shard runs it advisory against the ratchet in
 `scripts/test-timeout-headroom-baseline.json`, so a new offender is visible
 without gating the merge;
-`--fail-on-new` makes the same check block locally.
+`--fail-on-new` makes the same check block locally. The step's
+`PI_LENS_TEST_TIMEOUT_SCALE` must equal the `Run tests` step's, or a
+`scaledTestTimeout` cap is folded at the wrong width; regenerate the baseline
+from the shard artifacts with that scale and `--write-baseline`. A baseline row
+whose test no longer exists is printed as `stale` (only for files the reports
+carried, so a partial shard never calls a row stale) and pruned by the same
+`--write-baseline`.
 
 CI jobs, required contexts, the Windows leg, caches, smoke paths, shard weights
 and the pre-push base-range logic are in [docs/ci.md](docs/ci.md). Two rules

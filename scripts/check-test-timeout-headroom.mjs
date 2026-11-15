@@ -36,6 +36,7 @@ import {
 	formatSummary,
 	HEADROOM_RATIO,
 	loadBaseline,
+	staleBaselineEntries,
 	TimeoutHeadroomError,
 } from "./lib/test-timeout-headroom.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
@@ -182,7 +183,7 @@ export function runCli(argv, { log = console.log } = {}) {
 			}
 			return { value, source: file };
 		});
-		const { rows, counts } = assessReports({
+		const { rows, counts, reported } = assessReports({
 			reportValues,
 			root: options.root,
 			ratio: options.ratio,
@@ -207,6 +208,11 @@ export function runCli(argv, { log = console.log } = {}) {
 		}
 
 		const baseline = loadBaseline(baselineFile);
+		// A baseline row whose test has been renamed or deleted excuses nothing, so
+		// it is named here rather than left to shrink the ratchet's coverage. Only
+		// the files these reports carried are judged, so a shard that never ran a
+		// file cannot call its rows stale.
+		const stale = staleBaselineEntries(baseline, reported);
 		const added = rows.filter((row) => !baseline.entries.has(row.id));
 		const known = rows.length - added.length;
 		for (const row of rows.slice(0, options.maxRows))
@@ -227,6 +233,13 @@ export function runCli(argv, { log = console.log } = {}) {
 			log(
 				"timeout-headroom: advisory mode (exit 0); pass --fail-on-new to block on a new offender",
 			);
+		if (stale.length > 0) {
+			log(
+				`timeout-headroom: ${String(stale.length)} baseline row(s) name no test these reports carried; prune with --write-baseline`,
+			);
+			for (const entry of stale.slice(0, options.maxRows))
+				log(`stale  ${entry.file} > ${entry.test}`);
+		}
 		if (baseline.missing)
 			log(
 				annotation(

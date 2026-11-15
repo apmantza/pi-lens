@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — the committed CLI's exit code is what makes the CI step advisory, and only the child's process status shows it; runCli's return value is a different contract.
 // Slice: #5311 flags the tests whose CI duration already spent most of the
 // timeout that would have killed them. Entry point is `runCli`, the same
 // function the `if (isMainModule)` wrapper calls, plus one real child process
@@ -23,6 +24,7 @@ import {
 	parseTestReport,
 	resolveCap,
 } from "../../scripts/lib/test-timeout-headroom.mjs";
+import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
 import { scaledTestTimeout } from "../support/test-timeout-scale.ts";
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
@@ -446,6 +448,80 @@ it("has a budget the fold cannot reach", async () => {}, { timeout: pickMs() });
 				(line) => line.startsWith("NEW  "),
 			),
 		).toHaveLength(1);
+	});
+
+	it("names a baseline row whose test the reports no longer carry", () => {
+		// The planted row: same file, a test no scan produces. The committed
+		// ledger's own rows are the ones the check normally reports against.
+		const file = "tests/near/timeout-near.test.ts";
+		const planted = "session-fact bound > a test this suite no longer has";
+		const reportFile = report("reports/stale.json", file, [
+			{
+				title: "runs at the timeout",
+				ancestors: ["session-fact bound"],
+				duration: 29_600,
+			},
+			{
+				title: "kept as a skip",
+				ancestors: ["session-fact bound"],
+				duration: 120,
+				status: "skipped",
+			},
+		]);
+		const baselineFile = at("baseline/stale.json");
+		writeFileSync(
+			baselineFile,
+			JSON.stringify({
+				schema: 1,
+				entries: [
+					{
+						file,
+						test: "session-fact bound > runs at the timeout",
+						capStatus: "resolved",
+						capMs: 30_000,
+						durationMs: 29_600,
+					},
+					{
+						file,
+						test: planted,
+						capStatus: "resolved",
+						capMs: 30_000,
+						durationMs: 29_100,
+					},
+					{
+						file,
+						test: "session-fact bound > kept as a skip",
+						capStatus: "resolved",
+						capMs: 30_000,
+						durationMs: 29_000,
+					},
+				],
+			}),
+		);
+		const { lines } = run(["--report", reportFile, "--baseline", baselineFile]);
+		// The skipped test still counts as carried, so only the planted row is stale.
+		expect(lines.filter((line) => line.startsWith("stale  "))).toEqual([
+			`stale  ${file} > ${planted}`,
+		]);
+		expect(
+			lines.some((line) => line.includes("name no test these reports carried")),
+		).toBe(true);
+		// A shard that never ran the file calls nothing stale.
+		const elsewhere = report(
+			"reports/elsewhere.json",
+			"tests/near/other.test.ts",
+			[{ title: "unrelated", ancestors: [], duration: 10 }],
+		);
+		expect(
+			run(["--report", elsewhere, "--baseline", baselineFile]).lines.filter(
+				(line) => line.startsWith("stale  "),
+			),
+		).toHaveLength(0);
+		expectPlantedStaleRow({
+			baseline: "scripts/test-timeout-headroom-baseline.json",
+			rowKey: planted,
+			verdict: lines,
+		});
 	});
 
 	it("writes a baseline that reads back sorted and reports the same run as all known", () => {

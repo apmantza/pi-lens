@@ -1824,6 +1824,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// 2026-09-08 (#2628): the warm's install-log home resolution is the
 	// subject — a child whose env is fully pinned decides where the record
 	// lands, and its own `os.homedir()` fallback is unobservable in-process.
+	// #5311: the CLI's exit code is what makes the CI step advisory, and only the
+	// child's process status shows it; `runCli`'s return value is the in-process
+	// contract and cannot show what the step sees.
+	"real-process-spawn:scripts/test-timeout-headroom.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the committed script's process exit code (0 advisory, 1 on --fail-on-new, 2 unusable report) is the CI contract; only a child status observes it",
+	},
 	"real-process-spawn:scripts/warm-loader-cache.test.ts": {
 		detector: "real-process-spawn",
 		reason:
