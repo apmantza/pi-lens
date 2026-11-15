@@ -1,0 +1,25 @@
+{
+ "_source": "gh pr view 5623 --json statusCheckRollup, 2026-11-15: the two entries the issue #5629 reports on head a8b53c80f before the close/reopen (CodeRabbit and SonarCloud Code Analysis); rest of the post-reopen rollup dropped. The SonarCloud row's completedAt is from a re-run at 15:50Z; the verdict-time row is not recoverable.",
+ "statusCheckRollup": [
+  {
+   "__typename": "CheckRun",
+   "completedAt": "2026-11-15T13:43:54Z",
+   "conclusion": "SKIPPED",
+   "detailsUrl": "https://coderabbit.ai?utm_source=cr_app&utm_medium=github",
+   "name": "CodeRabbit",
+   "startedAt": "2026-11-15T13:43:54Z",
+   "status": "COMPLETED",
+   "workflowName": ""
+  },
+  {
+   "__typename": "CheckRun",
+   "completedAt": "2026-11-15T15:51:26Z",
+   "conclusion": "SUCCESS",
+   "detailsUrl": "https://sonarcloud.io/dashboard?id=apmantza_pi-lens&pullRequest=5623",
+   "name": "SonarCloud Code Analysis",
+   "startedAt": "2026-11-15T15:50:53Z",
+   "status": "COMPLETED",
+   "workflowName": ""
+  }
+ ]
+}

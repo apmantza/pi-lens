@@ -134,6 +134,7 @@ export declare function computeVerdict(
 	absentContext?: AbsentContext | (() => AbsentContext | null) | null,
 	noiseRowIds?: Set<number | null> | null,
 	queueContext?: QueueContext | (() => QueueContext | null) | null,
+	gateViewContext?: GateView | (() => GateView | null) | null,
 ): Verdict;
 
 export declare function formatVerdictTable(rows: VerdictRow[]): string;
@@ -186,6 +187,7 @@ export declare function pollVerdict(args: {
 		| null;
 	absentContext?: AbsentContext | (() => AbsentContext | null) | null;
 	queueContext?: QueueContext | (() => QueueContext | null) | null;
+	gateViewContext?: GateView | (() => GateView | null) | null;
 	sleepImpl?: (ms: number) => Promise<void>;
 	now?: () => number;
 	onRetry?: (line: string) => void;
@@ -255,6 +257,14 @@ export declare function fetchAutoMergeAge(
 	timeoutMs?: number,
 	knownPushedMs?: number | null,
 ): { autoMerge: boolean; pushedMs: number | null };
+
+export type GateView = Map<string, { status: string; conclusion: string }[]>;
+
+export declare function readGateView(
+	target: string | number,
+	ghExec?: GhExec,
+	timeoutMs?: number,
+): GateView | null;
 
 export declare function readMergeQueueState(
 	target: string | number,

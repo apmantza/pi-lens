@@ -1,0 +1,62 @@
+{
+ "_source": "gh api repos/apmantza/pi-lens/branches/master/protection, 2026-11-15, required_status_checks only.",
+ "required_status_checks": {
+  "url": "https://api.github.com/repos/apmantza/pi-lens/branches/master/protection/required_status_checks",
+  "strict": false,
+  "contexts": [
+   "Lint & type-check",
+   "Unit tests",
+   "Install test (ubuntu-latest)",
+   "Install test (windows-latest)",
+   "Install test (macos-latest)",
+   "knip",
+   "oxfmt format check",
+   "TLA+ models",
+   "Unit tests Windows",
+   "Hot-path latency (advisory)"
+  ],
+  "contexts_url": "https://api.github.com/repos/apmantza/pi-lens/branches/master/protection/required_status_checks/contexts",
+  "checks": [
+   {
+    "context": "Lint & type-check",
+    "app_id": 15368
+   },
+   {
+    "context": "Unit tests",
+    "app_id": 15368
+   },
+   {
+    "context": "Install test (ubuntu-latest)",
+    "app_id": 15368
+   },
+   {
+    "context": "Install test (windows-latest)",
+    "app_id": 15368
+   },
+   {
+    "context": "Install test (macos-latest)",
+    "app_id": 15368
+   },
+   {
+    "context": "knip",
+    "app_id": 15368
+   },
+   {
+    "context": "oxfmt format check",
+    "app_id": 15368
+   },
+   {
+    "context": "TLA+ models",
+    "app_id": 15368
+   },
+   {
+    "context": "Unit tests Windows",
+    "app_id": 15368
+   },
+   {
+    "context": "Hot-path latency (advisory)",
+    "app_id": 15368
+   }
+  ]
+ }
+}
