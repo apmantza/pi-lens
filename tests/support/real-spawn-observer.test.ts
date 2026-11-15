@@ -27,6 +27,10 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { setupTestEnvironment } from "../clients/test-utils.js";
 import {
+	expectPlantedStaleRow,
+	rowsWithoutLiveMember,
+} from "./baseline-staleness.js";
+import {
 	REAL_SPAWN_BASELINE_FILE,
 	REAL_SPAWN_OBSERVED_FILE,
 	hasRealSpawnAdmission,
@@ -549,7 +553,11 @@ describe("realSpawnGateFailure", () => {
 // 5. the committed run-time ledger is an account, not an allowlist
 // ---------------------------------------------------------------------------
 
-describe(`tests/support/${REAL_SPAWN_OBSERVED_FILE}`, () => {
+// A plain string title, on purpose: `sweep-kit.testDeclarations` cannot find
+// the callback body of a `describe` whose title is a template literal with a
+// `${}` placeholder, so every test nested under one reads as not live — and a
+// planted-stale-row cell (#5072) in such a block is invisible to the census.
+describe("the run-time observed ledger", () => {
 	const censusRows = Object.keys(
 		JSON.parse(
 			fs.readFileSync(path.join(SUPPORT_DIR, REAL_SPAWN_BASELINE_FILE), "utf8"),
@@ -594,6 +602,37 @@ describe(`tests/support/${REAL_SPAWN_OBSERVED_FILE}`, () => {
 	it("holds no row the static census already carries (the ledger only shrinks)", () => {
 		const covered = keys.filter((key) => censusRows.includes(key));
 		expect(covered).toEqual([]);
+	});
+
+	// #5072: the ledger's planted-stale-row cell. Its ratchet is the key rule
+	// above — a row is live while the file it keys exists — so the row this cell
+	// plants is the admission of a spawner that has since stopped starting
+	// children. Without this direction the ledger would shrink only by hand, and
+	// a retired row would keep admitting a file for nothing.
+	it("reds a row whose spawner is gone, on a planted retired key (#5072)", () => {
+		// The census speaks this ledger by its repo-relative id while the
+		// observer writes it by the module constant above; pin that the two
+		// spell one file, so renaming either cannot leave the census owning a
+		// ledger that is gone.
+		expect(path.resolve(REPO, "tests/support/real-spawn-observed.json")).toBe(
+			ledgerPath,
+		);
+		const planted = "support/planted-retired-spawner.test.ts";
+		// The live population, read from the tree: the same predicate the key
+		// rule above uses, so a planted key that does exist would red here.
+		const live = new Set(
+			keys.filter((key) => fs.existsSync(path.join(REPO, "tests", key))),
+		);
+		expect(live.size).toBe(keys.length);
+		const verdict = rowsWithoutLiveMember([...keys, planted], live).map(
+			(row) => `stale real-spawn admission: ${row}`,
+		);
+		expect(verdict).toEqual([`stale real-spawn admission: ${planted}`]);
+		expectPlantedStaleRow({
+			baseline: "tests/support/real-spawn-observed.json",
+			rowKey: planted,
+			verdict,
+		});
 	});
 });
 

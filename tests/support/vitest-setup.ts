@@ -511,10 +511,12 @@ installRealSpawnObserver(
 	realSpawnLedger,
 );
 
-// #5100: the run-time real-spawn gate. Registered with the other per-worker
-// teardown owners, and under the default `stack` hook order a setup hook runs
-// after the test file's own hooks, so a child the file started in its own
-// `afterAll` is already in the ledger when this reads it.
+// #5100: the run-time real-spawn gate. It is a check of the ONE top-level
+// teardown hook (#3139 pins that this file registers exactly one), and it runs
+// LAST in that hook's check list, so every child an earlier check started — the
+// kill guard's `ps`, the tmp-hygiene sweep — is already in the ledger when this
+// reads it. Running it first would judge the file on a shorter ledger, which is
+// a weaker gate, not a reordered one.
 //
 // A file whose call chain started a real child and that holds no
 // `real-process-spawn` admission fails HERE, in its own run: that is the
@@ -541,7 +543,7 @@ installRealSpawnObserver(
 // a run-time count is not derivable (a skipped case, a platform branch, or a
 // targeted run moves it), and `tests/support/real-spawn-observer.test.ts` pins
 // that the observer sees every importer shape the name list had to enumerate.
-afterAll(() => {
+function checkRealSpawnGate(): void {
 	const evidence = formatRealSpawnEvidence(tmpHygieneOwnFile, realSpawnLedger);
 	if (evidence === undefined) return;
 	const evidencePath = process.env[REAL_SPAWN_EVIDENCE_ENV];
@@ -558,7 +560,7 @@ afterAll(() => {
 		readFile: (target: string): string => fs.readFileSync(target, "utf8"),
 	});
 	if (failure !== undefined) throw new Error(failure);
-});
+}
 
 /** The running file's observed real-spawn ledger, for the observer's own test
  *  (#5100): it witnesses that the patch reached THIS file's module graph, which
@@ -2145,8 +2147,10 @@ afterAll(async () => {
 		]);
 		// #2912: before the checks, so the leak notice below names what is left.
 		sweepOwnTmpRoots("afterAll");
+		// #5100: last, so the ledger it judges holds every child the other
+		// checks and the settled registry tail started (see its comment).
 		runTeardownWithMemReport(
-			[checkKillGuard, checkTmpHygiene, checkBackstop],
+			[checkKillGuard, checkTmpHygiene, checkBackstop, checkRealSpawnGate],
 			emitMemReport,
 		);
 	} finally {

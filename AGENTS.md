@@ -614,7 +614,7 @@ also caught at run time, not by name: `tests/support/real-spawn-observer.ts`,
 installed by `tests/support/vitest-setup.ts`, wraps every process-starting entry
 point and charges the child to the file whose call chain holds a `tests/` frame,
 so a helper, a `vi.importActual` spawn, a renamed import and a spawn reached
-through `clients/` all count (#5100). A file that started a child and holds no
+through `clients/` all count. A file that started a child and holds no
 `flake-shape-baseline.json` row and no `tests/support/real-spawn-observed.json`
 row reds at its own teardown; the observed ledger is the promotion queue, and a
 row is deleted once the census carries the file. A child with no `tests/` frame
