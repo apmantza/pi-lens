@@ -148,6 +148,21 @@ function pickMs(): number {
 it("has a budget the fold cannot reach", async () => {}, { timeout: pickMs() });
 `,
 		);
+		// The same reader from the other side: here nothing in the file folds, so the
+		// cap and the floor are both missing and the row cannot be judged at all.
+		source(
+			"tests/setconfig-unresolved/dynamic-config.test.ts",
+			`import { it, vi } from "vitest";
+
+function pickMs(): number {
+	return 60_000;
+}
+
+vi.setConfig({ testTimeout: pickMs() });
+
+it("ran under the config the fold cannot reach", async () => {});
+`,
+		);
 		// Comments are named nodes in the tree, so a comment inside a test call is
 		// the one thing that can sit in an argument slot without being an argument.
 		source(
@@ -373,6 +388,27 @@ it("second test on the shared cap", async () => {}, CAP_MS);
 				line.startsWith("::warning title=test-timeout-headroom::"),
 			),
 		).toBe(true);
+	});
+
+	it("judges no row in a file whose only budget is an unfoldable file config", () => {
+		const file = "tests/setconfig-unresolved/dynamic-config.test.ts";
+		const reportFile = report("reports/setconfig-unresolved.json", file, [
+			{ title: "ran under the config the fold cannot reach", duration: 4_000 },
+		]);
+		const { lines } = run([
+			"--report",
+			reportFile,
+			"--baseline",
+			at("none.json"),
+		]);
+		// Nothing folds, so there is neither a cap nor a floor to compare against:
+		// the run says the test was read and emits no row. Replacing the missing
+		// config with the 5000 ms default the file never declares would turn an
+		// unmeasured run into a measured offender with a fabricated budget.
+		expect(summary(lines)).toContain(
+			"1 tests read, 0 over 60% (0 known, 0 new)",
+		);
+		expect(lines.filter((line) => line.includes("4000 ms"))).toEqual([]);
 	});
 
 	it("reads the budget past a comment standing in a test call's argument slot", () => {
