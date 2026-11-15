@@ -14,7 +14,12 @@ const safeSpawnAsync = vi.fn((...args: Parameters<typeof safeSpawn>) =>
 	Promise.resolve(safeSpawn(...args)),
 );
 
-vi.mock("../../../../clients/safe-spawn.js", () => ({
+// The dispatch-context cells (#5631) import the dispatcher, which reads more of
+// safe-spawn than javac does. Spreading the original keeps those names real.
+vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/safe-spawn.js")
+	>()),
 	safeSpawn,
 	safeSpawnAsync,
 }));
