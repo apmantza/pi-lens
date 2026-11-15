@@ -27,15 +27,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	afterEach,
-	beforeAll,
-	beforeEach,
-	describe,
-	expect,
-	it,
-	vi,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _setServersForFileForTests } from "../../clients/lsp/config.js";
 import type { LSPService } from "../../clients/lsp/index.js";
 import {
@@ -207,6 +199,13 @@ function makeFakeServer(
 /** Real milliseconds the driver gives the tool's real I/O, before the scale. */
 const DRIVER_DEADLINE_MS = 20_000;
 
+// The test budget sits above the driver's real deadline, so a stuck tool reds as
+// the driver's named failure rather than as a bare vitest timeout. It is a
+// module-scope statement because vitest reads the config while it collects the
+// module: the same call inside `beforeAll` left this file's tests on the 5000 ms
+// default, below the 20 s driver deadline they wait on (#5311 round 2 F5).
+vi.setConfig({ testTimeout: scaledTestTimeout(DRIVER_DEADLINE_MS + 10_000) });
+
 /**
  * Run the real tool and drive the fake clock until it answers, so a wait of any
  * length costs no wall time. Each step also yields a real millisecond, so the
@@ -350,14 +349,6 @@ describe("#5306 explicit single-file lens_diagnostics query", () => {
 			}
 		}
 	}
-
-	// The test budget sits above the driver's real deadline, so a stuck tool reds
-	// as the driver's named failure rather than as a bare vitest timeout.
-	beforeAll(() => {
-		vi.setConfig({
-			testTimeout: scaledTestTimeout(DRIVER_DEADLINE_MS + 10_000),
-		});
-	});
 
 	beforeEach(async () => {
 		_setServersForFileForTests(getServersForFileWithConfig);
