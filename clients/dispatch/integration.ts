@@ -3772,14 +3772,23 @@ async function ensureSeedCopyExcluded(dir: string): Promise<void> {
 	try {
 		const found = await safeSpawnAsync(
 			"git",
-			["rev-parse", "--path-format=absolute", "--git-common-dir"],
+			["rev-parse", "--git-common-dir"],
 			{ cwd: dir, timeout: 5000, resourceLabel: "seed-copy-exclude" },
 		);
-		// git missing or timed out is no answer: the record below says so.
-		if (found.error) throw found.error;
+		const exited = found.status;
+		// git missing, timed out or killed gives no exit code: no answer, so the
+		// record below says so.
+		if (exited === null)
+			throw new Error("git rev-parse gave no answer: " + String(found.failure));
 		// A non-zero exit is "not a repository": nothing to exclude from.
-		if (found.status !== 0) return;
-		const excludeFile = nodePath.join(found.stdout.trim(), "info", "exclude");
+		if (exited !== 0) return;
+		// Relative to `dir` unless git gave an absolute path (a linked worktree).
+		const excludeFile = nodePath.resolve(
+			dir,
+			found.stdout.trim(),
+			"info",
+			"exclude",
+		);
 		const held = nodeFs.existsSync(excludeFile)
 			? nodeFs.readFileSync(excludeFile, "utf8")
 			: "";
@@ -3792,11 +3801,11 @@ async function ensureSeedCopyExcluded(dir: string): Promise<void> {
 				SEED_COPY_EXCLUDE +
 				"\n",
 		);
-	} catch (error) {
+	} catch (failure) {
 		recordDegradationOnce({
 			kind: "seed-exclude-unwritable",
 			subject: "info/exclude",
-			reason: `the seed copy is not excluded from git: ${error instanceof Error ? error.message : String(error)}`,
+			reason: `the seed copy is not excluded from git: ${failure instanceof Error ? failure.message : String(failure)}`,
 		});
 	}
 }

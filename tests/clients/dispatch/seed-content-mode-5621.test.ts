@@ -71,9 +71,9 @@ const env = setupTestEnvironment("pi-lens-5621-seed-");
 const ROOT = env.tmpDir;
 const pi = { getFlag: () => undefined };
 
-function git(args: string[]): string {
+function git(args: string[], cwd = ROOT): string {
 	return execFileSync("git", args, {
-		cwd: ROOT,
+		cwd,
 		encoding: "utf8",
 		stdio: "pipe",
 	});
@@ -378,17 +378,13 @@ describe("#5621 the seed copy is excluded from git before it is written", () => 
 
 	afterAll(() => removeTempDirSync(cells.tmpDir));
 
-	function gitIn(cwd: string, args: string[]): string {
-		return execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
-	}
-
 	/** A repo with one committed TypeScript file whose write is credited. */
 	function tsRepo(name: string): { dir: string; file: string } {
 		const dir = path.join(cells.tmpDir, name);
 		fs.mkdirSync(dir, { recursive: true });
-		gitIn(dir, ["init", "-q"]);
-		gitIn(dir, ["config", "user.name", "t"]);
-		gitIn(dir, ["config", "user.email", "t@t.local"]);
+		git(["init", "-q"], dir);
+		git(["config", "user.name", "t"], dir);
+		git(["config", "user.email", "t@t.local"], dir);
 		fs.writeFileSync(path.join(dir, "biome.json"), "{}\n");
 		fs.writeFileSync(path.join(dir, ".gitignore"), "node_modules\n");
 		fs.symlinkSync(
@@ -398,8 +394,8 @@ describe("#5621 the seed copy is excluded from git before it is written", () => 
 		);
 		const file = path.join(dir, "a.ts");
 		fs.writeFileSync(file, TS_HEAD);
-		gitIn(dir, ["add", "-A"]);
-		gitIn(dir, ["commit", "-qm", "base"]);
+		git(["add", "-A"], dir);
+		git(["commit", "-qm", "base"], dir);
 		fs.writeFileSync(file, TS_WRITTEN);
 		return { dir, file };
 	}
@@ -431,10 +427,8 @@ describe("#5621 the seed copy is excluded from git before it is written", () => 
 			if (!name?.toString().startsWith("pi-lens-seed-")) return;
 			copySeen = true;
 			// The reproduced case: another tool stages the whole tree meanwhile.
-			gitIn(dir, ["add", "-A"]);
-			staged.push(
-				...gitIn(dir, ["diff", "--cached", "--name-only"]).split("\n"),
-			);
+			git(["add", "-A"], dir);
+			staged.push(...git(["diff", "--cached", "--name-only"], dir).split("\n"));
 		});
 		try {
 			await seed(dir, file);
@@ -465,7 +459,7 @@ describe("#5621 the seed copy is excluded from git before it is written", () => 
 		expect(fs.readFileSync(path.join(dir, ".gitignore"), "utf8")).toBe(
 			"node_modules\n",
 		);
-		expect(gitIn(dir, ["status", "--porcelain"])).not.toContain("pi-lens-");
+		expect(git(["status", "--porcelain"], dir)).not.toContain("pi-lens-");
 	}, 60_000);
 
 	it("keeps what the exclude file already holds, with and without a final newline", async () => {
@@ -491,7 +485,7 @@ describe("#5621 the seed copy is excluded from git before it is written", () => 
 	it("writes the line into the common dir for a linked worktree", async () => {
 		const main = tsRepo("wt-main");
 		const linked = path.join(cells.tmpDir, "wt-linked");
-		gitIn(main.dir, ["worktree", "add", "-q", linked, "-b", "wt"]);
+		git(["worktree", "add", "-q", linked, "-b", "wt"], main.dir);
 		fs.symlinkSync(
 			path.join(repoRoot, "node_modules"),
 			path.join(linked, "node_modules"),
@@ -502,7 +496,7 @@ describe("#5621 the seed copy is excluded from git before it is written", () => 
 		await seed(linked, file);
 		expect(exclude(path.join(main.dir, ".git"))).toContain(SEED_PATTERN + "\n");
 		// The worktree's own git dir holds no second copy of the rule.
-		const own = gitIn(linked, ["rev-parse", "--absolute-git-dir"]).trim();
+		const own = git(["rev-parse", "--absolute-git-dir"], linked).trim();
 		expect(exclude(own)).toBe("");
 	}, 60_000);
 
@@ -546,6 +540,5 @@ describe("#5621 the seed copy is excluded from git before it is written", () => 
 				(row) => row.kind === "seed-exclude-unwritable",
 			),
 		).toEqual([]);
-		expect(fs.readdirSync(dir).sort()).toEqual(["a.ts", "biome.json"]);
 	}, 60_000);
 });

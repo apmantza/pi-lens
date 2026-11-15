@@ -2384,7 +2384,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// `collectStagedLaneBlockers` awaits `prepareSeedLaneRun`; the capture's own
 	// await of it replaces its old await of `before`. Both callers keep their
 	// bounded() holds (the capture's budget, the gate's `gateStagedDelta`).
-	"clients/dispatch/integration.ts": 27,
+	// 27 -> 29 (#5621): `prepareSeedLaneRun` awaits
+	// `ensureSeedCopyExcluded` before it writes a copy, and that function awaits
+	// one `git rev-parse --git-common-dir` through `safeSpawnAsync`, which holds
+	// its own 5 s timeout. Both sit under the capture's and the gate's bounded().
+	"clients/dispatch/integration.ts": 29,
 	// 2 → 3 (#4484 review F5): `settlePendingRunnerFindingsForTests` awaits
 	// the store's runs so a test joins a collect-later settle without polling.
 	// Only tests call it; no hook handler reaches it.

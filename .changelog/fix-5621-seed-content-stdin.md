@@ -4,4 +4,4 @@ audience: user
 area: blockers
 ---
 
-- **A credited write over a Python file no longer leaves a seed copy beside it.** The earlier bytes now reach ruff through its standard input, so a concurrent `git add -A` has nothing to stage. Files whose linters read the disk, such as TypeScript with biome, still use the copy for the run. (refs #5621)
+- **A seed copy no longer reaches `git add -A`.** For a Python file the earlier bytes reach ruff through its standard input, so no copy exists. Where a linter reads the disk, such as biome on TypeScript, the one-run copy is still written, and its name is first added to the repository's local `.git/info/exclude` (never a tracked `.gitignore`). (refs #5621)

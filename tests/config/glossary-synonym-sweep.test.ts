@@ -1870,7 +1870,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/dispatcher.ts": 36,
 		// 1 -> 3 (#5553): the staged read leaves out a lane row whose `status`
 		// is skipped for a stated cause, and names the others' `status`.
-		"clients/dispatch/integration.ts": 3,
+		// 3 -> 4 (#5621): `ensureSeedCopyExcluded` reads the exit `status` of its
+		// one `git rev-parse`, the same member sense as the rows above.
+		"clients/dispatch/integration.ts": 4,
 		"clients/dispatch/pending-runner-findings.ts": 1,
 		"clients/dispatch/runners/actionlint.ts": 1,
 		"clients/dispatch/runners/ast-grep-napi.ts": 11,
