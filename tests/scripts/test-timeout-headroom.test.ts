@@ -18,8 +18,10 @@ import { runCli } from "../../scripts/check-test-timeout-headroom.mjs";
 import {
 	baselineEntries,
 	DEFAULT_TEST_TIMEOUT_MS,
+	indexTestFile,
 	loadBaseline,
 	parseTestReport,
+	resolveCap,
 } from "../../scripts/lib/test-timeout-headroom.mjs";
 import { scaledTestTimeout } from "../support/test-timeout-scale.ts";
 
@@ -183,6 +185,58 @@ it("has a budget the fold cannot reach", async () => {}, { timeout: pickMs() });
 		expect(summary(lines)).toContain(
 			"2 tests read, 1 over 60% (0 known, 1 new)",
 		);
+	});
+
+	it("resolves the cap of the issue's own file, which hard-codes it past the lane scale", () => {
+		// #5307: this test spends about 30 s on CI against a 30_000 ms literal, so
+		// the lane's `PI_LENS_TEST_TIMEOUT_SCALE=3` does not enlarge its cap. The
+		// fold is run on the real in-tree source, not a fixture copy.
+		const file = "tests/clients/dispatch/fact-store-session-bound.test.ts";
+		const title =
+			"stops retaining an early file's delta baseline once a large batch exceeds the session-fact cap";
+		const chain = ["FactStore session-fact bound (#2282)"];
+		const table = indexTestFile(join(ROOT, file), { scale: 1 });
+		expect(resolveCap(table, { chain, title })).toEqual({
+			status: "resolved",
+			capMs: 30_000,
+		});
+
+		const reportFile = at("reports/fact-store.json");
+		writeFileSync(
+			reportFile,
+			JSON.stringify({
+				testResults: [
+					{
+						name: join(ROOT, file),
+						assertionResults: [
+							{
+								title,
+								ancestorTitles: chain,
+								status: "passed",
+								duration: 29_600,
+							},
+						],
+					},
+				],
+			}),
+		);
+		const lines: string[] = [];
+		const code = runCli(
+			[
+				"--report",
+				reportFile,
+				"--root",
+				ROOT,
+				"--baseline",
+				at("none.json"),
+				"--scale",
+				"3",
+			],
+			{ log: (line: string) => lines.push(line) },
+		);
+		expect(code).toBe(0);
+		expect(summary(lines)).toContain("1 over 60% (0 known, 1 new)");
+		expect(lines.join("\n")).toContain("29600 ms is 99% of the 30000 ms cap");
 	});
 
 	it("judges a test against the describe budget it inherits, and its own when it declares one", () => {
