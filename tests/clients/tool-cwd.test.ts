@@ -515,8 +515,8 @@ describe("resolveToolCwd (#2777)", () => {
 	});
 
 	// #5645: a population cell, one nested project per registry language, each
-	// resolved twice through the marker walk, which costs ~130 path
-	// canonicalizations (a native realpath syscall on Windows) per language. It
+	// resolved twice through the marker walk: 814 normalizePathForm calls in
+	// all, ~130 filesystem syscalls per language (native realpath on Windows). It
 	// takes ~150 ms on Linux and 5608 ms on `Unit tests Windows`, past Vitest's
 	// 5 s default, twice on 2026-11-15. The budget is a ceiling only: 10 s on
 	// Linux, widened by the lane's own scale (3 on Windows, so 30 s).
