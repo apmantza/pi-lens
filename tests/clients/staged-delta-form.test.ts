@@ -400,6 +400,12 @@ describe("command substitutions, read with bash's quoting", () => {
 		"x=$(( 1 << A ))\ngit commit -m x\nA",
 		// The verb is named through quotes the read never finished.
 		"cat <<EOF\ngit co'mm'it -m x",
+		// Verify r5 R5-1: `<<` inside `${…}` or open parens is no here-doc
+		// the reader can trust, even when a later line ends it.
+		"echo ${x:-<<EOF}\ngit commit -m x\nEOF}",
+		"for ((i=1<<E; i<2; i++)); do :; done\ngit commit -m x\nE",
+		"(( x = 1 << 3 ))\ngit commit -m x\n3",
+		"echo $((1 << A))\ngit commit -m x\nA",
 	])("reads %j as a commit or push and does not replay it", (command) => {
 		expect(isGitCommitOrPushAttempt("bash", { command })).toBe(true);
 		expect(plan(command)).toHaveProperty("unresolved");

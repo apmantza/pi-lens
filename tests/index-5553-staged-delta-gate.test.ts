@@ -1059,6 +1059,11 @@ describe("#5553 a commit hidden behind a here-doc bash does not see", () => {
 		"x=$((1<<A))\n$(git add -A)\ngit commit -m x",
 		"echo ${x:-<<'EOF'}\n$(git add -A)\ngit commit -m x",
 		"cat <<EOF\\\n\n$(git add -A)\nEOF\ngit commit -m x",
+		// Verify r5 R5-1: a later line spelled as the misread delimiter ends
+		// the reader's here-doc, so the read was complete and hid the commit.
+		"echo ${x:-<<EOF}\ngit add -A\ngit commit -m x\nEOF}",
+		"for ((i=1<<E; i<2; i++)); do :; done\ngit add -A\ngit commit -m x\nE",
+		"echo ${x:-<<'E'}\ngit add -A\ngit commit -m x\nE}",
 	])("blocks %j at the tool call", { timeout: 120_000 }, async (command) => {
 		const proj = seedProject(`hidden-commit-${seeded++}`, { [B]: CLEAN });
 		write(proj, "src/new.ts", ADDED);

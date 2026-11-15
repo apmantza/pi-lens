@@ -390,9 +390,9 @@ const HEREDOC_ESCAPES = "$`\\\n";
  * character, inside `'…'` nothing expands, `$'…'` ends at an unescaped `'`, a
  * quoted here-doc is literal, and `#` at a word's start comments to the end of
  * the line. `complete` is false when a quote, a body or a here-doc does not
- * close (a here-doc still pending when its `$(…)` closes counts) or the
- * nesting passes three levels: a reader refuses that, never takes it as no
- * substitution.
+ * close (a here-doc still pending when its `$(…)` closes counts), a `<<`
+ * sits inside `${…}` or open parens, or the nesting passes three levels: a
+ * reader refuses that, never takes it as no substitution.
  * `heredoc` reads `text` as the body of an unquoted here-doc.
  */
 export function shellSubstitutions(
@@ -454,6 +454,8 @@ export function shellSubstitutions(
 			return source.length;
 		}
 		let parens = 0;
+		// Open `${` expansions: bash reads no here-doc inside one.
+		let braces = 0;
 		const heredocs: PendingHeredoc[] = [];
 		for (let i = start; i < source.length; i++) {
 			const ch = source[i] ?? "";
@@ -503,7 +505,20 @@ export function shellSubstitutions(
 				i = substitution(source, i + 2, depth);
 				continue;
 			}
+			if (ch === "$" && next === "{") {
+				braces += 1;
+				i += 1;
+				continue;
+			}
+			if (ch === "}" && braces > 0) {
+				braces -= 1;
+				continue;
+			}
 			if (ch === "<" && next === "<" && source[i + 2] !== "<") {
+				// Inside `${…}`, `((…))` or a subshell this reader cannot tell a
+				// here-doc from a shift or an operand, and a wrong guess swallows
+				// what follows (#5553 R5-1): the read is incomplete.
+				if (parens > 0 || braces > 0) complete = false;
 				const parsed = parseHeredocDelimiter(source, i + 2);
 				if (parsed) {
 					heredocs.push(parsed.heredoc);
