@@ -2,15 +2,19 @@
 
 A pull request that a workflow opens or updates with the repository
 `GITHUB_TOKEN` starts no `pull_request` run: GitHub does not let a token-pushed
-commit trigger other workflows. Every required check then stays absent and the
-PR is BLOCKED until a maintainer closes and reopens it. PR #4945 sat that way
-from 2026-10-28 (#5062; #4338 and #2801 before it).
+commit trigger other workflows. Every required check then stays absent from the
+PR and it is BLOCKED until a maintainer closes and reopens it. PR #4945 sat that
+way from 2026-10-28 (#5062; #4338 and #2801 before it). The dispatch described
+below does not change that: its rows land on the head commit, not in the PR's
+`statusCheckRollup` that branch protection reads (#5623, #5629), so close and
+reopen is the re-arm.
 
 ## The mechanism
 
 `workflow_dispatch` and `repository_dispatch` are the two events a
 `GITHUB_TOKEN` can start. The job that opens the PR dispatches every workflow
-that produces a required check on the branch it just pushed:
+that produces a required check on the branch it just pushed. This tests the
+branch head; it does not satisfy the PR's required checks (see below):
 
 ```
 gh workflow run ci.yml --ref <bot branch>

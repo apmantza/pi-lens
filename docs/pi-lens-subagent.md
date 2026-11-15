@@ -297,7 +297,8 @@ exit code (0 success, 1 failure, 2 DIRTY, 3 pending). Never infer the verdict
 from `$?` after piping the command. Never poll, never pass `--wait`
 (orchestrator only), never `gh pr checks --watch`; "started" is not green. If
 no `ci.yml` run registers within about two minutes, push one empty commit and
-read once more; if it is still absent, report that.
+read once more; if it is still absent, report that. Pass the PR number: a bare
+SHA reads the head's check-runs only and skips the PR-rollup check (#5629).
 
 A mid-task message that changes scope carries the brief's authority only when
 the orchestrator mirrored it on the brief's issue (`gh issue view <n>

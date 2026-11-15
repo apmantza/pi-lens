@@ -523,7 +523,7 @@ npm run check:allow-scripts           allowScripts policy vs the resolved lockfi
 npm run changelog:check               rollup check: fragment area and shape (.changelog/README.md); check-changelog-fragments.mjs runs it standalone
 npm run docs:rule-catalogs            regenerate rule catalogs
 npm run hygiene -- --dry-run          inspect worktree/process hygiene
-node scripts/ci-verdict.mjs <pr|sha>  exact-head CI verdict
+node scripts/ci-verdict.mjs <pr|sha>  exact-head CI verdict (a sha skips the PR-rollup check, #5629)
 node scripts/gen-test-shard-weights.mjs (--run <dir>... | --journal <test-daily.ndjson> [--days n])  regenerate the Unit tests shard weights
                                         (journal: `git fetch <remote> data/test-history`, `git show FETCH_HEAD:history/test-daily.ndjson`)
 node scripts/guard-bash-probe.mjs <matrix.jsonl> [--head <ref|file>] [--base <ref|file>]

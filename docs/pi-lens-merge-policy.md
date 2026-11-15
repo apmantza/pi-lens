@@ -74,7 +74,8 @@ fence at 20 lines (#5003).
 4. **Merge gate.** Merge only when: verdict is merge-ready; every gating check
    genuinely EXECUTED and passed on the exact head SHA
    (`node scripts/ci-verdict.mjs <pr-number|sha>` — a DIRTY PR silently skips
-   them, absent is not green); every failing check
+   them, absent is not green; a bare SHA skips the PR-rollup check, so read
+   the PR number, #5629); every failing check
    was read and judged (infra failures — codeload 429/503, SARIF-upload
    errors, Initialize-CodeQL outages — may be waved through only with the
    log read and the judgment recorded). A PR that is green on its head but
@@ -715,7 +716,7 @@ Each row cost a lane at least once; the prose above carries the record.
 | Letting a fix round enumerate cases instead of deriving the rule | #2877 took 7 rounds; the brief for a rule fix demands derivation from the source of truth (grammar table, measured host sequence) |
 | Accepting a state-space table on its claims | Grep every test id in the table before accepting the round; #2877 r3 and #2868 r3 (2026-09-10) shipped 48–72-cell tables with zero real ids |
 | Believing a worker's "N suites red on origin/master" without auditing its probe ENV | #3026's fixer pinned `TMPDIR` to the harness `.probe-home` and reported 16 unrelated suites red; the tree was green (2026-09-15). Ask for the A/B with the variable held fixed; the `tmpdirCollision` deny rule in `scripts/hooks/guard-bash.mjs` blocks the command |
-| Merging a PR before its own CI has been read on the exact head | #3051 landed 20:05Z with the gitignore negation commit missing; `gitignore-tracked-shadow` redded on every open lane for ~30 min (#3055). `node scripts/ci-verdict.mjs <sha>` before every merge, admin merges included |
+| Merging a PR before its own CI has been read on the exact head | #3051 landed 20:05Z with the gitignore negation commit missing; `gitignore-tracked-shadow` redded on every open lane for ~30 min (#3055). `node scripts/ci-verdict.mjs <sha>` before every merge, admin merges included (a SHA skips the PR-rollup check, #5629: read the PR number) |
 | Hand-triggering attempt 3 after a second infra kill | `ci-infra-kill-rerun.yml`'s classify job was gated `run_attempt == 1`, so it never covered the second kill on one head; #3048 and #3040 each needed a manual rerun (2026-09-15). The gate now covers attempt 2; a third kill is a hand rerun by design |
 | Merging a workflow edit whose only executing lane is master-only | #3033 edited install-smoke's `pnpm-global`/`mise-repro` steps, both gated `!= 'pull_request'`; six cells failed on every master push for a day (#3043). Give the edited lane a PR-eligible cell, or run `gh workflow run <file> --ref <branch>` and quote the run id |
 | Sending a governance-sweep brief to a Sonnet fixer | Two rounds cost 765k tokens / 459 tool uses on #3066 and 587k on round 1 alone (2026-09-15). A brief that adds or edits a `tests/support/sweep-kit.ts` registered-or-fail sweep goes to the strongest available fixer |
