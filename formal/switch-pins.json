@@ -1561,6 +1561,11 @@
 		},
 		"opaque-baseline-slot": {
 			"pins": {
+				"Credit": {
+					"value": "\"clean\"",
+					"test": "tests/index-5108-opaque-blocker-disclosure-witness.test.ts",
+					"title": "credits a node script that creates a new file"
+				},
 				"Root": {
 					"value": "\"one\"",
 					"test": "tests/index-4504-opaque-prescan-root-witness.test.ts",

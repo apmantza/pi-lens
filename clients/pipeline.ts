@@ -285,6 +285,18 @@ export interface PipelineContext {
 	 * pi-lens writers or edit-directed finding delivery (#3226).
 	 */
 	allowAutonomousWriters?: boolean;
+	/**
+	 * #5616: whether the authorship covers the bytes and not only their
+	 * blockers. pi-lens's own writers (format, autofix) run only then. A script
+	 * write credited for its blockers sets it false: no pre-write check covered
+	 * its bytes. Omitted: `allowAutonomousWriters`.
+	 */
+	bytesAuthored?: boolean;
+	/**
+	 * #5616: for a run without authorship, what pi-lens knows of the write,
+	 * which the withheld line states. Omitted: `changed`.
+	 */
+	withheldEvidence?: WithheldEvidence;
 	modifiedRanges?: { start: number; end: number }[];
 	/**
 	 * #4484 round 2: the file's recorded inline blockers before this run, read
@@ -476,7 +488,8 @@ export interface PipelineResult {
 	/**
 	 * #5108: the one line a run without authorship (#3226) ends with when it
 	 * holds blockers it withheld from the STOP block and the record: names the
-	 * file and the count, directs no edit. `output` carries the same line, so
+	 * file, the count and (#5616) each blocker's line and rule, and asks for a
+	 * fix only if the agent's call wrote the file. `output` carries the same line, so
 	 * the all-clear never renders over a blocker; this copy is what a host that
 	 * abandoned the handler (`index.ts`' tool_result bound) queues for the
 	 * agent's next context. Absent when nothing was withheld.
@@ -1748,23 +1761,42 @@ function formatStillUnfixedLine(
 }
 
 /**
+ * #5616: what pi-lens knows of a write it does not credit to the agent.
+ * `changed`: recovery saw the file change while the agent's call ran.
+ * `named`: the call names the file, and no observation confirmed a change.
+ */
+export type WithheldEvidence = "changed" | "named";
+
+/**
  * #5108: the line a run without authorship (#3226) gets for blockers it
  * withheld. The STOP block and the commit gate stay off for bytes pi-lens
  * cannot prove the agent wrote, but the agent is told the blockers exist, so a
- * withheld verdict never reads as the all-clear (defect shape 10). It states a
- * fact and names where the findings are; it asks for no edit.
+ * withheld verdict never reads as the all-clear (defect shape 10).
+ *
+ * #5616: it names each blocker's line and rule, bounded as the still-unfixed
+ * line is (#5008), states the one fact pi-lens holds (`evidence`), and asks for
+ * a fix only if the agent's call wrote the file. An agent that read "not your
+ * edit" left its own script's blockers in place.
  */
 export function formatWithheldBlockerLine(
-	count: number,
+	blockers: readonly Diagnostic[],
+	filePath: string,
 	display: string,
+	evidence: WithheldEvidence = "changed",
 	host: LensToolHost = "pi",
 ): string {
+	const count = blockers.length;
+	const them = count === 1 ? "it" : "them";
 	// #2535 F3: a host with no such tool gets no pointer, never a dead name.
 	const diagnosticsTool = resolveLensToolName("lens_diagnostics", host);
 	const pointer = diagnosticsTool
-		? ` ${diagnosticsTool} mode=all lists ${count === 1 ? "it" : "them"}.`
+		? ` ${diagnosticsTool} mode=all lists ${them}.`
 		: "";
-	return `\u26a0 ${count} blocking finding${count === 1 ? "" : "s"} in ${display} withheld: the file was changed by a script, so pi-lens cannot tell it was your edit and shows no fix prompt.${pointer}`;
+	const known =
+		evidence === "changed"
+			? "the file changed while this call ran, but pi-lens cannot confirm this call wrote it"
+			: "this call names the file, but pi-lens could not confirm the call changed it";
+	return `\u26a0 ${count} blocking finding${count === 1 ? "" : "s"} in ${display}${formatBlockerPlaces(blockers, filePath)} withheld: ${known}. If this call wrote it, fix ${them}.${pointer}`;
 }
 
 /**
@@ -2302,17 +2334,11 @@ async function analysePipeline(
 		resolveAnalysisRoot(filePath, ctx.projectRoot ?? cwd) === "adopted" ||
 		!!getFlag("no-autoformat", filePath);
 	const immediateFormat = !!getFlag("immediate-format");
+	// #5616: the writers need the bytes authored, not only their blockers.
+	const writersAllowed = allowAutonomousWriters && ctx.bytesAuthored !== false;
 	const formatDeferred =
-		allowAutonomousWriters &&
-		!autoformatDisabled &&
-		!immediateFormat &&
-		!!fileContent;
-	if (
-		allowAutonomousWriters &&
-		!autoformatDisabled &&
-		immediateFormat &&
-		fileContent
-	) {
+		writersAllowed && !autoformatDisabled && !immediateFormat && !!fileContent;
+	if (writersAllowed && !autoformatDisabled && immediateFormat && fileContent) {
 		const formatResult = await runFormatPhase(
 			filePath,
 			getFormatService,
@@ -2357,7 +2383,7 @@ async function analysePipeline(
 		}
 	} else if (formatDeferred) {
 		dbg(`autoformat: deferred until agent_end for ${filePath}`);
-	} else if (!allowAutonomousWriters) {
+	} else if (!writersAllowed) {
 		dbg(`autoformat: skipped for ${filePath} (mutation ownership is unproven)`);
 	} else if (autoformatDisabled) {
 		const source = getFlagSource?.("no-autoformat", filePath);
@@ -2380,7 +2406,7 @@ async function analysePipeline(
 	let autofixRestoring: Promise<FixRunLoss> | undefined;
 	let fixRefresh = false;
 	let autofixSkipReason: string | undefined;
-	if (!allowAutonomousWriters) {
+	if (!writersAllowed) {
 		autofixSkipReason = "mutation_ownership_unproven";
 		dbg(`autofix: skipped for ${filePath} (mutation ownership is unproven)`);
 	} else if (ctx.autofixMode === "deferred") {
@@ -2795,8 +2821,10 @@ async function analysePipeline(
 	const withheldBlockerLine =
 		!allowAutonomousWriters && liveBlockers.length > 0
 			? formatWithheldBlockerLine(
-					liveBlockers.length,
+					liveBlockers,
+					filePath,
 					toRunnerDisplayPath(cwd, filePath),
+					ctx.withheldEvidence,
 				)
 			: undefined;
 	if (withheldBlockerLine) {

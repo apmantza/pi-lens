@@ -13,7 +13,10 @@
 (* mtime). The paths the command's text names are recognized: one that    *)
 (* changed in the window is dispatched with authorship (autonomous         *)
 (* writers, the blocker channel). The rest of the window is opaque and is  *)
-(* dispatched without authorship (#3226).                                  *)
+(* dispatched without authorship (#3226), except, with Credit "clean"      *)
+(* (#5616), a path a successful call is credited with: clean when its     *)
+(* baseline's owner recorded, and no other call's dispatch recorded a      *)
+(* write to it since (getFilesChangedSince of the baseline's projectSeq).  *)
 (*                                                                         *)
 (* Actions:                                                                *)
 (*  - Record(w): tool_call stores w's baseline under its key. With Retire, *)
@@ -72,7 +75,8 @@ CONSTANTS
     Sequential,  \* TRUE: a call records only when no other is in flight
     Scenario,    \* "s8" | "namedSibling" | "failedSibling" | "blockedNamer"
     LatchClear,  \* TRUE: a concurrent session's turn start may clear the latch
-    ClearRule    \* "always" (pre-round-3) | "bytes" (round 3's refusal)
+    ClearRule,   \* "always" (pre-round-3) | "bytes" (round 3's refusal)
+    Credit       \* "none" (pre-#5616) | "clean": a script write's credit
 
 Writers == {1, 2, 3}
 Paths == {1, 2, 3}
@@ -85,6 +89,7 @@ Name ==
       [] Scenario = "namedSibling" -> <<{1}, {2}, {}>>
       [] Scenario = "failedSibling" -> <<{1}, {2}, {}>>
       [] Scenario = "blockedNamer" -> <<{1}, {}, {}>>
+      [] Scenario \in {"script", "scriptFailedSibling"} -> <<{1}, {}, {}>>
 Writes ==
     CASE Scenario = "s8" -> [w \in Writers |-> {w}]
       \* 3 is opaque: it writes 1's path (before or after 1's dispatch) and
@@ -93,7 +98,14 @@ Writes ==
       [] Scenario = "failedSibling" -> <<{1}, {}, {2}>>
       \* 1 is blocked; 2 and 3 are opaque writers of the path 1 names
       [] Scenario = "blockedNamer" -> <<{}, {1}, {1}>>
-Fails == IF Scenario = "failedSibling" THEN {2} ELSE {}
+      \* #5616: 2 and 3 are scripts, each the only writer of its path
+      [] Scenario = "script" -> <<{1}, {2}, {3}>>
+      \* 3 fails and writes nothing; its recovery still sees 2's write
+      [] Scenario = "scriptFailedSibling" -> <<{1}, {2}, {}>>
+Fails ==
+    CASE Scenario = "failedSibling" -> {2}
+      [] Scenario = "scriptFailedSibling" -> {3}
+      [] OTHER -> {}
 Blocked == IF Scenario = "blockedNamer" THEN {1} ELSE {}
 
 VARIABLES
@@ -112,12 +124,16 @@ VARIABLES
     analysed,  \* <<path, version, authored, turn>> of every dispatch that ran
     latch,     \* the dedupe's view of analysed (lastAnalyzedStateByFile)
     rec,       \* [Paths -> "none" | "authored" | "cleared"]
-    recVer     \* [Paths -> the version rec's authored verdict is about]
+    recVer,    \* [Paths -> the version rec's authored verdict is about]
+    dirtyAt,   \* [Writers -> paths written before w recorded] (the dirty set)
+    observed,  \* [Writers -> paths a dispatch recorded since w recorded]
+    creditSeen \* <<path, version>> credited after a dispatch had analysed it
 
 vars == <<pc, turn, ver, ran, window, slot, lost, retired, ledger, missed,
-          seen, plan, analysed, latch, rec, recVer>>
+          seen, plan, analysed, latch, rec, recVer, dirtyAt, observed,
+          creditSeen>>
 
-NoPlan == [rec |-> {}, auth |-> {}, opq |-> {}]
+NoPlan == [rec |-> {}, auth |-> {}, opq |-> {}, cred |-> {}]
 
 TypeOK ==
     /\ pc \in [Writers -> {"new", "called", "taken", "done", "gone"}]
@@ -131,11 +147,14 @@ TypeOK ==
     /\ missed \subseteq Writers
     /\ seen \in [Writers -> SUBSET Writers]
     /\ plan \in [Writers -> [rec : SUBSET Paths, auth : SUBSET Paths,
-                             opq : SUBSET Paths]]
+                             opq : SUBSET Paths, cred : SUBSET Paths]]
     /\ analysed \subseteq (Paths \X (0..3) \X BOOLEAN \X Turns)
     /\ latch \subseteq analysed
     /\ rec \in [Paths -> {"none", "authored", "cleared"}]
     /\ recVer \in [Paths -> 0..3]
+    /\ dirtyAt \in [Writers -> SUBSET Paths]
+    /\ observed \in [Writers -> SUBSET Paths]
+    /\ creditSeen \subseteq (Paths \X (0..3))
     /\ Len(slot) <= Cap
 
 (* #4504: which root the hook at `site` names. A session has ONE root — its  *)
@@ -177,6 +196,9 @@ Init ==
     /\ latch = {}
     /\ rec = [p \in Paths |-> "none"]
     /\ recVer = [p \in Paths |-> 0]
+    /\ dirtyAt = [w \in Writers |-> {}]
+    /\ observed = [w \in Writers |-> {}]
+    /\ creditSeen = {}
 
 InFlight(o) == pc[o] \in {"called", "taken"}
 
@@ -210,8 +232,11 @@ Record(w) ==
                 /\ ledger' = ledger + Counted(Cardinality(gone) + 1)
           /\ retired' = retired \cup gone
     /\ pc' = [pc EXCEPT ![w] = "called"]
+    \* #5616: the baseline holds the dirty set and the projectSeq.
+    /\ dirtyAt' = [dirtyAt EXCEPT ![w] = {p \in Paths : ver[p] > 0}]
+    /\ observed' = [observed EXCEPT ![w] = {}]
     /\ UNCHANGED <<turn, ver, ran, window, missed, seen, plan, analysed,
-                   latch, rec, recVer>>
+                   latch, rec, recVer, creditSeen>>
 
 \* The command runs and writes its paths; every pending owner's window
 \* (the owner of an entry in the store is called or gone) sees them.
@@ -225,7 +250,7 @@ Write(w) ==
                     IF pc[o] \in {"called", "gone"} THEN window[o] \cup Writes[w]
                     ELSE window[o]]
     /\ UNCHANGED <<pc, turn, slot, lost, retired, ledger, missed, seen, plan,
-                   analysed, latch, rec, recVer>>
+                   analysed, latch, rec, recVer, dirtyAt, observed, creditSeen>>
 
 \* A blocked or pre-start-aborted call: no tool_result ever arrives.
 Abandon(w) ==
@@ -233,7 +258,8 @@ Abandon(w) ==
     /\ w \in Blocked
     /\ pc' = [pc EXCEPT ![w] = "gone"]
     /\ UNCHANGED <<turn, ver, ran, window, slot, lost, retired, ledger, missed,
-                   seen, plan, analysed, latch, rec, recVer>>
+                   seen, plan, analysed, latch, rec, recVer, dirtyAt, observed,
+                   creditSeen>>
 
 \* tool_result: take the baseline under w's key and plan the dispatches.
 Take(w) ==
@@ -250,10 +276,19 @@ Take(w) ==
                        UNION {Name[o] : o \in seen[w] \cup Owners(rest)}
                    opq == (changed \ recW)
                               \ (IF Subtract THEN siblingNames ELSE {})
+                   \* #5616: clean at the owner's baseline, and no dispatch
+                   \* recorded a write to it since; never for a failed call.
+                   cred == IF Credit = "clean" /\ w \notin Fails
+                           THEN (opq \ dirtyAt[slot[i].owner])
+                                    \ observed[slot[i].owner]
+                           ELSE {}
+                   claimed == {<<a[1], a[2]>> : a \in analysed}
                IN /\ slot' = rest
                   /\ plan' = [plan EXCEPT ![w] =
                                  [rec |-> IF auth = {} THEN {} ELSE recW,
-                                  auth |-> auth, opq |-> opq]]
+                                  auth |-> auth, opq |-> opq, cred |-> cred]]
+                  /\ creditSeen' = creditSeen \cup
+                        ({<<p, ver[p]>> : p \in cred} \cap claimed)
                   /\ seen' = IF Subtract /\ Name[w] # {}
                              THEN [o \in Writers |->
                                      IF o # w /\ pc[o] # "new"
@@ -262,12 +297,13 @@ Take(w) ==
                   /\ UNCHANGED missed
           ELSE /\ missed' = missed \cup {w}
                /\ plan' = [plan EXCEPT ![w] =
-                              [rec |-> recW, auth |-> {}, opq |-> {}]]
-               /\ UNCHANGED <<slot, seen>>
+                              [rec |-> recW, auth |-> {}, opq |-> {},
+                               cred |-> {}]]
+               /\ UNCHANGED <<slot, seen, creditSeen>>
     /\ UNCHANGED <<turn, ver, ran, window, lost, retired, ledger, analysed,
-                   latch, rec, recVer>>
+                   latch, rec, recVer, dirtyAt, observed>>
 
-Authored(w, p) == p \in plan[w].auth
+Authored(w, p) == p \in plan[w].auth \cup plan[w].cred
 Claimed(w) == plan[w].rec \cup plan[w].opq
 
 \* claimPipelineDispatch: skip a claim whose bytes this turn already analysed,
@@ -300,9 +336,14 @@ Dispatch(w) ==
           /\ recVer' = [p \in Paths |->
                           IF p \in run /\ Authored(w, p) THEN ver[p]
                           ELSE recVer[p]]
+          \* recordProjectChange runs only for a claim that proceeds; every
+          \* pending baseline's getFilesChangedSince sees it.
+          /\ observed' = [o \in Writers |->
+                            IF pc[o] \in {"called", "gone"}
+                            THEN observed[o] \cup run ELSE observed[o]]
     /\ pc' = [pc EXCEPT ![w] = "done"]
     /\ UNCHANGED <<turn, ver, ran, window, slot, lost, retired, ledger, missed,
-                   seen, plan>>
+                   seen, plan, dirtyAt, creditSeen>>
 
 \* index.ts turn_start for a concurrent session: `runtime.beginTurn(sub)` and
 \* `clearLastAnalyzedStateCache()`. The primary's turn, tokens and records are
@@ -312,7 +353,8 @@ SecondaryTurnStart ==
     /\ latch # {}
     /\ latch' = {}
     /\ UNCHANGED <<pc, turn, ver, ran, window, slot, lost, retired, ledger,
-                   missed, seen, plan, analysed, rec, recVer>>
+                   missed, seen, plan, analysed, rec, recVer, dirtyAt, observed,
+                   creditSeen>>
 
 NextTurn ==
     /\ turn = 0
@@ -320,7 +362,8 @@ NextTurn ==
     /\ \E o \in Writers : pc[o] # "new"
     /\ turn' = 1
     /\ UNCHANGED <<pc, ver, ran, window, slot, lost, retired, ledger, missed,
-                   seen, plan, analysed, latch, rec, recVer>>
+                   seen, plan, analysed, latch, rec, recVer, dirtyAt, observed,
+                   creditSeen>>
 
 Next ==
     \/ NextTurn
@@ -385,4 +428,17 @@ StaleRetired ==
 
 (* Retirement never takes a call that can still get its result. *)
 RetiresOnlyAbandoned == \A w \in retired : pc[w] = "gone"
+
+(* #5616: a successful call that alone writes a path it does not name gets *)
+(* an authored analysis of it, unless a counted loss took its baseline.    *)
+ScriptWriteAttributed ==
+    \A w \in Writers :
+        (pc[w] = "done" /\ w \notin Fails /\ w \notin missed \cup lost) =>
+            \A p \in Writes[w] \ Name[w] :
+                (\A o \in Writers \ {w} : p \notin Writes[o] \cup Name[o])
+                    => \E v \in 0..3, t \in Turns : <<p, v, TRUE, t>> \in analysed
+
+(* #5616: the credit never takes bytes another call's dispatch already     *)
+(* analysed: those are that call's write, seen by pi-lens.                 *)
+CreditOnUnclaimedBytes == creditSeen = {}
 =============================================================================
