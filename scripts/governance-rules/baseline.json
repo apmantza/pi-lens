@@ -2,16 +2,6 @@
 	"_comment": "Governance baseline (#4865). Each row is a known member with the reason it stays. Regenerate with `npm run astgrep:governance:update-baseline`; a new row is written with an empty reason and the scan refuses it until the reason is filled in. Prefer fixing the member.",
 	"allowed": [
 		{
-			"signature": "turn-count-wait-test-hook::clients/project-snapshot.ts::f99c92a435f9#0",
-			"head": "for (",
-			"reason": "#4969: waitForProjectSnapshotPersistsForTests ends after 200 x 10 ms with no signal. A 2 s throw would red its 16 caller files on a loaded runner, so the move to a real-clock deadline with a signal is its own change (recorded p3 on #4865)."
-		},
-		{
-			"signature": "turn-count-wait-test-hook::clients/review-graph/builder.ts::4cb580f7f964#0",
-			"head": "for (",
-			"reason": "#4969 twin: waitForReviewGraphPersistsForTests ends after 200 x 10 ms with no signal. A 2 s throw would red its callers on a loaded runner, so the move to a real-clock deadline with a signal is its own change (recorded p3 on #4865)."
-		},
-		{
 			"signature": "turn-count-wait::tests/clients/debug-handles.test.ts::a3d9de64574d#0",
 			"head": "for (let i = 0; i < 50; i++) {",
 			"reason": "real I/O behind an async read: waitFor takes a synchronous read, so the move needs an async-read form of waitFor, more than one line. Shape-86 member, follow-up."
@@ -30,21 +20,6 @@
 			"signature": "turn-count-wait::tests/clients/lsp/client-registry-direct.test.ts::fff437d36942#0",
 			"head": "for (let turn = 0; turn < 200 && !f.registry.inFlight.has(f.key); turn++) {",
 			"reason": "in-process: the condition advances only on in-process work (mocked or gated doubles, no real I/O), so the turn count is the same on a loaded runner. Not load-sensitive; convert to waitFor when the file is next touched."
-		},
-		{
-			"signature": "turn-count-wait::tests/clients/lsp/integration.test.ts::1a1b69ce41b6#0",
-			"head": "for (",
-			"reason": "negative observation window: with sent=false the case must wait out the whole grace (500 ms / 300 ms) and then assert nothing arrived, which waitFor cannot express; the sent=true leg is a 5 s sleep-count budget over a real LSP child. Shape-86 member for the positive leg, follow-up."
-		},
-		{
-			"signature": "turn-count-wait::tests/clients/lsp/integration.test.ts::1f4162f6cbfe#0",
-			"head": "for (",
-			"reason": "negative observation window: with sent=false the case must wait out the whole grace (500 ms / 300 ms) and then assert nothing arrived, which waitFor cannot express; the sent=true leg is a 5 s sleep-count budget over a real LSP child. Shape-86 member for the positive leg, follow-up."
-		},
-		{
-			"signature": "turn-count-wait::tests/clients/lsp/integration.test.ts::c91cfaeb3561#0",
-			"head": "for (",
-			"reason": "negative observation window: with sent=false the case must wait out the whole grace (500 ms / 300 ms) and then assert nothing arrived, which waitFor cannot express; the sent=true leg is a 5 s sleep-count budget over a real LSP child. Shape-86 member for the positive leg, follow-up."
 		},
 		{
 			"signature": "turn-count-wait::tests/clients/lsp/notify-queue-properties.test.ts::39f94fee6b2f#0",
@@ -97,16 +72,6 @@
 			"reason": "drive loop, not a wait: each iteration runs the work under test (a turn, a cycle, a build or a run) and the exit is the outcome under test; the count caps the rounds. False positive of the fail-closed rule, which does not classify what a loop awaits."
 		},
 		{
-			"signature": "turn-count-wait::tests/clients/lsp/silent-clean-confirm.test.ts::1616ac5f9fc8#0",
-			"head": "for (let step = 0; step < 100 && finishedAt === undefined; step++) {",
-			"reason": "fake Date and setTimeout: a real-clock waitFor cannot run here, and the setImmediate pump lets the touch's real file I/O interleave, so the count is load-sensitive. Needs a pump bounded by a clock the fake does not replace; follow-up."
-		},
-		{
-			"signature": "turn-count-wait::tests/clients/module-report.test.ts::30dd07a35d1f#0",
-			"head": "for (let attempt = 0; attempt < 20; attempt++) {",
-			"reason": "real I/O behind an async read: waitFor takes a synchronous read, so the move needs an async-read form of waitFor, more than one line. Shape-86 member, follow-up."
-		},
-		{
 			"signature": "turn-count-wait::tests/clients/observed-mutation-integration.test.ts::8aa8e95ed635#0",
 			"head": "for (let i = 0; i < 200 && gated.contexts.length < 2; i++)",
 			"reason": "in-process: the condition advances only on in-process work (mocked or gated doubles, no real I/O), so the turn count is the same on a loaded runner. Not load-sensitive; convert to waitFor when the file is next touched."
@@ -137,19 +102,9 @@
 			"reason": "each round awaits the scheduler's real waitIdle() (a settled promise per round, not a yield); the count caps re-armed rounds of a property run. Drive loop, false positive."
 		},
 		{
-			"signature": "turn-count-wait::tests/clients/review-graph-persist.test.ts::a69c15a5b97e#0",
-			"head": "for (let i = 0; i < attempts; i++) {",
-			"reason": "sleep-count helper (attempts x 25 ms, unscaled) returning a boolean its callers assert true; moving it to waitFor changes the helper's signature and its callers. Shape-86 member, follow-up."
-		},
-		{
 			"signature": "turn-count-wait::tests/clients/review-graph-seq-fastpath.test.ts::d97a264b498b#0",
 			"head": "for (let i = 0; i < 21; i++) {",
 			"reason": "drive loop, not a wait: each iteration runs the work under test (a turn, a cycle, a build or a run) and the exit is the outcome under test; the count caps the rounds. False positive of the fail-closed rule, which does not classify what a loop awaits."
-		},
-		{
-			"signature": "turn-count-wait::tests/clients/review-graph/stage-sweep.test.ts::02b1d928cb07#0",
-			"head": "for (let i = 0; i < attempts; i++) {",
-			"reason": "sleep-count helper (attempts x 25 ms, unscaled) returning a boolean its callers assert true; moving it to waitFor changes the helper's signature and its callers. Shape-86 member, follow-up."
 		},
 		{
 			"signature": "turn-count-wait::tests/clients/session-generation-properties.test.ts::39f94fee6b2f#0",
@@ -167,11 +122,6 @@
 			"reason": "drive loop, not a wait: each iteration runs the work under test (a turn, a cycle, a build or a run) and the exit is the outcome under test; the count caps the rounds. False positive of the fail-closed rule, which does not classify what a loop awaits."
 		},
 		{
-			"signature": "turn-count-wait::tests/clients/warm-attach-socket-error.test.ts::838a88f9a902#0",
-			"head": "for (let turn = 0; turn < 500; turn++) {",
-			"reason": "waitForGroup: real socket I/O counted in setImmediate turns, and it returns undefined on exhaustion by design so the caller's first assertion (the uncaught list) names the defect. Moving it keeps that order only with a non-throwing waitFor; follow-up."
-		},
-		{
 			"signature": "turn-count-wait::tests/clients/widget-dependency-drift-delivery-cap.test.ts::458b7dff36cb#0",
 			"head": "for (let turn = 1; turn <= MAX_TURNS; turn++) {",
 			"reason": "drive loop, not a wait: each iteration runs the work under test (a turn, a cycle, a build or a run) and the exit is the outcome under test; the count caps the rounds. False positive of the fail-closed rule, which does not classify what a loop awaits."
@@ -187,11 +137,6 @@
 			"reason": "drive loop, not a wait: each iteration runs the work under test (a turn, a cycle, a build or a run) and the exit is the outcome under test; the count caps the rounds. False positive of the fail-closed rule, which does not classify what a loop awaits."
 		},
 		{
-			"signature": "turn-count-wait::tests/clients/word-index-persist.test.ts::a69c15a5b97e#0",
-			"head": "for (let i = 0; i < attempts; i++) {",
-			"reason": "sleep-count helper (attempts x 25 ms, unscaled) returning a boolean its callers assert true; moving it to waitFor changes the helper's signature and its callers. Shape-86 member, follow-up."
-		},
-		{
 			"signature": "turn-count-wait::tests/fixtures/snapshot-persist/generate-released-writer.mjs::f485b48fda87#0",
 			"head": "for (let i = 0; i < 500; i++) { const st = snap.getProjectSnapshotPersistStateForTests(cwd); if (!st.active && !st.queued) break; await new Promise(r => setTimeout(r, 20)); }",
 			"reason": "fixture generator, run by hand once against a frozen released build to mint the fixture; not a test and not run in CI."
@@ -200,21 +145,6 @@
 			"signature": "turn-count-wait::tests/fixtures/startup-scan/released-4.4.0/generate-released-writer.mjs::8d2ddb3ac5b6#0",
 			"head": "for (let i = 0; i < 500; i++) {",
 			"reason": "fixture generator, run by hand once against the frozen 4.4.0 build to mint the fixture; not a test and not run in CI."
-		},
-		{
-			"signature": "turn-count-wait::tests/index-3873-session-decision-records.test.ts::05a697ff6194#0",
-			"head": "for (let i = 0; i < 5000 && (await rows(late)).length === 0; i += 1)",
-			"reason": "real I/O behind an async read: waitFor takes a synchronous read, so the move needs an async-read form of waitFor, more than one line. Shape-86 member, follow-up."
-		},
-		{
-			"signature": "turn-count-wait::tests/index-4554-last-member-teardown.test.ts::d1f6b40da9f7#0",
-			"head": "for (let turn = 0; turn < 50; turn += 1) {",
-			"reason": "real I/O behind an async read: waitFor takes a synchronous read, so the move needs an async-read form of waitFor, more than one line. Shape-86 member, follow-up."
-		},
-		{
-			"signature": "turn-count-wait::tests/mcp/session-end.smoke.test.ts::909b0ca768ee#0",
-			"head": "for (let attempt = 0; attempt < 40; attempt++) {",
-			"reason": "sleep-count budget (40 x 25 ms, unscaled) that parses and returns the rows and throws a named error; the move needs the read split out of the loop, more than one line. Shape-86 member, follow-up."
 		},
 		{
 			"signature": "turn-count-wait::tests/scripts/check-shard-verdict.test.ts::8ee60505904f#0",

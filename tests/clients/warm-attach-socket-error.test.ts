@@ -18,9 +18,10 @@
  * no in-process double emits it, and a double that did would be pinning this
  * test's own fixture rather than the host boundary. So the server is the
  * production one (`configureWarmAttach`) and the client is a real
- * `net.createConnection`. No child process and no raw timer: the accept waits
- * on the kit's `waitFor` (a `setImmediate` pump under a real-clock deadline,
- * #4865), so none of `flake-shape-ratchet`'s four detectors
+ * `net.createConnection`. No child process and no raw timer: every wait here is
+ * the kit's `waitFor` or its `setImmediate` pump under a real-clock deadline
+ * (#4865, shape 86: a wait ends on its event or on the clock, never on a turn
+ * count), so none of `flake-shape-ratchet`'s four detectors
  * (real-process-spawn, elapsed-time-assertion, raw-timer-wait,
  * ungoverned-wait-for) apply.
  *
@@ -62,22 +63,26 @@ const pump = (): Promise<void> =>
 	});
 
 /**
- * The ledger group for `kind`, once it appears. Bounded by turns, not by the
- * clock: pre-fix nothing ever records it, and the caller's first assertion is
- * the uncaught-exception list, so an exhausted pump reports the real defect
- * rather than a timeout.
+ * The ledger group for `kind`, once it appears. Shape 86 (#4865): the ceiling
+ * was 500 `setImmediate` turns -- a count, not a duration -- so it is now a
+ * real-clock deadline that follows `PI_LENS_TEST_TIMEOUT_SCALE`, with `pump()`
+ * as the yield so the socket I/O still lands. The contract is unchanged: it
+ * returns undefined rather than throwing, so pre-fix the caller's first
+ * assertion, the uncaught-exception list, still names the real defect.
  */
 async function waitForGroup(
 	kind: string,
+	timeoutMs = 2_000,
 ): Promise<DegradationGroup | undefined> {
-	for (let turn = 0; turn < 500; turn++) {
-		const group = getDegradationSummary().find(
-			(candidate) => candidate.kind === kind,
-		);
-		if (group) return group;
+	const find = () =>
+		getDegradationSummary().find((candidate) => candidate.kind === kind);
+	const deadlineAt = Date.now() + scaledTestTimeout(timeoutMs);
+	let group = find();
+	while (!group && Date.now() < deadlineAt) {
 		await pump();
+		group = find();
 	}
-	return undefined;
+	return group;
 }
 
 // lane: Unit tests (CI's short TMPDIR); where the cut makes this process's
@@ -266,6 +271,25 @@ describe.skipIf(ambientSocketNameIsShared(process.pid))(
 			// every abandoned edit.
 			await configureWarmAttach(root);
 			const endpoint = diagnosticsIpcPathForCwd(root, process.pid);
+			// Shape 86 (#4865): the wait ends on the event it waits for. The 50
+			// `setImmediate` turns were standing in for the server-side close of the
+			// accepted socket, so the case takes that event: `allowHalfOpen` is false,
+			// so Node ends the server's side on the client's FIN and the socket emits
+			// `close` about one turn later (measured 1 ms in a bare `net` probe).
+			// `waitFor` bounds it on the real clock, pumped on the same seam as the
+			// accept above -- so no raw timer and no turn count, and a close path that
+			// never runs reports the wait's own diagnostic instead of a clean case.
+			const server = _warmAttachServerForTests();
+			expect(
+				server,
+				"configureWarmAttach did not leave a server to observe",
+			).toBeDefined();
+			let serverSocketClosed = false;
+			server?.once("connection", (socket) => {
+				socket.once("close", () => {
+					serverSocketClosed = true;
+				});
+			});
 			const client = net.createConnection(boundUnixSocketPath(endpoint));
 			client.on("error", () => {});
 			await new Promise<void>((resolve, reject) => {
@@ -277,7 +301,10 @@ describe.skipIf(ambientSocketNameIsShared(process.pid))(
 				client.once("close", resolve);
 				client.end();
 			});
-			for (let turn = 0; turn < 50; turn++) await pump();
+			await waitFor(() => serverSocketClosed, Boolean, {
+				timeoutMs: 4_000,
+				yieldControl: pump,
+			});
 
 			expect(uncaught).toEqual([]);
 			expect(

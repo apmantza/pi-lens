@@ -26,6 +26,11 @@ import { removeTempDirSync } from "../test-utils.js";
 
 const getServersForFileWithConfig = vi.fn();
 const createLSPClient = vi.fn();
+
+/** One pump of the fake-timer clock in the aggregate-wait case below (ms). */
+const PUMP_STEP_MS = 50;
+/** How much virtual time that pump may spend before the case asserts (#4865). */
+const PUMP_VIRTUAL_BUDGET_MS = 100 * PUMP_STEP_MS;
 vi.mock("../../../clients/lsp/client.js", () => ({ createLSPClient }));
 
 function makeServer(id: string, ext: string, root: string) {
@@ -537,8 +542,15 @@ describe("touchFile capability-aware AGGREGATE wait (#814)", () => {
 				finishedAt = Date.now();
 				return settled;
 			});
-		for (let step = 0; step < 100 && finishedAt === undefined; step++) {
-			await vi.advanceTimersByTimeAsync(50);
+		// Shape 86 (#4865): the pump's ceiling was `step < 100`. `Date` is faked
+		// here, so the time model of this case is the virtual clock: bounding the
+		// pump by `Date.now()` gives it exactly the 5,000 virtual ms the 100 x 50 ms
+		// steps were, and virtual time advances the same per step under any load.
+		// The per-step `setImmediate` stays (it is not faked) so the touch's real
+		// file I/O still interleaves with the pump.
+		const pumpBudgetEndsAt = startedAt + PUMP_VIRTUAL_BUDGET_MS;
+		while (finishedAt === undefined && Date.now() < pumpBudgetEndsAt) {
+			await vi.advanceTimersByTimeAsync(PUMP_STEP_MS);
 			await new Promise((resolve) => setImmediate(resolve));
 		}
 		const result = await touch;

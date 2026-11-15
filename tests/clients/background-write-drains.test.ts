@@ -119,9 +119,10 @@ describe("background write drains across module copies (#4937)", () => {
 	});
 
 	// Recurrence: review of #5006 (F1), the drain read a deferred write as
-	// settled. The snapshot wait is a bounded poll (200 x 10 ms); a persist that
-	// outlives it resolved the drain, and the write then re-created the fixture
-	// root. The drain must reject while work remains.
+	// settled. The snapshot wait is a bounded poll (SNAPSHOT_PERSIST_WAIT_MS, a
+	// real-clock 2 s ceiling since #4865); a persist that outlives it resolved the
+	// drain, and the write then re-created the fixture root. The drain must reject
+	// while work remains.
 	it("rejects when a snapshot persist outlives the bounded wait", async () => {
 		const env = setupTestEnvironment("bwd-snapshot-slow-");
 		let other: typeof import("../../clients/project-snapshot.js") | undefined;

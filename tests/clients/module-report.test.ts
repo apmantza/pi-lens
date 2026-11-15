@@ -25,6 +25,7 @@ import {
 	flushReviewGraphPersistsForExitForTests,
 } from "../../clients/review-graph/builder.js";
 import { getProjectDataDir } from "../../clients/file-utils.js";
+import { scaledTestTimeout } from "../support/test-timeout-scale.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 
 // module_report consumes the cached review graph read-only (#256) — it never
@@ -1047,7 +1048,12 @@ describe("moduleReport — review-graph who-uses-this", () => {
 		// elsewhere with an empty in-memory cache). persistGraph writes async, so
 		// clear in-memory and poll until the disk snapshot lands.
 		let foo: { usedBy?: Array<{ file: string }> } | undefined;
-		for (let attempt = 0; attempt < 20; attempt++) {
+		// Shape 86 (#4865): the bound was `attempt < 20` of 50 ms sleeps. The
+		// re-read is async, so this stays a loop, but the ceiling is the clock and
+		// it scales with the lane like `waitFor` does; the assertion below still
+		// decides the case when the disk snapshot never lands.
+		const deadlineAt = Date.now() + scaledTestTimeout(1_000);
+		while (Date.now() < deadlineAt) {
 			clearReviewGraphWorkspaceCache(); // force the disk (Tier 3) path
 			const report = await moduleReport("a.ts", env.tmpDir);
 			foo = report.api.find((e) => e.name === "foo");
