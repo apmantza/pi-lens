@@ -294,6 +294,21 @@ async function preEditCaptureRows(repo: string): Promise<string[][]> {
 		]);
 }
 
+/** #5616 F-B: the skip reasons of `repo`'s skipped `pre_edit_capture` rows. */
+async function preEditSkipReasons(repo: string): Promise<string[]> {
+	await flushLatencyLog();
+	const read = readNdjsonRows(getLatencyLogPath());
+	expect(read.skipped).toBe(0);
+	return read.rows
+		.filter(
+			(row) =>
+				row.phase === "pre_edit_capture" &&
+				row.result === "skipped" &&
+				String(row.filePath).startsWith(repo),
+		)
+		.map((row) => String((row.metadata as { reason?: unknown }).reason));
+}
+
 function everyText(requests: readonly (readonly PiMessage[])[]): string {
 	return requests
 		.flatMap((messages) => messages)
@@ -1095,17 +1110,22 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 describe("#5616: a script write the call is credited with", () => {
 	const havePython =
 		spawnSync("python3", ["--version"], { stdio: "ignore" }).status === 0;
+	// A read-only directory stops a write only for a user who is not root, and
+	// Windows does not model directory permissions this way.
+	const canLockDirectory =
+		process.platform !== "win32" && process.getuid?.() !== 0;
 
 	/** One prompt, its pending handlers, then a second prompt that commits. */
 	async function writeThenCommit(
 		repo: string,
 		call: Record<string, unknown>,
+		flags: ReadonlyArray<[string, boolean]> = GUARDED_FLAGS,
 	): Promise<{ write: string; commit: string; requests: string }> {
 		gate.results.length = 0;
 		const handle = await startPiSession({
 			root: fixture.root,
 			cwd: repo,
-			flags: new Map(GUARDED_FLAGS),
+			flags: new Map(flags),
 			inlineFactory: async () => (await import("../index.js")).default,
 			responses: [
 				step(call, "writing"),
@@ -1292,6 +1312,53 @@ describe("#5616: a script write the call is credited with", () => {
 			).not.toContain("pi-lens-seed-");
 			expect(handle.errors).toEqual([]);
 			await handle.dispose();
+		},
+	);
+
+	// #5616 review r3 F-B: a credited write whose HEAD copy cannot be written
+	// beside it (the script overwrote the file in place, and its directory is
+	// read-only) has no seed, so the HEAD debt the file already held reads as
+	// new. The credit is withheld for that file: its blockers go out as the
+	// withheld line and the commit gate stays open for its bytes. Recurrence
+	// prevented: the `copy-unwritable` skip fell through to crediting, so a
+	// reformat of a file that held an old blocker gave a false STOP and shut
+	// the gate. The file is reformatted only; the blocker it held at HEAD stays.
+	it.skipIf(!canLockDirectory)(
+		"withholds the credit when the HEAD copy cannot be written beside the file: no STOP, the gate stays open",
+		{ timeout: 90_000 },
+		async () => {
+			const repo = initRepo("5616-copy-unwritable");
+			const locked = path.join(repo, "locked");
+			fs.mkdirSync(locked);
+			fs.writeFileSync(path.join(locked, "legacy.ts"), MARKED_FILE);
+			git(["add", "-A"], repo);
+			git(["commit", "-qm", "legacy"], repo);
+			const reformatted = MARKED_FILE.replace(/\t/g, "    ");
+			fs.chmodSync(locked, 0o555);
+			try {
+				// Delta on, as in production: the seed capture is a no-op under
+				// `no-delta`, which GUARDED_FLAGS sets.
+				const run = await writeThenCommit(
+					repo,
+					scriptWrite("locked/legacy.ts", reformatted),
+					[...GUARDED_FLAGS, ["no-delta", false]],
+				);
+				// The script's write landed, and no copy was left beside it.
+				expect(fs.readFileSync(path.join(locked, "legacy.ts"), "utf8")).toBe(
+					reformatted,
+				);
+				expect(
+					git(["status", "--porcelain", "--untracked-files=all"], repo),
+				).not.toContain("pi-lens-seed-");
+				// The case under test: the seed was skipped for this reason.
+				expect(await preEditSkipReasons(repo)).toEqual(["copy-unwritable"]);
+				expect(run.write).not.toContain("\u{1F534} STOP");
+				expect(run.write).toContain("withheld");
+				expect(run.commit).toContain(RAN_MARKER);
+				expect(run.commit).not.toContain(GATE_BLOCK);
+			} finally {
+				fs.chmodSync(locked, 0o755);
+			}
 		},
 	);
 

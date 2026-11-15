@@ -52,14 +52,17 @@ function captureBudgetMs(spanless: boolean): number {
  * lanes read the whole file and are seeded too
  * (`PRE_EDIT_SEED_SPANLESS_RUNNER_IDS`). #5616: `before` supplies each file's
  * earlier bytes when the write already happened (a credited script write's
- * HEAD copy, read at `tool_result`). Never rejects.
+ * HEAD copy, read at `tool_result`). Returns the files whose copy could not be
+ * written beside them (`copy-unwritable`): they have no seed, so the caller
+ * withholds their credit (#5616 F-B). Never rejects.
  */
 export async function captureWriterSeeds(
 	filePaths: readonly string[],
 	deps: WriterSeedDeps,
 	spanless: boolean,
 	before?: (filePath: string, signal?: AbortSignal) => Promise<PreEditBytes>,
-): Promise<void> {
+): Promise<string[]> {
+	const unseeded: string[] = [];
 	for (const filePath of filePaths) {
 		const started = Date.now();
 		// The thunk's signal is the capture's cancel: it aborts when the budget
@@ -87,8 +90,11 @@ export async function captureWriterSeeds(
 				subject: "pre-edit",
 				reason: outcome?.outcome ?? "abandoned",
 			});
+		if (outcome?.outcome === "skipped" && outcome.reason === "copy-unwritable")
+			unseeded.push(filePath);
 		recordPreEditCapture(filePath, outcome, Date.now() - started, spanless);
 	}
+	return unseeded;
 }
 
 type PreEditCaptureResult =

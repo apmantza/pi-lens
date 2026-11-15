@@ -3437,8 +3437,8 @@ export async function handleToolResult(
 			if (scriptCredited.has(wp)) creditedWrites.push(wp);
 		// A name of its own: the primary resync above bounds with the same signal.
 		const seedSignal = deps.signal;
-		if (creditedWrites.length > 0)
-			await bounded(
+		if (creditedWrites.length > 0) {
+			const unseeded = await bounded(
 				(signal) =>
 					captureWriterSeeds(
 						creditedWrites,
@@ -3459,6 +3459,13 @@ export async function handleToolResult(
 					label: "credited-script-seed",
 				},
 			);
+			// #5616 F-B: a file whose HEAD copy could not be written beside it has
+			// no seed, so its old blockers would read as new: a false STOP that
+			// shuts the gate. Its credit is withheld, and the withheld line
+			// discloses its blockers as for any uncredited write. A bound that
+			// lapsed names no file, so it withholds nothing.
+			for (const wp of unseeded ?? []) scriptCredited.delete(wp);
+		}
 		for (const wp of written) {
 			// #3525: a parser-recognized bash write is whole-file authorship only
 			// after the tool_call preflight proved no foreign writer intervened.
