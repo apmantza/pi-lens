@@ -228,9 +228,22 @@ function ghFor(w: World) {
 					comments: [],
 				});
 			if (p.headReadThrows) throw new Error("HTTP 404: Not Found");
+			// #5629: the PR's rollup is what its own runs posted: the same rows.
 			return JSON.stringify({
 				headRefOid: p.sha ?? shaOf(p.number),
 				mergeable: p.mergeable ?? "MERGEABLE",
+				statusCheckRollup: (
+					(p.checkRuns ?? []) as {
+						name: string;
+						status: string;
+						conclusion: string | null;
+					}[]
+				).map((run) => ({
+					__typename: "CheckRun",
+					name: run.name,
+					status: run.status.toUpperCase(),
+					conclusion: (run.conclusion ?? "").toUpperCase(),
+				})),
 			});
 		}
 		if (args[0] === "api" && args[1] === "user") {

@@ -570,6 +570,72 @@ function formatTriggerAdvisoryLines(rows) {
 }
 
 /**
+ * #5629: the merge gate's own view of a PR. The verdict reads the head's
+ * check-runs (`commits/<sha>/check-runs`), which also carry rows no PR sees:
+ * a `workflow_dispatch` run on the head posts them, and `gh pr view`'s
+ * `statusCheckRollup` (what GitHub's gate reads) lists none of them. PR #5623
+ * (nightly docs refresh, 2026-11-15) read green from its dispatch rows while
+ * the PR rollup held only CodeRabbit and SonarCloud and the merge stayed
+ * BLOCKED. Success therefore also needs a concluded-success rollup entry for
+ * EVERY required name: an allow-list over what the gate counts, so a name the
+ * rollup does not list, or lists unfinished or red, never reads as green.
+ *
+ * `gateViewContext` is `readGateView`'s name -> entries map (or a function
+ * returning it), `null` when the view is not wired (bare SHA, REST transport),
+ * and a function returning `null` when the rollup could not be read:
+ * unavailable is not clean, so it is pending, never green. Returns `null`
+ * when every required name is a concluded success.
+ */
+function readGateViewFault(requiredChecks, gateViewContext) {
+	if (gateViewContext == null) return null;
+	const view =
+		typeof gateViewContext === "function" ? gateViewContext() : gateViewContext;
+	if (!(view instanceof Map)) {
+		return {
+			exitCode: EXIT_PENDING,
+			kind: "gate-view",
+			reason:
+				"could not read the PR's statusCheckRollup to confirm the required checks reach the merge gate; treating as pending, not green",
+		};
+	}
+	const missing = [];
+	const unfinished = [];
+	const red = [];
+	for (const name of requiredChecks) {
+		const entries = view.get(name) ?? [];
+		if (entries.length === 0) missing.push(name);
+		else if (entries.some((entry) => entry.status !== "COMPLETED"))
+			unfinished.push(name);
+		else {
+			const bad = entries.find((entry) => entry.conclusion !== "SUCCESS");
+			if (bad) red.push(`${name} (${String(bad.conclusion).toLowerCase()})`);
+		}
+	}
+	if (red.length > 0) {
+		return {
+			exitCode: EXIT_FAILURE,
+			kind: "failed",
+			reason: `the head's check-runs read green, but the PR's statusCheckRollup (the merge gate's view) shows required check(s) not green: ${red.join(", ")}`,
+		};
+	}
+	if (missing.length + unfinished.length === 0) return null;
+	const parts = [];
+	if (missing.length > 0)
+		parts.push(
+			`absent from the PR's statusCheckRollup: ${missing.join(", ")} -- check-run rows on the head that no PR run posted (a workflow_dispatch run's) do not count; close and reopen the PR so its pull_request runs register`,
+		);
+	if (unfinished.length > 0)
+		parts.push(
+			`not finished in the PR's statusCheckRollup: ${unfinished.join(", ")}`,
+		);
+	return {
+		exitCode: EXIT_PENDING,
+		kind: "gate-view",
+		reason: `required check(s) the merge gate does not yet count -- ${parts.join("; ")}`,
+	};
+}
+
+/**
  * Pure verdict over one commit's check-runs payload -- the literal
  * `gh api repos/<owner>/<repo>/commits/<sha>/check-runs` response shape,
  * `{ total_count, check_runs: [...] }`. No I/O, no `gh`, no fetch; exported
@@ -637,6 +703,7 @@ export function computeVerdict(
 	absentContext = null,
 	noiseRowIds = null,
 	queueContext = null,
+	gateViewContext = null,
 ) {
 	const checkRuns = Array.isArray(checkRunsPayload?.check_runs)
 		? checkRunsPayload.check_runs
@@ -920,13 +987,23 @@ export function computeVerdict(
 			reason = `gating check(s) ${parts.join("; ")}`;
 		}
 	} else {
+		// #5629: green over the head's check-runs is not green over the PR's own
+		// merge-gate view. Read lazily, like the queue below.
+		const gateFault = readGateViewFault(requiredChecks, gateViewContext);
 		// #3754: the head's own gating checks are green, which only makes the PR
 		// ELIGIBLE for the merge queue. Read lazily (only here, so a red or
 		// pending head costs no extra call): a PR in the queue is waiting on the
 		// `merge_group` run, and a PR whose queue run failed was ejected.
-		const queue =
-			typeof queueContext === "function" ? queueContext() : queueContext;
-		if (queue?.entry) {
+		const queue = gateFault
+			? null
+			: typeof queueContext === "function"
+				? queueContext()
+				: queueContext;
+		if (gateFault) {
+			exitCode = gateFault.exitCode;
+			kind = gateFault.kind;
+			reason = gateFault.reason;
+		} else if (queue?.entry) {
 			exitCode = EXIT_PENDING;
 			kind = "in-queue";
 			reason = formatInQueueReason(queue.entry);
@@ -1162,6 +1239,7 @@ export async function pollVerdict({
 	rerunState = null,
 	absentContext = null,
 	queueContext = null,
+	gateViewContext = null,
 	sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 	now = () => Date.now(),
 	onRetry = () => {},
@@ -1188,6 +1266,7 @@ export async function pollVerdict({
 			absentContext,
 			null,
 			queueContext,
+			gateViewContext,
 		);
 		polls += 1;
 		if (verdict.exitCode !== EXIT_PENDING) break;
@@ -1653,6 +1732,66 @@ function graphqlFieldArgs(query, fields) {
 			`${name}=${value}`,
 		]),
 	];
+}
+
+/**
+ * #5629: the PR's `statusCheckRollup` as `name -> [{ status, conclusion }]`,
+ * upper-cased, or `null` when unreadable (the caller reads that as pending,
+ * never green). A check-run entry carries `name`/`status`/`conclusion`; a
+ * commit-status entry carries `context`/`state`, where `PENDING` and
+ * `EXPECTED` are unfinished and every other state is its own conclusion.
+ *
+ * The rollup keeps every run of a name, a superseded CANCELLED or FAILURE row
+ * beside the newer SUCCESS (PR #5600's `PR metadata`: [CANCELLED, SUCCESS,
+ * SUCCESS], GitHub's own aggregate SUCCESS), so each name keeps only its
+ * newest entries by `startedAt` (`completedAt` when absent). An entry with no
+ * usable timestamp (absent, unparseable, or gh's zero time for a run not yet
+ * started) is never superseded, and tied newest entries are all kept: the
+ * verdict stays fail-closed, any kept entry not a concluded success is not
+ * green.
+ */
+export function readGateView(
+	target,
+	ghExec = gh,
+	timeoutMs = DEFAULT_GH_TIMEOUT_MS,
+) {
+	try {
+		const rollup = JSON.parse(
+			ghExec(["pr", "view", String(target), "--json", "statusCheckRollup"], {
+				timeoutMs,
+			}),
+		)?.statusCheckRollup;
+		if (!Array.isArray(rollup)) return null;
+		const byName = new Map();
+		for (const entry of rollup) {
+			const name = String(entry?.name ?? entry?.context ?? "");
+			const state = String(entry?.state ?? "").toUpperCase();
+			const status = entry?.state
+				? state === "PENDING" || state === "EXPECTED"
+					? "IN_PROGRESS"
+					: "COMPLETED"
+				: String(entry?.status ?? "").toUpperCase();
+			const conclusion = String(entry?.conclusion ?? state).toUpperCase();
+			const stamp = Date.parse(entry?.startedAt ?? entry?.completedAt);
+			byName.set(name, [
+				...(byName.get(name) ?? []),
+				{ status, conclusion, at: stamp > 0 ? stamp : null },
+			]);
+		}
+		const view = new Map();
+		for (const [name, entries] of byName) {
+			const newest = Math.max(...entries.map((entry) => entry.at ?? 0));
+			view.set(
+				name,
+				entries
+					.filter((entry) => entry.at === null || entry.at === newest)
+					.map(({ status, conclusion }) => ({ status, conclusion })),
+			);
+		}
+		return view;
+	} catch {
+		return null;
+	}
 }
 
 /**
@@ -3246,6 +3385,13 @@ export async function run({
 						);
 					}
 				: null;
+		// #5629: read lazily, only when computeVerdict reaches its green branch:
+		// the PR's own statusCheckRollup, the view GitHub's merge gate reads. PR
+		// targets on the gh transport only (REST has no PR rollup read).
+		const gateViewContext =
+			transport === TRANSPORT_GH && isPrNumber(target)
+				? () => readGateView(target, ghExec, initialTimeoutMs)
+				: null;
 		// #2609: read once, before polling starts (branch protection does not
 		// change between polls of the same head). `null` means unreadable --
 		// `requiredChecks` then falls back to the constant default, and every
@@ -3322,6 +3468,7 @@ export async function run({
 			rerunState,
 			absentContext,
 			queueContext,
+			gateViewContext,
 			onRetry: stderr,
 			...(sleepImpl ? { sleepImpl } : {}),
 			...(now ? { now } : {}),
@@ -3364,6 +3511,7 @@ export async function run({
 					absentContext,
 					found.noiseRowIds,
 					queueContext,
+					gateViewContext,
 				);
 			}
 			verdict = { ...verdict, details: found.details, hints: found.hints };
