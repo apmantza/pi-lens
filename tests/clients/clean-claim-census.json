@@ -1756,10 +1756,7 @@
 			"\"failed-command\"": 1,
 			"\"changed\"": 1,
 			"\"named\"": 1,
-			"\"HEAD\"": 1,
-			"\"pre-edit-head-seed\"": 1,
-			"\"absent\"": 1,
-			"\"unreadable\"": 1,
+			"\"head\"": 1,
 			"\"credited-script-seed\"": 1
 		}
 	}
