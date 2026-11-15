@@ -370,23 +370,42 @@ describe("GitHub release asset selection", () => {
 		});
 	});
 
-	describe("HashiCorp release fallback", () => {
+	describe("derived-asset release fallback", () => {
 		it("derives terraform-ls download URLs from the release tag when GitHub assets are absent", async () => {
-			const { resolveDerivedHashiCorpReleaseAsset } =
+			const { resolveDerivedReleaseAsset } =
 				await import("../../../clients/installer/index.js");
 
 			expect(
-				resolveDerivedHashiCorpReleaseAsset(
-					"terraform-ls",
-					"v0.38.2",
-					"win32",
-					"x64",
-				),
+				resolveDerivedReleaseAsset("terraform-ls", "v0.38.2", "win32", "x64"),
 			).toEqual({
 				name: "terraform-ls_0.38.2_windows_amd64.zip",
 				browser_download_url:
 					"https://releases.hashicorp.com/terraform-ls/0.38.2/terraform-ls_0.38.2_windows_amd64.zip",
 			});
+		});
+
+		// #5643: helm keeps the tag's `v` in both the file name and the URL,
+		// unlike terraform-ls, whose archives are named by the bare version.
+		it("derives helm download URLs on get.helm.sh and keeps the tag's v", async () => {
+			const { resolveDerivedReleaseAsset } =
+				await import("../../../clients/installer/index.js");
+
+			expect(
+				resolveDerivedReleaseAsset("helm", "v4.3.2", "linux", "arm64"),
+			).toEqual({
+				name: "helm-v4.3.2-linux-arm64.tar.gz",
+				browser_download_url:
+					"https://get.helm.sh/helm-v4.3.2-linux-arm64.tar.gz",
+			});
+		});
+
+		it("derives nothing for a tool whose release carries its archives", async () => {
+			const { resolveDerivedReleaseAsset } =
+				await import("../../../clients/installer/index.js");
+
+			expect(
+				resolveDerivedReleaseAsset("tflint", "v0.50.0", "linux", "x64"),
+			).toBeUndefined();
 		});
 	});
 
