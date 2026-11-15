@@ -46,7 +46,6 @@ import { holdFileMutationQueue } from "./file-mutation-queue.js";
 import { renderFixRunLoss } from "./fix-run-restore.js";
 import { getAmbientAbortSignal } from "./safe-spawn.js";
 import { recordMutationOutcome } from "./mutation-bridge.js";
-import { countFileLines } from "./read-guard-tool-lines.js";
 import { readFileContent } from "./dispatch/runners/utils.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import {
@@ -161,8 +160,8 @@ function recordDrainWrite(args: {
 	dbg: (msg: string) => void;
 }): boolean {
 	const { runtime, filePath } = args;
-	// An unreadable file is still recorded: its lines count through
-	// `countFileLines` and it reports no import change.
+	// An unreadable file is still recorded: it counts one line, as the other
+	// scans do, and it reports no import change.
 	const content = readFileContent(filePath);
 	recordMutationOutcome(
 		{
@@ -193,10 +192,8 @@ function recordDrainWrite(args: {
 			getCacheManager: () => args.cacheManager,
 			getProjectRoot: () => args.turnStateCwd,
 			getDispatchCwd: () => args.turnStateCwd,
-			countFileLines: (file) =>
-				content === undefined
-					? countFileLines(file)
-					: content.split("\n").length,
+			countFileLines: () =>
+				content === undefined ? 1 : content.split("\n").length,
 			// The drain's queue holds only files a recorded write put there.
 			isRecordable: () => true,
 			shouldStampReadGuard: () => !args.getFlag("no-read-guard"),
