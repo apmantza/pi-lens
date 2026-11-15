@@ -5,8 +5,8 @@ id: turn-count-wait-test-hook
 language: TypeScript
 severity: error
 message: >-
-  Awaited loop without a known-good exit (shape 86) in a test hook: a loop that
-  awaits may end only on a real-clock deadline, or await nothing but waitFor.
+  Turn-count wait (shape 86) in a test hook: this loop polls a fixed number of
+  times and then returns without a signal. Bound it by a real-clock deadline.
 note: >-
   Exempt a loop only with `// ast-grep-ignore: turn-count-wait-test-hook --
   <reason>`, or record it in scripts/governance-rules/baseline.json with a
@@ -15,7 +15,7 @@ files:
   - "clients/**"
 rule:
   all:
-    - matches: awaited-loop
+    - matches: turn-count-loop
     - inside:
         stopBy: end
         any:

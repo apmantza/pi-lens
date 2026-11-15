@@ -1,0 +1,88 @@
+# A loop that waits by counting turns (shape 86, docs/defect-shapes.md). The
+# rule does not classify what the loop awaits: setImmediate, setTimeout,
+# Promise.resolve, a tick or flush helper and any alias of one look the same.
+# It admits only the known-good forms below and refuses every other spelling.
+id: turn-count-loop
+language: TypeScript
+utils:
+  fn-boundary:
+    any:
+      - kind: arrow_function
+      - kind: function_expression
+      - kind: function_declaration
+      - kind: generator_function_declaration
+      - kind: method_definition
+      - kind: class_declaration
+  logical-test:
+    kind: binary_expression
+    has: { field: operator, regex: '^(&&|\|\|)$' }
+rule:
+  all:
+    - any:
+        - kind: for_statement
+        - kind: while_statement
+        - kind: do_statement
+    # 1. a counter: an identifier stepped inside the loop (`i++`, `++i`,
+    #    `i += 1`, `i = i + 1`)...
+    - has:
+        stopBy: { matches: fn-boundary }
+        any:
+          - kind: update_expression
+          - kind: augmented_assignment_expression
+          - all:
+              - kind: assignment_expression
+              - has: { field: left, pattern: $I }
+              - has: { field: right, stopBy: end, pattern: $I }
+    # 2. ...and a `<`, `<=`, `>` or `>=` comparison inside the loop. It need not
+    #    name the counter: a bound read through another binding
+    #    (`const n = i; if (n > 50) break;`) is still a count bound.
+    - has:
+        stopBy: { matches: fn-boundary }
+        kind: binary_expression
+        has: { field: operator, regex: '^[<>]=?$' }
+    # 3. an await, whatever it awaits, except a fake-timer advance: with fake
+    #    timers the count is virtual time, deterministic, and a real-clock
+    #    waitFor cannot run. A loop that awaits anything else as well (a
+    #    setImmediate for real I/O beside the advance, #4977) is still a member.
+    - has:
+        stopBy: { matches: fn-boundary }
+        kind: await_expression
+        not:
+          has:
+            kind: call_expression
+            has:
+              field: function
+              regex: '^vi\.(advanceTimersByTimeAsync|advanceTimersToNextTimerAsync|runAllTimersAsync|runOnlyPendingTimersAsync)$'
+
+    # 4. an exit besides the count: a poll, not N rounds of work.
+    - any:
+        - has:
+            field: condition
+            any:
+              - matches: logical-test
+              - has: { stopBy: end, matches: logical-test }
+        - has:
+            stopBy: { matches: fn-boundary }
+            any:
+              - kind: break_statement
+              - kind: return_statement
+              - kind: throw_statement
+    # Admitted: a real-clock DEADLINE. The clock must be compared (`<`, `<=`,
+    # `>`, `>=`) inside the loop; a clock merely read (a timestamp in a
+    # payload or a log line) does not bound the wait and admits nothing.
+    # Residuals (live 0 at #4865 r2): a comparison of clock values that does
+    # not bound the loop still admits it, and a count bound written as
+    # iteration over a generated range (`for (const _ of
+    # Array.from({ length: N }))`) has no counter step and is not seen.
+    - not:
+        has:
+          stopBy: { matches: fn-boundary }
+          kind: binary_expression
+          all:
+            - has: { field: operator, regex: '^[<>]=?$' }
+            - has:
+                stopBy: end
+                kind: call_expression
+                has:
+                  field: function
+                  regex: '^(Date\.now|performance\.now|process\.hrtime|process\.hrtime\.bigint)$'

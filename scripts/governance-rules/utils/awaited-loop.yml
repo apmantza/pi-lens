@@ -6,6 +6,7 @@
 # a fake-timer advance and the call under test all look the same, and any
 # count (`++`, `+= 1`, `i = i + 1`, a for-of over a range, recursion) is a
 # count. It admits the two forms below and reports every other awaited loop.
+# Only rules-disabled/awaited-loop-wait.yml uses it, and that rule ships off.
 id: awaited-loop
 language: TypeScript
 utils:

@@ -767,20 +767,19 @@ file-scoped worklist and receives no project-wide scanner output.
     so the red lands on an unrelated PR. Wait on `waitFor`
     (`tests/clients/interleaving-kit.ts`), which reads a real-clock deadline
     scaled by `PI_LENS_TEST_TIMEOUT_SCALE`, and give the test a timeout above
-    that deadline. Screen: does every awaited loop end on a real-clock
-    deadline or await nothing but `waitFor`? Enforcer: the governance ast-grep
+    that deadline. Screen: does the wait end on the event it waits for or on a
+    real-clock deadline, never on a count? Enforcer: the governance ast-grep
     rules `turn-count-wait` and `turn-count-wait-test-hook`
     (`scripts/governance-rules/`, run by `npm run astgrep:self-scan`), with a
-    reasoned baseline. They admit an awaited loop in two forms only: a
-    `Date.now`, `performance.now` or `process.hrtime` comparison in its
-    condition or an exit branch, with no exit that reads a count the loop
-    steps; or every await it owns is the `waitFor` imported from
-    `interleaving-kit`. Every other awaited loop is a member, whatever it
-    awaits and however it counts (a counter, a for-of, recursion). The rules
-    cannot tell N rounds of the work under test from N yields, so a drive loop
-    carries a reasoned `ast-grep-ignore` or a baseline row. They do not see
-    straight-line repeated awaits, mutual recursion, or a count copied into
-    another binding beside a real deadline.
+    reasoned baseline. It does not see a count loop with no exit besides the
+    count (a pure `for (N) await yield` flush), a wait spelled as recursion, a
+    count written as iteration over a generated range
+    (`for (const _ of Array.from({ length: N }))`), or a loop that compares a
+    clock value for some other purpose. The broader `awaited-loop-wait` rule,
+    which admits an awaited loop only on a real-clock deadline or a lone
+    `waitFor`, sees all of these but ships disabled
+    (`scripts/governance-rules/rules-disabled/`, #4865): 17 of its 669 members
+    on the tree were real-I/O waits.
     Instances and dates: `HISTORY.md`.
 
 92. **Test double with a result shape the real producer never returns:** a
