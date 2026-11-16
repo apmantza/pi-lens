@@ -3590,9 +3590,6 @@ export class TestRunnerClient {
 				return {
 					command: config.detectedBinary,
 					args: stripWrapperArgs("pytest", config.args(testFile, spawnCwd)),
-					...(pythonEnvironment
-						? { env: augmentPythonEnvironment(process.env, pythonEnvironment) }
-						: {}),
 					ownInstall: false,
 				};
 			}
