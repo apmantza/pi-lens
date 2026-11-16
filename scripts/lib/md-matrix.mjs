@@ -759,18 +759,18 @@ function sanitizeIdleEvictionState(map) {
 }
 
 /**
- * #3989: replace the `idle-eviction` key of the refresh-state block in `text`,
- * leaving the other keys as parsed. An empty map removes the key (and the
- * section when nothing else is left).
+ * Replace one key of the refresh-state block in `text` (`idle-eviction`,
+ * `save-verdict`: the keys whose own nightly step writes them), leaving the
+ * other keys as parsed. An empty map removes the key (and the section when
+ * nothing else is left). The render below sanitizes the value, so a key it does
+ * not know is dropped, never carried.
  *
  * @param {string} text
- * @param {Record<string, { nights: { day: string, rssMb: number | null, coldMs: number }[] }>} idleEviction
+ * @param {string} key
+ * @param {Record<string, unknown>} value
  */
-export function setIdleEvictionState(text, idleEviction) {
-	const state = {
-		...parseRefreshState(text),
-		[IDLE_EVICTION_KEY]: idleEviction,
-	};
+export function setRefreshStateKey(text, key, value) {
+	const state = { ...parseRefreshState(text), [key]: value };
 	return replaceRefreshStateSection(text, renderRefreshStateSection(state));
 }
 

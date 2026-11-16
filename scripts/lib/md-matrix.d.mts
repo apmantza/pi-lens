@@ -201,10 +201,14 @@ export interface IdleEvictionNight {
 	coldMs: number;
 }
 
-/** #3989: replace the `idle-eviction` key of the refresh-state block. */
-export function setIdleEvictionState(
+/**
+ * Replace one key of the refresh-state block (`idle-eviction`, `save-verdict`),
+ * leaving the others as parsed.
+ */
+export function setRefreshStateKey(
 	text: string,
-	idleEviction: Record<string, { nights: IdleEvictionNight[] }>,
+	key: string,
+	value: Record<string, unknown>,
 ): string;
 
 export function refreshCapabilityMatrix(

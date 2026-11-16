@@ -33,7 +33,7 @@ import {
 import {
 	IDLE_EVICTION_KEY,
 	parseRefreshState,
-	setIdleEvictionState,
+	setRefreshStateKey,
 } from "./lib/md-matrix.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 
@@ -74,7 +74,10 @@ export function promoteFromSummary(opts) {
 			log(
 				"idle-eviction promotion: no readable measurement summary; clearing the night memory and promoting nothing",
 			);
-			fs.writeFileSync(opts.matrixPath, setIdleEvictionState(matrixText, {}));
+			fs.writeFileSync(
+				opts.matrixPath,
+				setRefreshStateKey(matrixText, IDLE_EVICTION_KEY, {}),
+			);
 			return [];
 		}
 		const plan = planPromotions({
@@ -89,7 +92,7 @@ export function promoteFromSummary(opts) {
 		});
 		fs.writeFileSync(
 			opts.matrixPath,
-			setIdleEvictionState(matrixText, plan.state),
+			setRefreshStateKey(matrixText, IDLE_EVICTION_KEY, plan.state),
 		);
 		for (const s of plan.skipped)
 			log(`idle-eviction promotion: skip ${s.serverId}: ${s.reason}`);
