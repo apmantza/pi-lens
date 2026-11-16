@@ -6,7 +6,7 @@ import {
 	selectLivePeerInstances,
 } from "./instance-registry.js";
 import { realIsPidAlive } from "./instance-reaper.js";
-import { withinRemaining } from "./deadline-utils.js";
+import { withDeadline } from "./deadline-utils.js";
 import { logLatency } from "./latency-logger.js";
 import type { LSPDiagnostic } from "./lsp/client.js";
 import { touchCoverageGap } from "./lsp/diagnostic-binding.js";
@@ -119,11 +119,17 @@ function askProjectMembership(
 	if (probeDeadlineAt <= Date.now()) {
 		return Promise.resolve(abandoned("no-time-left"));
 	}
-	return withinRemaining(
+	// A probe that rejects reads as one that did not settle: the reply goes out
+	// without the verdict either way.
+	return withDeadline(
 		fetchTsserverProjectIdentity(service, file).then((identity) => ({
 			identity,
 		})),
-		probeDeadlineAt,
+		{
+			deadlineAt: probeDeadlineAt,
+			onTimeout: "undefined",
+			onReject: "undefined",
+		},
 	).then((settled) =>
 		settled === undefined ? abandoned("probe-timeout") : settled.identity,
 	);

@@ -1,10 +1,11 @@
 /**
  * Characterization + unit tests for the consolidated timeout-race helper (#366).
- * These lock the exact semantics of the three helpers folded into `withDeadline`
- * (`withTimeout`, `withBudget`, `withinRemaining`) so the consolidation is
- * provably behavior-preserving, and cover the two latent bugs it fixes:
- * `withBudget`'s missing late-rejection suppression and `withinRemaining`'s
- * uncleared timer.
+ * These lock the exact semantics of the three copies folded into `withDeadline`
+ * (reject on timeout, `withBudget`, and the deadline race that swallowed
+ * rejections; the first and last are plain `withDeadline` options since #5550)
+ * so the consolidation is provably behavior-preserving, and cover the two
+ * latent bugs it fixed: `withBudget`'s missing late-rejection suppression and
+ * the deadline race's uncleared timer.
  */
 
 import { getEventListeners } from "node:events";
@@ -14,8 +15,6 @@ import {
 	untilAborted,
 	withBudget,
 	withDeadline,
-	withinRemaining,
-	withTimeout,
 } from "../../clients/deadline-utils.js";
 
 const slow = <T>(value: T, ms: number): Promise<T> =>
@@ -86,6 +85,27 @@ describe("withDeadline", () => {
 				withDeadline(slow("ok", 5), { deadlineAt: Date.now() + 1000 }),
 			).resolves.toBe("ok");
 		});
+		// The options the warm-attach probe and the module-report sweep pass (the
+		// former `withinRemaining`, #5550): a timer armed for a future deadline,
+		// and a rejection read as no answer.
+		it("resolves undefined when a future deadline passes first, and swallows a rejection", async () => {
+			const swallow = {
+				onTimeout: "undefined",
+				onReject: "undefined",
+			} as const;
+			await expect(
+				withDeadline(slow("x", 1000), {
+					deadlineAt: Date.now() + 10,
+					...swallow,
+				}),
+			).resolves.toBeUndefined();
+			await expect(
+				withDeadline(slowReject("boom", 5), {
+					deadlineAt: Date.now() + 1000,
+					...swallow,
+				}),
+			).resolves.toBeUndefined();
+		});
 		it("resolves undefined immediately once the deadline has passed", async () => {
 			await expect(
 				withDeadline(slow("x", 50), {
@@ -154,17 +174,7 @@ describe("late-rejection suppression (#366 bug fix)", () => {
 	);
 });
 
-describe("named adapters preserve their exact semantics", () => {
-	it("withTimeout: rejects on timeout, propagates rejection, resolves value", async () => {
-		await expect(withTimeout(slow("v", 5), 1000)).resolves.toBe("v");
-		await expect(withTimeout(slow("v", 1000), 10)).rejects.toThrow(
-			/Timeout after 10ms/,
-		);
-		await expect(withTimeout(slowReject("boom", 5), 1000)).rejects.toThrow(
-			"boom",
-		);
-	});
-
+describe("the named adapter preserves its exact semantics", () => {
 	it("withBudget: undefined on timeout, undefined for <=0, propagates rejection", async () => {
 		await expect(withBudget(slow("v", 1000), 10)).resolves.toBeUndefined();
 		await expect(withBudget(slow("v", 50), 0)).resolves.toBeUndefined();
@@ -172,21 +182,6 @@ describe("named adapters preserve their exact semantics", () => {
 		await expect(withBudget(slowReject("boom", 5), 1000)).rejects.toThrow(
 			"boom",
 		);
-	});
-
-	it("withinRemaining: undefined on timeout, swallows rejection, undefined once past deadline", async () => {
-		await expect(
-			withinRemaining(slow("v", 5), Date.now() + 1000),
-		).resolves.toBe("v");
-		await expect(
-			withinRemaining(slow("v", 1000), Date.now() + 10),
-		).resolves.toBeUndefined();
-		await expect(
-			withinRemaining(slowReject("boom", 5), Date.now() + 1000),
-		).resolves.toBeUndefined();
-		await expect(
-			withinRemaining(slow("v", 50), Date.now() - 1),
-		).resolves.toBeUndefined();
 	});
 });
 

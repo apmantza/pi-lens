@@ -27,7 +27,7 @@ import {
 	recordDegradationOnce,
 } from "./degradation-ledger.js";
 import { BoundedFifoMap } from "./bounded-cache.js";
-import { withTimeout } from "./deadline-utils.js";
+import { withDeadline } from "./deadline-utils.js";
 import { loadWebTreeSitter } from "./deps/web-tree-sitter.js";
 import { transientRetryDelayMs } from "./dispatch/runners/utils/availability-policy.js";
 import { getProjectIgnoreMatcher, isExcludedDirName } from "./file-utils.js";
@@ -337,7 +337,7 @@ type GrammarFetchFailureCause =
 	| "load-timed-out";
 
 /**
- * `withTimeout` rejects with this EXACT message (`clients/deadline-utils.ts`)
+ * `withDeadline` rejects with this EXACT message (`clients/deadline-utils.ts`)
  * only when its own timer wins the race, so it is the one rejection that means
  * the load was abandoned and may still settle. Mirrors `isPullTimeoutError`
  * (#1713) and `isNavTimeoutError` (#1716) in `clients/lsp/client.ts`.
@@ -2087,10 +2087,9 @@ export class TreeSitterClient {
 			const started: Promise<TreeSitterLanguage> =
 				this.LanguageLoader.load(grammarPath);
 			loading = started;
-			const language = await withTimeout<TreeSitterLanguage>(
-				started,
-				GRAMMAR_LOAD_TIMEOUT_MS,
-			);
+			const language = await withDeadline<TreeSitterLanguage>(started, {
+				ms: GRAMMAR_LOAD_TIMEOUT_MS,
+			});
 			this.dbg(`Language loaded: ${language?.name || "unknown"}`);
 			if (language) {
 				this.languages.set(languageId, language);

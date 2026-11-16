@@ -2,7 +2,7 @@
  * #1716: `navRequest` (`clients/lsp/client.ts` — hover/definition/references/
  * signatureHelp/documentSymbol/workspace-symbol/call-hierarchy) shares the
  * observability hole #1713 fixed for pull diagnostics. Its per-request
- * `withTimeout` previously collapsed a timeout to `undefined`, so callers
+ * timeout previously collapsed a timeout to `undefined`, so callers
  * rendered an unanswered request as an empty result.
  *
  * navRequest is the highest-volume LSP call site (one call per turn, often

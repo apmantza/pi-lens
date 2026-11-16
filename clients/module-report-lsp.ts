@@ -23,7 +23,7 @@
  */
 
 import { nonNegativeIntEnv } from "./env-utils.js";
-import { withinRemaining } from "./deadline-utils.js";
+import { withDeadline } from "./deadline-utils.js";
 import type { LSPLocation } from "./lsp/client.js";
 import type { ModuleSymbolUsedBy } from "./module-report.js";
 import { uriToPath } from "./path-utils.js";
@@ -194,6 +194,12 @@ async function enrichModuleReportWithLspNow(
 
 	const lsp = getLSPService();
 	const deadlineAt = Date.now() + budgetMs;
+	// A probe that misses the shared deadline, or rejects, contributes nothing.
+	const withinSweep = {
+		deadlineAt,
+		onTimeout: "undefined",
+		onReject: "undefined",
+	} as const;
 	const byName = new Map<
 		string,
 		{ usedBy?: ModuleSymbolUsedBy[]; hasImpl?: boolean }
@@ -206,9 +212,9 @@ async function enrichModuleReportWithLspNow(
 	async function enrichOne(sym: ExtractedSymbol): Promise<void> {
 		if (Date.now() >= deadlineAt) return;
 		const { line, character } = lspPosition(sym, lines);
-		const refsPromise = withinRemaining(
+		const refsPromise = withDeadline(
 			lsp.references(absPath, line, character, false),
-			deadlineAt,
+			withinSweep,
 		).then((locs) => {
 			if (!locs || Date.now() > deadlineAt) return;
 			const usedBy = lspLocationsToUsedBy(locs, maxRefs);
@@ -218,9 +224,9 @@ async function enrichModuleReportWithLspNow(
 		});
 
 		const implPromise = INTERFACE_LIKE_KINDS.has(sym.kind)
-			? withinRemaining(
+			? withDeadline(
 					lsp.implementation(absPath, line, character),
-					deadlineAt,
+					withinSweep,
 				).then((locs) => {
 					if (!locs || locs.length === 0 || Date.now() > deadlineAt) return;
 					byName.set(sym.name, { ...byName.get(sym.name), hasImpl: true });

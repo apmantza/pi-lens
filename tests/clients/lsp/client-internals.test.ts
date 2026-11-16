@@ -2448,7 +2448,7 @@ describe("clientWaitForDiagnostics — pull mode (#240)", () => {
 		// replies (stream stays alive). safeSendRequest only settles on a reply or
 		// a destroyed stream, so pre-fix this await never resolves and hangs the
 		// whole diagnostics wait (→ pipeline → flush → lens_diagnostics). The
-		// per-request withTimeout must bound it: time out → unavailable → fall
+		// per-request withDeadline must bound it: time out → unavailable → fall
 		// through to the push backstop and resolve within the caller's budget.
 		state.connection.sendRequest = vi.fn(() => new Promise<never>(() => {}));
 
@@ -2977,7 +2977,7 @@ describe("shutdown protocol race fixture (#1292)", () => {
 
 describe("navRequest — per-request timeout ceiling (#365)", () => {
 	// workspaceSymbol and codeAction now route through navRequest, so its
-	// withTimeout ceiling is what stops a hung server (a request the server
+	// sender ceiling is what stops a hung server (a request the server
 	// accepts but never replies to — safeSendRequest only settles on a reply or
 	// a destroyed stream) from hanging those tools forever.
 	const TEST_FILE = "/proj/file.ts";

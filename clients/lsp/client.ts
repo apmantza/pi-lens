@@ -14,7 +14,7 @@ import { access, lstat, readFile, stat } from "node:fs/promises";
 import * as os from "node:os";
 import { pathToFileURL } from "node:url";
 import { emitBounded } from "../bounded-telemetry.js";
-import { untilAborted, withTimeout } from "../deadline-utils.js";
+import { untilAborted, withDeadline } from "../deadline-utils.js";
 import { minimatch } from "../deps/minimatch.js";
 import { mapWithConcurrency } from "../map-with-concurrency.js";
 import {
@@ -4070,7 +4070,7 @@ async function clientRequestPullDiagnostics(
 			results.some((r) => r.status === "found" && r.primaryCount > 0),
 		{
 			// No graceMs: finalize the instant a source answers for this file.
-			// The per-request `withTimeout` inside each attempt is the real bound;
+			// The per-request `withDeadline` inside each attempt is the real bound;
 			// this deadline is only a backstop, so it sits just past it.
 			timeoutMs:
 				Math.max(1, Math.min(PULL_REQUEST_TIMEOUT_MS, budgetMs)) +
@@ -4188,7 +4188,7 @@ async function pullDiagnosticSource(
 	// alone would let a slow answer from the earlier round land on top of a newer
 	// one. Re-checked at write time below.
 	const requestSequence = claimPullRequestSequence(state, sourceKey);
-	// #1889: give the request a cancellation token. `withTimeout` only abandons
+	// #1889: give the request a cancellation token. `withDeadline` only abandons
 	// its await; aborting in the timeout branch below also sends `$/cancelRequest`
 	// so repeated touches cannot leave an aging backlog inside the server.
 	const requestStartedAt = Date.now();
@@ -4222,14 +4222,14 @@ async function pullDiagnosticSource(
 		pullSettlement,
 	);
 	try {
-		// withTimeout is the backstop against a hung pull-mode server: without it
+		// withDeadline is the backstop against a hung pull-mode server: without it
 		// this await never settles unless the stream is destroyed. Bounded by the
 		// smaller of the absolute ceiling and the caller's remaining wait budget.
 		// On timeout the caught error yields `unavailable` below (never a false
 		// `clean`), so it falls through to the push-wait/timeout backstop.
-		const report = await withTimeout(
+		const report = await withDeadline(
 			untilAborted(requestPromise, abortSignal, PULL_ABORTED),
-			effectiveTimeoutMs,
+			{ ms: effectiveTimeoutMs },
 		);
 
 		if (report === PULL_ABORTED) {
@@ -4424,7 +4424,7 @@ function trackAbandonedPullRequest(
 }
 
 /**
- * #1713: `withTimeout` rejects with this EXACT message (`clients/deadline-utils.ts`)
+ * #1713: `withDeadline` rejects with this EXACT message (`clients/deadline-utils.ts`)
  * only when its own timer wins the race — every other rejection is the request
  * itself failing (bad params, dead connection, thrown by the server). Only the
  * timer-won case is a "the answer might still be coming" situation worth a
@@ -4437,7 +4437,7 @@ function isPullTimeoutError(err: unknown, timeoutMs: number): boolean {
 
 /**
  * #1713: every pull timeout emits exactly one bounded latency.log record — the
- * observability gap the issue names (`withTimeout`'s throw previously skipped
+ * observability gap the issue names (the timeout's throw previously skipped
  * ALL telemetry for this site). Never throws: telemetry must not perturb the
  * timeout path, which has already decided to return `unavailable` regardless.
  *
@@ -4487,7 +4487,7 @@ function recordPullTimeoutTelemetry(args: {
 
 /**
  * #1713: a telemetry-only continuation on the ALREADY-abandoned request
- * promise. `withTimeout` only raced it against a timer — the request is still
+ * promise. `withDeadline` only raced it against a timer — the request is still
  * live server-side — so if it eventually resolves, this is the only place that
  * ever finds out. Purely observational: it runs after the caller has already
  * moved on with `unavailable`, and it never writes into `state`.
@@ -4680,7 +4680,7 @@ export async function clientRequestWorkspaceDiagnostics(
 		return undefined;
 	}
 	// #1713: declared OUTSIDE the try so the catch below can still reach them —
-	// same shape as `pullDiagnosticSource` above. Captured outside `withTimeout`
+	// same shape as `pullDiagnosticSource` above. Captured outside `withDeadline`
 	// so a timeout still holds a live handle on the request for the late-answer
 	// watch.
 	const workspacePullStartedAt = Date.now();
@@ -4704,10 +4704,9 @@ export async function clientRequestWorkspaceDiagnostics(
 		workspacePullSettlement,
 	);
 	try {
-		const report = await withTimeout(
-			workspaceRequestPromise,
-			workspacePullTimeoutMs,
-		);
+		const report = await withDeadline(workspaceRequestPromise, {
+			ms: workspacePullTimeoutMs,
+		});
 		if (!report || !Array.isArray(report.items)) return undefined;
 		const out: Array<{
 			filePath: string;
@@ -6395,9 +6394,9 @@ async function clientShutdownOnce(
 	try {
 		if (!options.fast) {
 			try {
-				const shutdownAck = await withTimeout(
+				const shutdownAck = await withDeadline(
 					safeSendRequest(state.connection, "shutdown", {}),
-					SHUTDOWN_REQUEST_TIMEOUT_MS,
+					{ ms: SHUTDOWN_REQUEST_TIMEOUT_MS },
 				);
 				if (shutdownAck === undefined) shutdownRequestUndelivered = true;
 			} catch (err) {
@@ -6409,9 +6408,9 @@ async function clientShutdownOnce(
 				}
 			}
 			try {
-				const exitSent = await withTimeout(
+				const exitSent = await withDeadline(
 					safeSendNotification(state.connection, "exit", {}),
-					EXIT_NOTIFY_TIMEOUT_MS,
+					{ ms: EXIT_NOTIFY_TIMEOUT_MS },
 				);
 				if (exitSent === false) exitNotifyUndelivered = true;
 			} catch (err) {
@@ -6622,7 +6621,7 @@ function isNavTimeoutError(err: unknown, timeoutMs: number): boolean {
 }
 
 /**
- * #1620 residual 1: `withTimeout` rejects with this EXACT message only when
+ * #1620 residual 1: `withDeadline` rejects with this EXACT message only when
  * its own timer wins the race — mirrors #1713's `isPullTimeoutError` and
  * #1716's `isNavTimeoutError`. `clientShutdown`'s two catches previously
  * treated ANY rejection (a real timeout OR an immediate protocol error) as
@@ -7539,7 +7538,7 @@ export async function createLSPClient(options: {
 
 	let initResult: Awaited<ReturnType<typeof safeSendRequest>>;
 	try {
-		initResult = await withTimeout(
+		initResult = await withDeadline(
 			safeSendRequest(connection, "initialize", {
 				processId: process.pid,
 				rootUri: pathToFileURL(root).href,
@@ -7549,7 +7548,7 @@ export async function createLSPClient(options: {
 				capabilities: CLIENT_CAPABILITIES,
 				initializationOptions: initialization,
 			}),
-			initializeTimeoutMs,
+			{ ms: initializeTimeoutMs },
 		);
 	} catch (err) {
 		// #1969: claim this kill BEFORE issuing it. `setupConnectionLifecycle`
@@ -8030,7 +8029,7 @@ export async function createLSPClient(options: {
 
 		async workspaceSymbol(query) {
 			if (!isClientAlive(state)) return [];
-			// Route through navRequest for the shared withTimeout ceiling — a hung
+			// Route through navRequest for the sender's shared ceiling — a hung
 			// server would otherwise await forever (safeSendRequest only settles on
 			// a reply or a destroyed stream). No staleCheckPath: not single-file.
 			const result = await navRequest<LSPSymbol[]>(state, "workspace/symbol", {
@@ -8042,7 +8041,7 @@ export async function createLSPClient(options: {
 		async codeAction(filePath, line, character, endLine, endCharacter) {
 			if (!isClientAlive(state)) return [];
 			const uri = pathToFileURL(filePath).href;
-			// navRequest adds the shared withTimeout ceiling + single-file
+			// navRequest adds the sender's shared ceiling + single-file
 			// stale-drop (matches documentSymbol); a hung server no longer awaits
 			// forever, and code actions computed against superseded content drop.
 			const result = await navRequest<unknown[]>(
