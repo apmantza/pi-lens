@@ -1,6 +1,7 @@
 import { hostPackageDir } from "../support/pi-session.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
 	HOST_BOM_CODE_POINT,
@@ -116,10 +117,28 @@ describe("host-edit-normalize sync (host source drift guard)", () => {
 		expect(HOST_SPECIAL_SPACES).toEqual(expected);
 	});
 
-	it("host still exports the line-ending primitives we vendored", () => {
-		expect(src).toContain("export function detectLineEnding");
+	it("host still exports normalization and preserves original line endings", () => {
+		// #5670: pi 1.5.2 replaced global detect/restore with range-local
+		// restoration. Keep our legacy ports unchanged and track the host seam.
 		expect(src).toContain("export function normalizeToLF");
-		expect(src).toContain("export function restoreLineEndings");
+		expect(sliceExportedFunction(src, "normalizeToLF")).toContain(
+			'text.replace(/\\r\\n/g, "\\n").replace(/\\r/g, "\\n")',
+		);
+		expect(src).toContain("export function applyReplacementsToOriginal");
+	});
+
+	it("host edits preserve untouched mixed endings after pi 1.5.2", async () => {
+		// #5670: the former global restoration would rewrite the final CRLF
+		// to LF because the first line is LF. The new host keeps those bytes.
+		const host = await import(
+			pathToFileURL(path.join(hostPackageDir(), "dist/core/tools/edit-diff.js"))
+				.href
+		);
+		expect(
+			host.applyReplacementsToOriginal("first\nold\r\nlast\r\n", [
+				{ matchIndex: 6, matchLength: 3, newText: "new\nline" },
+			]),
+		).toBe("first\nnew\r\nline\r\nlast\r\n");
 	});
 
 	it("host still delegates BOM stripping to splitBom, and splitBom matches our vendored copy", () => {
