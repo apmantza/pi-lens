@@ -42,6 +42,7 @@ const { safeSpawnAsync, spawnCalls, behaviour, ensureToolCalls } = vi.hoisted(
 			cmd: string;
 			args: readonly string[];
 			cwd: string | undefined;
+			timeout: number | undefined;
 		}> = [];
 		// What a binary on disk does when asked for its version: it answers, or it
 		// is broken. Keyed by absolute path; a bare command is resolved on the
@@ -51,9 +52,18 @@ const { safeSpawnAsync, spawnCalls, behaviour, ensureToolCalls } = vi.hoisted(
 			async (
 				cmd: string,
 				args: readonly string[] = [],
-				opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+				opts: {
+					cwd?: string;
+					env?: NodeJS.ProcessEnv;
+					timeout?: number;
+				} = {},
 			) => {
-				spawnCalls.push({ cmd: String(cmd), args, cwd: opts.cwd });
+				spawnCalls.push({
+					cmd: String(cmd),
+					args,
+					cwd: opts.cwd,
+					timeout: opts.timeout,
+				});
 				const fs = await import("node:fs");
 				const path = await import("node:path");
 				const searchPath = opts.env?.PATH ?? process.env.PATH ?? "";
@@ -164,6 +174,32 @@ describe("client availability through the registry resolver (#5410)", () => {
 		expect(await client.ensureAvailable()).toBe(false);
 		setProjectTrustState("trusted");
 		expect(await client.ensureAvailable()).toBe(true);
+	});
+
+	// Recurrence: #5685 review F5. The jscpd row carries the old checker's 1.5 s
+	// probe budget; a mutation to the row's value survived, so a slow `--version`
+	// would have held the session-start scan for the registry default instead.
+	it("jscpd: its version probe keeps the 1.5 s budget of the checker it replaced", async () => {
+		plant(pathEnv.tmpDir, "jscpd");
+		const { JscpdClient } = await import("../../clients/jscpd-client.js");
+		expect(await new JscpdClient().ensureAvailable()).toBe(true);
+		expect(probeSpawns("jscpd").map((call) => call.timeout)).toEqual([1500]);
+	});
+
+	// Recurrence: #5685 review F6. A failed question answers "missing" for the
+	// cwd it was asked about; the verdict read by mode=full's cold reason has to
+	// read that cwd, not the host's (a field nothing pinned survived deletion).
+	it("jscpd: the verdict for a failed question is read at the cwd it was asked about", async () => {
+		const { JscpdClient } = await import("../../clients/jscpd-client.js");
+		const client = new JscpdClient();
+		const asked = setupTestEnvironment("pi-lens-5410cl-asked-");
+		try {
+			// process.cwd() is the project, which this client never asked about.
+			expect(await client.ensureAvailable(asked.tmpDir)).toBe(false);
+			expect(client.getAvailabilityVerdict().outcome).toBe("missing");
+		} finally {
+			asked.cleanup();
+		}
 	});
 
 	it("jscpd: a repeated question probes the binary once", async () => {
