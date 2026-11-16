@@ -2514,16 +2514,43 @@ export async function computeCascadeForFile(
 					// per `neighborPath` (`getClientForFile` → `getServersForFileWithConfig`),
 					// so a multi-language neighbor still gets its OWN language server,
 					// not the primary edit's.
-					const rawDiags = await lspService.touchFile(neighborPath, content, {
-						diagnostics: "document",
-						collectDiagnostics: true,
-						maxClientWaitMs: isColdSnapshot ? 1000 : 2000,
-						silent: true,
-						source: "cascade",
-						clientScope: "primary",
-						readStamp,
-						nameUnansweredPrimaries: true,
-					});
+					const touchNeighbor = (resendUnchanged: boolean) =>
+						lspService.touchFile(neighborPath, content, {
+							diagnostics: "document",
+							collectDiagnostics: true,
+							maxClientWaitMs: isColdSnapshot ? 1000 : 2000,
+							silent: true,
+							source: "cascade",
+							clientScope: "primary",
+							readStamp,
+							nameUnansweredPrimaries: true,
+							...(resendUnchanged && { resendUnchanged: true }),
+						});
+					const firstTouch = await touchNeighbor(false);
+					// #5675: the answer this touch reused predates the run, and a
+					// push-only server (jdtls) republishes a dependent when ITS model
+					// changes, never because it was asked: it republished one importer
+					// before this run started and left the other on its warm-up answer.
+					// The touch above sent nothing (same bytes, debounced), so nothing
+					// has asked since the exporter changed. Ask once, by sending the
+					// document again: a re-sent document is the one request such a
+					// server takes. Once per neighbour per run, and the answer decides
+					// as the first would have: a re-touch that still reads pre-edit,
+					// came back inconclusive or timed out leaves the neighbour
+					// unconfirmed through the branches below, and one that throws is
+					// the touch-error fallback's case, the same as a first touch that
+					// throws. Not for `primary-unavailable`: its reused answer belongs
+					// to an alternate, and re-sending to the missing primary asks no one.
+					const retouchedAnswer =
+						firstTouch !== undefined &&
+						firstTouch.inconclusiveReason !== "primary-unavailable" &&
+						isPreEditAnswer(firstTouch, cascadeStart)
+							? readReusedAnswer(firstTouch)
+							: undefined;
+					const retouched = retouchedAnswer !== undefined;
+					const rawDiags = retouched
+						? ((await touchNeighbor(true)) ?? firstTouch)
+						: firstTouch;
 					if (!rawDiags) {
 						// #3483: the idle reset can destroy the service this compute
 						// captured while neighbours are still being touched; both
@@ -2643,7 +2670,7 @@ export async function computeCascadeForFile(
 						incrementDegradationCount({
 							kind: "cascade-pre-edit-answer",
 							subject: `${reusedAnswer.serverId}:${normalizeMapKey(neighborPath)}`,
-							reason: `no publication for this dependent since the edit, so the cached answer is ${Math.max(0, cascadeStart - reusedAnswer.publishedAt)} ms older than this run`,
+							reason: `no publication for this dependent since the edit, so the cached answer is ${Math.max(0, cascadeStart - reusedAnswer.publishedAt)} ms older than this run${retouched ? " (re-touched once, and the server did not answer it)" : ""}`,
 						});
 						logCascade({
 							phase: "neighbor_touch",
@@ -2660,6 +2687,7 @@ export async function computeCascadeForFile(
 								answerPublishedAt: reusedAnswer.publishedAt,
 								cascadeStart,
 								answerAgeMs: cascadeStart - reusedAnswer.publishedAt,
+								...(retouched && { retouched: true }),
 							},
 						});
 						// Not an answer (#240 doctrine): the degraded-fallback path below
@@ -2683,6 +2711,19 @@ export async function computeCascadeForFile(
 					const confirmed = isConfirmedTouch(rawDiags);
 					const bindingRejected = readBoundToCurrentDisk(rawDiags) === false;
 					const inconclusive = readInconclusive(rawDiags);
+					// #5675: the re-touch itself did not conclude (its notify write or its
+					// diagnostics wait lapsed). The neighbour is unconfirmed below, as any
+					// inconclusive touch is; this is the one counted record of why, in the
+					// pre-edit answer's own kind, because the reused answer that sent it
+					// here is no longer on the result.
+					if (inconclusive && retouchedAnswer !== undefined) {
+						incrementDegradationCount({
+							kind: "cascade-pre-edit-answer",
+							subject: `:`,
+							reason:
+								"re-touched once and the re-touch did not conclude (its notify write or diagnostics wait lapsed)",
+						});
+					}
 					// #1470/#1493: the third, independent reason a touch is unconfirmed — an
 					// auxiliary that never reported, cut off by our grace timer or silent
 					// with nothing published for this content. Logged alongside the other two

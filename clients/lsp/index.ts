@@ -700,6 +700,18 @@ export interface LSPTouchFileOptions {
 	 * which their clientless fallbacks rely on.
 	 */
 	nameUnansweredPrimaries?: boolean;
+	/**
+	 * #5675: send this content again even though the server already holds it.
+	 * The notify debounce (`shouldSkipNotify`) exists so a second touch of the
+	 * same bytes does not clear a cache the server is still filling; a caller
+	 * that holds a cached answer it cannot trust asks for the opposite. The one
+	 * reader is the cascade's re-touch of a push-only dependent whose only
+	 * answer predates the edit: such a server republishes a dependent when its
+	 * own model changes, not when asked, and a re-sent document is the only
+	 * request it takes. Honoured by a touch that waits for diagnostics only; the
+	 * whole-call skip of a `diagnostics: "none"` touch does not read it.
+	 */
+	resendUnchanged?: boolean;
 	/** Hook identity for bounded abandonment attribution (defaults to tool_result_edit). */
 	hook?: LedgerHookKey;
 	/**
@@ -4749,13 +4761,15 @@ export class LSPService {
 			// no-new-version baseline below.
 			const notifySkippedServerIds = new Set(
 				spawned
-					.filter((entry) =>
-						this.shouldSkipNotify(
-							filePath,
-							contentHash,
-							entry.info.id,
-							entry.client,
-						),
+					.filter(
+						(entry) =>
+							options.resendUnchanged !== true &&
+							this.shouldSkipNotify(
+								filePath,
+								contentHash,
+								entry.info.id,
+								entry.client,
+							),
 					)
 					.map((entry) => entry.info.id),
 			);
