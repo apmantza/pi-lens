@@ -1189,6 +1189,45 @@ it("shares one title across two budgets", { timeout: 5_000 }, async () => {});
 		expect(rows[0]).toContain("floor 8000 ms");
 	});
 
+	it("annotates how many judged tests were measured against their file's floor", () => {
+		// Round 2 V1 (verify of #5627): the floored annotation had no red. With
+		// `if (counts.floored > 0)` replaced by `if (false)` this file stayed green
+		// (44 passed), so a CI run could judge a test against its floor and say
+		// nothing about it in the annotations.
+		const file = source(
+			"floor/annotated.test.ts",
+			[
+				'import { it, vi } from "vitest";',
+				"",
+				"vi.setConfig({ testTimeout: 20_000 });",
+				"",
+				'it("keeps a declared budget", { timeout: 8_000 }, async () => {});',
+				'it("keeps a wider one", { timeout: 9_000 }, async () => {});',
+				"",
+			].join("\n"),
+		);
+		const reportFile = report("reports/floor-annotated.json", file, [
+			{
+				title: "reported under a title the source does not carry",
+				duration: 11_500,
+			},
+		]);
+		// --scale 1 keeps the 8000 ms floor and the 11500 ms duration the numbers
+		// this case decides on, whatever the lane's scale is.
+		const { lines } = run([
+			"--report",
+			reportFile,
+			"--baseline",
+			at("baseline/none-annotated.json"),
+			"--scale",
+			"1",
+		]);
+		expect(rowLines(lines, file).length).toBe(1);
+		expect(lines).toContain(
+			"::warning title=test-timeout-headroom::1 tests are over the ratio against the floor of their file because their cap did not resolve",
+		);
+	});
+
 	it("leaves the committed baseline self-consistent", () => {
 		const committed = join(ROOT, "scripts/test-timeout-headroom-baseline.json");
 		const loaded = loadBaseline(committed);
