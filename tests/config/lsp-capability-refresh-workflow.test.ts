@@ -300,7 +300,7 @@ function runCensusTracker(census: CensusCase): {
 			candidate.name ===
 			"Notify on LSP capability census (file/update/close tracking issue)",
 	);
-	const root = mkdtempSync(join(tmpdir(), "census-tracker-"));
+	const root = mkdtempSync(join(tmpdir(), "pi-lens-census-tracker-"));
 	try {
 		const bin = join(root, "bin");
 		const work = join(root, "work");
