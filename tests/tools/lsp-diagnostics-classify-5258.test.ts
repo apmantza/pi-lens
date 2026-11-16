@@ -52,12 +52,14 @@ type LspService = {
 async function diagnose(
 	severity: string,
 	name: string,
+	// `fake-lsp-clean` makes the fake answer the pull with no finding at all.
+	body = "export const a = 1;",
 ): Promise<{
 	text: string;
 	details: Record<string, unknown>;
 }> {
 	const probe = path.join(workspace, name);
-	fs.writeFileSync(probe, `/* ${name} */\nexport const a = 1;\n`);
+	fs.writeFileSync(probe, `/* ${name} */\n${body}\n`);
 	const { createLspDiagnosticsTool } =
 		await import("../../tools/lsp-diagnostics.js");
 	const result = (await createLspDiagnosticsTool().execute(
@@ -147,6 +149,35 @@ describe("a thrown empty-result classification is not clean (#5258)", () => {
 		expect(result.text).not.toContain("confirmed clean");
 		expect(result.details.unconfirmed).toBe(true);
 		expect(result.text).toContain("Primary LSP (typescript): unconfirmed");
+		expect(
+			getDegradationSummary().some(
+				(row) => row.kind === "lsp-empty-classification-failed",
+			),
+		).toBe(true);
+	}, 30_000);
+
+	// The same fail-open catch sat in `resolveEmptyResult`, the read for a file
+	// whose server answered with nothing at all.
+	it("an empty answer is confirmed clean when the classification runs", async () => {
+		const result = await diagnose(
+			"all",
+			"empty-control.ts",
+			"export const a = 1; // fake-lsp-clean",
+		);
+		expect(result.text).toContain("Primary LSP (typescript): confirmed clean.");
+	}, 30_000);
+
+	it("an empty answer whose classification rejects reads unconfirmed, never confirmed clean", async () => {
+		vi.spyOn(service, "getCapabilitySnapshots").mockRejectedValue(
+			new Error("EACCES: root resolution failed"),
+		);
+		const result = await diagnose(
+			"all",
+			"empty-rejected.ts",
+			"export const a = 1; // fake-lsp-clean",
+		);
+		expect(result.text).not.toContain("confirmed clean");
+		expect(result.details.unconfirmed).toBe(true);
 		expect(
 			getDegradationSummary().some(
 				(row) => row.kind === "lsp-empty-classification-failed",

@@ -8070,10 +8070,10 @@ export async function createLSPClient(options: {
 			);
 			// #5258: only the server's own list (or its `null`, the protocol's "no
 			// actions") is an answer. `undefined` is a request that was cancelled,
-			// ContentModified twice, lost its stream or went stale; `null` from a
-			// client that died under the request is not the server's reply either.
+			// ContentModified twice, lost its stream or went stale; a reply that is
+			// neither a list nor `null` is malformed, not "no actions".
 			if (result === undefined) return undefined;
-			if (result === null) return isClientAlive(state) ? [] : undefined;
+			if (result === null) return [];
 			if (!Array.isArray(result)) return undefined;
 			const actions = result.filter(
 				(item): item is LSPCodeAction =>
