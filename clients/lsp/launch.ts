@@ -1076,8 +1076,6 @@ export async function launchLSP(
 		if (isBareCommand) {
 			const globalBinPath = await findGlobalBinary(command);
 			if (globalBinPath && globalBinPath !== spawnCommand) {
-				// The retry's answer is judged like the first lookup's (#4530, #5674).
-				refuseProjectLookup(command, globalBinPath, cwd, env, rootAdmitted);
 				// Recompute needsShell for the resolved global path
 				const needsShellGlobal = computeNeedsShell(globalBinPath);
 				proc = trySpawn(globalBinPath, args, cwd, env, needsShellGlobal);

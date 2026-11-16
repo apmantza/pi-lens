@@ -2581,17 +2581,19 @@ async function findTsserverPath(
 	// it to the real file once, so the tsserver layout probe and the version
 	// read below see the same absolute path a managed or npm-global hit has.
 	// #5674: through the store-only rule, so an unadmitted root's `tsc` on PATH
-	// is never version-probed and never repaired over.
-	const discovered = await lookupManagedTool("typescript", root, undefined, {
-		allowInstall: installAllowed,
-	});
-	const discoveredTsc = await absoluteCommandPath(discovered.found);
+	// is never version-probed; the repair below goes through it too.
+	const discoveredTsc = await absoluteCommandPath(
+		(
+			await lookupManagedTool("typescript", root, undefined, {
+				allowInstall: installAllowed,
+			})
+		).found,
+	);
 	const discoveredTsserver = await tsserverForTsc(discoveredTsc);
 	if (
 		discoveredTsserver ||
 		!discoveredTsc ||
 		!installAllowed ||
-		discovered.storeOnly ||
 		classicTsRepairState().attempted
 	) {
 		return discoveredTsserver;
