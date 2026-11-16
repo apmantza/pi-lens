@@ -648,9 +648,8 @@ describe("the cascade does not read a pre-edit answer as this edit's clean", () 
 			publishInsideTouch: false,
 		});
 		try {
-			// The server never answered this edit for the importer, not even the
-			// one re-send the cascade makes of it (#5675), so it stays unconfirmed.
-			expect(server.state.notifies).toEqual(["open", "open"]);
+			// The server never answered this edit for the importer.
+			expect(server.state.notifies).toEqual(["open"]);
 			expect(run.skipReason).toBe("indeterminate");
 			expect(run.result).toBeUndefined();
 			expect(run.unconfirmed?.servers).toEqual([
@@ -715,19 +714,23 @@ describe("the cascade does not read a pre-edit answer as this edit's clean", () 
 	// Recurrence (Greptile PRRT_kwDORt8rec6yL28Z on #5046): an error published
 	// between the touch's cache merge and its result assembly read as "the touch
 	// has its own answer", so the stale `[]` was a confirmed clean and the new
-	// error was lost. #5675: the cascade's re-send of the importer now reads the
-	// error the first touch missed, so the run lists it instead of an unconfirmed
-	// line; the stale `[]` still never reads as this edit's clean.
-	it("lists the error that lands after the touch merged the cache, never the stale clean", async () => {
+	// error was lost.
+	it("reads a neighbour unconfirmed when its error lands after the touch merged the cache", async () => {
 		const { env, run, importer } = await runCascade({
 			publishInsideTouch: false,
 			publishErrorAfterMerge: true,
 		});
 		try {
-			expect(run.skipReason).not.toBe("clean");
-			expect(run.unconfirmed).toBeUndefined();
-			expect(run.observedNeighborPaths).toEqual([importer]);
-			expect(run.result?.formatted).toContain("late error");
+			expect(run.skipReason).toBe("indeterminate");
+			expect(run.unconfirmed?.servers).toEqual([
+				{
+					serverId: "gopls",
+					reason: "pre-edit-answer",
+					waitMs: 0,
+					paths: [importer],
+				},
+			]);
+			expect(run.observedNeighborPaths).toBeUndefined();
 		} finally {
 			env.cleanup();
 		}

@@ -708,8 +708,11 @@ export interface LSPTouchFileOptions {
 	 * reader is the cascade's re-touch of a push-only dependent whose only
 	 * answer predates the edit: such a server republishes a dependent when its
 	 * own model changes, not when asked, and a re-sent document is the only
-	 * request it takes. Honoured by a touch that waits for diagnostics only; the
-	 * whole-call skip of a `diagnostics: "none"` touch does not read it.
+	 * request it takes. Honoured per server, and only for a server declared
+	 * `resendRecheck: "rechecks"` (#4782): one that publishes nothing for
+	 * unchanged bytes would lose its cached answer with none coming. Honoured by a
+	 * touch that waits for diagnostics only; the whole-call skip of a
+	 * `diagnostics: "none"` touch does not read it.
 	 */
 	resendUnchanged?: boolean;
 	/** Hook identity for bounded abandonment attribution (defaults to tool_result_edit). */
@@ -4763,7 +4766,10 @@ export class LSPService {
 				spawned
 					.filter(
 						(entry) =>
-							options.resendUnchanged !== true &&
+							!(
+								options.resendUnchanged === true &&
+								serverTraits(entry.info).resendRecheck === "rechecks"
+							) &&
 							this.shouldSkipNotify(
 								filePath,
 								contentHash,
@@ -7203,7 +7209,13 @@ export class LSPService {
 						reusedAnswer === undefined ||
 						publishedAt < reusedAnswer.publishedAt
 					) {
-						reusedAnswer = { serverId: entry.info.id, publishedAt };
+						reusedAnswer = {
+							serverId: entry.info.id,
+							publishedAt,
+							...(serverTraits(entry.info).resendRecheck === "rechecks" && {
+								rechecks: true as const,
+							}),
+						};
 					}
 				}
 				if (reusedAnswer) result.reusedAnswer = reusedAnswer;

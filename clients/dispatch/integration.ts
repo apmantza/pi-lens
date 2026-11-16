@@ -846,13 +846,23 @@ function isConfirmedTouch(rawDiags: TouchFileResult): boolean {
  */
 function readReusedAnswer(
 	rawDiags: unknown,
-): { serverId: string; publishedAt: number } | undefined {
+): { serverId: string; publishedAt: number; rechecks: boolean } | undefined {
 	const reused = (
-		rawDiags as { reusedAnswer?: { serverId?: unknown; publishedAt?: unknown } }
+		rawDiags as {
+			reusedAnswer?: {
+				serverId?: unknown;
+				publishedAt?: unknown;
+				rechecks?: unknown;
+			};
+		}
 	)?.reusedAnswer;
 	return typeof reused?.serverId === "string" &&
 		typeof reused.publishedAt === "number"
-		? { serverId: reused.serverId, publishedAt: reused.publishedAt }
+		? {
+				serverId: reused.serverId,
+				publishedAt: reused.publishedAt,
+				rechecks: reused.rechecks === true,
+			}
 		: undefined;
 }
 
@@ -2534,19 +2544,25 @@ export async function computeCascadeForFile(
 					// The touch above sent nothing (same bytes, debounced), so nothing
 					// has asked since the exporter changed. Ask once, by sending the
 					// document again: a re-sent document is the one request such a
-					// server takes. Once per neighbour per run, and the answer decides
+					// server takes, but only a server declared to re-check unchanged
+					// bytes (`resendRecheck`, #4782; the touch result says so): one that
+					// publishes nothing for them would lose this very answer with none
+					// coming. Once per neighbour per run, and the answer decides
 					// as the first would have: a re-touch that still reads pre-edit,
 					// came back inconclusive or timed out leaves the neighbour
 					// unconfirmed through the branches below, and one that throws is
 					// the touch-error fallback's case, the same as a first touch that
 					// throws. Not for `primary-unavailable`: its reused answer belongs
 					// to an alternate, and re-sending to the missing primary asks no one.
-					const retouchedAnswer =
+					const firstReused =
 						firstTouch !== undefined &&
 						firstTouch.inconclusiveReason !== "primary-unavailable" &&
 						isPreEditAnswer(firstTouch, cascadeStart)
 							? readReusedAnswer(firstTouch)
 							: undefined;
+					const retouchedAnswer = firstReused?.rechecks
+						? firstReused
+						: undefined;
 					const retouched = retouchedAnswer !== undefined;
 					const rawDiags = retouched
 						? ((await touchNeighbor(true)) ?? firstTouch)
@@ -2719,7 +2735,7 @@ export async function computeCascadeForFile(
 					if (inconclusive && retouchedAnswer !== undefined) {
 						incrementDegradationCount({
 							kind: "cascade-pre-edit-answer",
-							subject: `:`,
+							subject: `${retouchedAnswer.serverId}:${normalizeMapKey(neighborPath)}`,
 							reason:
 								"re-touched once and the re-touch did not conclude (its notify write or diagnostics wait lapsed)",
 						});
@@ -2781,6 +2797,10 @@ export async function computeCascadeForFile(
 							...(unconfirmedServerIds.length > 0 && {
 								unconfirmedServerIds: [...unconfirmedServerIds],
 							}),
+							// #5675: the one trace that a re-sent document is what
+							// concluded (or failed to conclude) this neighbour; the
+							// failure rows above carry the same flag.
+							...(retouched && { retouched: true }),
 						},
 					});
 

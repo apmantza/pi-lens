@@ -29,18 +29,24 @@ import {
 	describe,
 	expect,
 	it,
+	vi,
 } from "vitest";
 import {
 	neighbourShowsFinding,
 	neighbourVerdict,
 } from "../../scripts/lib/lsp-cascade-smoke.mjs";
-import { initLSPConfig } from "../../clients/lsp/config.js";
+import {
+	_setServersForFileForTests,
+	explainServersForFile,
+	initLSPConfig,
+} from "../../clients/lsp/config.js";
 import { getLSPService, resetLSPService } from "../../clients/lsp/index.js";
 import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
 import { computeCascadeForFile } from "../../clients/dispatch/integration.js";
+import { normalizeMapKey } from "../../clients/path-utils.js";
 import {
 	resetProjectTrust,
 	setProjectTrustState,
@@ -49,6 +55,27 @@ import { FAKE_LSP_SERVER_PATH } from "../support/fake-lsp-server.js";
 import { withEnv } from "../support/with-env.js";
 import { waitFor } from "./interleaving-kit.js";
 import { pinFixtureHome, setupTestEnvironment } from "./test-utils.js";
+
+// A passthrough spy: the real cascade logger still runs, and the test reads
+// the rows the cascade handed it (the success-path record has no other reader).
+const logged = vi.hoisted(() => ({
+	rows: [] as Array<{
+		phase: string;
+		neighborFile?: string;
+		metadata?: Record<string, unknown>;
+	}>,
+}));
+vi.mock("../../clients/cascade-logger.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../../clients/cascade-logger.js")>();
+	return {
+		...actual,
+		logCascade: (entry: Parameters<typeof actual.logCascade>[0]) => {
+			logged.rows.push(entry);
+			actual.logCascade(entry);
+		},
+	};
+});
 
 const EXPORTER = "export function foo(x: number): number {\n\treturn x;\n}\n";
 const EXPORTER_EDITED =
@@ -68,6 +95,13 @@ type Shape = {
 	early: string;
 	/** `0`: the server never answers a re-ask. */
 	revalidate: "0" | "1";
+	/**
+	 * Whether the server row declares `resendRecheck: "rechecks"` (#4782). A
+	 * project `lsp.servers` row cannot declare it, so the declared case arms the
+	 * test-only selection with the trait added; the default is declared, the
+	 * server the cascade's re-send is for.
+	 */
+	rechecks?: boolean;
 };
 
 /**
@@ -120,6 +154,15 @@ async function runShape(shape: Shape) {
 	);
 
 	await initLSPConfig(proj);
+	if (shape.rechecks !== false)
+		_setServersForFileForTests((filePath) =>
+			explainServersForFile(filePath)
+				.filter((entry) => entry.selected)
+				.map((entry) => ({
+					...entry.server,
+					resendRecheck: "rechecks" as const,
+				})),
+		);
 	const service = getLSPService();
 	for (const file of [a, b, c]) {
 		await service.touchFile(file, fs.readFileSync(file, "utf8"), {
@@ -165,6 +208,9 @@ async function runShape(shape: Shape) {
 	return {
 		proj,
 		run,
+		serverId: spawned?.client.serverId,
+		/** The importer's answer the server holds after the run. */
+		heldFindingsOnB: spawned?.client.getDiagnostics(b).length ?? 0,
 		bChanges: changes(b),
 		cChanges: changes(c),
 		verdict: (rel: string) => neighbourVerdict(run, proj, rel),
@@ -184,6 +230,7 @@ describe("push-only dependent whose only answer predates the edit (#5675)", () =
 
 	beforeEach(() => {
 		resetDegradationLedger();
+		logged.rows.length = 0;
 		restoreHome = pinFixtureHome("retouch-5675").restore;
 		setProjectTrustState("trusted");
 	});
@@ -192,6 +239,7 @@ describe("push-only dependent whose only answer predates the edit (#5675)", () =
 		await getLSPService().shutdown({ fast: true, reason: "test" });
 		resetLSPService();
 		resetProjectTrust();
+		_setServersForFileForTests(undefined);
 		restoreHome();
 	});
 
@@ -222,6 +270,20 @@ describe("push-only dependent whose only answer predates the edit (#5675)", () =
 		// none.
 		expect(r.bChanges).toBe(1);
 		expect(r.cChanges).toBeLessThanOrEqual(1);
+		// #5675 r2 F4: a rescued neighbour leaves one cascade-log row saying the
+		// re-touch is what concluded it (a run that fixed nothing logs none).
+		const touchRows = (rel: string) =>
+			logged.rows.filter(
+				(row) =>
+					row.phase === "neighbor_touch" &&
+					row.neighborFile === path.join(r.proj, rel),
+			);
+		expect(
+			touchRows("src/b.ts").map((row) => ({
+				inconclusive: row.metadata?.inconclusive,
+				retouched: row.metadata?.retouched,
+			})),
+		).toEqual([{ inconclusive: false, retouched: true }]);
 	}, 90_000);
 
 	it("concludes importers no server republished at all", async () => {
@@ -253,5 +315,57 @@ describe("push-only dependent whose only answer predates the edit (#5675)", () =
 		expect(
 			record?.latestReasons.map((entry) => entry.reason).join("\n"),
 		).toContain("re-touched");
+		// #5675 r2 F3: the record is keyed per server and path, so two silent
+		// neighbours are two subjects, never one `:` subject with a count of two.
+		const didNotConclude = getDegradationSummary()
+			.filter((group) => group.kind === "cascade-pre-edit-answer")
+			.flatMap((group) => group.latestReasons)
+			.filter((entry) => entry.reason.includes("did not conclude"))
+			.map((entry) => entry.subject)
+			.sort();
+		expect(didNotConclude).toEqual(
+			[
+				`${r.serverId}:${normalizeMapKey(path.join(r.proj, "src", "b.ts"))}`,
+				`${r.serverId}:${normalizeMapKey(path.join(r.proj, "src", "c.ts"))}`,
+			].sort(),
+		);
+	}, 90_000);
+
+	// #5675 r2 F1: #4782's `resendRecheck` trait. A server not declared to
+	// re-check unchanged bytes may publish nothing for them (clangd 22.1.0 does
+	// not), and a re-send empties the client's answer with none coming, so the
+	// importer's held finding is lost. Recurrence: the r1 head re-sent to every
+	// push server (probe: didChange frames 1 -> 31 with 30 neighbours, the
+	// importer's held finding 1 -> 0, latency 1617 -> 3151 ms).
+	it("sends nothing to a server not declared to re-check unchanged bytes", async () => {
+		const r = await runShape({
+			early: "b.ts",
+			revalidate: "0",
+			rechecks: false,
+		});
+		expect([r.bChanges, r.cChanges]).toEqual([0, 0]);
+		// The answer the server published before the run is still the one held.
+		expect(r.heldFindingsOnB).toBe(1);
+		expect({
+			b: r.verdict("src/b.ts"),
+			c: r.verdict("src/c.ts"),
+		}).toEqual({ b: "unconfirmed", c: "unconfirmed" });
+		// The #5040 outcome, unchanged: never clean, no cascade result to read.
+		expect(r.run.skipReason).toBe("indeterminate");
+		expect(r.run.result).toBeUndefined();
+		// Still counted as the pre-edit answer it is, and never as a re-touch.
+		const reasons = getDegradationSummary()
+			.filter((group) => group.kind === "cascade-pre-edit-answer")
+			.flatMap((group) => group.latestReasons)
+			.map((entry) => entry.reason)
+			.join("\n");
+		expect(reasons).toContain("no publication for this dependent");
+		expect(reasons).not.toContain("re-touched");
+		expect(
+			logged.rows.filter(
+				(row) =>
+					row.phase === "neighbor_touch" && row.metadata?.retouched === true,
+			),
+		).toEqual([]);
 	}, 90_000);
 });
