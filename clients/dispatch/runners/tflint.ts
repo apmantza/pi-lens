@@ -1,4 +1,3 @@
-import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import { skipped } from "../types.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
@@ -14,14 +13,12 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import {
-	createAvailabilityChecker,
-	resolveAvailableOrInstall,
+	resolveToolCommandWithInstallFallback,
+	toolAbsentSkip,
 } from "./utils/runner-helpers.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-const tflint = createAvailabilityChecker("tflint", ".exe");
 
 interface TflintIssue {
 	rule: { name: string; severity: string };
@@ -91,15 +88,8 @@ const tflintRunner: RunnerDefinition = {
 			return skipped("not-preferred");
 		}
 
-		let cmd: string | null = null;
-		if (await tflint.isAvailableAsync(cwd)) {
-			cmd = tflint.getCommand(cwd);
-		} else {
-			const managed = await resolveAvailableOrInstall(tflint, "tflint", cwd);
-			if (managed) cmd = managed;
-		}
-
-		if (!cmd) return toolAbsentSkip(cwd, { id: "tflint", checker: tflint });
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "tflint");
+		if (!cmd) return toolAbsentSkip(cwd, { id: "tflint" });
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const fileDir = path.dirname(absPath);

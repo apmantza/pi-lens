@@ -1292,6 +1292,61 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 			managedToolId: "golangci-lint",
 		},
 	],
+	// The six install-capable runner tools (#5410 S2). Each `windowsExt` is the
+	// one the runner's own checker carried, and each is the installer entry's
+	// release launcher (`.exe`); unprobed on Windows. A project's
+	// `node_modules/.bin` is matched through that dir's own extension
+	// (`PROJECT_BIN_DIR_WINDOWS_EXT`), not these rows. `shfmt`'s row sits with
+	// the formatter binaries below.
+	[
+		"shellcheck",
+		{
+			command: "shellcheck",
+			windowsExt: ".exe",
+			versionArgs: ["--version"],
+			managedToolId: "shellcheck",
+		},
+	],
+	[
+		"tflint",
+		{
+			command: "tflint",
+			windowsExt: ".exe",
+			versionArgs: ["--version"],
+			managedToolId: "tflint",
+		},
+	],
+	[
+		"terragrunt",
+		{
+			command: "terragrunt",
+			windowsExt: ".exe",
+			versionArgs: ["--version"],
+			managedToolId: "terragrunt",
+		},
+	],
+	[
+		// `cue version`: the installer entry's own probe (v0.17.1 exits 0); the CLI
+		// has no `--version`. cue has no execution-policy row, so the shared
+		// ladder never installs it, as cue-vet never did.
+		"cue",
+		{
+			command: "cue",
+			windowsExt: ".exe",
+			versionArgs: ["version"],
+			managedToolId: "cue",
+		},
+	],
+	[
+		// The spellcheck runner's `typos` CLI. No managedToolId: the installer has
+		// `typos-lsp`, a different binary, and no `typos` entry (#5418).
+		"typos",
+		{
+			command: "typos",
+			windowsExt: ".exe",
+			versionArgs: ["--version"],
+		},
+	],
 	[
 		// No managedToolId: no installer entry for `detekt` exists, and it has no
 		// execution-policy row, so nothing installs it (#5410).

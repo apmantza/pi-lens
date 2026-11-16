@@ -1,4 +1,3 @@
-import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import { skipped } from "../types.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { hasToolConfig } from "../../tool-config-presence.js";
@@ -12,12 +11,10 @@ import type {
 } from "../types.js";
 import { findingsResult } from "../types.js";
 import {
-	createAvailabilityChecker,
-	resolveAvailableOrInstall,
+	resolveToolCommandWithInstallFallback,
+	toolAbsentSkip,
 } from "./utils/runner-helpers.js";
 import { skipUnlessToolRan } from "./utils/tool-failure.js";
-
-const shfmt = createAvailabilityChecker("shfmt", ".exe");
 
 // shfmt's only config source is .editorconfig. We treat its presence as the
 // opt-in for the (non-error) format-diff warning, so out of the box shfmt only
@@ -37,18 +34,8 @@ const shfmtRunner: RunnerDefinition = {
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "shfmt");
 
-		let cmd: string | null = null;
-		if (await shfmt.isAvailableAsync(cwd)) {
-			cmd = shfmt.getCommand(cwd);
-		} else {
-			const installed = await resolveAvailableOrInstall(shfmt, "shfmt", cwd);
-			if (!installed) {
-				return toolAbsentSkip(cwd, { id: "shfmt", checker: shfmt });
-			}
-			cmd = installed;
-		}
-
-		if (!cmd) return toolAbsentSkip(cwd, { id: "shfmt", checker: shfmt });
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "shfmt");
+		if (!cmd) return toolAbsentSkip(cwd, { id: "shfmt" });
 
 		// --diff exits 1 and prints a unified diff if the file needs formatting
 		const result = await safeSpawnAsync(cmd, ["--diff", ctx.filePath], {

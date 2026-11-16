@@ -5,7 +5,6 @@ import { pathsEqual } from "../../path-utils.js";
 import { getLinterPolicyForCwd } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import { skipped } from "../types.js";
-import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import type {
 	Diagnostic,
 	DispatchContext,
@@ -14,14 +13,12 @@ import type {
 } from "../types.js";
 import { faultSkip } from "../types.js";
 import {
-	createAvailabilityChecker,
-	resolveAvailableOrInstall,
+	resolveToolCommandWithInstallFallback,
+	toolAbsentSkip,
 } from "./utils/runner-helpers.js";
 import { spawnFailedWithNoOutput } from "./utils/spawn-outcome.js";
 import { faultIfCutShort, finishParsedRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-const terragrunt = createAvailabilityChecker("terragrunt", ".exe");
 
 interface TerragruntDiagnostic {
 	severity?: string | number;
@@ -161,20 +158,8 @@ const terragruntRunner: RunnerDefinition = {
 		if (policy && !policy.preferredRunners.includes("terragrunt"))
 			return skipped("not-preferred");
 
-		let cmd: string | null = null;
-		if (await terragrunt.isAvailableAsync(cwd)) {
-			cmd = terragrunt.getCommand(cwd);
-		} else {
-			const managed = await resolveAvailableOrInstall(
-				terragrunt,
-				"terragrunt",
-				cwd,
-			);
-			if (managed) cmd = managed;
-		}
-
-		if (!cmd)
-			return toolAbsentSkip(cwd, { id: "terragrunt", checker: terragrunt });
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "terragrunt");
+		if (!cmd) return toolAbsentSkip(cwd, { id: "terragrunt" });
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const fileDir = path.dirname(absPath);

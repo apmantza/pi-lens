@@ -20,7 +20,6 @@
  * Config: .shellcheckrc (optional, zero-config works)
  */
 
-import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import {
@@ -38,16 +37,14 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import {
-	createAvailabilityChecker,
 	coveringLaneAvailable,
 	lspPrimaryCoversFile,
-	resolveAvailableOrInstall,
+	resolveToolCommandWithInstallFallback,
+	toolAbsentSkip,
 } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-const shellcheck = createAvailabilityChecker("shellcheck", ".exe");
 
 // EXIT TABLE (ShellCheck v0.11.0 documents these codes, pinned at
 // https://github.com/koalaman/shellcheck/blob/b12c2a6a0834a5b8c12b1c0eb36704f698de5bac/shellcheck.1.md#return-values):
@@ -197,19 +194,8 @@ const shellcheckRunner: RunnerDefinition = {
 			};
 		}
 
-		let cmd: string | null = null;
-		if (await shellcheck.isAvailableAsync(cwd)) {
-			cmd = shellcheck.getCommand(cwd);
-		} else {
-			const managed = await resolveAvailableOrInstall(
-				shellcheck,
-				"shellcheck",
-				cwd,
-			);
-			if (managed) cmd = managed;
-		}
-		if (!cmd)
-			return toolAbsentSkip(cwd, { id: "shellcheck", checker: shellcheck });
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "shellcheck");
+		if (!cmd) return toolAbsentSkip(cwd, { id: "shellcheck" });
 
 		// Build args
 		// --format json: JSON output
