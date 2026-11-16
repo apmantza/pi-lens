@@ -2934,8 +2934,9 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
  * `work` is the closed vocabulary that replaces shape 91's judgment-only
  * status for a bound's work: `threaded` (the thunk form: the bound's signal is
  * the scope its work runs in, so it reaches every spawn and every request that
- * reads `getAmbientAbortSignal()`; `touchFile`, `getDiagnostics` and
- * `openFile` do not read it yet, #5097), `pure-read` (a read or a wait:
+ * reads `getAmbientAbortSignal()`: the diagnostic pull and the clean-confirm
+ * ping under `touchFile` and `getDiagnostics` read it, #5097; `openFile` sends
+ * only a notification, which has no cancel), `pure-read` (a read or a wait:
  * nothing it holds or writes outlives the bound), `outlives:<owner>` (the work
  * must keep running and its owner writes the tail) or `migrate:#<n>` (a leak
  * known and filed). Checked by {@link auditBoundedWork} against the call's
@@ -3016,8 +3017,8 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, BoundedSite>> = {
 			"turn_end path and absent only in a unit harness. Deadline half is live " +
 			"either way, and is itself the per-trip minimum of the loop's remaining " +
 			"budget and the per-pull timeout. The thunk's scope aborts with the bound, " +
-			"but the real `getDiagnostics` pull does not read it yet, so that cancel " +
-			"waits on the LSP request sender (#5097).",
+			"and the real `getDiagnostics` pull reads it: it sends `$/cancelRequest` " +
+			"(#5097, `request-sender-5097.test.ts`).",
 	},
 	"call:clients/blocker-freshness.ts#detectSelfDrift:31ccd4b2~6f51ea0e": {
 		work: "pure-read",
@@ -3153,9 +3154,9 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, BoundedSite>> = {
 				"is best-effort by contract (an unconfirmed touch is kept verbatim and " +
 				"labeled, never a false clean), so a wall-clock-only run degrades " +
 				"honestly rather than blocking the hook. The thunk's scope aborts with " +
-				"the bound, and reaches only what reads it: the real `touchFile` does " +
-				"not read it yet (it owns its `pullAbort`), so the request is not cut " +
-				"when the bound fires. That cut waits on the LSP request sender (#5097).",
+				"the bound, and reaches only what reads it: the real `touchFile`'s " +
+				"diagnostic pull and clean-confirm ping do, so a firing bound sends " +
+				"`$/cancelRequest` for them (#5097, `request-sender-5097.test.ts`).",
 		},
 	"call:clients/persistent-reverify.ts#runPersistentReverify:df18bffa~a607d75c":
 		{

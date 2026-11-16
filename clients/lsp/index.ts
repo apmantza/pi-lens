@@ -6364,43 +6364,49 @@ export class LSPService {
 					diagnosticsTimedOut =
 						(!hasWaitedPrimary && !hasUnsupportedPrimary) ||
 						diagnosticsUnansweredPrimaryServerIds.length > 0;
-					for (const entry of unanswered) {
-						incrementDegradationCount({
-							kind: "lsp-diagnostics-timeout",
-							// `info.id` is the authoritative server identity carried by
-							// every spawned entry. The client test doubles (and some
-							// lightweight clients) need not expose a serverId property;
-							// ledger recording must never abort the touch or alter #570's
-							// timeout-preserves-last-known-diagnostics semantics.
-							subject: entry.info.id,
-							reason: "diagnostics wait timed out",
+					// #5097: a wait the caller's Esc ended is no budget that lapsed. The
+					// verdict above stays what it is (no answer, so inconclusive), and
+					// the budget rows below are for lapses only: written for an abort
+					// they would charge the server a timeout it never had.
+					if (getAmbientAbortSignal()?.aborted !== true) {
+						for (const entry of unanswered) {
+							incrementDegradationCount({
+								kind: "lsp-diagnostics-timeout",
+								// `info.id` is the authoritative server identity carried by
+								// every spawned entry. The client test doubles (and some
+								// lightweight clients) need not expose a serverId property;
+								// ledger recording must never abort the touch or alter #570's
+								// timeout-preserves-last-known-diagnostics semantics.
+								subject: entry.info.id,
+								reason: "diagnostics wait timed out",
+							});
+						}
+						logLatency({
+							type: "phase",
+							phase: "lsp_diagnostics_timeout",
+							filePath: normalizedPath,
+							durationMs: waitedMs,
+							metadata: {
+								source,
+								// #1444: WHICH server(s) burned the budget — without this the
+								// ~221/day timeout rows can't be attributed to a server at all.
+								// `info.id` (not `client.serverId`) for the same reason the
+								// degradation ledger above uses it: test doubles and lightweight
+								// clients need not expose `serverId`.
+								serverIds: spawned.map((e) => e.info.id),
+								clientScope,
+								diagnosticsMode,
+								timeoutMs,
+								// #1549: which of those servers actually produced no evidence, and
+								// whether the lapse is attributable to a primary (the touch is
+								// inconclusive) or only to auxiliaries (a named coverage gap, with
+								// the primary's findings intact). Without these two fields a
+								// forensic sweep cannot tell the two apart at all.
+								unansweredServerIds: diagnosticsUnansweredServerIds,
+								attributedToPrimary: diagnosticsTimedOut,
+							},
 						});
 					}
-					logLatency({
-						type: "phase",
-						phase: "lsp_diagnostics_timeout",
-						filePath: normalizedPath,
-						durationMs: waitedMs,
-						metadata: {
-							source,
-							// #1444: WHICH server(s) burned the budget — without this the
-							// ~221/day timeout rows can't be attributed to a server at all.
-							// `info.id` (not `client.serverId`) for the same reason the
-							// degradation ledger above uses it: test doubles and lightweight
-							// clients need not expose `serverId`.
-							serverIds: spawned.map((e) => e.info.id),
-							clientScope,
-							diagnosticsMode,
-							timeoutMs,
-							// #1549: which of those servers actually produced no evidence, and
-							// whether the lapse is attributable to a primary (the touch is
-							// inconclusive) or only to auxiliaries (a named coverage gap, with
-							// the primary's findings intact). Without these two fields a
-							// forensic sweep cannot tell the two apart at all.
-							unansweredServerIds: diagnosticsUnansweredServerIds,
-							attributedToPrimary: diagnosticsTimedOut,
-						},
-					});
 				}
 
 				// #814: capability-aware AGGREGATE wait — generalize #799's
@@ -6479,7 +6485,10 @@ export class LSPService {
 								const liveness = await Promise.all(
 									outstanding.map((entry) =>
 										(
-											entry.client.pingLiveness?.() ?? Promise.resolve(true)
+											entry.client.pingLiveness?.(
+												undefined,
+												getAmbientAbortSignal(),
+											) ?? Promise.resolve(true)
 										).catch(() => false),
 									),
 								);
@@ -6763,7 +6772,10 @@ export class LSPService {
 						// responding before its silence is trusted as a clean confirm; a
 						// server that doesn't answer in time leaves the touch inconclusive.
 						const alive = await (
-							spawned[0].client.pingLiveness?.() ?? Promise.resolve(true)
+							spawned[0].client.pingLiveness?.(
+								undefined,
+								getAmbientAbortSignal(),
+							) ?? Promise.resolve(true)
 						).catch(() => false);
 						if (alive) {
 							diagnosticsTimedOut = false;
@@ -9140,7 +9152,13 @@ export class LSPService {
 			}
 		}
 
-		if (failedServerIds.length > 0) {
+		// #5097: an abort cut this warm-up, and its pull was cancelled with it, so
+		// the server was never asked to finish: unknown, not cold. The sweep's own
+		// signal and the call's ambient scope are two spellings of the same Esc.
+		const abandoned =
+			options.signal?.aborted === true ||
+			getAmbientAbortSignal()?.aborted === true;
+		if (failedServerIds.length > 0 && !abandoned) {
 			// #799: record the negative cache so a LATER sweep this session
 			// skips straight past re-paying this warm-up (initial + retry).
 			// Cleared automatically the moment the server demonstrates
