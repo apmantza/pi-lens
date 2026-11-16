@@ -2331,14 +2331,6 @@ export async function resolveLocalFirstAsync(
 	return { cmd: "npx", args: ["--no", toolName] };
 }
 
-// =============================================================================
-// PRE-BUILT CHECKERS FOR COMMON TOOLS
-// =============================================================================
-
-export const pyright = createAvailabilityChecker("pyright", ".exe");
-export const ruff = createAvailabilityChecker("ruff", ".exe");
-export const biome = createAvailabilityChecker("biome");
-
 /** Shared cwd seam for runner probes and analysis children (#2777). */
 export function resolveRunnerCwd(ctx: DispatchContext, tool: string): string {
 	return resolveToolCwd("runner", tool, ctx.filePath, ctx).cwd;

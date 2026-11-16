@@ -21,7 +21,6 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	createAvailabilityChecker,
-	ruff,
 	toolAbsentSkip,
 	type AvailabilityVerdict,
 } from "../../../clients/dispatch/runners/utils/runner-helpers.js";
@@ -37,6 +36,9 @@ import { removeTempDirSync } from "../test-utils.js";
 import { withEnv } from "../../support/with-env.js";
 
 const cwd = os.tmpdir();
+
+// A venv-only checker of ruff, the shape the runner used to export (#5410 S1).
+const ruff = createAvailabilityChecker("ruff", ".exe");
 
 const verdict = (
 	outcome: AvailabilityVerdict["outcome"],

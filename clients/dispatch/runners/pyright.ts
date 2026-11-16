@@ -7,7 +7,10 @@
  * Requires: pyright (pip install pyright or npm install -g pyright)
  */
 
-import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import {
+	resolveToolCommandWithInstallFallback,
+	toolAbsentSkip,
+} from "./utils/runner-helpers.js";
 import { logExtension } from "../../extension-log.js";
 import { getLSPService } from "../../lsp/capabilities.js";
 import {
@@ -25,13 +28,7 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import { faultSkip, semanticFor } from "../types.js";
-import {
-	createAvailabilityChecker,
-	resolveAvailableOrInstall,
-} from "./utils/runner-helpers.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
-
-const pyright = createAvailabilityChecker("pyright", ".exe");
 
 const pyrightRunner: RunnerDefinition = {
 	id: "pyright",
@@ -51,35 +48,10 @@ const pyrightRunner: RunnerDefinition = {
 
 		const cwd = resolveRunnerCwd(ctx, "pyright");
 
-		// Get pyright command - try multiple strategies
-		let cmd: string | null = null;
-
-		// Strategy 1: Check cached availability (fast path)
-		if (await pyright.isAvailableAsync(cwd)) {
-			cmd = pyright.getCommand(cwd);
-		}
-
-		// Strategy 2: use the shared availability taxonomy and install suppression.
-		if (!cmd) {
-			const installedPath = await resolveAvailableOrInstall(
-				pyright,
-				"pyright",
-				cwd,
-			);
-			if (installedPath) cmd = installedPath;
-		}
-
-		// Strategy 3: Direct PATH check (handles module cache staleness)
-		if (!cmd) {
-			const { findCommandAsync } = await import("../../safe-spawn.js");
-			const foundCmd: string | null = await findCommandAsync("pyright");
-			if (foundCmd) cmd = foundCmd;
-		}
-
-		// If still no pyright, skip this runner
-		if (!cmd) {
-			return toolAbsentSkip(cwd, { id: "pyright", checker: pyright });
-		}
+		// The registry resolver: the project's venv or node_modules at this cwd,
+		// then the managed copy, then PATH, each proven by a version probe (#5410).
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "pyright");
+		if (!cmd) return toolAbsentSkip(cwd, { id: "pyright" });
 
 		// Pyright's Node CLI falls back to `python` on PATH when the project has no
 		// explicit Pyright config. Apply the same environment the Python LSP uses so

@@ -4,25 +4,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installLspServiceDouble } from "../../../support/lsp-service-seam.js";
 import { makeRunnerCtx } from "../../../support/runner-ctx.js";
 import { setupTestEnvironment } from "../../test-utils.js";
+import { resetDispatchAvailabilityState } from "../../../../clients/dispatch/runners/utils/runner-helpers.js";
 
 const safeSpawnAsync = vi.hoisted(() => vi.fn());
 const getClientForFile = vi.hoisted(() => vi.fn(async () => undefined));
-const isAvailableAsync = vi.hoisted(() => vi.fn(async () => true));
-const getCommand = vi.hoisted(() => vi.fn(() => "pyright"));
-const resolveAvailableOrInstall = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
-
-vi.mock(
-	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
-	async (importOriginal) => ({
-		...(await importOriginal<
-			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
-		>()),
-		createAvailabilityChecker: () => ({ isAvailableAsync, getCommand }),
-		resolveAvailableOrInstall,
-	}),
-);
+vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/safe-spawn.js")
+	>()),
+	safeSpawnAsync,
+}));
 
 const originalVenv = process.env.VIRTUAL_ENV;
 const originalConda = process.env.CONDA_PREFIX;
@@ -39,9 +31,7 @@ beforeEach(async () => {
 	trust.setProjectTrustState("trusted");
 	safeSpawnAsync.mockReset();
 	getClientForFile.mockClear();
-	isAvailableAsync.mockClear();
-	getCommand.mockClear();
-	resolveAvailableOrInstall.mockReset();
+	resetDispatchAvailabilityState();
 	delete process.env.VIRTUAL_ENV;
 	delete process.env.CONDA_PREFIX;
 });
@@ -71,6 +61,14 @@ describe("pyright project environment", () => {
 			);
 			fs.mkdirSync(binDir, { recursive: true });
 			fs.writeFileSync(pythonPath, "#!/usr/bin/env python\n");
+			// The project's own pyright, which the registry resolver finds at the
+			// exact cwd and proves with a version probe (#5410).
+			const pyrightPath = path.join(
+				binDir,
+				process.platform === "win32" ? "pyright.cmd" : "pyright",
+			);
+			fs.writeFileSync(pyrightPath, "#!/bin/sh\n");
+			fs.chmodSync(pyrightPath, 0o755);
 
 			let pyrightOptions: { cwd?: string; env?: NodeJS.ProcessEnv } | undefined;
 			safeSpawnAsync.mockImplementation(
@@ -79,6 +77,9 @@ describe("pyright project environment", () => {
 					_args: string[],
 					options?: { cwd?: string; env?: NodeJS.ProcessEnv },
 				) => {
+					if (_args.includes("--version")) {
+						return { error: null, status: 0, stdout: "1.1.400\n", stderr: "" };
+					}
 					pyrightOptions = options;
 					return {
 						error: null,

@@ -641,7 +641,6 @@
 		"clients/dispatch/runners/parsed-nothing.test.ts::clients/dispatch/runners/utils/runner-helpers": 1,
 		"clients/dispatch/runners/parsed-nothing.test.ts::clients/tool-policy": 1,
 		"clients/dispatch/runners/psscriptanalyzer-availability.test.ts::clients/latency-logger": 1,
-		"clients/dispatch/runners/pyright-environment.test.ts::clients/dispatch/runners/utils/runner-helpers": 1,
 		"clients/dispatch/runners/reported-path-attribution.test.ts::clients/dispatch/runners/utils/runner-helpers": 1,
 		"clients/dispatch/runners/reported-path-attribution.test.ts::clients/rust-client": 1,
 		"clients/dispatch/runners/ruff.test.ts::clients/dispatch/runners/utils/runner-helpers": 1,
