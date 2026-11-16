@@ -374,10 +374,10 @@ function lspMutationEntry(
  * #5551: the direct branch records through the bridge's own body,
  * `recordMutationOutcome`, over the surfaces its caller threaded. Three
  * answers stay the direct branch's: the change-log row names the LSP
- * operation (`context.source`, not `agent-tool:<tool>`), the turn-state entry
- * judges containment against the project root (#2504 review round 2, F1),
- * and the write does not reach `noteAgentMutation` (the writer table's G6
- * cell, a maintainer decision).
+ * operation (the seam's `source` option, `context.source`, not
+ * `agent-tool:<tool>`), the turn-state entry judges containment against the
+ * project root (#2504 review round 2, F1), and the write does not reach
+ * `noteAgentMutation` (the writer table's G6 cell, a maintainer decision).
  */
 function directBookkeepingDeps(
 	context: LspMutationContext,
@@ -399,11 +399,7 @@ function directBookkeepingDeps(
 				}),
 			},
 			...(runtime.recordProjectMutation !== undefined && {
-				recordProjectMutation: (args) =>
-					runtime.recordProjectMutation?.({
-						...args,
-						source: context.source as ProjectChangeSource,
-					}),
+				recordProjectMutation: (args) => runtime.recordProjectMutation?.(args),
 			}),
 			...(runtime.noteCallWrite !== undefined && {
 				noteCallWrite: (toolCallId, filePath) =>
@@ -470,7 +466,9 @@ function bookkeepLspMutation(
 		// the handled mark, which are facts about the bytes.
 		let sessionLive: boolean;
 		if (deps) {
-			recordMutationOutcome(lspMutationEntry(context, filePath, detail), deps);
+			recordMutationOutcome(lspMutationEntry(context, filePath, detail), deps, {
+				source: context.source as ProjectChangeSource,
+			});
 			// The seam's `guardedWrite` already counted a dead session's dropped
 			// write, so this asks `isCurrent()`, the same question without the
 			// count (#5592 review r1 F4). It asks the session, not the record's
