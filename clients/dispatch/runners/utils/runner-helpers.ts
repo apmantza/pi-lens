@@ -56,6 +56,7 @@ import {
 	type LocalBinLookup,
 	localBinPath,
 	NODE_MODULES_BIN_DIRS,
+	PROJECT_BIN_DIR_WINDOWS_EXT,
 	VENDOR_BIN_DIRS,
 	VENV_BIN_DIRS,
 } from "../../../package-manager.js";
@@ -674,6 +675,8 @@ export function createVenvFinder(
 	 * without the memo-less second probe that used to look for it.
 	 */
 	projectBinDirs: readonly string[] = VENV_BIN_DIRS,
+	/** Each project bin dir's own Windows launcher extension (#5410 S1 F2). */
+	projectBinDirWindowsExt?: Readonly<Record<string, string>>,
 ): (cwd: string) => Promise<VenvResolution> {
 	return async (cwd: string): Promise<VenvResolution> => {
 		if (allowProjectLocal) {
@@ -681,6 +684,7 @@ export function createVenvFinder(
 				findLocalBinAt(command, cwd, {
 					windowsExt,
 					binDirs: projectBinDirs,
+					binDirWindowsExt: projectBinDirWindowsExt,
 				}),
 			);
 			if (venvBin) return { path: venvBin, rung: "venv" };
@@ -809,6 +813,12 @@ export interface AvailabilityCheckerOptions {
 	allowProjectLocal?: boolean;
 	/** Project-local bin dirs at exactly `cwd`; see `createVenvFinder`. */
 	projectBinDirs?: readonly string[];
+	/**
+	 * The Windows launcher extension of each of those dirs, so one spec
+	 * `windowsExt` need not serve a venv `.exe` and a `node_modules` `.cmd`
+	 * (#5410 S1 F2). A dir it does not name keeps `windowsExt`.
+	 */
+	projectBinDirWindowsExt?: Readonly<Record<string, string>>;
 	/**
 	 * Resolve the bare command on PATH only, for a caller that spawns it by
 	 * that bare name (`DispatchContext.hasTool`, #5410): a managed or venv
@@ -1296,6 +1306,7 @@ export function createAvailabilityChecker(
 		findLocalBinAt(command, cwd, {
 			windowsExt,
 			binDirs: options.projectBinDirs ?? VENV_BIN_DIRS,
+			binDirWindowsExt: options.projectBinDirWindowsExt,
 		});
 	const findCommand = options.pathOnly
 		? async (): Promise<VenvResolution> => pathRung()
@@ -1312,6 +1323,7 @@ export function createAvailabilityChecker(
 					versionArgs,
 					allowProjectLocal,
 					options.projectBinDirs,
+					options.projectBinDirWindowsExt,
 				);
 	// The rungs beyond the project: where a broken project shim falls through.
 	const findBeyondProject = createVenvFinder(
@@ -2044,6 +2056,7 @@ function toolBinaryChecker(
 		spec.versionArgs ?? ["--version"],
 		{
 			projectBinDirs: [...VENV_BIN_DIRS, ...NODE_MODULES_BIN_DIRS],
+			projectBinDirWindowsExt: PROJECT_BIN_DIR_WINDOWS_EXT,
 			...(spec.probeTimeoutMs !== undefined && {
 				probeTimeout: spec.probeTimeoutMs,
 			}),

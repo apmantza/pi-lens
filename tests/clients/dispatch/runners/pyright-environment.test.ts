@@ -61,11 +61,12 @@ describe("pyright project environment", () => {
 			);
 			fs.mkdirSync(binDir, { recursive: true });
 			fs.writeFileSync(pythonPath, "#!/usr/bin/env python\n");
-			// The project's own pyright, which the registry resolver finds at the
-			// exact cwd and proves with a version probe (#5410).
+			// The project's own pip-installed pyright, which the registry resolver
+			// finds at the exact cwd and proves with a version probe (#5410). A
+			// venv `Scripts` holds `pyright.exe` on Windows, not an npm `.cmd`.
 			const pyrightPath = path.join(
 				binDir,
-				process.platform === "win32" ? "pyright.cmd" : "pyright",
+				process.platform === "win32" ? "pyright.exe" : "pyright",
 			);
 			fs.writeFileSync(pyrightPath, "#!/bin/sh\n");
 			fs.chmodSync(pyrightPath, 0o755);

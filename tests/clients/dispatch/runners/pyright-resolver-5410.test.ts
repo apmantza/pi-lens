@@ -112,12 +112,16 @@ vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
 	findCommandAsync,
 }));
 
-/** Plant a `pyright` file the doubled child process treats as a binary. */
-function plantPyright(dir: string): string {
+/**
+ * Plant a `pyright` file the doubled child process treats as a binary. On
+ * Windows the launcher extension follows the dir: pip writes `.exe` into a
+ * venv `Scripts`, npm writes `.cmd` into `node_modules/.bin`.
+ */
+function plantPyright(dir: string, launcherExt = ".cmd"): string {
 	fs.mkdirSync(dir, { recursive: true });
 	const file = path.join(
 		dir,
-		process.platform === "win32" ? "pyright.cmd" : "pyright",
+		process.platform === "win32" ? "pyright" + launcherExt : "pyright",
 	);
 	fs.writeFileSync(file, "#!/bin/sh\n");
 	fs.chmodSync(file, 0o755);
@@ -146,7 +150,9 @@ describe("pyright resolves through the registry resolver (#5410 S1)", () => {
 		);
 	};
 	const pyrightSpawns = () =>
-		spawnCalls.filter((call) => /(^|[\\/])pyright(\.cmd)?$/.test(call.cmd));
+		spawnCalls.filter((call) =>
+			/(^|[\\/])pyright(\.cmd|\.exe)?$/.test(call.cmd),
+		);
 	const runSpawns = () =>
 		spawnCalls.filter((call) => call.args.includes("--outputjson"));
 
@@ -213,7 +219,7 @@ describe("pyright resolves through the registry resolver (#5410 S1)", () => {
 	// cwd is the project's own copy, admitted only while pi trusts the project.
 	// Characterization: the runner's old checker gated the same rung.
 	it("refuses .venv/bin/pyright while untrusted, then runs it once trusted", async () => {
-		const bin = plantPyright(venvBin(workspace.tmpDir));
+		const bin = plantPyright(venvBin(workspace.tmpDir), ".exe");
 		setProjectTrustState("untrusted");
 		const refused = await run();
 		expect(refused.status).toBe("skipped");
@@ -240,5 +246,47 @@ describe("pyright resolves through the registry resolver (#5410 S1)", () => {
 		const result = await run();
 		expect(result.status).toBe("succeeded");
 		expect(runSpawns().map((call) => call.cmd)).toEqual([bin]);
+	});
+	// The registry row's `windowsExt` is `.cmd`, the installer's npm package. A pip
+	// venv holds `Scripts\\pyright.exe`, which one value per spec row never
+	// matched, so the runner skipped past a working project pyright on Windows.
+	describe("the Windows launcher follows the bin dir (#5410 S1 F2)", () => {
+		const asPlatform = async <T>(
+			platform: NodeJS.Platform,
+			body: () => Promise<T>,
+		): Promise<T> => {
+			const saved = Object.getOwnPropertyDescriptor(process, "platform");
+			Object.defineProperty(process, "platform", { value: platform });
+			try {
+				return await body();
+			} finally {
+				if (saved) Object.defineProperty(process, "platform", saved);
+			}
+		};
+
+		it.each([
+			["a venv Scripts pyright.exe", [".venv", "Scripts"], ".exe"],
+			["a node_modules/.bin pyright.cmd", ["node_modules", ".bin"], ".cmd"],
+		])("win32 runs %s", async (_cell, segments, ext) => {
+			const dir = path.join(workspace.tmpDir, ...segments);
+			fs.mkdirSync(dir, { recursive: true });
+			const bin = path.join(dir, "pyright" + ext);
+			fs.writeFileSync(bin, "x");
+			const result = await asPlatform("win32", run);
+			expect(result.status).toBe("succeeded");
+			expect(runSpawns().map((call) => call.cmd)).toEqual([bin]);
+		});
+
+		it("posix ignores both Windows launchers", async () => {
+			const scripts = path.join(workspace.tmpDir, ".venv", "Scripts");
+			const nodeBin = path.join(workspace.tmpDir, "node_modules", ".bin");
+			fs.mkdirSync(scripts, { recursive: true });
+			fs.mkdirSync(nodeBin, { recursive: true });
+			fs.writeFileSync(path.join(scripts, "pyright.exe"), "x");
+			fs.writeFileSync(path.join(nodeBin, "pyright.cmd"), "x");
+			const result = await asPlatform("linux", run);
+			expect(result.status).toBe("skipped");
+			expect(runSpawns()).toHaveLength(0);
+		});
 	});
 });
