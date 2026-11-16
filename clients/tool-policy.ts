@@ -1391,6 +1391,26 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 		},
 	],
 	[
+		// The prisma-validate runner's CLI. No managedToolId: the installer has no
+		// `prisma` entry and pi-lens never installs it (#5410 D8).
+		"prisma",
+		{
+			command: "prisma",
+			windowsExt: ".cmd",
+			versionArgs: ["--version"],
+		},
+	],
+	[
+		// Vite+'s `vp`, which the oxlint runner prefers when the project uses it.
+		// No managedToolId: the installer has no `vp` entry (#5410 F4).
+		"vp",
+		{
+			command: "vp",
+			windowsExt: ".cmd",
+			versionArgs: ["--version"],
+		},
+	],
+	[
 		"htmlhint",
 		{
 			command: "htmlhint",

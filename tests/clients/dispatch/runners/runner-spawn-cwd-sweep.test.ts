@@ -185,7 +185,9 @@ const EXPECTED_FILES = 81;
 // walk (`findCommandOnPath`), so its NO_CWD_EXEMPTION_ROWS row went with it.
 // 129 -> 128 (#5410 S5): the sync `findCommand` in `clients/safe-spawn.ts` had
 // no production caller; its `which`/`where` spawn and its row are deleted.
-const EXPECTED_DIRECT_SITES = 128;
+// 128 -> 127 (#5410 F4): oxlint's `vp --version` probe moved onto the shared
+// resolver, so its spawn site and its wrapper row go.
+const EXPECTED_DIRECT_SITES = 127;
 /**
  * Every same-file spawn-routing wrapper call site the scan discovers. Pinned
  * as a LIST, not a count, because the list is the part round 2 got wrong: it
@@ -216,7 +218,6 @@ const EXPECTED_WRAPPER_SITES = [
 	"clients/dispatch/runners/helm-lint.ts:lintChart",
 	"clients/dispatch/runners/helm-render.ts:runIacPass",
 	"clients/dispatch/runners/helm-render.ts:renderAndValidate",
-	"clients/dispatch/runners/oxlint.ts:resolveVitePlusCommand",
 	"clients/dispatch/runners/psscriptanalyzer.ts:spawnPs",
 	"clients/dispatch/runners/utils/lazy-installer.ts:performInstall",
 	"clients/dispatch/runners/utils/lazy-installer.ts:runLazyInstall",
@@ -520,10 +521,6 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/dispatch/runners/helm-render.ts#renderAndValidate:db985ac0~dbf27697",
 		"renderAndValidate forwards its own `cwd` parameter into runIacPass",
-	],
-	[
-		"clients/dispatch/runners/oxlint.ts#resolveVitePlusCommand:7b703741~dbf27697",
-		"`vp --version` probe inside resolveVitePlusCommand, whose own `cwd` parameter it passes; the checked site is its caller in this file",
 	],
 	[
 		"clients/dispatch/runners/psscriptanalyzer.ts#spawnPs:35a0658a~dbf27697",

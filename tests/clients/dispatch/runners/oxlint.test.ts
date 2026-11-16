@@ -23,6 +23,9 @@ const { safeSpawn, safeSpawnAsync, ensureTool } = vi.hoisted(() => ({
 	ensureTool: vi.fn(async (_toolId?: string) => "oxlint"),
 }));
 const logLatency = vi.hoisted(() => vi.fn());
+// What the registry ladder answers for `vp` (#5410 F4); the real ladder is
+// driven in `oxlint-vp-resolver-5410.test.ts`.
+const vpAnswer = vi.hoisted(() => ({ value: null as string | null }));
 
 const OXLINT_NO_FILES_BANNER =
 	"No files found to lint. Please check your paths and ignore patterns.";
@@ -109,10 +112,13 @@ vi.mock(
 			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
 		resolveToolCommand: vi.fn(() => null),
-		resolveToolCommandWithInstallFallback: vi.fn(async (_cwd: string) => {
-			const installed = await ensureTool("oxlint");
-			return installed ?? null;
-		}),
+		resolveToolCommandWithInstallFallback: vi.fn(
+			async (_cwd: string, toolId?: string) => {
+				if (toolId === "vp") return vpAnswer.value;
+				const installed = await ensureTool("oxlint");
+				return installed ?? null;
+			},
+		),
 	}),
 );
 
@@ -127,6 +133,7 @@ describe("oxlint runner", () => {
 		safeSpawnAsync.mockReset();
 		ensureTool.mockReset();
 		logLatency.mockReset();
+		vpAnswer.value = null;
 		ensureTool.mockResolvedValue("oxlint");
 		// Simulate oxlint not being available on PATH/venv so ensureTool path is used.
 		safeSpawn.mockReturnValue({ error: new Error("not found"), status: 1 });
@@ -896,21 +903,13 @@ describe("oxlint runner", () => {
 				JSON.stringify({ devDependencies: { "vite-plus": "^0.1.0" } }),
 			);
 
-			// First call: vp --version (not found)
-			// Second call: oxlint --format unix <file> (success, no issues)
-			safeSpawnAsync
-				.mockResolvedValueOnce({
-					error: new Error("not found"),
-					status: 1,
-					stdout: "",
-					stderr: "",
-				})
-				.mockResolvedValueOnce({
-					error: null,
-					status: 0,
-					stdout: "",
-					stderr: "",
-				});
+			// vp is not installed (the ladder answers null): oxlint runs, clean.
+			safeSpawnAsync.mockResolvedValueOnce({
+				error: null,
+				status: 0,
+				stdout: "",
+				stderr: "",
+			});
 
 			const runner = (
 				await import("../../../../clients/dispatch/runners/oxlint.js")
@@ -918,11 +917,6 @@ describe("oxlint runner", () => {
 
 			const result = await runner.run(createCtx(filePath, env.tmpDir) as never);
 
-			expect(safeSpawnAsync).toHaveBeenCalledWith(
-				"vp",
-				["--version"],
-				expect.objectContaining({ timeout: 5000 }),
-			);
 			expect(safeSpawnAsync).toHaveBeenCalledWith(
 				"oxlint",
 				expect.arrayContaining(["--format", "json", "sample.ts"]),
@@ -950,20 +944,14 @@ describe("oxlint runner", () => {
 				path.join(env.tmpDir, "package.json"),
 				JSON.stringify({ devDependencies: { "vite-plus": "^0.1.0" } }),
 			);
-			// vp --version succeeds, then the lint itself runs clean.
-			safeSpawnAsync
-				.mockResolvedValueOnce({
-					error: null,
-					status: 0,
-					stdout: "vp 0.1.0",
-					stderr: "",
-				})
-				.mockResolvedValueOnce({
-					error: null,
-					status: 0,
-					stdout: "",
-					stderr: "",
-				});
+			// The ladder answers `vp`; the lint itself runs clean.
+			vpAnswer.value = "vp";
+			safeSpawnAsync.mockResolvedValueOnce({
+				error: null,
+				status: 0,
+				stdout: "",
+				stderr: "",
+			});
 
 			const runner = (
 				await import("../../../../clients/dispatch/runners/oxlint.js")
@@ -1019,20 +1007,13 @@ describe("oxlint runner", () => {
 			process.env.HOME = fakeHome;
 			process.env.USERPROFILE = fakeHome;
 
-			// vp --version (not found), then oxlint (clean).
-			safeSpawnAsync
-				.mockResolvedValueOnce({
-					error: new Error("not found"),
-					status: 1,
-					stdout: "",
-					stderr: "",
-				})
-				.mockResolvedValueOnce({
-					error: null,
-					status: 0,
-					stdout: "",
-					stderr: "",
-				});
+			// The ladder answers null for vp, then oxlint runs (clean).
+			safeSpawnAsync.mockResolvedValueOnce({
+				error: null,
+				status: 0,
+				stdout: "",
+				stderr: "",
+			});
 
 			const runner = (
 				await import("../../../../clients/dispatch/runners/oxlint.js")
@@ -1042,13 +1023,9 @@ describe("oxlint runner", () => {
 			const spawned = safeSpawnAsync.mock.calls.map((call) => call[0]);
 			expect(spawned).not.toContain(homeVpCmd);
 			expect(spawned).not.toContain(homeVp);
-			// Pre-fix the home-level bin WAS the resolved command, so the PATH
-			// probe never happened at all.
-			expect(safeSpawnAsync).toHaveBeenCalledWith(
-				"vp",
-				["--version"],
-				expect.objectContaining({ timeout: 5000 }),
-			);
+			// Pre-fix the home-level bin WAS the resolved command; the run now goes on
+			// to plain oxlint.
+			expect(spawned).toContain("oxlint");
 			expect(result.status).toBe("succeeded");
 		} finally {
 			if (originalHome === undefined) delete process.env.HOME;

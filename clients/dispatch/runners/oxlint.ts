@@ -93,19 +93,16 @@ function resolveLocalVp(cwd: string): string | null {
 	return localBinPath(findLocalBinUpwards("vp", cwd)) ?? null;
 }
 
-// `packageDir` is where the project's own `vp` is looked up; `cwd` is where the
-// PATH probe (like the lint it gates) starts.
+// `packageDir` is where the project's own `vp` is looked up, walking up to the
+// HOME ceiling; past that the shared registry ladder answers (project shim at
+// exactly `cwd`, then PATH with a version check, held in the shared latch).
 async function resolveVitePlusCommand(
 	packageDir: string,
 	cwd: string,
 ): Promise<string | null> {
 	const local = resolveLocalVp(packageDir);
 	if (local) return local;
-	const version = await safeSpawnAsync("vp", ["--version"], {
-		timeout: 5000,
-		cwd,
-	});
-	return !version.error && version.status === 0 ? "vp" : null;
+	return resolveToolCommandWithInstallFallback(cwd, "vp");
 }
 
 const oxlintRunner: RunnerDefinition = {
