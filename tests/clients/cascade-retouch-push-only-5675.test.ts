@@ -29,7 +29,6 @@ import {
 	describe,
 	expect,
 	it,
-	vi,
 } from "vitest";
 import {
 	neighbourShowsFinding,
@@ -55,27 +54,6 @@ import { FAKE_LSP_SERVER_PATH } from "../support/fake-lsp-server.js";
 import { withEnv } from "../support/with-env.js";
 import { waitFor } from "./interleaving-kit.js";
 import { pinFixtureHome, setupTestEnvironment } from "./test-utils.js";
-
-// A passthrough spy: the real cascade logger still runs, and the test reads
-// the rows the cascade handed it (the success-path record has no other reader).
-const logged = vi.hoisted(() => ({
-	rows: [] as Array<{
-		phase: string;
-		neighborFile?: string;
-		metadata?: Record<string, unknown>;
-	}>,
-}));
-vi.mock("../../clients/cascade-logger.js", async (importOriginal) => {
-	const actual =
-		await importOriginal<typeof import("../../clients/cascade-logger.js")>();
-	return {
-		...actual,
-		logCascade: (entry: Parameters<typeof actual.logCascade>[0]) => {
-			logged.rows.push(entry);
-			actual.logCascade(entry);
-		},
-	};
-});
 
 const EXPORTER = "export function foo(x: number): number {\n\treturn x;\n}\n";
 const EXPORTER_EDITED =
@@ -230,7 +208,6 @@ describe("push-only dependent whose only answer predates the edit (#5675)", () =
 
 	beforeEach(() => {
 		resetDegradationLedger();
-		logged.rows.length = 0;
 		restoreHome = pinFixtureHome("retouch-5675").restore;
 		setProjectTrustState("trusted");
 	});
@@ -270,20 +247,6 @@ describe("push-only dependent whose only answer predates the edit (#5675)", () =
 		// none.
 		expect(r.bChanges).toBe(1);
 		expect(r.cChanges).toBeLessThanOrEqual(1);
-		// #5675 r2 F4: a rescued neighbour leaves one cascade-log row saying the
-		// re-touch is what concluded it (a run that fixed nothing logs none).
-		const touchRows = (rel: string) =>
-			logged.rows.filter(
-				(row) =>
-					row.phase === "neighbor_touch" &&
-					row.neighborFile === path.join(r.proj, rel),
-			);
-		expect(
-			touchRows("src/b.ts").map((row) => ({
-				inconclusive: row.metadata?.inconclusive,
-				retouched: row.metadata?.retouched,
-			})),
-		).toEqual([{ inconclusive: false, retouched: true }]);
 	}, 90_000);
 
 	it("concludes importers no server republished at all", async () => {
@@ -361,11 +324,5 @@ describe("push-only dependent whose only answer predates the edit (#5675)", () =
 			.join("\n");
 		expect(reasons).toContain("no publication for this dependent");
 		expect(reasons).not.toContain("re-touched");
-		expect(
-			logged.rows.filter(
-				(row) =>
-					row.phase === "neighbor_touch" && row.metadata?.retouched === true,
-			),
-		).toEqual([]);
 	}, 90_000);
 });

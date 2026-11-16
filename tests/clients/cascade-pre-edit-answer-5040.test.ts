@@ -105,6 +105,9 @@ function makePushOnlyServer(options: { serverId?: string; filePath: string }) {
 		publishOnWait: false,
 		/** What that re-check publishes (a clean file by default). */
 		waitDiags: [] as unknown[],
+		/** The server checks the document again whenever it is sent, like a
+		 *  server declared `resendRecheck: "rechecks"` (#4782, #5675). */
+		publishOnOpen: false,
 	};
 	const publish = (diags: unknown[], publishedAt: number): void => {
 		state.diags = diags;
@@ -170,6 +173,7 @@ function makePushOnlyServer(options: { serverId?: string; filePath: string }) {
 			open: vi.fn(async (_filePath: string, content: string) => {
 				state.notifies.push("open");
 				state.sentContent = hashDiagnosticContent(content);
+				if (state.publishOnOpen) publish([], Date.now());
 			}),
 			change: vi.fn(async (_filePath: string, content: string) => {
 				state.notifies.push("change");
@@ -212,8 +216,10 @@ function serverConfig(
 	root: string,
 	extension: string,
 	onResolveRoot?: { current?: () => void },
+	traits: Record<string, unknown> = {},
 ): Record<string, unknown> {
 	return {
+		...traits,
 		id: serverId,
 		name: serverId,
 		extensions: [extension],
@@ -609,6 +615,8 @@ describe("the cascade does not read a pre-edit answer as this edit's clean", () 
 		publishBeforeTouch?: boolean;
 		/** The server publishes an ERROR after the touch merged the cache. */
 		publishErrorAfterMerge?: boolean;
+		/** The row declares `resendRecheck: "rechecks"` and answers a re-send. */
+		rechecks?: boolean;
 	}) {
 		const env = setupTestEnvironment("cascade-pre-edit-answer-");
 		const java = options.lang === "java";
@@ -626,7 +634,13 @@ describe("the cascade does not read a pre-edit answer as this edit's clean", () 
 		mocks.createLSPClient.mockResolvedValue(server.client);
 		const onResolveRoot: { current?: () => void } = {};
 		mocks.getServersForFileWithConfig.mockReturnValue([
-			serverConfig(serverId, env.tmpDir, ext, onResolveRoot),
+			serverConfig(
+				serverId,
+				env.tmpDir,
+				ext,
+				onResolveRoot,
+				options.rechecks ? { resendRecheck: "rechecks" } : {},
+			),
 		]);
 
 		const { LSPService } = await import("../../clients/lsp/index.js");
@@ -641,6 +655,7 @@ describe("the cascade does not read a pre-edit answer as this edit's clean", () 
 			server.state.publishOnWait = true;
 			server.state.waitDiags = options.insideTouchDiags ?? [];
 		}
+		if (options.rechecks) server.state.publishOnOpen = true;
 		if (options.publishBeforeTouch) {
 			// The graph build runs after `cascadeStart` and before the neighbour
 			// touch, so a stamp from here is a post-edit publication the touch
@@ -698,6 +713,30 @@ describe("the cascade does not read a pre-edit answer as this edit's clean", () 
 				preEditAnswer: true,
 				answerServerId: "gopls",
 			});
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #5675 r2 F4: a neighbour the cascade's one re-send concluded leaves a
+	// cascade.log row saying so; a row that concluded without it carries none.
+	// Recurrence: the r1 head flagged only the failure rows, so a rescued
+	// neighbour was indistinguishable from one the first touch concluded.
+	it("flags the cascade.log row of a neighbour the re-send concluded", async () => {
+		const { env, run, importer, server } = await runCascade({
+			publishInsideTouch: false,
+			rechecks: true,
+		});
+		try {
+			expect(server.state.notifies).toEqual(["open", "open"]);
+			expect(run.skipReason).toBe("clean");
+			expect(run.observedNeighborPaths).toEqual([importer]);
+			const touchRows = mocks.logCascade.mock.calls
+				.map((args) => args[0] as { phase?: string; metadata?: unknown })
+				.filter((row) => row?.phase === "neighbor_touch");
+			expect(touchRows.map((row) => row.metadata)).toEqual([
+				expect.objectContaining({ inconclusive: false, retouched: true }),
+			]);
 		} finally {
 			env.cleanup();
 		}
