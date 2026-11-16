@@ -279,7 +279,7 @@ describe("the pending flips live in the refresh-state block (#5667)", () => {
 		// The nightly runs promote-lsp-idle-eviction.mjs on the same matrix the
 		// measurement just wrote; a night with no summary is its shortest path.
 		const first = night(PRIOR, MATRIX_5677, { csharp: NO_BASELINE });
-		const dir = fs.mkdtempSync(join(os.tmpdir(), "idle-hold-"));
+		const dir = fs.mkdtempSync(join(os.tmpdir(), "pi-lens-idle-hold-"));
 		try {
 			const matrixPath = join(dir, "matrix.md");
 			fs.writeFileSync(matrixPath, first.matrixText as string);
