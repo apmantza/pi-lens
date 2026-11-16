@@ -17,6 +17,7 @@ import * as path from "node:path";
 import { incrementDegradationCount } from "./degradation-ledger.js";
 import { createSubsystemLogger } from "./extension-log.js";
 import { probeToolAsync } from "./tool-probe.js";
+import { findManagedReleaseBinary } from "./dispatch/runners/utils/runner-helpers.js";
 import {
 	type AvailabilityCause,
 	type AvailabilityOutcome,
@@ -171,14 +172,18 @@ export abstract class SecurityScanClient<TResult> {
 			const shared = securityProbeFlights.run(
 				`security:${this.toolName}|${versionArgs.join("|")}`,
 				async () => {
-					const { findManagedToolBinary } =
-						await import("./installer/index.js");
-					const managed = await findManagedToolBinary(this.toolName);
+					// The verified managed rung the runners' ladder uses: a managed
+					// binary that fails its version check falls through to PATH
+					// instead of shadowing it (#1657, #5410).
+					const managed = await findManagedReleaseBinary(
+						this.toolName,
+						versionArgs,
+					);
 					return {
 						probe: await probeToolAsync(managed ?? this.toolName, versionArgs, {
 							timeout: 5000,
 						}),
-						binaryPath: managed ?? null,
+						binaryPath: managed,
 					};
 				},
 			);

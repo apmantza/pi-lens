@@ -1417,6 +1417,39 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 			managedToolId: "prettier",
 		},
 	],
+	// The Node-CLI analyzers the clients (not a runner) own: madge, jscpd and
+	// knip ask the same ladder for "is it usable" (#5410, #5666 item 1). Each
+	// is its installer entry and its binary name; `.cmd` is the npm launcher,
+	// unprobed on Windows. jscpd's `--version` is a cold-start Node load, so its
+	// budget is the 1.5 s its private checker carried.
+	[
+		"madge",
+		{
+			command: "madge",
+			windowsExt: ".cmd",
+			versionArgs: ["--version"],
+			managedToolId: "madge",
+		},
+	],
+	[
+		"jscpd",
+		{
+			command: "jscpd",
+			windowsExt: ".cmd",
+			versionArgs: ["--version"],
+			managedToolId: "jscpd",
+			probeTimeoutMs: 1500,
+		},
+	],
+	[
+		"knip",
+		{
+			command: "knip",
+			windowsExt: ".cmd",
+			versionArgs: ["--version"],
+			managedToolId: "knip",
+		},
+	],
 	// The formatter binaries (#5410): the formatters resolve these through the
 	// runners' ladder machinery (version-checked, one latch per cwd), in their
 	// own order, PATH before managed (#5492 r2). Each id is also its installer

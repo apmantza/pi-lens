@@ -544,7 +544,7 @@ export async function findManagedNodeToolBinary(
  * `fs.access`, and an on-disk binary that cannot run must not shadow a working
  * PATH binary — it falls through instead.
  */
-async function findManagedReleaseBinary(
+export async function findManagedReleaseBinary(
 	tool: string,
 	verificationArgs: string[] = ["--version"],
 ): Promise<string | null> {

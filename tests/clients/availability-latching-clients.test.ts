@@ -29,6 +29,8 @@ vi.mock("../../clients/installer/index.js", () => ({
 	findManagedToolBinary: vi.fn(async () => undefined),
 	isSpawnableCommand: vi.fn(async () => true),
 	resetPathWalkMemo: vi.fn(),
+	// Read by the registry ladder when it names where a managed binary came from.
+	getToolInstallStrategy: vi.fn(() => undefined),
 	getToolEnvironment: vi.fn(async () => ({ ...process.env })),
 }));
 
@@ -93,17 +95,24 @@ function advancePastCooldown(): void {
 }
 
 describe("knip availability (#1467)", () => {
-	it("resolves the managed binary with no spawn at all", async () => {
+	// #5410: knip's private checker answered a managed shim from its fast path
+	// with no spawn; the registry ladder proves the shim it resolved with one
+	// version probe, as every runner does, so the answer costs one spawn of the
+	// managed path and nothing else.
+	it("resolves the managed binary with one version probe of the shim", async () => {
 		const binDir = path.join(tmpHome, "tools", "node_modules", ".bin");
 		fs.mkdirSync(binDir, { recursive: true });
 		const binName = process.platform === "win32" ? "knip.cmd" : "knip";
-		fs.writeFileSync(path.join(binDir, binName), "");
+		const shim = path.join(binDir, binName);
+		fs.writeFileSync(shim, "");
+		const spawn = await spawnMock();
+		spawn.mockResolvedValue(versionOk as never);
 
 		const { KnipClient } = await import("../../clients/knip-client.js");
 		const client = new KnipClient(false);
 
 		expect(await client.ensureAvailable()).toBe(true);
-		expect(await spawnMock()).not.toHaveBeenCalled();
+		expect(spawn.mock.calls.map(([cmd]) => cmd)).toEqual([shim]);
 	});
 
 	it("reports a probe timeout as a timeout, and recovers without a restart", async () => {

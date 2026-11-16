@@ -19,7 +19,10 @@ import {
 	getProjectIgnoreGlobs,
 	getProjectIgnoreMatcher,
 } from "./file-utils.js";
-import { findNodeToolBinary } from "./package-manager.js";
+import {
+	findNodeToolBinary,
+	isProjectLocalBinPath,
+} from "./package-manager.js";
 import {
 	isAtOrAboveHomeDir,
 	isFullyQualified,
@@ -35,9 +38,8 @@ import { isDeclarationFile } from "./generated-artifacts.js";
 const JSCPD_WALK_OTHER_SOURCE =
 	/\.(py|pyi|java|go|rs|rb|php|swift|kt|kts|dart|lua|scala|c|h|cpp|cc|cxx|hpp|hxx|cs|m|mm)$/;
 import {
-	createAvailabilityChecker,
-	findManagedNodeToolBinary,
-	resolveAvailableOrInstall,
+	resolveToolCommandWithInstallFallback,
+	toolBinaryVerdict,
 } from "./dispatch/runners/utils/runner-helpers.js";
 import { nestedWorktreeOffsets } from "./scratch-tree-policy.js";
 import { parseReportJson, runReportScan } from "./report-scan.js";
@@ -160,28 +162,18 @@ function worktreeIgnoreGlobs(cwd: string): string[] {
 	return globs;
 }
 
-const jscpdAvailability = createAvailabilityChecker(
-	"jscpd",
-	"",
-	["--version"],
-	{
-		probeTimeout: 1500,
-		// One definition of the managed-shim fast path, shared with knip (#1476).
-		fastPath: () => findManagedNodeToolBinary("jscpd"),
-	},
-);
-
 // --- Client ---
 
 export class JscpdClient {
-	// Absolute path of a MANAGED jscpd (the global ~/.pi-lens tools shim
-	// discovered by the availability fast path, or the ensureTool install
-	// result), else null. Nullable on purpose: a bare-name sentinel can't
-	// distinguish "resolved" from "on PATH" — ensureTool may legitimately
-	// return a bare command for an already-spawnable tool (#1289 review).
-	// Project-local binaries are NOT stored; each scan resolves those against
-	// its own cwd via findNodeToolBinary.
+	// Absolute path the registry ladder verified outside the project (the
+	// managed install or the install's result), else null. Nullable on purpose:
+	// a bare-name sentinel can't distinguish "resolved" from "on PATH" (#1289
+	// review). The project's own shim is not stored: each scan resolves it
+	// against its own cwd via findNodeToolBinary, a walk that stays
+	// client-owned until the project-scope decision of #5410 D10.
 	private jscpdManagedPath: string | null = null;
+	/** The cwd the last availability question was asked for, which the verdict reads. */
+	private availabilityCwd = process.cwd();
 	private inFlight = new Map<string, Promise<JscpdResult>>();
 	// Pending availability probes. A scan holds no `inFlight` entry until its
 	// own probe settles, so `shutdown()` must see the probe too (#4505).
@@ -274,22 +266,23 @@ export class JscpdClient {
 	/**
 	 * Check if jscpd is available, auto-install if not
 	 */
-	ensureAvailable(): Promise<boolean> {
-		const probe: Promise<boolean> = this.probeAvailable().finally(() => {
+	ensureAvailable(cwd = process.cwd()): Promise<boolean> {
+		this.availabilityCwd = cwd;
+		const probe: Promise<boolean> = this.probeAvailable(cwd).finally(() => {
 			this.probing.delete(probe);
 		});
 		this.probing.add(probe);
 		return probe;
 	}
 
-	private async probeAvailable(): Promise<boolean> {
-		const resolved = await resolveAvailableOrInstall(
-			jscpdAvailability,
-			"jscpd",
-			process.cwd(),
-		);
+	private async probeAvailable(cwd: string): Promise<boolean> {
+		const resolved = await resolveToolCommandWithInstallFallback(cwd, "jscpd");
 		if (!resolved) return false;
-		if (isFullyQualified(resolved)) this.jscpdManagedPath = resolved;
+		// The project's own shim at `cwd` is that scan's to resolve (below), not a
+		// command another root's scan may fall back to.
+		if (isFullyQualified(resolved) && !isProjectLocalBinPath(resolved, cwd)) {
+			this.jscpdManagedPath = resolved;
+		}
 		return true;
 	}
 
@@ -297,16 +290,16 @@ export class JscpdClient {
 	 * #1623: public availability verdict for callers outside the dispatch
 	 * graph (mode=full's fresh-fetch) that need to say WHY `ensureAvailable()`
 	 * most recently returned false, using the SAME outcome/cause the shared
-	 * `jscpdAvailability` checker already tracks — not a re-guessed "jscpd
+	 * registry ladder (`toolBinaryVerdict`) already tracks — not a re-guessed "jscpd
 	 * binary unavailable" that can't tell a transient retry-cooldown probe
 	 * from a durable absence.
 	 */
 	getAvailabilityVerdict(): {
-		outcome: ReturnType<typeof jscpdAvailability.getOutcome>;
-		cause: ReturnType<typeof jscpdAvailability.getVerdict>["cause"];
+		outcome: ReturnType<typeof toolBinaryVerdict>["outcome"];
+		cause: ReturnType<typeof toolBinaryVerdict>["cause"];
 		retryAtMs: number;
 	} {
-		const verdict = jscpdAvailability.getVerdict(process.cwd());
+		const verdict = toolBinaryVerdict("jscpd", this.availabilityCwd);
 		return {
 			outcome: verdict.outcome,
 			cause: verdict.cause,
@@ -357,7 +350,7 @@ export class JscpdClient {
 			return { ...EMPTY_RESULT, success: true };
 		}
 
-		if (!(await this.ensureAvailable())) {
+		if (!(await this.ensureAvailable(targetDir))) {
 			return { ...EMPTY_RESULT };
 		}
 

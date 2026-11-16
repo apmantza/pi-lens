@@ -67,6 +67,7 @@ vi.mock("../../clients/installer/index.js", () => ({
 	getLastEnsureResolutionSource: vi.fn(() => undefined),
 	getToolInstallStrategy: vi.fn(() => undefined),
 	isSpawnableCommand,
+	resetPathWalkMemo: vi.fn(),
 }));
 
 describe("DependencyChecker madge resolution (#766)", () => {
@@ -214,9 +215,17 @@ describe("DependencyChecker madge resolution (#766)", () => {
 		ensureTool.mockResolvedValue(managed);
 		// Exercise the off-PATH auto-install path: ensureAvailable's bare-name
 		// probe fails, then resolution must reuse the installed absolute path.
+		// A real absent binary carries a typed `tool-not-found` failure; the
+		// registry ladder reads that, not a bare non-zero exit, as installable.
 		safeSpawnAsync.mockImplementation(async (_cmd: string, args: string[]) =>
 			args[0] === "--version"
-				? { status: 1, error: new Error("not found"), stdout: "", stderr: "" }
+				? {
+						status: null,
+						error: new Error("not found"),
+						spawnFailure: { kind: "tool-not-found" },
+						stdout: "",
+						stderr: "",
+					}
 				: { status: 0, error: undefined, stdout: "[]", stderr: "" },
 		);
 
