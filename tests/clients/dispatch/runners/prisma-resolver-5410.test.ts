@@ -213,4 +213,28 @@ describe("prisma-validate resolves through the registry resolver (#5410 D8)", ()
 		expect((await run()).status).toBe("succeeded");
 		expect(validateRuns().map((call) => call.cmd)).toEqual([globalBin]);
 	});
+	// Pins the order the move changed (review F3): the project's own copy, then
+	// PATH, then a package manager's global bin dir. The old code asked the
+	// global dir before PATH. Untrusted, the project rung is refused, so PATH must
+	// beat the global copy; trusted, the project's own copy wins over both.
+	it("prefers the project copy, then PATH, then the manager-global copy", async () => {
+		plant(pathEnv.tmpDir, "prisma");
+		plant(pathEnv.tmpDir, "npm");
+		const prefix = path.join(workspace.tmpDir, "npm-prefix");
+		npmPrefix.dir = prefix;
+		const globalBin = plant(path.join(prefix, "bin"), "prisma");
+		const localBin = plant(
+			path.join(workspace.tmpDir, "node_modules", ".bin"),
+			"prisma",
+		);
+		setProjectTrustState("untrusted");
+		await run();
+		setProjectTrustState("trusted");
+		await run();
+		expect(validateRuns().map((call) => call.cmd)).toEqual([
+			"prisma",
+			localBin,
+		]);
+		expect(validateRuns().map((call) => call.cmd)).not.toContain(globalBin);
+	});
 });

@@ -417,7 +417,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/cue-vet.ts": 9,
 		"clients/dispatch/runners/helm-lint.ts": 2,
 		"clients/dispatch/runners/helm-render.ts": 7,
-		"clients/dispatch/runners/oxlint.ts": 3,
+		"clients/dispatch/runners/oxlint.ts": 2,
 		"clients/dispatch/runners/psscriptanalyzer.ts": 3,
 		"clients/dispatch/runners/rust-clippy.ts": 1,
 		"clients/dispatch/runners/pyright.ts": 1,
@@ -1909,7 +1909,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/lsp.ts": 11,
 		// 4 -> 3 (#5413): the local cooldown skip moved to the dispatcher.
 		"clients/dispatch/runners/markdownlint.ts": 1,
-		"clients/dispatch/runners/oxlint.ts": 9,
+		"clients/dispatch/runners/oxlint.ts": 8,
 		"clients/dispatch/runners/php-lint.ts": 1,
 		// 1 -> 4 (#5594): the `dump-parameters` spawn's exit `status`, read three
 		// ways before the overlay is built; the spawn-result field, the same sense
@@ -2071,7 +2071,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/cache/rule-cache.ts": 3,
 		"clients/call-graph.ts": 4,
 		"clients/codebase-model.ts": 3,
-		"clients/dispatch/runners/oxlint.ts": 3,
 		"clients/grammar-source.ts": 5,
 		"clients/install-diagnostics.ts": 3,
 		// 60 -> 54 (#5624): vale's asset names drop their pinned `version` constant.

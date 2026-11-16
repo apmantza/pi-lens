@@ -1401,6 +1401,16 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 		},
 	],
 	[
+		// Vite+'s `vp`, which the oxlint runner prefers when the project uses it.
+		// No managedToolId: the installer has no `vp` entry (#5410 F4).
+		"vp",
+		{
+			command: "vp",
+			windowsExt: ".cmd",
+			versionArgs: ["--version"],
+		},
+	],
+	[
 		"htmlhint",
 		{
 			command: "htmlhint",
