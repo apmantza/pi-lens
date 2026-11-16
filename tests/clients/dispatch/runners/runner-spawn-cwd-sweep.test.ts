@@ -181,7 +181,9 @@ const EXPECTED_FILES = 81;
 // 129 -> 130 (#5621): `git rev-parse --git-common-dir` in
 // `ensureSeedCopyExcluded` (clients/dispatch/integration.ts), admitted by name
 // in ORIGIN_ADMISSION_ROWS; its one caller is a NO_CWD_EXEMPTION_ROWS row.
-const EXPECTED_DIRECT_SITES = 130;
+// 130 -> 129 (#5410 D2): `detectRunner`'s `which pytest` spawn became a PATH
+// walk (`findCommandOnPath`), so its NO_CWD_EXEMPTION_ROWS row went with it.
+const EXPECTED_DIRECT_SITES = 129;
 /**
  * Every same-file spawn-routing wrapper call site the scan discovers. Pinned
  * as a LIST, not a count, because the list is the part round 2 got wrong: it
@@ -414,10 +416,6 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/sg-runner.ts#SgRunner.spawnResolved:82ea3b08",
 		"the one spawn for `ast-grep scan --config <temp rule file> …` (#5247): `--config` and the scan target are absolute arguments the caller built (#4233 V3-HIGH-01), and when the resolved command is the scoped npx fallback `...this.sgSpawnOptions` supplies the pi-lens-owned neutral cwd (#4233 V3-HIGH-02) the scan cannot follow through a class-field spread",
-	],
-	[
-		"clients/test-runner-client.ts#TestRunnerClient.detectRunner:4411bf71",
-		"`which pytest` / `where pytest` PATH lookup for the global-pytest fallback",
 	],
 	[
 		"clients/tool-probe.ts#probeToolAsync:4fc4430b",

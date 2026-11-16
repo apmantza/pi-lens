@@ -1277,3 +1277,167 @@ describe("python environment state space (review round 3)", () => {
 					});
 				}
 });
+
+describe("pytest found on PATH with no pytest config (#5410 D2)", () => {
+	// Recurrence (#5410 D2): detection asked a sync `which pytest`, which
+	// ignored pi trust, and the run then started `<interpreter> -m pytest`, a
+	// different binary. A pipx pytest on PATH beside a project interpreter
+	// without the pytest module was detected, and the run failed with "No
+	// module named pytest" instead of running the pytest detection found.
+	const POSIX = process.platform !== "win32";
+	let originalPath: string | undefined;
+	let originalCwd: string;
+
+	beforeEach(() => {
+		originalPath = process.env.PATH;
+		originalCwd = process.cwd();
+		// The interpreter stand-in answers as a real interpreter without the
+		// pytest module does; every other command reports one passing test.
+		safeSpawnAsync.mockImplementation(async (_command, args) =>
+			args[0] === "-m" && args[1] === "pytest"
+				? {
+						stdout: "",
+						stderr: "/venv/bin/python: No module named pytest\n",
+						status: 1,
+					}
+				: { stdout: "1 passed in 0.01s\n", stderr: "", status: 0 },
+		);
+	});
+
+	afterEach(() => {
+		process.chdir(originalCwd);
+		if (originalPath === undefined) delete process.env.PATH;
+		else process.env.PATH = originalPath;
+		safeSpawnAsync.mockReset();
+		safeSpawnAsync.mockImplementation(async () => ({
+			stdout: "1 passed in 0.01s\n",
+			stderr: "",
+			status: 0,
+		}));
+	});
+
+	/** A PATH dir holding a non-empty `pytest` executable; returns its file. */
+	function plantPathPytest(dir: string): string {
+		fs.mkdirSync(dir, { recursive: true });
+		const file = path.join(dir, "pytest");
+		fs.writeFileSync(file, "#!/bin/sh\necho '1 passed in 0.01s'\n");
+		fs.chmodSync(file, 0o755);
+		process.env.PATH = [dir, originalPath ?? ""].join(path.delimiter);
+		return file;
+	}
+
+	async function detectAndRun(
+		project: { root: string; testFile: string },
+		requireOwnInstall = false,
+	) {
+		const client = new TestRunnerClient(false);
+		const target = client.getTestRunTarget(project.testFile, project.root);
+		if (!target) throw new Error("no pytest target was detected");
+		const result = await client.runTestFileAsync(
+			target.testFile,
+			project.root,
+			{ runner: target.runner, config: target.config, requireOwnInstall },
+		);
+		return { target, result };
+	}
+
+	it.runIf(POSIX)(
+		"runs the PATH pytest detection found when the interpreter lacks pytest",
+		async () => {
+			const project = createProject(false);
+			const env = createEnvironment(createTempDir("pi-lens-5410-env-"));
+			process.env.VIRTUAL_ENV = env.root;
+			const pytest = plantPathPytest(
+				path.join(createTempDir("pi-lens-5410-pipx-"), "bin"),
+			);
+
+			const { target, result } = await detectAndRun(project);
+
+			expect(target.runner).toBe("pytest");
+			expect(safeSpawnAsync).toHaveBeenCalledOnce();
+			const [command, args] = safeSpawnAsync.mock.calls[0];
+			expect(command).toBe(pytest);
+			expect(args[0]).toBe(project.testFile);
+			expect(result.error).toBeUndefined();
+			expect(result.passed).toBe(1);
+		},
+	);
+
+	it.runIf(POSIX)(
+		"runs the PATH pytest, not a bare python, when no interpreter is found",
+		async () => {
+			const project = createProject(false);
+			const pytest = plantPathPytest(
+				path.join(createTempDir("pi-lens-5410-pipx-"), "bin"),
+			);
+
+			await detectAndRun(project);
+
+			expect(safeSpawnAsync.mock.calls[0][0]).toBe(pytest);
+		},
+	);
+
+	it.runIf(POSIX)(
+		"keeps the project interpreter when its environment installs pytest",
+		async () => {
+			// Pins the cell the PATH binary must not take over: a pipx pytest
+			// cannot import the packages of the project's own environment.
+			const project = createProject(false);
+			const env = createEnvironment(createTempDir("pi-lens-5410-env-"));
+			fs.writeFileSync(path.join(env.binDir, "pytest"), "#!/bin/sh\n");
+			process.env.VIRTUAL_ENV = env.root;
+			safeSpawnAsync.mockImplementation(async () => ({
+				stdout: "1 passed in 0.01s\n",
+				stderr: "",
+				status: 0,
+			}));
+			plantPathPytest(path.join(createTempDir("pi-lens-5410-pipx-"), "bin"));
+
+			await detectAndRun(project);
+
+			const [command, args] = safeSpawnAsync.mock.calls[0];
+			expect(command).toBe(env.pythonPath);
+			expect(args.slice(0, 2)).toEqual(["-m", "pytest"]);
+		},
+	);
+
+	it.runIf(POSIX)(
+		"refuses a PATH pytest inside the project until pi trusts it",
+		async () => {
+			const project = createProject(false);
+			plantPathPytest(path.join(project.root, "bin"));
+			// The session root is this process's cwd: the planted PATH entry is
+			// the session repository's own bytes.
+			process.chdir(project.root);
+
+			setProjectTrustState("untrusted");
+			expect(
+				new TestRunnerClient(false).getTestRunTarget(
+					project.testFile,
+					project.root,
+				),
+			).toBeNull();
+
+			setProjectTrustState("trusted");
+			expect(
+				new TestRunnerClient(false).getTestRunTarget(
+					project.testFile,
+					project.root,
+				)?.runner,
+			).toBe("pytest");
+		},
+	);
+
+	it.runIf(POSIX)(
+		"does not run a PATH pytest for a linked-worktree root",
+		async () => {
+			const project = createProject(false);
+			plantPathPytest(path.join(createTempDir("pi-lens-5410-pipx-"), "bin"));
+
+			const { result } = await detectAndRun(project, true);
+
+			expect(result.notRun).toBe("no-runner-install");
+			expect(safeSpawnAsync).not.toHaveBeenCalled();
+		},
+	);
+});

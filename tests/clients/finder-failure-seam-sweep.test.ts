@@ -82,11 +82,6 @@ const FINDER_FILES: ReadonlyArray<readonly [string, FinderForm, string]> = [
 		"`findCommand*` and `isCommandAvailableAsync` reduce each call to a path or a boolean",
 	],
 	[
-		"clients/test-runner-client.ts",
-		"status-only",
-		"the pytest-on-PATH probe reads `status === 0` per call",
-	],
-	[
 		"scripts/smoke-availability-lifecycle.mjs",
 		"status-only",
 		"a bare Node smoke script: it cannot import the TypeScript seam and reads the finder's status",

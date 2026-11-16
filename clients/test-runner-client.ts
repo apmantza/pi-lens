@@ -56,8 +56,9 @@ import {
 	toProjectRelativePath,
 } from "./path-utils.js";
 import { findNearestDirWithAnyBasename } from "./workspace-topology.js";
+import { findCommandOnPath } from "./command-path.js";
 import { isMeasuredDuration, toMeasuredDurationMs } from "./run-duration.js";
-import { safeSpawn, safeSpawnAsync } from "./safe-spawn.js";
+import { safeSpawnAsync } from "./safe-spawn.js";
 import { scannerReportParentDir } from "./scanner-temp-root.js";
 import { stripAnsi } from "./sanitize.js";
 import { resolveGitCheckout } from "./review-graph/git-identity.js";
@@ -224,6 +225,13 @@ export interface RunnerConfig {
 	 * only the notice on stdout when `--outputFile` is passed (#5270).
 	 */
 	reportToFile?: boolean;
+	/**
+	 * #5410 D2: the PATH file detection admitted when no project config names
+	 * the runner (pytest's last rung). The run starts this file unless the
+	 * project interpreter has its own install, so detection and the run never
+	 * name different binaries.
+	 */
+	detectedBinary?: string;
 }
 
 // Discovery table; exported so the #2928 parity test enumerates its conventions.
@@ -1067,17 +1075,18 @@ export class TestRunnerClient {
 			typeof sourceFilePath === "string" && sourceFilePath.endsWith(".py");
 		if (!isPythonSource) return null;
 
-		try {
-			const whichCmd = process.platform === "win32" ? "where" : "which";
-			const result = safeSpawn(whichCmd, ["pytest"], {
-				timeout: 2000,
-			});
-			if (result.status === 0) {
-				this.log("Detected pytest globally");
-				return { runner: "pytest", config: RUNNERS.pytest };
-			}
-		} catch (err) {
-			void err;
+		// #5410 D2: a PATH walk (no spawn) that refuses a project entry until pi
+		// trusts the project; the file it admits is the one the run starts.
+		const detectedBinary = findCommandOnPath(
+			"pytest",
+			process.platform === "win32",
+		);
+		if (detectedBinary) {
+			this.log(`Detected pytest on PATH: ${detectedBinary}`);
+			return {
+				runner: "pytest",
+				config: { ...RUNNERS.pytest, detectedBinary },
+			};
 		}
 
 		return null;
@@ -3556,12 +3565,35 @@ export class TestRunnerClient {
 			const pythonEnvironment = await detectPythonEnvironment(cwd, undefined, {
 				allowAmbient: !requireOwnInstall,
 			});
-			if (pythonEnvironment) {
+			// #5410 D2: a PATH-detected pytest runs through the interpreter only
+			// when that environment installs pytest itself (pip writes the
+			// `pytest` script into its bin dir); otherwise `-m pytest` fails with
+			// "No module named pytest", so the admitted PATH file runs instead.
+			if (
+				pythonEnvironment &&
+				(config.detectedBinary === undefined ||
+					fs.existsSync(
+						path.join(
+							pythonEnvironment.binDir,
+							process.platform === "win32" ? "pytest.exe" : "pytest",
+						),
+					))
+			) {
 				return {
 					command: pythonEnvironment.pythonPath,
 					args: config.args(testFile, spawnCwd),
 					env: augmentPythonEnvironment(process.env, pythonEnvironment),
 					ownInstall: true,
+				};
+			}
+			if (config.detectedBinary !== undefined) {
+				return {
+					command: config.detectedBinary,
+					args: stripWrapperArgs("pytest", config.args(testFile, spawnCwd)),
+					...(pythonEnvironment
+						? { env: augmentPythonEnvironment(process.env, pythonEnvironment) }
+						: {}),
+					ownInstall: false,
 				};
 			}
 		}
