@@ -22,7 +22,6 @@ import {
 import {
 	decodeShellCommand,
 	decodeShellWords,
-	isShellBlank,
 	type DecodedShellWord,
 	type DecodedSimpleCommand,
 	type ShellSubstitution,
@@ -463,38 +462,7 @@ function canonicalizeGuardCommand(command: string): string {
 		}
 		result += ch;
 	}
-	let collapsed = "";
-	let pendingSpace = false;
-	quote = undefined;
-	// This pass does not know ANSI-C strings (#4739): on `$'\''` its quote state
-	// flips, and only which blanks it collapses changes. The lexer splits on
-	// every blank either way, and no decision reads the collapsed blanks.
-	for (const ch of result) {
-		if (!quote && ch === "\n") {
-			collapsed += ch;
-			pendingSpace = false;
-			continue;
-		}
-		if (!quote && isShellBlank(ch)) {
-			pendingSpace = collapsed.length > 0;
-			continue;
-		}
-		if (pendingSpace) collapsed += " ";
-		pendingSpace = false;
-		collapsed += ch;
-		if (!quote && (ch === "'" || ch === '"')) {
-			quote = ch === "'" ? "single" : "double";
-		} else if (
-			(quote === "single" && ch === "'") ||
-			(quote === "double" && ch === '"')
-		) {
-			quote = undefined;
-		}
-	}
-	// Not the trailing end: a backslash-newline there is a line continuation
-	// that joins the last word to nothing, and `git push\<newline>` is
-	// `git push` (#4739).
-	return collapsed.trimStart();
+	return result;
 }
 
 /** Normalize only a command-position token; never apply this to path args. */

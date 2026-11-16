@@ -1110,10 +1110,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :182, :247
 	"clients/runtime-agent-end.ts": {
-		silent: 4,
-		identities: "38ca64e7de6ced49",
+		silent: 3,
+		identities: "71ea6a3be5f5074e",
 		reason: PRE_RULE,
-	}, // :604, :864, :880, :1030
+	}, // :677, :965, :981
 	"clients/runtime-coordinator.ts": {
 		silent: 4,
 		identities: "4fdad997e8135617",

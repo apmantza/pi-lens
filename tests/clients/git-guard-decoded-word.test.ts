@@ -331,6 +331,23 @@ const ROWS: readonly Row[] = [
 		guard: true,
 	},
 	{
+		// Recurrence prevented (#5648 review F1): the removed blank-collapse
+		// pass turned `\ ` before a newline into a line continuation, so the
+		// gate read the commit as echo's word. Bash ends the command at the
+		// newline and runs the commit.
+		row: "escaped blank, then a newline, then git commit",
+		command: "echo a \\ \ngit commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		// The same shape with a carriage return in place of the blank.
+		row: "escaped CR, then a newline, then git commit",
+		command: "echo a \\\r\ngit commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
 		row: "subshell",
 		command: "(git push)",
 		bash: "push",
