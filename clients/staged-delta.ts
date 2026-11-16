@@ -287,7 +287,19 @@ async function judgeStagedDelta(
 				};
 				copies.set(index, held);
 				// No index yet is an empty one, for git and for the copy alike.
-				if (nodeFs.existsSync(index)) nodeFs.copyFileSync(index, held.copy);
+				if (nodeFs.existsSync(index)) {
+					nodeFs.copyFileSync(index, held.copy);
+					// git re-hashes a working file whose stat equals its entry's only
+					// when the entry is not newer than the index file's own mtime
+					// (racily clean, to the second where git compares no finer). A copy
+					// stamped now is newer than every entry, so a file rewritten at
+					// the same size in the second of its `git add` would read as
+					// equal to the index and the gate would judge the working bytes
+					// instead of the staged blob (#5650). The copy keeps the mtime.
+					const { mtimeMs } = nodeFs.statSync(index);
+					const stamp = Math.floor(mtimeMs) / 1000;
+					nodeFs.utimesSync(held.copy, stamp, stamp);
+				}
 			}
 			return { top, mergeHead, replay, ...held };
 		};
