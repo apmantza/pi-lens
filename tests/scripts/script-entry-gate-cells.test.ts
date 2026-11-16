@@ -79,6 +79,10 @@ const CELLS: Record<string, Cell> = {
 	"check-prose.mjs": { args: ["--body-file", NO_SUCH_FILE] },
 	"check-shard-verdict.mjs": {},
 	"check-snapshot-persist-ratio.mjs": {},
+	// Unknown flag: usage line and exit 2. A started run of the real report would
+	// read a shard artifact the scratch CWD does not have, so the cell keeps to the
+	// parser's answer.
+	"check-test-timeout-headroom.mjs": {},
 	"check-tla-models.mjs": {},
 	"ci-changed-files.mjs": {},
 	"ci-shuffle-census.mjs": {},
