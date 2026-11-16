@@ -1238,10 +1238,14 @@ function diagnosticsToFileDiags(
  * capability-snapshot classifier the #458 cascade lane already trusts
  * (`classifyCascadeWaitTier`) so this tool's notion of "silent tier-3" stays
  * in lockstep with the rest of the LSP layer instead of drifting via a second
- * copy of the server-strategy table. Fail-safe: any error or missing snapshot
- * (server not alive, capability probe failure) reads as "clean" — the same
- * default this tool has always had — rather than manufacturing a new failure
- * mode from a best-effort classification.
+ * copy of the server-strategy table.
+ *
+ * #5258 (shape 10): a classification that cannot run (a rejected capability
+ * read, a throwing registry) is "unconfirmed" with a record, never "clean":
+ * "confirmed clean" renders only from an answer, and a lookup that failed
+ * answered nothing. A missing snapshot (no live client) is not a throw: the
+ * wait policy reads it as `waits`, which stays clean here (a named residual on
+ * #5258; `primaryUnavailable` is judged before this read).
  */
 async function classifyEmptyResult(
 	file: string,
@@ -1251,8 +1255,13 @@ async function classifyEmptyResult(
 		const snapshots = await lspService.getCapabilitySnapshots(file);
 		const tier = classifyCascadeWaitTier(lspService, file, snapshots);
 		return tier === "tier3-silent" ? "unconfirmed" : "clean";
-	} catch {
-		return "clean";
+	} catch (error) {
+		recordDegradationOnce({
+			kind: "lsp-empty-classification-failed",
+			subject: file,
+			reason: `the silent-on-clean classification of an empty answer failed (${error instanceof Error ? error.message : String(error)}); the file reads unconfirmed, not clean`,
+		});
+		return "unconfirmed";
 	}
 }
 
@@ -1287,31 +1296,28 @@ async function primaryRootFallback(
  * server had computed but never published (silentOnClean) — these must be
  * surfaced to the caller, not discarded. `confirmed: false` is the existing
  * "unconfirmed" fallback (command unavailable, error, or the file isn't part
- * of any project). Fail-safe: any error in the tier classification itself
- * (missing snapshot, server not alive) reads as `confirmed: true` with no
- * diagnostics — the same "clean" default this tool has always had.
+ * of any project).
+ *
+ * #5258: the tier read is `classifyEmptyResult`'s, so a read that fails is not
+ * a clean answer here either; it falls to the direct sync request, which
+ * answers only where the server advertises it (`attemptTsserverSyncDiagnostics`
+ * never throws).
  */
 async function resolveEmptyResult(
 	file: string,
 	lspService: NonNullable<ReturnType<typeof getLSPService>>,
 ): Promise<{ confirmed: boolean; diagnostics: LSPDiagnostic[] }> {
-	try {
-		const snapshots = await lspService.getCapabilitySnapshots(file);
-		const tier = classifyCascadeWaitTier(lspService, file, snapshots);
-		if (tier !== "tier3-silent") {
-			return { confirmed: true, diagnostics: [] };
-		}
-		const syncDiagnostics = await attemptTsserverSyncDiagnostics(
-			file,
-			lspService,
-		);
-		if (syncDiagnostics === undefined) {
-			return { confirmed: false, diagnostics: [] };
-		}
-		return { confirmed: true, diagnostics: syncDiagnostics };
-	} catch {
+	if ((await classifyEmptyResult(file, lspService)) === "clean") {
 		return { confirmed: true, diagnostics: [] };
 	}
+	const syncDiagnostics = await attemptTsserverSyncDiagnostics(
+		file,
+		lspService,
+	);
+	if (syncDiagnostics === undefined) {
+		return { confirmed: false, diagnostics: [] };
+	}
+	return { confirmed: true, diagnostics: syncDiagnostics };
 }
 
 /**

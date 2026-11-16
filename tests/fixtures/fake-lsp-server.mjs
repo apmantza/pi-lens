@@ -197,6 +197,12 @@ const PULL_DIAGNOSTIC_MESSAGE =
 	"actual diagnostic\nfor further information visit https://example.test\nhttps://example.test/docs";
 const PULL_DIAGNOSTIC_SOURCE =
 	process.env.FAKE_LSP_DIAGNOSTIC_SOURCE ?? "fake-lsp";
+// #5258: `FAKE_LSP_DIAGNOSTIC_SEVERITY=2` makes the default pull finding a
+// warning, so a check filtered to errors sees a non-empty answer it filters away.
+const PULL_DIAGNOSTIC_SEVERITY = Number.parseInt(
+	process.env.FAKE_LSP_DIAGNOSTIC_SEVERITY ?? "1",
+	10,
+);
 const DELAY_AFTER_FIRST_PULL_MS = Number.parseInt(
 	process.env.FAKE_LSP_DELAY_AFTER_FIRST_PULL_MS ?? "0",
 	10,
@@ -1721,7 +1727,7 @@ function handle(raw) {
 					? []
 					: [
 							{
-								severity: 1,
+								severity: PULL_DIAGNOSTIC_SEVERITY,
 								code: "FAKE1001",
 								source: PULL_DIAGNOSTIC_SOURCE,
 								message: PULL_DIAGNOSTIC_MESSAGE,
@@ -1843,8 +1849,28 @@ function handle(raw) {
 		return;
 	}
 
-	// Code actions return lightweight actions; resolve populates the edit.
+	// #5258: `FAKE_LSP_CODE_ACTION_REPLY` picks the codeAction answer: `null` is
+	// the server's own "no actions"; `exit` kills the server mid-request;
+	// `content-modified` answers -32801 every time; `malformed` is not a list.
 	if (data.method === "textDocument/codeAction") {
+		const reply = process.env.FAKE_LSP_CODE_ACTION_REPLY;
+		if (reply === "null") {
+			send({ jsonrpc: "2.0", id: data.id, result: null });
+			return;
+		}
+		if (reply === "exit") process.exit(0);
+		if (reply === "content-modified") {
+			send({
+				jsonrpc: "2.0",
+				id: data.id,
+				error: { code: -32801, message: "content modified" },
+			});
+			return;
+		}
+		if (reply === "malformed") {
+			send({ jsonrpc: "2.0", id: data.id, result: { title: "not a list" } });
+			return;
+		}
 		send({
 			jsonrpc: "2.0",
 			id: data.id,

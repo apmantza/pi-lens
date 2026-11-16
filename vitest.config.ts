@@ -354,6 +354,8 @@ const lspSpawnHeavyInclude = [
 	// (up to 90 s) and then the graph-position call — the #1022/#2332 shape of
 	// its lane siblings.
 	"tests/clients/lsp/cascade-rust-references-position-5559.integration.test.ts",
+	// #5258: a codeAction the real fake-server child never answers (exit, ContentModified, a non-list), read through the client and the re-verify verdict.
+	"tests/clients/lsp/code-action-unanswered-5258.test.ts",
 	// #4322: the production LSPService over two real stdio fake-server children
 	// (a JSON primary and a typos auxiliary); waits on real handshakes and a
 	// diagnostics round, the same #1022/#2332 shape as its lane siblings.
@@ -485,6 +487,9 @@ const lspSpawnHeavyInclude = [
 	// announced `languageId` off the wire after a real handshake and a
 	// diagnostics round like its lane siblings.
 	"tests/tools/lsp-diagnostics-jsonc-language-id-4636.test.ts",
+	// #5258: the production lsp_diagnostics handler and LSPService over a real
+	// stdio fake-server child whose warning the severity filter drops.
+	"tests/tools/lsp-diagnostics-classify-5258.test.ts",
 	// #4322: the production lsp_diagnostics handler, LSPService and the dispatch
 	// LSP runner beside a real stdio fake-server child (the typos auxiliary)
 	// whose primary cannot start; waits on a real handshake like #4346's.
