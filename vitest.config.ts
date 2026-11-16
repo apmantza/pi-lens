@@ -849,6 +849,10 @@ export const wallClockBudgetInclude = [
 	// and the ref-deleted Git mechanism runs through git-fixture-env
 	// (flake-shape admission).
 	"tests/config/heavy-advisory-gate-workflow.test.ts",
+	// #5676: the census tracker's clean verdict is judged by running the real
+	// workflow step's bash (`bash -c` over its run text) with gh and the tracker
+	// script stubbed at the host boundary (flake-shape admission).
+	"tests/config/lsp-capability-refresh-workflow.test.ts",
 	// #3244: the advisory floor must observe the real oxlint --print-config and
 	// counter process; an in-process double would only restate the expected rule map.
 	"tests/config/oxlint-advisory-rule-floor-gate.test.ts",
