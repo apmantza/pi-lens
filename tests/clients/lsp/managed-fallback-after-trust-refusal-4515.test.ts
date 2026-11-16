@@ -81,6 +81,7 @@ vi.mock("../../../clients/lsp/launch.js", async (importOriginal) => {
 
 import { withLspProjectCodePermission } from "../../../clients/lsp/launch.js";
 import {
+	PythonJediServer,
 	PythonServer,
 	resolveAndLaunch as resolveAndLaunchRaw,
 } from "../../../clients/lsp/server.js";
@@ -285,6 +286,39 @@ describe("Python managed stage after a project refusal (#5674 review F5)", () =>
 		});
 		expect(decisionRows("store-only-repair")).toHaveLength(0);
 	});
+
+	it.skipIf(process.platform === "win32")(
+		"keeps jedi's managed tier off the project's python after its project tier is refused",
+		async () => {
+			// The same shape one server over: jedi's project tier refuses the
+			// venv's jedi-language-server, and its managed tier's pip probe then
+			// ran the activated venv's `python -m site --user-base`.
+			setProjectTrustState("trusted");
+			const tool = "jedi-language-server";
+			const {
+				spec,
+				bin: venvBin,
+				marker,
+			} = makeProject(tool, false, path.join(".venv", "bin"));
+			fs.writeFileSync(path.join(spec.cwd, ".venv", "pyvenv.cfg"), "\n");
+			for (const python of ["python3", "python"]) {
+				fs.writeFileSync(
+					path.join(venvBin, python),
+					`#!/bin/sh\necho "$@" > ${JSON.stringify(marker)}\n`,
+					{ mode: 0o755 },
+				);
+			}
+			process.env.PATH = [venvBin, outsideBin].join(path.delimiter);
+
+			const result = await withLspProjectCodePermission(false, () =>
+				PythonJediServer.spawn(spec.cwd, { allowInstall: true }),
+			);
+
+			expect(result).toBeUndefined();
+			expect(fs.existsSync(marker)).toBe(false);
+			expect(decisionRows(`store-only-repair:${tool}`)).toHaveLength(1);
+		},
+	);
 });
 
 describe("Python adopted-root fallback (#5674)", () => {

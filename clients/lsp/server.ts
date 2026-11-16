@@ -3599,6 +3599,9 @@ export const PythonJediServer: LSPServerInfo = {
 		const initialization = pythonEnvironment
 			? { workspace: { environmentPath: pythonEnvironment.pythonPath } }
 			: {};
+		// #5674: both tiers share one refusal record, so the managed tier reads
+		// only the store after a project-tier refusal a bare lookup could reach.
+		const refusals = { refused: false, bareRefused: false };
 
 		if (pythonEnvironment) {
 			// A project launch can fail for a reason other than "tool not found"
@@ -3615,6 +3618,7 @@ export const PythonJediServer: LSPServerInfo = {
 						args: [],
 						cwd: root,
 						env,
+						refusals,
 					},
 					options?.allowInstall,
 				);
@@ -3641,6 +3645,7 @@ export const PythonJediServer: LSPServerInfo = {
 				cwd: root,
 				env: toolEnvironment,
 				managedToolId: "jedi-language-server",
+				refusals,
 			},
 			options?.allowInstall,
 		);
