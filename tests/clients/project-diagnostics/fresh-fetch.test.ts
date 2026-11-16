@@ -29,6 +29,7 @@ import * as safeSpawn from "../../../clients/safe-spawn.js";
 import { runnerRetirementDecision } from "../../../tools/lens-diagnostics.js";
 import type { WidgetDiagnostic } from "../../../clients/widget-state.js";
 import { removeTempDirSync } from "../test-utils.js";
+import { withEnv } from "../../support/with-env.js";
 import {
 	_resetStateCacheForTests,
 	markDisposition,
@@ -913,6 +914,9 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 		fs.mkdirSync(host);
 		setProjectTrustState("trusted");
 		const cwd = vi.spyOn(process, "cwd").mockReturnValue(host);
+		// `npx vitest` puts this checkout's node_modules/.bin (which holds a real
+		// jscpd) on PATH, which would answer for the wrong cwd too.
+		const restorePath = withEnv({ PATH: "/usr/bin:/bin" });
 		try {
 			const { JscpdClient } = await import("../../../clients/jscpd-client.js");
 			const jscpdClient = new JscpdClient();
@@ -938,6 +942,7 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 			expect(scan).toHaveBeenCalled();
 			expect(result.cold).not.toContain("jscpd");
 		} finally {
+			restorePath();
 			cwd.mockRestore();
 		}
 	});
