@@ -233,7 +233,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"elapsed-time-assertion:clients/lsp/request-sender-5097.test.ts": {
 		detector: "elapsed-time-assertion",
 		reason:
-			"#5097 acceptance 3: Esc must return a navigation call on a silent server within 500 ms, and a firing bound must put the cancel of its pull and ping on the wire within 500 ms, and must end the touch and the wait it ran within a bound that the server's own 800 ms answer and 5 s loading window would otherwise exceed; the bound is the behavior and a fake clock cannot time a child process's wire",
+			"#5097 acceptance 3: Esc must return a navigation call on a silent server within 500 ms, and a firing bound must put the cancel of its pull and ping on the wire within 500 ms, and must end the touch and the wait it ran within a bound that the server's own 800 ms answer and 5 s loading window would otherwise exceed, and Esc must return a workspace pull and a read-only tsserver command within 500 ms of the abort, where their 5 s and 2.5 s ceilings would otherwise answer; the bound is the behavior and a fake clock cannot time a child process's wire",
 	},
 	"elapsed-time-assertion:clients/lsp/server-status-readiness-5487.test.ts": {
 		detector: "elapsed-time-assertion",
@@ -2054,7 +2054,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"ungoverned-wait-for:clients/lsp/request-sender-5097.test.ts": {
 		detector: "ungoverned-wait-for",
 		reason:
-			"#5097: the abort must land after the request is on the wire (and the server's own refresh must reach a re-pull, and a loading server must be reported loading), and only the server's own trace shows that; the poll is bounded by its own timeout",
+			"#5097: the abort must land after the request is on the wire (and the server's own refresh must reach a re-pull, and a loading server must be reported loading, and the workspace pull and the read-only command must be on the wire before the Esc), and only the server's own trace shows that; the poll is bounded by its own timeout",
 	},
 	"ungoverned-wait-for:clients/session-repository-trust-4530.test.ts": {
 		detector: "ungoverned-wait-for",
