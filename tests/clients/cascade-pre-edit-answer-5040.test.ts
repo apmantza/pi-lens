@@ -393,6 +393,34 @@ describe("touchFile reports the cached answer it reused (#5040)", () => {
 		}
 	});
 
+	// #5675 r2 F1: `resendUnchanged` is honoured per server, and only for one
+	// declared `resendRecheck: "rechecks"` (#4782). This double is gopls, which
+	// declares nothing: a re-send would empty the answer it holds with none
+	// coming. Recurrence: the r1 head re-sent to every push server, so a server
+	// that publishes nothing for unchanged bytes lost its held finding (30
+	// neighbours: didChange frames 1 -> 31).
+	it("keeps the answer of a server not declared to recheck when asked to send the bytes again", async () => {
+		const { env, importer, server, service } = await setupServer({
+			prefix: "cascade-resend-undeclared-",
+		});
+		try {
+			const preEditPublishedAt = server.state.publishedAt;
+			const result = await service.touchFile(importer, NEIGHBOR_CONTENT, {
+				...TOUCH_OPTIONS,
+				resendUnchanged: true,
+			});
+
+			expect(server.state.notifies).toEqual(["open"]);
+			// Still the cached answer, and no claim that a re-send would be answered.
+			expect(result?.reusedAnswer).toEqual({
+				serverId: "gopls",
+				publishedAt: preEditPublishedAt,
+			});
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("reports no reused answer when the server published inside the touch", async () => {
 		const { env, importer, server, service } = await setupServer({
 			prefix: "cascade-reused-answer-publish-",
