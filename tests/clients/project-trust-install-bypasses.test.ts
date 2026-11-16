@@ -35,7 +35,7 @@ beforeEach(() => {
 	safeSpawnAsync.mockClear();
 	notifyUserDegradation.mockClear();
 });
-// #5231: lazy installs and govulncheck honour PI_LENS_DISABLE_TOOL_INSTALL,
+// #5231: govulncheck honours PI_LENS_DISABLE_TOOL_INSTALL,
 // which vitest-setup defaults to "1"; the "permits when trusted" cases drive
 // the install spawn.
 let restoreInstallSwitch: () => void = () => {};
@@ -48,25 +48,6 @@ afterEach(() => {
 });
 
 describe("central project-trust install gate (#1334 review)", () => {
-	it("gates formatter gem/rustup lazy installs and permits them when trusted", async () => {
-		const { tryLazyInstallFormatterTool } =
-			await import("../../clients/formatters.js");
-		setProjectTrustState("untrusted");
-		expect(
-			await tryLazyInstallFormatterTool("rubocop", "/trust/fmt-blocked"),
-		).toBe(false);
-		expect(safeSpawnAsync).not.toHaveBeenCalled();
-		setProjectTrustState("trusted");
-		expect(
-			await tryLazyInstallFormatterTool("rubocop", "/trust/fmt-allowed"),
-		).toBe(true);
-		expect(safeSpawnAsync).toHaveBeenCalledWith(
-			"gem",
-			expect.any(Array),
-			expect.any(Object),
-		);
-	});
-
 	it("treats an install-capable formatter npx fallback as a trust-gated skip", async () => {
 		const env = setupTestEnvironment("pi-lens-trust-npx-");
 		try {
@@ -124,25 +105,6 @@ describe("central project-trust install gate (#1334 review)", () => {
 		} finally {
 			env.cleanup();
 		}
-	});
-
-	it("gates the runner lazy-installer seam and permits it when trusted", async () => {
-		const { tryLazyInstall } =
-			await import("../../clients/dispatch/runners/utils/lazy-installer.js");
-		setProjectTrustState("untrusted");
-		expect(await tryLazyInstall("rust-clippy", "/trust/lazy-blocked")).toBe(
-			false,
-		);
-		expect(safeSpawnAsync).not.toHaveBeenCalled();
-		setProjectTrustState("trusted");
-		expect(await tryLazyInstall("rust-clippy", "/trust/lazy-allowed")).toBe(
-			true,
-		);
-		expect(safeSpawnAsync).toHaveBeenCalledWith(
-			"rustup",
-			expect.any(Array),
-			expect.any(Object),
-		);
 	});
 
 	// #1350 delta review: trust denial must NOT latch available=false -- a

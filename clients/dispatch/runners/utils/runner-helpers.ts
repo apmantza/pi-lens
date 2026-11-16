@@ -2157,8 +2157,8 @@ export interface InstalledToolResolution {
  * check, then the managed installs. The formatter's version decides the bytes
  * it writes, so a working PATH binary outranks the managed copy; the runners
  * keep managed before PATH in `resolveToolCommandWithInstallFallback`. A
- * formatter calls this where its own install opt-in
- * (`AUTO_INSTALLABLE_DEFAULT_FORMATTERS`) stays a separate decision.
+ * formatter calls this where `shouldAutoInstallTool` decides the install
+ * separately.
  */
 export async function resolveInstalledToolCommand(
 	cwd: string,

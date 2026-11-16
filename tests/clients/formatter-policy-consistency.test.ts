@@ -5,7 +5,6 @@ import {
 } from "../../clients/formatters.js";
 import type { FormatterPolicy } from "../../clients/tool-policy.js";
 import {
-	AUTO_INSTALLABLE_DEFAULT_FORMATTERS,
 	FORMATTER_POLICY_BY_EXTENSION,
 	FORMATTER_POLICY_BY_FILENAME,
 } from "../../clients/tool-policy.js";
@@ -216,21 +215,6 @@ describe("formatter ↔ policy consistency (#1135)", () => {
 					: `filename policy ${filename} names "${name}" but ${name}'s definition does not claim filename ${filename}`;
 			},
 			1,
-		);
-	});
-
-	it("every AUTO_INSTALLABLE_DEFAULT_FORMATTERS key is a real formatter definition (sibling drift, #1086)", () => {
-		// Keys are formatter names consumed by getAutoInstallToolIdForFormatter (via
-		// formatter.name); a rename in formatters.ts that misses this map silently
-		// disables auto-install for that formatter.
-		expectClean(
-			"auto-installable formatter names",
-			AUTO_INSTALLABLE_DEFAULT_FORMATTERS.keys(),
-			(name) =>
-				formatterByName.has(name)
-					? null
-					: `AUTO_INSTALLABLE_DEFAULT_FORMATTERS names "${name}" with no formatter definition`,
-			3,
 		);
 	});
 

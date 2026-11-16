@@ -6,7 +6,7 @@
  * function that either nobody calls at `session_start` or that no test proves
  * re-arms anything. `#1266` (install-failure suppression), `#1490`/`#1540`
  * (PSScriptAnalyzer latches), `#1497` (install-retry ceiling), `#1535` (zizmor
- * token), `#1537` (lazy-install hold), `#1570` (classic-TS repair guard),
+ * token), `#1537` (lazy-install hold, deleted by #5410 D9), `#1570` (classic-TS repair guard),
  * `#1618` (workspace sweep hold), `#1625` (deferred dispositions) — each was
  * found in production, one at a time, by a human noticing a tool stayed off.
  *
@@ -716,7 +716,7 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 		ownerKey: "project",
 		resetName: "clearFormatterRuntimeState",
 		reason:
-			"Formatter resolution is re-derived every turn through `resetFormatService()`; #1537's note explains why the lazy-install hold specifically must NOT ride this turn-scoped reset.",
+			"Formatter resolution is re-derived every turn through `resetFormatService()`.",
 	},
 	{
 		id: "formatters:whichLatches",
@@ -871,17 +871,6 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 		sessionStartClosureReset: true,
 		reason:
 			"#2526: `config_resolved` is a SESSION fact written by `loadLSPConfig`, which runs many times per session (session start, each served root, the MCP `ensureReady` boot, the first edit's ensure). The claim set is what collapses those to one row per session and served root. Review round 2 F1 MOVED the re-arm out of handleSessionStart's body into index.ts's session_start closure, beside resetCurrentPhaseForSession and behind the same #473 gate: index.ts's ensureLSPConfigInitialized resolves this session's config BEFORE handleSessionStart runs, so a re-arm inside the handler fired between the session's own two resolutions and the deferred loadLSPConfig wrote a second row for one session. Behind the #473 gate for the same reason as liveBrackets - a concurrent secondary never reaches handleSessionStart, so it never publishes an expectation line and must not re-arm a live primary's claims. Catalog shape 17 still applies in the other direction: a claim never re-armed silences a positive-observability record for the rest of the process.",
-	},
-	{
-		id: "lazy-installer:attempts",
-		module: "dispatch/runners/utils/lazy-installer.ts",
-		state: "attempts",
-		policy: "session_start",
-		ownerKey:
-			"process-wide: install attempts are a fact about this machine, keyed by tool",
-		resetName: "resetLazyInstallAttempts",
-		reason:
-			"#1537: the lazy-install hold is durable for a SESSION; it deliberately sits here and not on the turn_end path, where a failing install would re-spawn every turn.",
 	},
 	{
 		id: "lsp-index:globalLSPService",
@@ -2500,7 +2489,6 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// BoundedLruCache, so this file's module-level bounded cache is counted.
 	"dispatch/runners/spotbugs.ts": 1,
 	"dispatch/runners/tree-sitter.ts": 1,
-	"dispatch/runners/utils/lazy-installer.ts": 2,
 	// #5410: 7 -> 8, then 8 -> 7 when `uncorrectedEmissionsByCwd` went with the
 	// compensating-row branch it fed. `toolBinaryCheckers`, one resolver checker per registry
 	// tool id; its per-cwd latches clear at the same generation bump.

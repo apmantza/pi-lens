@@ -153,7 +153,9 @@ const POPULATION_FILES = [
 // #5553: 79 -> 80, clients/staged-delta.ts (the commit gate's git replay).
 // #5621: 80 -> 81, clients/dispatch/integration.ts (the `git rev-parse` that
 // finds the exclude file for a seed copy).
-const EXPECTED_FILES = 81;
+// #5410 D9: 81 -> 80, clients/dispatch/runners/utils/lazy-installer.ts deleted
+// (the two lazy-install spawns went with it: 128 -> 127 direct sites).
+const EXPECTED_FILES = 80;
 // 135 -> 134 (#4532 round 3): `findBinaryOnPath` stopped spawning
 // `which`/`where` — the bare-command probe resolved its own binary through the
 // path and cwd it was asked to judge, so a project-supplied `which` ran. It is
@@ -185,7 +187,7 @@ const EXPECTED_FILES = 81;
 // walk (`findCommandOnPath`), so its NO_CWD_EXEMPTION_ROWS row went with it.
 // 129 -> 128 (#5410 S5): the sync `findCommand` in `clients/safe-spawn.ts` had
 // no production caller; its `which`/`where` spawn and its row are deleted.
-const EXPECTED_DIRECT_SITES = 128;
+const EXPECTED_DIRECT_SITES = 127;
 /**
  * Every same-file spawn-routing wrapper call site the scan discovers. Pinned
  * as a LIST, not a count, because the list is the part round 2 got wrong: it
@@ -218,9 +220,6 @@ const EXPECTED_WRAPPER_SITES = [
 	"clients/dispatch/runners/helm-render.ts:renderAndValidate",
 	"clients/dispatch/runners/oxlint.ts:resolveVitePlusCommand",
 	"clients/dispatch/runners/psscriptanalyzer.ts:spawnPs",
-	"clients/dispatch/runners/utils/lazy-installer.ts:performInstall",
-	"clients/dispatch/runners/utils/lazy-installer.ts:runLazyInstall",
-	"clients/dispatch/runners/utils/lazy-installer.ts:runLazyInstall",
 	"clients/git-tracked-ignore.ts:fetchUntrackedIgnoredIds",
 	"clients/git-tracked-ignore.ts:fetchTrackedFiles",
 	"clients/gitleaks-client.ts:runScan",
@@ -540,22 +539,6 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/dispatch/runners/tflint.ts#run:338013e8~a6e3b67b",
 		"cwd is `fileDir` = dirname(path.resolve(<resolveRunnerCwd result>, ctx.filePath)): tflint scans one module directory and its --config is passed absolute — a Terraform module IS a directory, which is why #2894 left it where cue-vet and terragrunt stay",
-	],
-	[
-		"clients/dispatch/runners/utils/lazy-installer.ts#runLazyInstall:c226c0b2~c226c0b2",
-		"runLazyInstall forwards its own `cwd` parameter into performInstall",
-	],
-	[
-		"clients/dispatch/runners/utils/lazy-installer.ts#performInstall:0e6f55b2~dbf27697",
-		"cwd is performInstall's own `cwd` parameter; the checked site is runLazyInstall's call in this file",
-	],
-	[
-		"clients/dispatch/runners/utils/lazy-installer.ts#tryLazyInstall:1adf4f32~1adf4f32",
-		"tryLazyInstall forwards its own `cwd` parameter into runLazyInstall",
-	],
-	[
-		"clients/dispatch/runners/utils/lazy-installer.ts#tryLazyInstallForFormatter:1adf4f32~1adf4f32",
-		"tryLazyInstallForFormatter forwards its own `cwd` parameter into runLazyInstall",
 	],
 	[
 		"clients/dispatch/runners/utils/runner-helpers.ts#createAvailabilityChecker.isAvailableAsync:1fe0ada7~d99d2124",

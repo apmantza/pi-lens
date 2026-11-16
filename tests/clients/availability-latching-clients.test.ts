@@ -24,7 +24,11 @@ vi.mock("../../clients/safe-spawn.js", () => ({
 	safeSpawnAsync: vi.fn(async () => ({ stdout: "", stderr: "", status: 1 })),
 }));
 
-vi.mock("../../clients/installer/index.js", () => ({
+vi.mock("../../clients/installer/index.js", async (importOriginal) => ({
+	// #5410 D9: `shouldAutoInstallTool` reads the opt-in off the real `TOOLS`.
+	TOOLS: (
+		await importOriginal<typeof import("../../clients/installer/index.js")>()
+	).TOOLS,
 	ensureTool: vi.fn(async () => null),
 	findManagedToolBinary: vi.fn(async () => undefined),
 	isSpawnableCommand: vi.fn(async () => true),

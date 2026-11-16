@@ -12,8 +12,7 @@
  * `safeSpawnAsync` is mocked so nothing actually shells out.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withEnv } from "../support/with-env.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockSafeSpawnAsync = vi.fn();
 
@@ -124,68 +123,5 @@ describe("LSP server install actions (#197)", () => {
 		} finally {
 			process.env.PATH = originalPath;
 		}
-	});
-});
-
-describe("formatter lazy-install actions (#197)", () => {
-	let cwdSeq = 0;
-	const freshCwd = () => `/proj/install-test-${Date.now()}-${cwdSeq++}`;
-
-	// #5231: the lazy installer honours PI_LENS_DISABLE_TOOL_INSTALL, which
-	// vitest-setup defaults to "1"; these cases drive the install spawn.
-	let restoreInstallSwitch: () => void = () => {};
-	beforeEach(() => {
-		restoreInstallSwitch = withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" });
-	});
-	afterEach(() => {
-		restoreInstallSwitch();
-		vi.restoreAllMocks();
-	});
-
-	it("rubocop: spawns `gem install rubocop`, uncancellable, true on exit 0", async () => {
-		const { tryLazyInstallFormatterTool } =
-			await import("../../clients/formatters.js");
-
-		expect(await tryLazyInstallFormatterTool("rubocop", freshCwd())).toBe(true);
-		const [cmd, args, opts] = mockSafeSpawnAsync.mock.calls[0];
-		expect(cmd).toBe("gem");
-		expect(args).toEqual(["install", "rubocop", "--no-document"]);
-		expect(opts).toMatchObject({ ignoreAmbientSignal: true });
-	});
-
-	it("rustfmt: spawns `rustup component add rustfmt`, uncancellable", async () => {
-		const { tryLazyInstallFormatterTool } =
-			await import("../../clients/formatters.js");
-
-		expect(await tryLazyInstallFormatterTool("rustfmt", freshCwd())).toBe(true);
-		const [cmd, args, opts] = mockSafeSpawnAsync.mock.calls[0];
-		expect(cmd).toBe("rustup");
-		expect(args).toEqual(["component", "add", "rustfmt"]);
-		expect(opts).toMatchObject({ ignoreAmbientSignal: true });
-	});
-
-	it("returns false on a failed install and does not throw", async () => {
-		const { tryLazyInstallFormatterTool } =
-			await import("../../clients/formatters.js");
-		vi.spyOn(console, "error").mockImplementation(() => {});
-		mockSafeSpawnAsync.mockResolvedValueOnce(ok({ status: 1, stderr: "boom" }));
-
-		expect(await tryLazyInstallFormatterTool("rubocop", freshCwd())).toBe(
-			false,
-		);
-	});
-
-	it("dedupes repeated attempts for the same tool+cwd (no second spawn)", async () => {
-		const { tryLazyInstallFormatterTool } =
-			await import("../../clients/formatters.js");
-		const cwd = freshCwd();
-
-		expect(await tryLazyInstallFormatterTool("rubocop", cwd)).toBe(true);
-		expect(mockSafeSpawnAsync).toHaveBeenCalledTimes(1);
-
-		// Second attempt with the same key is short-circuited (returns false,
-		// no new spawn) — matches the pre-conversion guard behaviour.
-		expect(await tryLazyInstallFormatterTool("rubocop", cwd)).toBe(false);
-		expect(mockSafeSpawnAsync).toHaveBeenCalledTimes(1);
 	});
 });

@@ -429,7 +429,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/trivy-config.ts": 2,
 		"clients/dispatch/runners/utils/availability-policy.ts": 4,
 		"clients/dispatch/runners/utils/candidate-probe.ts": 1,
-		"clients/dispatch/runners/utils/lazy-installer.ts": 3,
 		"clients/dispatch/runners/utils/runner-helpers.ts": 6,
 		"clients/dispatch/runners/utils/spawn-outcome.ts": 2,
 		"clients/dispatch/runners/vale.ts": 1,
@@ -1943,7 +1942,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// #5594: the `status` of the `RunnerResult` `markUnanchored` withholds a
 		// clean verdict from; the result field, the same sense as its siblings.
 		"clients/dispatch/runners/utils/ignore-anchor.ts": 1,
-		"clients/dispatch/runners/utils/lazy-installer.ts": 3,
 		// 7 -> 5 (#5410): the rubocop bundler form and its install-fallback pair
 		// left the file.
 		"clients/dispatch/runners/utils/runner-helpers.ts": 5,

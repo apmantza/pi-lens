@@ -770,11 +770,11 @@ export type DegradationKind =
 	 */
 	| "inline-blocker-unstructured"
 	/**
-	 * `install-disabled`: #5231: an install the lazy installer or govulncheck would have run was
+	 * `install-disabled`: #5231: an install govulncheck would have run was
 	 * refused because `PI_LENS_DISABLE_TOOL_INSTALL=1` (`isToolInstallDisabled`).
-	 * Subject is the tool id (`rubocop`, `rustfmt`, `govulncheck`), recorded
-	 * ONCE per tool per session (`recordDegradationOnce`): both entry points
-	 * are reached per save, so a counted row would grow without adding
+	 * Subject is the tool id (`govulncheck`), recorded
+	 * ONCE per tool per session (`recordDegradationOnce`): the entry point
+	 * is reached per save, so a counted row would grow without adding
 	 * information. The managed installer reports the same refusal through its
 	 * own install-attempt record.
 	 */

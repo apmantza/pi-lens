@@ -559,6 +559,14 @@ export interface ToolDefinition {
 	/** Verification timeout for this tool's managed-binary probe, in ms. */
 	verificationTimeoutMs?: number;
 	installStrategy: "npm" | "pip" | "gem" | "github" | "maven" | "archive";
+	/**
+	 * The only place pi-lens records that it may install this tool without being
+	 * asked (#5410 D9). Absent means it may not: the tool is reported not
+	 * installed, with its install command, and the user runs the install.
+	 * `shouldAutoInstallTool` (`clients/tool-policy.ts`) reads this field; no
+	 * policy table, formatter map or lazy-install table holds a second copy.
+	 */
+	autoInstall?: true;
 	packageName?: string;
 	binaryName?: string;
 	github?: GitHubAssetSpec;
@@ -683,6 +691,7 @@ const MANAGED_PACKAGE_FORMATTERS = [
 type ManagedGitHubFormatterSpec = {
 	id: string;
 	name: string;
+	autoInstall?: true;
 	owner: string;
 	repo: string;
 	assetPattern: GitHubAssetSpec["assetMatch"];
@@ -699,6 +708,7 @@ function managedGitHubFormatterTool(
 		checkCommand: spec.id,
 		checkArgs: ["--version"],
 		installStrategy: "github",
+		...(spec.autoInstall && { autoInstall: true as const }),
 		binaryName: spec.id,
 		github: {
 			repo: `${spec.owner}/${spec.repo}`,
@@ -714,6 +724,7 @@ const MANAGED_GITHUB_FORMATTERS = [
 	{
 		id: "typstyle",
 		name: "typstyle",
+		autoInstall: true,
 		owner: "typstyle-rs",
 		repo: "typstyle",
 		assetPattern: archAssetMatch({
@@ -809,6 +820,8 @@ export const TOOLS: ToolDefinition[] = [
 	// Core LSP servers
 	{
 		id: "typescript-language-server",
+		// Preinstalled at session start for a TypeScript project, as before (#5410 D9).
+		autoInstall: true,
 		name: "TypeScript Language Server",
 		checkCommand: "typescript-language-server",
 		checkArgs: ["--version"],
@@ -836,6 +849,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "pyright",
+		autoInstall: true,
 		name: "Pyright",
 		checkCommand: "pyright",
 		checkArgs: ["--version"],
@@ -846,6 +860,7 @@ export const TOOLS: ToolDefinition[] = [
 	// Linting/formatting tools
 	{
 		id: "prettier",
+		autoInstall: true,
 		name: "Prettier",
 		checkCommand: "prettier",
 		checkArgs: ["--version"],
@@ -856,6 +871,7 @@ export const TOOLS: ToolDefinition[] = [
 	...MANAGED_PACKAGE_FORMATTERS.map(managedPackageFormatterTool),
 	{
 		id: "ruff",
+		autoInstall: true,
 		name: "Ruff",
 		checkCommand: "ruff",
 		checkArgs: ["--version"],
@@ -876,6 +892,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "biome",
+		autoInstall: true,
 		name: "Biome",
 		checkCommand: "biome",
 		checkArgs: ["--version"],
@@ -898,6 +915,7 @@ export const TOOLS: ToolDefinition[] = [
 	// Analysis tools (run at session start / turn end)
 	{
 		id: "madge",
+		autoInstall: true,
 		name: "Madge",
 		checkCommand: "madge",
 		checkArgs: ["--version"],
@@ -907,6 +925,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "jscpd",
+		autoInstall: true,
 		name: "jscpd",
 		checkCommand: "jscpd",
 		checkArgs: ["--version"],
@@ -917,6 +936,7 @@ export const TOOLS: ToolDefinition[] = [
 	// Structural search and dead code detection
 	{
 		id: "ast-grep",
+		autoInstall: true,
 		name: "ast-grep CLI",
 		checkCommand: "ast-grep",
 		checkArgs: ["--version"],
@@ -938,6 +958,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "knip",
+		autoInstall: true,
 		name: "Knip",
 		checkCommand: "knip",
 		checkArgs: ["--version"],
@@ -947,6 +968,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "yamllint",
+		autoInstall: true,
 		name: "yamllint",
 		checkCommand: "yamllint",
 		checkArgs: ["--version"],
@@ -956,6 +978,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "sqlfluff",
+		autoInstall: true,
 		name: "sqlfluff",
 		checkCommand: "sqlfluff",
 		checkArgs: ["--version"],
@@ -1039,6 +1062,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "htmlhint",
+		autoInstall: true,
 		name: "HTMLHint",
 		checkCommand: "htmlhint",
 		checkArgs: ["--version"],
@@ -1048,6 +1072,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "hadolint",
+		autoInstall: true,
 		name: "Hadolint",
 		checkCommand: "hadolint",
 		checkArgs: ["--version"],
@@ -1067,6 +1092,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "helm",
+		autoInstall: true,
 		name: "Helm",
 		checkCommand: "helm",
 		// Probed against helm 4.3.0: `--version` exits 1 ("unknown flag"), `version --short` exits 0.
@@ -1101,6 +1127,7 @@ export const TOOLS: ToolDefinition[] = [
 		// Opengrep: a single standalone binary per platform on GitHub releases —
 		// no login, no telemetry (the reason for switching off Semgrep, #111).
 		id: "opengrep",
+		autoInstall: true,
 		name: "Opengrep",
 		checkCommand: "opengrep",
 		checkArgs: ["--version"],
@@ -1212,6 +1239,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "markdownlint",
+		autoInstall: true,
 		name: "markdownlint-cli2",
 		checkCommand: "markdownlint-cli2",
 		// `--version` is interpreted as a file glob by markdownlint-cli2. Use
@@ -1223,6 +1251,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "mypy",
+		autoInstall: true,
 		name: "mypy",
 		checkCommand: "mypy",
 		checkArgs: ["--version"],
@@ -1241,6 +1270,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "stylelint",
+		autoInstall: true,
 		name: "Stylelint",
 		checkCommand: "stylelint",
 		checkArgs: ["--version"],
@@ -1250,6 +1280,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "oxlint",
+		autoInstall: true,
 		name: "Oxlint",
 		checkCommand: "oxlint",
 		checkArgs: ["--version"],
@@ -1260,6 +1291,7 @@ export const TOOLS: ToolDefinition[] = [
 	// GitHub release binaries
 	{
 		id: "shellcheck",
+		autoInstall: true,
 		name: "ShellCheck",
 		checkCommand: "shellcheck",
 		checkArgs: ["--version"],
@@ -1284,6 +1316,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "shfmt",
+		autoInstall: true,
 		name: "shfmt",
 		checkCommand: "shfmt",
 		checkArgs: ["--version"],
@@ -1359,6 +1392,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "golangci-lint",
+		autoInstall: true,
 		name: "golangci-lint",
 		checkCommand: "golangci-lint",
 		checkArgs: ["--version"],
@@ -1382,6 +1416,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "ktlint",
+		autoInstall: true,
 		name: "ktlint",
 		checkCommand: "ktlint",
 		checkArgs: ["--version"],
@@ -1407,6 +1442,7 @@ export const TOOLS: ToolDefinition[] = [
 		// fat JAR — no native binary, no npm package — so it uses the maven strategy
 		// (#129). Run via a `java -jar` launcher; requires a JRE.
 		id: "ktfmt",
+		autoInstall: true,
 		name: "ktfmt",
 		checkCommand: "ktfmt",
 		checkArgs: ["--version"],
@@ -1425,6 +1461,7 @@ export const TOOLS: ToolDefinition[] = [
 		// NOT a runnable fat JAR — so it uses the archive strategy, not maven
 		// (refs #133). Requires a JRE (gated by the runner, not the install).
 		id: "spotbugs",
+		autoInstall: true,
 		name: "SpotBugs",
 		checkCommand: "spotbugs",
 		// Probed against spotbugs 4.10.2 (JRE 21): `--version` exits 1 ("Unknown option"), `-version` prints 4.10.2.
@@ -1599,6 +1636,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "actionlint",
+		autoInstall: true,
 		name: "actionlint",
 		checkCommand: "actionlint",
 		checkArgs: ["--version"],
@@ -1747,6 +1785,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "tflint",
+		autoInstall: true,
 		name: "tflint",
 		checkCommand: "tflint",
 		checkArgs: ["--version"],
@@ -1767,6 +1806,7 @@ export const TOOLS: ToolDefinition[] = [
 		// Windows arm64 uses the x64 binary through Windows' built-in emulation —
 		// there is no terragrunt_windows_arm64.exe upstream.
 		id: "terragrunt",
+		autoInstall: true,
 		name: "terragrunt",
 		checkCommand: "terragrunt",
 		checkArgs: ["--version"],
@@ -1814,6 +1854,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "trivy",
+		autoInstall: true,
 		name: "Trivy",
 		checkCommand: "trivy",
 		checkArgs: ["--version"],
@@ -1837,6 +1878,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "swiftlint",
+		autoInstall: true,
 		name: "SwiftLint",
 		checkCommand: "swiftlint",
 		checkArgs: ["--version"],
@@ -1857,6 +1899,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "taplo",
+		autoInstall: true,
 		name: "taplo",
 		checkCommand: "taplo",
 		checkArgs: ["--version"],

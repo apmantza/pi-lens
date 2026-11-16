@@ -2394,7 +2394,6 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// Only tests call it; no hook handler reaches it.
 	"clients/dispatch/pending-runner-findings.ts": 3,
 	"clients/dispatch/runners/psscriptanalyzer.ts": 7,
-	"clients/dispatch/runners/utils/lazy-installer.ts": 2,
 	// 32 → 37 (#2140): the probe resolver now asks the installer for a
 	// release-managed binary (`~/.pi-lens/bin`) before falling back to PATH, so
 	// probe and spawn resolve through one definition. The five added awaits are
@@ -2509,7 +2508,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// previous turn (one child per project at a time) and awaits its own turn.
 	// The previous turn ends when its child settles, which its 15 s spawn
 	// timeout bounds, and the run is inside the format service's `bounded()`.
-	"clients/formatters.ts": 115,
+	// 115 -> 107 (#5410 D9): not a bound. The rustfmt and rubocop `detect()`s
+	// lost their install fallbacks (`findUp`, `which rustup`, the lazy install
+	// and a second `which`), and ktfmt's install is one gated await, so the hook
+	// path awaits eight fewer calls.
+	"clients/formatters.ts": 107,
 	// 4 -> 3 and 2 -> 1 (#4984): not a bound. The two `await safeSpawnAsync`
 	// calls moved into `SecurityScanClient.runReportScan`, which the one-hop set
 	// does not walk, so the hook path's unbounded awaits are unchanged.

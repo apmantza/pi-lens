@@ -24,8 +24,8 @@ export function isTestMode(): boolean {
 
 /**
  * The ONE read of the tool-install kill switch (#5231). Every path that can
- * download or run an installer (the managed installer, the lazy installer,
- * govulncheck's `go install`) asks here and answers "unavailable" without
+ * download or run an installer (the managed installer, govulncheck's
+ * `go install`) asks here and answers "unavailable" without
  * spawning when it is true. `tests/config/install-kill-switch-census.test.ts`
  * pins each install spawn to a consult of this function.
  *

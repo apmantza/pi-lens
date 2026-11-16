@@ -68,7 +68,11 @@ vi.mock("../../clients/safe-spawn.js", () => ({
 	isCommandAvailableAsync: vi.fn(async () => false),
 }));
 
-vi.mock("../../clients/installer/index.js", () => ({
+vi.mock("../../clients/installer/index.js", async (importOriginal) => ({
+	// #5410 D9: `shouldAutoInstallTool` reads the opt-in off the real `TOOLS`.
+	TOOLS: (
+		await importOriginal<typeof import("../../clients/installer/index.js")>()
+	).TOOLS,
 	ensureTool,
 	// #1500: the durable-absence arms read the installer's own attempt record, so
 	// an attempt that failed is distinguishable from one that never ran.

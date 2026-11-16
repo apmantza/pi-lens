@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { normalizeToml } from "./cargo-manifest.js";
+import { TOOLS } from "./installer/index.js";
 import { isJstsFactFile, TERRAGRUNT_FILENAMES } from "./file-kinds.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { logLatency } from "./latency-logger.js";
@@ -19,12 +20,12 @@ export interface FormatterPolicy {
 	gate: ToolGate;
 }
 
-// Extension → formatter policy. This map, `FORMATTER_POLICY_BY_FILENAME`, and
-// `AUTO_INSTALLABLE_DEFAULT_FORMATTERS` are the inverse of the formatter
-// definitions in `clients/formatters.ts` (formatter → extensions). The two are
+// Extension → formatter policy. This map and `FORMATTER_POLICY_BY_FILENAME`
+// are the inverse of the formatter definitions in `clients/formatters.ts`
+// (formatter → extensions). The two are
 // bound by `tests/clients/formatter-policy-consistency.test.ts` (#1135, the
-// #883/#209 single-source-of-truth class) so they cannot drift silently. All
-// three are re-exported (read-only intent) via a single `export {}` below —
+// #883/#209 single-source-of-truth class) so they cannot drift silently. Both
+// are re-exported (read-only intent) via a single `export {}` below —
 // deliberately NOT inline on these declarations, to keep the pre-existing,
 // structural lookup-table duplication out of the PR's "new code" (SonarCloud).
 //
@@ -781,16 +782,6 @@ for (const [ext, policy] of FORMATTER_POLICY_BY_EXTENSION) {
 	}
 }
 
-const AUTO_INSTALLABLE_DEFAULT_FORMATTERS = new Map<string, string>([
-	["biome", "biome"],
-	["ruff", "ruff"],
-	["prettier", "prettier"],
-	["shfmt", "shfmt"],
-	["taplo", "taplo"],
-	["ktlint", "ktlint"],
-	["typstyle", "typstyle"],
-]);
-
 // `gate: "smart-default"` so a matched file is formatted only when nothing else
 // claims it. Misdetection edge: `root.hcl` is filename-detected as terragrunt, so
 // a non-terragrunt `root.hcl` gets smart-default formatted with `terragrunt hcl
@@ -813,7 +804,6 @@ const FORMATTER_POLICY_BY_FILENAME = new Map<string, FormatterPolicy>(
 // pre-existing lookup-table duplication and get counted as new duplicated
 // code. Bindings are live, so position is safe.
 export {
-	AUTO_INSTALLABLE_DEFAULT_FORMATTERS,
 	FORMATTER_POLICY_BY_EXTENSION,
 	FORMATTER_POLICY_BY_FILENAME,
 	TOOL_COMMAND_SPECS,
@@ -844,20 +834,20 @@ export function getSmartDefaultFormatterName(
 	return policy.defaultFormatter;
 }
 
-export function getAutoInstallToolIdForFormatter(
-	formatterName: string,
-): string | undefined {
-	return AUTO_INSTALLABLE_DEFAULT_FORMATTERS.get(formatterName);
-}
-
 export function getToolExecutionPolicy(
 	toolId: string,
 ): ToolExecutionPolicy | undefined {
 	return TOOL_EXECUTION_POLICY.get(toolId);
 }
 
+/**
+ * May pi-lens install this tool without asking? The runners and the formatters
+ * (a formatter's name is its tool id) ask here, and the installer's `TOOLS`
+ * entry is the only place the answer is declared (#5410 D9): no entry, or an
+ * entry with no `autoInstall`, answers no.
+ */
 export function shouldAutoInstallTool(toolId: string): boolean {
-	return getToolExecutionPolicy(toolId)?.autoInstall ?? false;
+	return TOOLS.some((tool) => tool.id === toolId && tool.autoInstall === true);
 }
 
 export function getAutofixCapability(
@@ -974,7 +964,6 @@ export interface ToolExecutionPolicy {
 	 * from `gate` so one word does not carry both meanings.
 	 */
 	configEligibility: ToolGate;
-	autoInstall: boolean;
 }
 
 export interface ToolCommandSpec {
@@ -1046,60 +1035,49 @@ const AUTOFIX_CAPABILITIES = new Map<string, AutofixCapability>([
 ]);
 
 const TOOL_EXECUTION_POLICY = new Map<string, ToolExecutionPolicy>([
-	// Dispatch/LSP runners use the shared availability/install seam. These
-	// managed tools are missing-command repair candidates; probe failures still
-	// fail closed before this policy is consulted.
-	["pyright", { configEligibility: "smart-default", autoInstall: true }],
-	["shellcheck", { configEligibility: "smart-default", autoInstall: true }],
-	["shfmt", { configEligibility: "smart-default", autoInstall: true }],
-	["tflint", { configEligibility: "smart-default", autoInstall: true }],
-	["terragrunt", { configEligibility: "smart-default", autoInstall: true }],
-	["trivy", { configEligibility: "config-first", autoInstall: true }],
-	["biome", { configEligibility: "smart-default", autoInstall: true }],
-	["ruff", { configEligibility: "smart-default", autoInstall: true }],
-	["jscpd", { configEligibility: "smart-default", autoInstall: true }],
-	["madge", { configEligibility: "smart-default", autoInstall: true }],
-	["knip", { configEligibility: "smart-default", autoInstall: true }],
-	["ast-grep", { configEligibility: "smart-default", autoInstall: true }],
-	["oxlint", { configEligibility: "smart-default", autoInstall: true }],
-	["stylelint", { configEligibility: "smart-default", autoInstall: true }],
-	["sqlfluff", { configEligibility: "smart-default", autoInstall: true }],
-	["rubocop", { configEligibility: "smart-default", autoInstall: true }],
-	["yamllint", { configEligibility: "smart-default", autoInstall: true }],
-	["actionlint", { configEligibility: "smart-default", autoInstall: true }],
-	["markdownlint", { configEligibility: "smart-default", autoInstall: true }],
-	["mypy", { configEligibility: "config-first", autoInstall: true }],
-	["taplo", { configEligibility: "smart-default", autoInstall: true }],
-	["hadolint", { configEligibility: "smart-default", autoInstall: true }],
-	["helm", { configEligibility: "smart-default", autoInstall: true }],
-	["htmlhint", { configEligibility: "smart-default", autoInstall: true }],
-	["ktlint", { configEligibility: "smart-default", autoInstall: true }],
+	// Whether a tool may install without asking is NOT recorded here: it is the
+	// `autoInstall` field of the installer's `TOOLS` entry (`shouldAutoInstallTool`).
+	["pyright", { configEligibility: "smart-default" }],
+	["shellcheck", { configEligibility: "smart-default" }],
+	["shfmt", { configEligibility: "smart-default" }],
+	["tflint", { configEligibility: "smart-default" }],
+	["terragrunt", { configEligibility: "smart-default" }],
+	["trivy", { configEligibility: "config-first" }],
+	["biome", { configEligibility: "smart-default" }],
+	["ruff", { configEligibility: "smart-default" }],
+	["jscpd", { configEligibility: "smart-default" }],
+	["madge", { configEligibility: "smart-default" }],
+	["knip", { configEligibility: "smart-default" }],
+	["ast-grep", { configEligibility: "smart-default" }],
+	["oxlint", { configEligibility: "smart-default" }],
+	["stylelint", { configEligibility: "smart-default" }],
+	["sqlfluff", { configEligibility: "smart-default" }],
+	["rubocop", { configEligibility: "smart-default" }],
+	["yamllint", { configEligibility: "smart-default" }],
+	["actionlint", { configEligibility: "smart-default" }],
+	["markdownlint", { configEligibility: "smart-default" }],
+	["mypy", { configEligibility: "config-first" }],
+	["taplo", { configEligibility: "smart-default" }],
+	["hadolint", { configEligibility: "smart-default" }],
+	["helm", { configEligibility: "smart-default" }],
+	["htmlhint", { configEligibility: "smart-default" }],
+	["ktlint", { configEligibility: "smart-default" }],
 	// ktfmt is opt-in (a project's explicit formatting choice), so it only runs
-	// when its config marker is present — config-first, but auto-installable via
-	// the maven-JAR strategy once elected (#129).
-	["ktfmt", { configEligibility: "config-first", autoInstall: true }],
-	["golangci-lint", { configEligibility: "config-first", autoInstall: true }],
+	// when its config marker is present — config-first.
+	["ktfmt", { configEligibility: "config-first" }],
+	["golangci-lint", { configEligibility: "config-first" }],
 	// SpotBugs is opt-in (lens-spotbugs flag) + config-first (needs a Java build
-	// descriptor + compiled .class files), auto-installed via the archive
-	// strategy when elected (#133).
-	["spotbugs", { configEligibility: "config-first", autoInstall: true }],
+	// descriptor + compiled .class files).
+	["spotbugs", { configEligibility: "config-first" }],
 	// Opengrep is opt-in (lens-opengrep flag or a discovered rule file) and
-	// config-first, but auto-installable via the GitHub single-binary strategy
-	// once elected — no login/token required, unlike Semgrep (#111).
-	["opengrep", { configEligibility: "config-first", autoInstall: true }],
-	["phpstan", { configEligibility: "config-first", autoInstall: false }],
-	["eslint", { configEligibility: "config-first", autoInstall: false }],
-	["prettier", { configEligibility: "smart-default", autoInstall: true }],
-	["vale", { configEligibility: "config-first", autoInstall: false }],
-	["swiftlint", { configEligibility: "smart-default", autoInstall: true }],
-	// typstyle is the default Typst formatter, so it carries the same
-	// smart-default/auto-install row its AUTO_INSTALLABLE_DEFAULT_FORMATTERS
-	// entry implies. The formatter path in `clients/formatters.ts` is what
-	// installs it; the row exists so the policy table does not disagree with the
-	// formatter table about a tool it names (#5418). The row states what already
-	// runs, and changes no install decision: whether typstyle should auto-install
-	// at all is an open product decision this branch deliberately leaves open.
-	["typstyle", { configEligibility: "smart-default", autoInstall: true }],
+	// config-first.
+	["opengrep", { configEligibility: "config-first" }],
+	["phpstan", { configEligibility: "config-first" }],
+	["eslint", { configEligibility: "config-first" }],
+	["prettier", { configEligibility: "smart-default" }],
+	["vale", { configEligibility: "config-first" }],
+	["swiftlint", { configEligibility: "smart-default" }],
+	["typstyle", { configEligibility: "smart-default" }],
 ]);
 
 const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([

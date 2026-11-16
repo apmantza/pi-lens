@@ -505,8 +505,6 @@ describe("#2981 long-lived containers are bounded or admitted", () => {
 		"clients/dispatch/runners/psscriptanalyzer.ts#psCmdLatch:d04c7adf",
 		"clients/dispatch/runners/psscriptanalyzer.ts#psAnalyzerLatchByCmd:d95a85ac",
 		"clients/dispatch/runners/rust-clippy.ts#makeClippyProbe:e3811ba4",
-		"clients/dispatch/runners/utils/lazy-installer.ts#LAZY_INSTALL_TIMEOUT_MS:d9d707ca",
-		"clients/dispatch/runners/utils/lazy-installer.ts#suppressionFor:d1456960",
 		"clients/dispatch/runners/utils/runner-helpers.ts#managedNodeToolCandidates:ee842ef8",
 		"clients/dispatch/runners/utils/runner-helpers.ts#managedBinaryVerdicts:85753e76",
 		"clients/extension-log.ts#consoleGuardInstalled:388c75ce",
