@@ -154,6 +154,10 @@ describe("Tool registry parity (#5418)", () => {
 		() => {
 			const { names, problems, scanned } = runnerCliCommands();
 			assertNonEmptyScan("runner CLI probe sites", names.size, 19);
+			// The floor alone lets a stray createAvailabilityChecker re-added to a
+			// folded runner pass (#5410 S2). Lower the ceiling when a later slice
+			// removes a name.
+			expect(names.size).toBeLessThanOrEqual(19);
 			const notInstallable = [...names.entries()]
 				.filter(([cli]) => !installerIds.has(cli))
 				.map(([cli, files]) => ({
