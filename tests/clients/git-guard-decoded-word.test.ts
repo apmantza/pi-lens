@@ -1194,6 +1194,45 @@ const ROWS: readonly Row[] = [
 		bash: "commit",
 		guard: true,
 	},
+	// #5652 r3 V2: a POSIX shell takes `-c` anywhere in a flag cluster. The
+	// switch match wanted a final `c`, so `bash -ce 'git push'` read as no
+	// command string (base and round 2 missed these).
+	{
+		row: "a -c flag cluster, bash -ce",
+		command: "bash -ce 'git push'",
+		bash: "push",
+		guard: true,
+	},
+	{
+		row: "a -c flag cluster, bash -cx",
+		command: "bash -cx 'git push'",
+		bash: "push",
+		guard: true,
+	},
+	{
+		row: "a -c flag cluster, sh -ce",
+		command: "sh -ce 'git commit -m x'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "a -c flag cluster, bash -eci",
+		command: "bash -eci 'git push'",
+		bash: "push",
+		guard: true,
+	},
+	{
+		row: "a -c flag cluster, bash -ceu",
+		command: "bash -ceu 'git push'",
+		bash: "push",
+		guard: true,
+	},
+	{
+		row: "a -c flag cluster, bash -ce, a harmless git",
+		command: "bash -ce 'git status'",
+		bash: null,
+		guard: false,
+	},
 ];
 
 /**
@@ -1656,6 +1695,44 @@ describe("reads a command string with the grammar that runs it (#5652 r2)", () =
 			"$e 'echo $(git push)'",
 		])
 			expect(guarded(command), command).toBe(true);
+	});
+
+	// #5652 r3 V1: round 2 spent a whole level on each launcher with a switch,
+	// so these ordinary ops chains reached the depth cap and refused for naming
+	// `commit` or `push`. Base reads each as false.
+	it("reads an ordinary launcher chain as base does", () => {
+		const refused = [
+			'ssh -t host sudo -u deploy docker exec -ti c sh -c "grep -r commit /var/log"',
+			"kubectl exec -it pod -n ns -- sh -c \"psql -c 'select 1 from push'\"",
+			"timeout 60 nice -n 5 ionice -c 3 xargs -n 1 -P 4 sh -c 'echo commit message'",
+			'kubectl exec -n prod deploy/api -c app -- sh -c "tail -n 50 /var/log/push.log"',
+			"sudo -u ci env -i PATH=/usr/bin nice -n 10 timeout -s KILL 300 sh -c 'make release-notes TOPIC=push'",
+			"ssh -t h sudo -u d docker exec -ti c sh -c 'kubectl exec -it p -- sh -c \"echo push\"'",
+			'docker compose -f x.yml exec -T app sh -c "npm run build && echo pushed"',
+			"docker run --rm -e MODE=push -v $PWD:/w -w /w node:22 sh -c 'npm ci && npm test -- --grep commit'",
+		].filter(
+			(command) =>
+				guarded(command) || isWorktreeMutatingGitAttempt("bash", { command }),
+		);
+		expect(refused).toEqual([]);
+	});
+
+	it("ends the read of a long launcher chain", () => {
+		// A launcher's value costs an eighth of a level: none at all read this
+		// 3000-term `find` 3000 levels deep, past the stack.
+		const find = `find . -name a${" -o -name a".repeat(3000)}`;
+		expect(guarded(find)).toBe(false);
+	});
+
+	it("keeps the PowerShell switch a cluster ending in c", () => {
+		// `-NonInteractive` holds a `c`: read as the switch, it would make
+		// `-File`'s arguments a command string.
+		expect(
+			guarded('pwsh -NonInteractive -File deploy.ps1 -Message "git push"'),
+		).toBe(false);
+		expect(guarded('pwsh -NonInteractive -Command "git commit -m x"')).toBe(
+			true,
+		);
 	});
 
 	it("refuses past depth 3 in both guards", () => {

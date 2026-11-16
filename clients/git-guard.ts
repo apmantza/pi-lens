@@ -793,16 +793,28 @@ export function collectGitInvocations(
 type CommandStringReader = "bash" | "posix-c" | "text" | "windows-shell";
 
 /**
+ * What a `text` command string costs of the depth a shell's string spends
+ * whole (#5652 r3). A chain of launchers (`ssh -t h sudo -u u docker exec -ti
+ * c sh -c '…'`) is ordinary and reads one `text` level per switch, so a whole
+ * level each would end the read at the fourth launcher and refuse it. None at
+ * all would read `find` with a thousand `-o` terms a thousand levels deep:
+ * quadratic, and past the stack. An eighth ends the read after 24 launchers.
+ */
+const TEXT_LEVEL = 1 / 8;
+
+/**
  * A command string is a shell's, so its words are lexed again as one (the
  * decoded text of each word, joined): `bash -c $'git\x20push'` reads
- * `git push` (#4739 round 5).
+ * `git push` (#4739 round 5). `callerDepth` is the caller's level; the string
+ * is read one shell level deeper, or {@link TEXT_LEVEL} deeper as `text`.
  */
 function commandStringHasGuardedVerb(
 	words: readonly DecodedShellWord[],
-	depth: number,
+	callerDepth: number,
 	matcher: GitVerbMatcher,
 	reader: CommandStringReader,
 ): boolean {
+	const depth = callerDepth + (reader === "text" ? TEXT_LEVEL : 1);
 	// PowerShell and cmd read their own whitespace: Char.IsWhiteSpace, which
 	// holds NBSP, U+0085, the Unicode spaces, CR, VT and FF
 	// (CharTraits.IsWhitespace in the PowerShell parser). Bash's blanks apply
@@ -869,7 +881,7 @@ function hidesGuardedVerb(
 				(word) =>
 					(firstHidden === 0 && word.hidden) ||
 					matcher.matchesVerb(word.text, []) ||
-					commandStringHasGuardedVerb([word], depth + 1, matcher, "text"),
+					commandStringHasGuardedVerb([word], depth, matcher, "text"),
 			)
 	);
 }
@@ -907,7 +919,7 @@ function containsGuardedGitVerb(
 		if (runIndex >= 0 && runIndex + 1 < commandTokens.length) {
 			return commandStringHasGuardedVerb(
 				commandWords.slice(runIndex + 2),
-				depth + 1,
+				depth,
 				matcher,
 				"bash",
 			);
@@ -937,7 +949,7 @@ function containsGuardedGitVerb(
 		evalIndex >= 0 &&
 		commandStringHasGuardedVerb(
 			commandWords.slice(evalIndex + 1),
-			depth + 1,
+			depth,
 			matcher,
 			evalIndex === 0 ? "bash" : "text",
 		)
@@ -987,18 +999,25 @@ function containsGuardedGitVerb(
 		if (commandIndex >= commandTokens.length) return false;
 		return commandStringHasGuardedVerb(
 			commandWords.slice(commandIndex),
-			depth + 1,
+			depth,
 			matcher,
 			"text",
 		);
 	}
+	const windowsShell = ["pwsh", "powershell", "cmd"].includes(
+		executableName(leadingExecutable),
+	);
+	// A POSIX shell takes `-c` anywhere in a flag cluster (`bash -ce`, `-eci`,
+	// #5652 r3). PowerShell options hold a `c` too (`-noninteractive`), so
+	// there only a cluster ending in `c` is the switch.
+	const commandCluster = windowsShell ? /^-[^-]*c$/ : /^-[^-]*c[^-]*$/;
 	const lower = commandTokens.slice(1).map((token) => token.toLowerCase());
 	const switchIndex = lower.findIndex(
 		(token) =>
 			token === "-c" ||
 			token === "--run" ||
 			token === "-lc" ||
-			(/^-[^-]*c$/.test(token) && !token.startsWith("--")) ||
+			(commandCluster.test(token) && !token.startsWith("--")) ||
 			token === "/c" ||
 			token === "-command" ||
 			token === "-command:" ||
@@ -1016,11 +1035,9 @@ function containsGuardedGitVerb(
 	if (commandTokens[commandIndex] === "--") commandIndex += 1;
 	return commandStringHasGuardedVerb(
 		commandWords.slice(commandIndex),
-		depth + 1,
+		depth,
 		matcher,
-		["pwsh", "powershell", "cmd"].includes(executableName(leadingExecutable))
-			? "windows-shell"
-			: "posix-c",
+		windowsShell ? "windows-shell" : "posix-c",
 	);
 }
 
