@@ -225,13 +225,6 @@ export interface RunnerConfig {
 	 * only the notice on stdout when `--outputFile` is passed (#5270).
 	 */
 	reportToFile?: boolean;
-	/**
-	 * #5410 D2: the PATH file detection admitted when no project config names
-	 * the runner (pytest's last rung). The run starts this file unless the
-	 * project interpreter has its own install, so detection and the run never
-	 * name different binaries.
-	 */
-	detectedBinary?: string;
 }
 
 // Discovery table; exported so the #2928 parity test enumerates its conventions.
@@ -685,6 +678,30 @@ export const RUNNERS: Record<string, RunnerConfig> = {
  * `["test", "-run", …]`, rspec's `["exec", "rspec", file]` once binName is
  * "bundle", etc.) is a real subcommand/argv and is returned unchanged (#1098).
  */
+/**
+ * #5410 D2: the PATH `pytest` file both detection and the run answer from, or
+ * null. `findCommandOnPath` walks PATH without a spawn and refuses a project
+ * entry until pi trusts the project. On POSIX a file without the execute bit
+ * is no answer (exec would refuse it). A relative PATH entry is anchored at
+ * the cwd the walk read it from, never the child's cwd.
+ */
+function findPathPytest(): string | null {
+	const isWindows = process.platform === "win32";
+	const found = findCommandOnPath("pytest", isWindows);
+	if (!found) return null;
+	if (!isWindows) {
+		try {
+			fs.accessSync(found, fs.constants.X_OK);
+		} catch {
+			// none: EACCES is the verdict itself, a pytest exec cannot start.
+			return null;
+		}
+	}
+	return isAbsoluteFilePath(found)
+		? found
+		: `${process.cwd()}${path.sep}${found}`;
+}
+
 export function stripWrapperArgs(binName: string, args: string[]): string[] {
 	if (args[0] === binName) return args.slice(1);
 	if (args[0] === "-m" && args[1] === binName) return args.slice(2);
@@ -1075,18 +1092,11 @@ export class TestRunnerClient {
 			typeof sourceFilePath === "string" && sourceFilePath.endsWith(".py");
 		if (!isPythonSource) return null;
 
-		// #5410 D2: a PATH walk (no spawn) that refuses a project entry until pi
-		// trusts the project; the file it admits is the one the run starts.
-		const detectedBinary = findCommandOnPath(
-			"pytest",
-			process.platform === "win32",
-		);
-		if (detectedBinary) {
-			this.log(`Detected pytest on PATH: ${detectedBinary}`);
-			return {
-				runner: "pytest",
-				config: { ...RUNNERS.pytest, detectedBinary },
-			};
+		// #5410 D2: `resolveExec` runs this answer when the project has no
+		// Python environment.
+		if (findPathPytest()) {
+			this.log("Detected pytest on PATH");
+			return { runner: "pytest", config: RUNNERS.pytest };
 		}
 
 		return null;
@@ -3565,20 +3575,7 @@ export class TestRunnerClient {
 			const pythonEnvironment = await detectPythonEnvironment(cwd, undefined, {
 				allowAmbient: !requireOwnInstall,
 			});
-			// #5410 D2: a PATH-detected pytest runs through the interpreter only
-			// when that environment installs pytest itself (pip writes the
-			// `pytest` script into its bin dir); otherwise `-m pytest` fails with
-			// "No module named pytest", so the admitted PATH file runs instead.
-			if (
-				pythonEnvironment &&
-				(config.detectedBinary === undefined ||
-					fs.existsSync(
-						path.join(
-							pythonEnvironment.binDir,
-							process.platform === "win32" ? "pytest.exe" : "pytest",
-						),
-					))
-			) {
+			if (pythonEnvironment) {
 				return {
 					command: pythonEnvironment.pythonPath,
 					args: config.args(testFile, spawnCwd),
@@ -3586,10 +3583,25 @@ export class TestRunnerClient {
 					ownInstall: true,
 				};
 			}
-			if (config.detectedBinary !== undefined) {
+			// #5410 D2: with no project environment, the pytest on PATH (the file
+			// detection admits, trust-scoped) runs, not a bare `python -m pytest`.
+			// Resolved here, where every target executes, so a deferred re-run
+			// built from `RUNNERS` takes the same binary as a fresh one.
+			const pathPytest = findPathPytest();
+			if (pathPytest) {
+				// `python -m pytest` puts its cwd on `sys.path`; the console script
+				// does not, so the spawn cwd goes first on PYTHONPATH and a root
+				// module imports as it did under `-m`.
+				const pythonPath = process.env.PYTHONPATH;
 				return {
-					command: config.detectedBinary,
+					command: pathPytest,
 					args: stripWrapperArgs("pytest", config.args(testFile, spawnCwd)),
+					env: {
+						...process.env,
+						PYTHONPATH: pythonPath
+							? `${spawnCwd}${path.delimiter}${pythonPath}`
+							: spawnCwd,
+					},
 					ownInstall: false,
 				};
 			}

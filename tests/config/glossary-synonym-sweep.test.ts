@@ -1613,9 +1613,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 74 -> 72 (#4689 batch 2): two `path.resolve` locals dropped from the root and
 		// failed-target keys.
 		// 68 -> 70 (#5257): the per-run report scratch path (`reportDir`, `reportPath`).
-		// 70 -> 71 (#5410 D2): `path.join` of the environment's own `pytest`
-		// script, which decides whether the interpreter or the PATH pytest runs.
-		"clients/test-runner-client.ts": 71,
+		// 70 -> 72 (#5410 D2): the PATH pytest's spawn root on PYTHONPATH and
+		// its relative PATH entry anchored at the cwd the walk read.
+		"clients/test-runner-client.ts": 72,
 		"clients/todo-scanner.ts": 3,
 		// 4 -> 10 (#3655): the Node lockfile walk-up and supplier selection
 		// resolve pnpm/yarn evidence through `path.join`, `path.relative`,
