@@ -680,7 +680,7 @@ export interface LocalBinWalkOptions {
 	 * own extension first, then `windowsExt`; an unmapped dir tries `windowsExt`
 	 * alone. Absent, every dir takes `windowsExt` (#5410 S1 F2).
 	 */
-	readonly binDirWindowsExt?: Readonly<Record<string, string>>;
+	readonly binDirWindowsExt?: Readonly<Record<string, string>> | undefined;
 	/** HOME ceiling; injectable so tests never touch the real home. */
 	readonly homeDir?: string;
 	/**
