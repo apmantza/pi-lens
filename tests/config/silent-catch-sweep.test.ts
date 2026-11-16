@@ -1195,10 +1195,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :48, :73
 	"clients/test-runner-client.ts": {
-		silent: 14,
-		identities: "4cdcaf420967db23",
+		silent: 13,
+		identities: "56ba424651013754",
 		reason: PRE_RULE,
-	}, // :358, :1071, :1121, :1137, :1181, :1211, :1256, :1355, :1556, :1962, :2043, :2310, :3458, :3467
+	}, // :367, :1138, :1154, :1198, :1228, :1273, :1372, :1573, :1982, :2063, :2330, :3492, :3501
 	"clients/test-runner-delivery.ts": {
 		silent: 3,
 		identities: "4cdd627d04c0d6e1",
@@ -1423,7 +1423,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 // so the sweep reads it as recorded and `report-scan.ts` admits no row.
 // 1165 -> 1163 (refs #4907): the raw-realpath fold deleted `toRealPath`'s handler
 // in `probe-home-state.ts` and `canonicalDirectory`'s in `git-identity.ts`.
-const PINNED_TOTAL = 1163;
+// 1163 -> 1162 (#5410 D2): `detectRunner`'s `which pytest` spawn and its
+// handler became a PATH walk that does not throw.
+const PINNED_TOTAL = 1162;
 
 interface Census {
 	byFile: Map<string, CatchSite[]>;
