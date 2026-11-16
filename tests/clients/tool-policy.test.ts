@@ -1468,6 +1468,23 @@ describe("tool-policy", () => {
 			windowsExt: ".cmd",
 			managedToolId: "prettier",
 		});
+		// #5410 (#5685 review F5): the three client CLIs the clients now resolve
+		// through the registry. jscpd's old checker had a 1.5 s probe budget and
+		// no Windows launcher extension; npm writes a `.cmd` shim for it.
+		expect(getToolCommandSpec("jscpd")).toMatchObject({
+			command: "jscpd",
+			windowsExt: ".cmd",
+			probeTimeoutMs: 1500,
+			managedToolId: "jscpd",
+		});
+		expect(getToolCommandSpec("knip")).toMatchObject({
+			windowsExt: ".cmd",
+			managedToolId: "knip",
+		});
+		expect(getToolCommandSpec("madge")).toMatchObject({
+			windowsExt: ".cmd",
+			managedToolId: "madge",
+		});
 		expect(getToolCommandSpec("unknown-tool")).toBeUndefined();
 	});
 });

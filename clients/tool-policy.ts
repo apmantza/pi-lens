@@ -1391,6 +1391,26 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 		},
 	],
 	[
+		// The prisma-validate runner's CLI. No managedToolId: the installer has no
+		// `prisma` entry and pi-lens never installs it (#5410 D8).
+		"prisma",
+		{
+			command: "prisma",
+			windowsExt: ".cmd",
+			versionArgs: ["--version"],
+		},
+	],
+	[
+		// Vite+'s `vp`, which the oxlint runner prefers when the project uses it.
+		// No managedToolId: the installer has no `vp` entry (#5410 F4).
+		"vp",
+		{
+			command: "vp",
+			windowsExt: ".cmd",
+			versionArgs: ["--version"],
+		},
+	],
+	[
 		"htmlhint",
 		{
 			command: "htmlhint",
@@ -1415,6 +1435,39 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 			windowsExt: ".cmd",
 			versionArgs: ["--version"],
 			managedToolId: "prettier",
+		},
+	],
+	// The Node-CLI analyzers the clients (not a runner) own: madge, jscpd and
+	// knip ask the same ladder for "is it usable" (#5410, #5666 item 1). Each
+	// is its installer entry and its binary name; `.cmd` is the npm launcher,
+	// unprobed on Windows. jscpd's `--version` is a cold-start Node load, so its
+	// budget is the 1.5 s its private checker carried.
+	[
+		"madge",
+		{
+			command: "madge",
+			windowsExt: ".cmd",
+			versionArgs: ["--version"],
+			managedToolId: "madge",
+		},
+	],
+	[
+		"jscpd",
+		{
+			command: "jscpd",
+			windowsExt: ".cmd",
+			versionArgs: ["--version"],
+			managedToolId: "jscpd",
+			probeTimeoutMs: 1500,
+		},
+	],
+	[
+		"knip",
+		{
+			command: "knip",
+			windowsExt: ".cmd",
+			versionArgs: ["--version"],
+			managedToolId: "knip",
 		},
 	],
 	// The formatter binaries (#5410): the formatters resolve these through the

@@ -27,6 +27,12 @@ measured, never zero: **respawn** is whether the next request after eviction
 brought the server back, **coverage** is whether the respawned server kept
 every baseline finding.
 
+The rows are the published answer, not one night's reading (#5667): a row's
+`result`, `reason`, `respawn` and `coverage` change together, and only after
+two consecutive nights measure the same new row. A night that could not spawn
+a server (`unavailable`) leaves its row as it was. The pending night is kept
+in the capability matrix's refresh-state block (`idle-eviction-doc`).
+
 A server that reports extra findings after the respawn (`widened`) still reads
 `preserved`, because nothing was lost, but a first scan that grows on respawn
 is a sign the baseline was partial. Any policy flip needs `preserved` on

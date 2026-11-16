@@ -145,6 +145,8 @@ describe("renderIdleEvictionDoc", () => {
 				declared: "transparent",
 				result: "eligible",
 				reason: undefined,
+				respawn: "ok",
+				coverage: "preserved",
 			},
 			{
 				serverId: "bravo",
@@ -152,6 +154,8 @@ describe("renderIdleEvictionDoc", () => {
 				declared: "unmeasured",
 				result: "eligible",
 				reason: undefined,
+				respawn: "ok",
+				coverage: "preserved",
 			},
 			{
 				serverId: "charlie",
@@ -159,6 +163,8 @@ describe("renderIdleEvictionDoc", () => {
 				declared: "resident",
 				result: "vetoed",
 				reason: "findings-narrowed",
+				respawn: "ok",
+				coverage: "narrowed",
 			},
 			{
 				serverId: "delta",
@@ -166,6 +172,8 @@ describe("renderIdleEvictionDoc", () => {
 				declared: "unmeasured",
 				result: "unavailable",
 				reason: "tool-unavailable",
+				respawn: "n/a",
+				coverage: "n/a",
 			},
 			{
 				serverId: "echo",
@@ -173,6 +181,8 @@ describe("renderIdleEvictionDoc", () => {
 				declared: "unmeasured",
 				result: "unavailable",
 				reason: "budget-exhausted",
+				respawn: "n/a",
+				coverage: "n/a",
 			},
 		]);
 		expect(parseIdleEvictionDoc("# nothing here\n")).toBeNull();
@@ -304,6 +314,16 @@ describe("buildIdleEvictionDriftBody", () => {
 		expect(body).not.toContain("**b**");
 		expect(body).toContain("Workflow run: https://example.test/run/1");
 		expect(body).toContain("closed automatically");
+	});
+
+	// #5667 review Q4: the drift issue reads the MEASURED rows, while the doc
+	// shows the prior row until two nights agree, so a first-night veto must not
+	// send the reader to a doc row that contradicts the issue.
+	it("says the doc shows the prior row while a change is pending and points at the raw measurement", () => {
+		const body = buildIdleEvictionDriftBody([finding("a", "drift")]) ?? "";
+		expect(body).toContain("two nights agree");
+		expect(body).toContain("step log");
+		expect(body).not.toContain("The per-server rows are in");
 	});
 
 	it("keeps a stable title, because the tracking issue is found by exact title", () => {

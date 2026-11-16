@@ -217,8 +217,13 @@ export interface TouchFileResult {
 	 * which is about silence rather than a reused observation). Auxiliary
 	 * contributors never appear: their answers are file-local, so an edit to
 	 * another file cannot invalidate them (#1720).
+	 *
+	 * `rechecks` (#5675): the server is declared to check unchanged bytes again
+	 * and publish for them (`resendRecheck: "rechecks"`, #4782), so sending the
+	 * document once more is a request it answers. Absent for every other server:
+	 * a re-send there would empty this very answer with none coming.
 	 */
-	reusedAnswer?: { serverId: string; publishedAt: number };
+	reusedAnswer?: { serverId: string; publishedAt: number; rechecks?: true };
 	binding?: DiagnosticBinding;
 }
 

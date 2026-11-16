@@ -39,6 +39,7 @@ import { isMainModule } from "./lib/is-main-module.mjs";
 
 export const BOT_BRANCH = "bot/lsp-docs-refresh";
 export const MATRIX_DOC = "docs/lsp-capability-matrix.md";
+export const IDLE_DOC = "docs/lsp-idle-eviction.md";
 const BOT_REF = `refs/remotes/origin/${BOT_BRANCH}`;
 
 /**
@@ -125,22 +126,39 @@ export function seedMatrixFromBotBranch(deps = {}) {
 			reason: `bot branch absent or unreachable (${firstLine})`,
 		});
 	}
-	const decision = decideMatrixSeed({
-		masterBlob: blob(`HEAD:${MATRIX_DOC}`),
-		botBlob: blob(`${BOT_REF}:${MATRIX_DOC}`),
-		botBaseBlob: blob(`${BOT_REF}^:${MATRIX_DOC}`),
-	});
-	if (decision.source === "bot") {
+	// One doc's decision and, when the bot branch wins, its restore. Fail-open:
+	// an unreadable bot doc leaves master's.
+	const seedDoc = (doc) => {
+		const decision = decideMatrixSeed({
+			masterBlob: blob(`HEAD:${doc}`),
+			botBlob: blob(`${BOT_REF}:${doc}`),
+			botBaseBlob: blob(`${BOT_REF}^:${doc}`),
+		});
+		if (decision.source !== "bot") return decision;
 		try {
-			const text = git(["show", `${BOT_REF}:${MATRIX_DOC}`], { cwd });
-			writeFile(path.join(cwd, MATRIX_DOC), text);
+			writeFile(
+				path.join(cwd, doc),
+				git(["show", `${BOT_REF}:${doc}`], { cwd }),
+			);
 		} catch (error) {
-			return done({
+			return {
 				source: "master",
 				reason: `bot doc unreadable (${String(error?.message ?? error).split("\n")[0]})`,
-			});
+			};
 		}
-	}
+		return decision;
+	};
+	const decision = seedDoc(MATRIX_DOC);
+	// #5667: the idle-eviction doc is the published row the matrix's pending
+	// `idle-eviction-doc` flips are held against, so it is restored on its own
+	// decision, never gated on the matrix's. The flip-commit night clears the
+	// pending flip and leaves the matrix at master's exact bytes: the next
+	// night's matrix decision is `master`, and a restore gated on it would
+	// drop the committed row and flip it back every other night while the
+	// refresh PR stays unmerged. Its staleness check stays: a bot branch built
+	// before master's idle doc changed (merged, hand-edited) must not revert it.
+	const idle = seedDoc(IDLE_DOC);
+	log(`idle-eviction doc seed: using ${idle.source} doc (${idle.reason})`);
 	return done(decision);
 }
 

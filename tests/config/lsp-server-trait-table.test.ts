@@ -223,7 +223,7 @@ describe("#1756 stage 1 — declared server trait table", () => {
 			LSP_SERVERS.length,
 			30,
 		);
-		expect(rechecks).toEqual(["python", "typescript"]);
+		expect(rechecks).toEqual(["java", "python", "typescript"]);
 		// #4829 verify r3 F5: the re-send's model (DependencyResend.cfg) sets
 		// `Drain = FALSE` because the phase drains only `single-task-ordered`
 		// clients. A re-checking row that turned ordered would drain, and the

@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { applyTextEditsToString } from "../../clients/lsp/edits.js";
 import {
 	HOST_BOM_CODE_POINT,
 	HOST_EDIT_DIFF_SDK_FLOOR,
@@ -139,6 +140,125 @@ describe("host-edit-normalize sync (host source drift guard)", () => {
 				{ matchIndex: 6, matchLength: 3, newText: "new\nline" },
 			]),
 		).toBe("first\nnew\r\nline\r\nlast\r\n");
+		// #5670 review r1 (F3): a host reverted to whole-file CRLF detection passes
+		// the case above, because its edited line also ends in CRLF. This case edits
+		// an LF line in a mixed-ending file, so that revert reds here.
+		expect(
+			host.applyReplacementsToOriginal("a\r\nold\nz\r\n", [
+				{ matchIndex: 2, matchLength: 3, newText: "new\nline" },
+			]),
+		).toBe("a\r\nnew\nline\nz\r\n");
+	});
+
+	it("an LSP edit and the host edit tool agree on the line ending of mixed-ending files", async () => {
+		// #5670 r2: pi-lens used the file's first ending for every edit while pi 1.5.2
+		// takes the ending of the line where the replaced range starts. Each case is
+		// run through the host's applyReplacementsToOriginal and through
+		// applyTextEditsToString, and both must produce the literal expected text.
+		const host = await import(
+			pathToFileURL(path.join(hostPackageDir(), "dist/core/tools/edit-diff.js"))
+				.href
+		);
+		type Pos = { line: number; character: number };
+		const cases: Array<{
+			name: string;
+			content: string;
+			start: Pos;
+			end: Pos;
+			newText: string;
+			expected: string;
+		}> = [
+			{
+				name: "CRLF line in an LF-first file",
+				content: "a\nx\r\nc\r\n",
+				start: { line: 1, character: 1 },
+				end: { line: 1, character: 1 },
+				newText: "\ny",
+				expected: "a\nx\r\ny\r\nc\r\n",
+			},
+			{
+				name: "LF line in a CRLF-first file",
+				content: "a\r\nx\nc\n",
+				start: { line: 1, character: 1 },
+				end: { line: 1, character: 1 },
+				newText: "\ny",
+				expected: "a\r\nx\ny\nc\n",
+			},
+			{
+				name: "range that starts on an LF line and ends on a CRLF line",
+				content: "a\nb\r\nc\r\n",
+				start: { line: 0, character: 1 },
+				end: { line: 1, character: 1 },
+				newText: "\nq\nr",
+				expected: "a\nq\nr\r\nc\r\n",
+			},
+			{
+				name: "range that starts on a CRLF line and ends on an LF line",
+				content: "a\r\nb\nc\n",
+				start: { line: 0, character: 1 },
+				end: { line: 1, character: 1 },
+				newText: "\nq\nr",
+				expected: "a\r\nq\r\nr\nc\n",
+			},
+			{
+				name: "unterminated last line after a CRLF line",
+				content: "a\nb\r\nc",
+				start: { line: 2, character: 1 },
+				end: { line: 2, character: 1 },
+				newText: "\nd",
+				expected: "a\nb\r\nc\r\nd",
+			},
+			{
+				name: "unterminated last line after an LF line",
+				content: "a\r\nb\nc",
+				start: { line: 2, character: 1 },
+				end: { line: 2, character: 1 },
+				newText: "\nd",
+				expected: "a\r\nb\nc\nd",
+			},
+			{
+				name: "insert after the final CRLF of a mixed file",
+				content: "a\nb\r\n",
+				start: { line: 2, character: 0 },
+				end: { line: 2, character: 0 },
+				newText: "x\ny",
+				expected: "a\nb\r\nx\r\ny",
+			},
+			{
+				name: "pure LF",
+				content: "a\nb\n",
+				start: { line: 0, character: 1 },
+				end: { line: 0, character: 1 },
+				newText: "\nx",
+				expected: "a\nx\nb\n",
+			},
+			{
+				name: "pure CRLF",
+				content: "a\r\nb\r\n",
+				start: { line: 0, character: 1 },
+				end: { line: 0, character: 1 },
+				newText: "\nx",
+				expected: "a\r\nx\r\nb\r\n",
+			},
+		];
+		for (const c of cases) {
+			const lines = host.normalizeToLF(c.content).split("\n") as string[];
+			const offset = (p: Pos) =>
+				lines.slice(0, p.line).reduce((n, l) => n + l.length + 1, 0) +
+				p.character;
+			const fromHost = host.applyReplacementsToOriginal(c.content, [
+				{
+					matchIndex: offset(c.start),
+					matchLength: offset(c.end) - offset(c.start),
+					newText: c.newText,
+				},
+			]);
+			const fromLsp = applyTextEditsToString(c.content, [
+				{ range: { start: c.start, end: c.end }, newText: c.newText },
+			]);
+			expect(fromHost, "host: " + c.name).toBe(c.expected);
+			expect(fromLsp, "lsp: " + c.name).toBe(c.expected);
+		}
 	});
 
 	it("host still delegates BOM stripping to splitBom, and splitBom matches our vendored copy", () => {

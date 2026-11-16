@@ -22,10 +22,9 @@ import { safeSpawnAsync } from "./safe-spawn.js";
 import { compareOrdinal } from "./string-utils.js";
 import { getIsolatedNpxSpawnOptions } from "./tool-probe.js";
 import {
-	createAvailabilityChecker,
 	discoverManagedTool,
-	getManagedToolEnvironment,
-	resolveAvailableOrInstall,
+	resolveToolCommandWithInstallFallback,
+	toolBinaryVerdict,
 } from "./dispatch/runners/utils/runner-helpers.js";
 import {
 	type AvailabilityCause,
@@ -314,15 +313,6 @@ export { mapWithConcurrency };
 // --- Client ---
 
 export class DependencyChecker {
-	private readonly madgeAvailability = createAvailabilityChecker(
-		"madge",
-		".cmd",
-		["--version"],
-		{
-			environment: (cwd) => getManagedToolEnvironment("madge", cwd),
-			unclassifiedFailureOutcome: "missing",
-		},
-	);
 	/** Transient-aware availability memo — see `ensureAvailable` (#1467). */
 	private readonly availabilityLatch = createAvailabilityLatch();
 	private ensureInFlight: Promise<boolean> | null = null;
@@ -523,16 +513,12 @@ export class DependencyChecker {
 	}
 
 	private async doEnsureAvailable(cwd: string): Promise<boolean> {
-		const resolved = await resolveAvailableOrInstall(
-			this.madgeAvailability,
-			"madge",
-			cwd,
-		);
+		const resolved = await resolveToolCommandWithInstallFallback(cwd, "madge");
 		if (resolved !== null) {
 			this.availabilityLatch.noteAvailable();
 			return true;
 		}
-		const verdict = this.madgeAvailability.getVerdict(cwd);
+		const verdict = toolBinaryVerdict("madge", cwd);
 		this.availabilityLatch.noteUnavailable(
 			verdict.outcome ?? "missing",
 			verdict.cause ?? "not-found",
