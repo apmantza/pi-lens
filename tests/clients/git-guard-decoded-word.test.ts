@@ -1040,6 +1040,44 @@ const ROWS: readonly Row[] = [
 		bash: "push",
 		guard: true,
 	},
+	// The word tokenizer read the same `)` as a comment boundary and dropped the
+	// rest of the line, a plain commit after `;` included.
+	{
+		row: "a $() close before a hash, then a plain commit after a semicolon",
+		command: "echo $(true)#;git commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "a $(( )) close before a hash, then a plain commit after a semicolon",
+		command: "echo $((1))#;git commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "a process substitution close before a hash, then a plain commit",
+		command: "echo <(true)#;git commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "a nested $() close before a hash, then a plain commit",
+		command: "echo $(echo $(true))#;git commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "a subshell close before a hash is a comment, a commit after it is text",
+		command: "(true)#;git commit -m x",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "a $() close before a hash, then a commit in a bash -c body",
+		command: "echo $(true)#;sh -c 'git commit -m x'",
+		bash: "commit",
+		guard: true,
+	},
 	{
 		row: "a $() close, a blank, then a hash is a comment",
 		command: "echo $(true) #$(git commit -m x)",

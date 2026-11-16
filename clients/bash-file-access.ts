@@ -793,6 +793,10 @@ function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 	let escapeKept = false;
 	let unsupported = false;
 	let atTokenStart = true;
+	// Each open `(` of the command, true for one that opens a `$(…)`, `<(…)` or
+	// `>(…)`: the `)` that closes it ends no word, so a `#` after it is no
+	// comment (#5652).
+	const openParens: boolean[] = [];
 	let segmentStart = 0;
 	let grouping = false;
 	let input = false;
@@ -1060,11 +1064,18 @@ function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 		if ((ch === "(" || ch === ")") && !escapeKept) {
 			const opensSubstitution =
 				ch === "(" && part?.kind === "unquoted" && part.text.endsWith("$");
+			const closesSubstitution =
+				ch === ")" ? openParens.pop() === true : undefined;
+			if (ch === "(")
+				openParens.push(
+					opensSubstitution || command[i - 1] === "<" || command[i - 1] === ">",
+				);
 			if (!opensSubstitution) {
 				flushWord();
 				word = ch;
 				addToPart("unquoted", ch);
 				flushWord();
+				if (closesSubstitution) atTokenStart = false;
 				escapeKept = false;
 				continue;
 			}
