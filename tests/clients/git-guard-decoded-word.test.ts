@@ -53,6 +53,12 @@ interface Row {
 	guard: boolean;
 }
 
+/** `body` inside `levels` nested `bash -c`, each level single-quoted. */
+const nestedBashC = (levels: number, body: string): string =>
+	levels === 0
+		? body
+		: nestedBashC(levels - 1, `bash -c '${body.replace(/'/g, "'\\''")}'`);
+
 /** The acceptance spellings, and the fail-closed rows, one per rule clause. */
 const ROWS: readonly Row[] = [
 	{ row: "plain", command: "git push", bash: "push", guard: true },
@@ -1096,6 +1102,91 @@ const ROWS: readonly Row[] = [
 		bash: "commit",
 		guard: true,
 	},
+	// #5652 r2 F4 (CodeRabbit): a POSIX `-c` lexes its one body word; the words
+	// after it are `$0` and the positional parameters, whose text never runs as
+	// a substitution. Round 1 scanned them joined to the body.
+	{
+		row: "bash -c, a substitution in a positional parameter is text",
+		command: "bash -c 'echo ok' '$(git commit -m x)'",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "bash -c, an apostrophe in a positional parameter is text",
+		command: 'bash -c \'echo "$1"\' _ "don\'t commit this"',
+		bash: null,
+		guard: false,
+	},
+	// The body reads its parameters through `"$@"` and `eval "$1"`: the word walk
+	// still reads the words after the body (CodeRabbit's one-word slice of the
+	// whole string misses these).
+	{
+		row: "bash -c runs its parameters as a command",
+		command: "bash -c '\"$@\"' _ git commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "bash -c evals a parameter holding a substitution",
+		command: "bash -c 'eval \"$1\"' _ 'echo $(git commit -m x)'",
+		bash: "commit",
+		guard: true,
+	},
+	// An option word after `-c` leaves the body word unknown: the rest is read.
+	{
+		row: "bash -c, then an option and its value before the body",
+		command: "bash -c -o pipefail 'echo \"$(git commit -m x)\"'",
+		bash: "commit",
+		guard: true,
+	},
+	// #5652 r2: the incomplete-read refusal stays where bash reads the string. A
+	// here-doc ending at `EOF)` leaves the read incomplete, and bash commits.
+	{
+		row: "bash -c body, a here-doc closing its $() leaves the read incomplete",
+		command:
+			"bash -c 'echo $(cat <<EOF\nbody git commit\nEOF)#;git commit -m z'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "eval body, a here-doc closing its $() leaves the read incomplete",
+		command: "eval 'echo $(cat <<EOF\nbody git commit\nEOF)#;git commit -m z'",
+		bash: "commit",
+		guard: true,
+	},
+	// #5652 r2 F2 (Qodo): past depth 3 the gate read nothing and passed. It now
+	// answers as for an incomplete read. Round 1 turned the `)#` row into a miss:
+	// base caught it only through the `)#` misread.
+	{
+		row: "four nested bash -c levels",
+		command: nestedBashC(4, "git commit -m x"),
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "five nested bash -c levels",
+		command: nestedBashC(5, "git commit -m x"),
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "five nested bash -c levels, a harmless git",
+		command: nestedBashC(5, "git status"),
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "eval inside two $() levels, then sh -c",
+		command: 'echo $(echo $(eval "sh -c \\"git commit -m x\\""))',
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "eval inside two $() levels, then sh -c, a hash after the inner close",
+		command: 'echo $(echo $(eval "sh -c \\"git commit -m x\\"")#)',
+		bash: "commit",
+		guard: true,
+	},
 ];
 
 /**
@@ -1470,6 +1561,111 @@ describe.skipIf(process.platform === "win32")(
 		}, 60_000);
 	},
 );
+
+/**
+ * #5652 r2 F1: ordinary commands whose text is no command bash runs. Round 1
+ * refused each of the first eleven: an apostrophe or a PowerShell backtick left
+ * the bash read of a switch value, a word after an unread word, a later `eval`
+ * or a PowerShell or cmd string incomplete, and the incomplete-read refusal
+ * fired on `push` or `commit` anywhere in it. The rest are the review's
+ * ordinary agent commands. String-level: `gh`, `npm` and `rg` must not run here,
+ * and the rows run on Windows too.
+ */
+const ORDINARY: readonly string[] = [
+	'gh pr comment 12 --body "Don\'t push yet"',
+	'gh pr comment 12 --body "can\'t merge yet"',
+	'gh pr comment 12 --body "won\'t pull"',
+	'gh pr comment 12 --body "don\'t checkout main"',
+	'npm run foo -- --msg "can\'t push"',
+	'rg --glob "*.ts" "don\'t commit"',
+	'notify-send $T "Don\'t forget to push"',
+	'sudo -u me gh pr comment 3 -b "can\'t push"',
+	'npm run eval -- --note "it\'s a push"',
+	"pwsh -Command 'Write-Output \"a`nb commit\"'",
+	'cmd /c "echo it\'s push day"',
+	'bash -c \'echo "$1"\' _ "don\'t commit this"',
+	'sh -c \'echo "$1"\' sh "it\'s push day"',
+	"bash -c 'cd repo && npm test'",
+	"bash -c 'for f in *.ts; do echo \"$f\"; done'",
+	"bash -c 'echo $(date)'",
+	"bash -c 'echo $(pwd) && ls'",
+	"bash -c 'cat <<EOF\nhello $(whoami)\nEOF'",
+	"bash -c 'case \"$1\" in a) echo a;; b) echo b;; esac' _ a",
+	"sh -c 'while read l; do echo \"$l\"; done < f'",
+	'eval "$(ssh-agent -s)"',
+	"eval $(ssh-agent)",
+	"bash -c 'echo \"commit message\"'",
+	"bash -c \"echo 'push'\"",
+	"bash -c 'grep -r \"git commit\" docs/'",
+	"bash -c 'git log --oneline | head'",
+	"bash -c 'git status && echo $(git rev-parse HEAD)'",
+	"bash -c 'git diff $(git merge-base HEAD main)'",
+	"bash -lc 'echo $(git branch --show-current)'",
+	"bash -c 'echo \"$(git log -1 --format=%s)\" | grep -i push'",
+	"bash -c 'echo \"$(git log -1 --format=%s)\" | grep -i commit'",
+	"sh -c 'echo ${HOME}/x # commit'",
+	"bash -c 'x=$(echo a) # commit this'",
+	'bash -c \'tr "(" ")" < f # push\'',
+	"bash -c 'echo \"(\" commit'",
+	"bash -c \"echo ')' push\"",
+	"bash -c 'echo $((1+2)) push'",
+	"bash -c 'if [ -f x ]; then echo commit; fi'",
+	"bash -c 'echo hello ( world'",
+	"powershell -Command \"Write-Host 'commit'; Get-Date\"",
+	"powershell -Command \"Get-ChildItem | Where-Object { $_.Name -like 'push*' }\"",
+	'pwsh -Command "echo $(Get-Date)"',
+	'cmd /c "echo it\'s commit time"',
+	'cmd /c "dir & echo push"',
+	"bash -c 'echo $(echo \"unclosed' commit",
+	"ssh host 'bash -c \"echo $(date) commit\"'",
+	"nix-shell --run 'echo $(date) commit' ",
+	"docker exec c sh -c 'echo $(date)'",
+	"echo $(true)#commit",
+	"(cd x && make)#commit",
+	"case x in a) echo hi;; esac # commit",
+	'x=(a b c); echo "${x[@]}" # commit',
+	"echo $((1+2))#commit",
+	"diff <(sort a) <(sort b) # commit",
+	"cat <(echo a)#x\ngit status",
+	'echo "a (b) c" && (cd x && ls)#',
+];
+
+describe("reads a command string with the grammar that runs it (#5652 r2)", () => {
+	it("refuses none of the ordinary commands", () => {
+		const refused = ORDINARY.filter(
+			(command) =>
+				guarded(command) || isWorktreeMutatingGitAttempt("bash", { command }),
+		);
+		expect(refused).toEqual([]);
+		expect(ORDINARY.length).toBe(56);
+	});
+
+	it("still reads the substitutions such a string runs", () => {
+		// A PowerShell `$()` is a subexpression that runs; an unknown launcher's
+		// switch value and a word after an unread word may be command strings.
+		for (const command of [
+			"pwsh -Command 'echo $(git commit -m x)'",
+			"myprog -c 'echo $(git push)'",
+			"$e 'echo $(git push)'",
+		])
+			expect(guarded(command), command).toBe(true);
+	});
+
+	it("refuses past depth 3 in both guards", () => {
+		// The shared-checkout guard reads the cap as the commit gate does: as an
+		// incomplete read, which refuses a word naming its verb.
+		expect(
+			isWorktreeMutatingGitAttempt("bash", {
+				command: nestedBashC(4, "git checkout main"),
+			}),
+		).toBe(true);
+		expect(
+			isWorktreeMutatingGitAttempt("bash", {
+				command: nestedBashC(4, "git status"),
+			}),
+		).toBe(false);
+	});
+});
 
 describe("the word model the gate reads (#4739)", () => {
 	const words = (command: string) =>
