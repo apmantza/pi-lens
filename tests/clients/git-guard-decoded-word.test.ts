@@ -1154,6 +1154,13 @@ const ROWS: readonly Row[] = [
 		bash: "commit",
 		guard: true,
 	},
+	{
+		row: "nix-shell --run body, a here-doc closing its $() leaves the read incomplete",
+		command:
+			"nix-shell --run 'echo $(cat <<EOF\nbody git commit\nEOF)#;git commit -m z'",
+		bash: "commit",
+		guard: true,
+	},
 	// #5652 r2 F2 (Qodo): past depth 3 the gate read nothing and passed. It now
 	// answers as for an incomplete read. Round 1 turned the `)#` row into a miss:
 	// base caught it only through the `)#` misread.
@@ -1372,11 +1379,11 @@ beforeAll(() => {
 	fs.chmodSync(stub, 0o755);
 	// Command-string launchers the gate knows by name, as stand-ins that do
 	// what the real ones do with `-c`, `--run` and `--command`: run the string
-	// in a shell.
+	// in a shell (nix-shell's is bash, #5652 r2).
 	for (const [name, script] of [
 		[
 			"nix-shell",
-			'#!/bin/sh\ncase "$1" in --run | --command) exec sh -c "$2" ;; esac\n',
+			'#!/bin/sh\ncase "$1" in --run | --command) exec bash -c "$2" ;; esac\n',
 		],
 		["launcher", '#!/bin/sh\n[ "$1" = -c ] && exec sh -c "$2"\n'],
 	] as const) {
