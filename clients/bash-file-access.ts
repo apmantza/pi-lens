@@ -369,10 +369,18 @@ function consumeHeredocBodies(
  * reads words, so the character before those pairs decides (a blank, an
  * operator, or nothing since `start`).
  */
-function startsWord(source: string, i: number, start: number): boolean {
+function startsWord(
+	source: string,
+	i: number,
+	start: number,
+	substitutionClose: number,
+): boolean {
 	let before = i - 1;
 	while (source[before] === "\n" && source[before - 1] === "\\") before -= 2;
 	if (before < start) return true;
+	// The `)` that closes a `$(…)`, `<(…)` or `>(…)` ends no word: `echo $(true)#x`
+	// has no comment, so a substitution after the `#` runs (#5652).
+	if (before === substitutionClose) return false;
 	// An escaped blank or operator is a word character: `echo \ #$(…)` has no
 	// comment, so the substitution runs (#5649).
 	let backslashes = 0;
@@ -470,6 +478,8 @@ export function shellSubstitutions(
 			return source.length;
 		}
 		let parens = 0;
+		// Where the last `$(…)`, `<(…)` or `>(…)` of this text closed.
+		let substitutionClose = -1;
 		// Open `${` expansions: bash reads no here-doc inside one.
 		let braces = 0;
 		const heredocs: PendingHeredoc[] = [];
@@ -491,7 +501,7 @@ export function shellSubstitutions(
 				continue;
 			}
 			if (ch === "$" && next === "(") {
-				i = substitution(source, i + 2, depth);
+				i = substitutionClose = substitution(source, i + 2, depth);
 				continue;
 			}
 			if (context === "double") {
@@ -518,7 +528,7 @@ export function shellSubstitutions(
 				continue;
 			}
 			if ((ch === "<" || ch === ">") && next === "(") {
-				i = substitution(source, i + 2, depth);
+				i = substitutionClose = substitution(source, i + 2, depth);
 				continue;
 			}
 			if (ch === "$" && next === "{") {
@@ -558,7 +568,7 @@ export function shellSubstitutions(
 				i = consumed.end;
 				continue;
 			}
-			if (ch === "#" && startsWord(source, i, start)) {
+			if (ch === "#" && startsWord(source, i, start, substitutionClose)) {
 				const lineEnd = source.indexOf("\n", i);
 				i = (lineEnd < 0 ? source.length : lineEnd) - 1;
 				continue;
@@ -783,6 +793,10 @@ function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 	let escapeKept = false;
 	let unsupported = false;
 	let atTokenStart = true;
+	// Each open `(` of the command, true for one that opens a `$(…)`, `<(…)` or
+	// `>(…)`: the `)` that closes it ends no word, so a `#` after it is no
+	// comment (#5652).
+	const openParens: boolean[] = [];
 	let segmentStart = 0;
 	let grouping = false;
 	let input = false;
@@ -1050,11 +1064,18 @@ function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 		if ((ch === "(" || ch === ")") && !escapeKept) {
 			const opensSubstitution =
 				ch === "(" && part?.kind === "unquoted" && part.text.endsWith("$");
+			const closesSubstitution =
+				ch === ")" ? openParens.pop() === true : undefined;
+			if (ch === "(")
+				openParens.push(
+					opensSubstitution || command[i - 1] === "<" || command[i - 1] === ">",
+				);
 			if (!opensSubstitution) {
 				flushWord();
 				word = ch;
 				addToPart("unquoted", ch);
 				flushWord();
+				if (closesSubstitution) atTokenStart = false;
 				escapeKept = false;
 				continue;
 			}
