@@ -400,6 +400,25 @@ describe.skipIf(process.platform === "win32")(
 			expect(outcome).toBeUndefined();
 		});
 
+		it("keeps the full managed lookup for an admitted root whose bin is on PATH", async () => {
+			// The rule binds only roots not admitted for project code: a trusted
+			// session run from its own package scripts has node_modules/.bin on
+			// PATH, and must still reach the PATH rung and the install.
+			setProjectTrustState("trusted");
+			const { spec, bin } = makeProject("tinymist", false, "bin");
+			process.env.PATH = [bin, outsideBin].join(path.delimiter);
+
+			await withLspProjectCodePermission(true, () =>
+				resolveAndLaunchRaw(spec, true),
+			).catch(() => undefined);
+
+			expect(getInstallAttempt("tinymist")).toMatchObject({
+				outcome: "declined",
+				reason: expect.stringContaining("PI_LENS_DISABLE_TOOL_INSTALL"),
+			});
+			expect(decisionRows("store-only-repair")).toHaveLength(0);
+		});
+
 		it("skips the runtime install when PATH reaches the root", async () => {
 			// The runtime (`go install`, `gem install`) is a bare name resolved
 			// through the process PATH; no stage refuses a missing bare candidate.
