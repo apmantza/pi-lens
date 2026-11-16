@@ -35,12 +35,12 @@
 // server.
 
 import {
-	advancePendingClass,
+	holdSettledCell,
 	parseRefreshState,
 	parseTable,
 	replaceTable,
 	SAVE_VERDICT_KEY,
-	sanitizeSaveVerdictState,
+	sanitizePendingFlips,
 	setRefreshStateKey,
 	TIER_CHANGE_AGREE_RUNS,
 } from "./md-matrix.mjs";
@@ -497,8 +497,9 @@ export function refreshSaveVerdictTable(text, measured, opts = {}) {
 	const detailIdx = table.header.indexOf("verdict");
 	// #3405: the flips pending from earlier nights, and the ones pending after
 	// this one. A server with no table row falls out of the next map.
-	const priorPending = sanitizeSaveVerdictState(
+	const priorPending = sanitizePendingFlips(
 		parseRefreshState(text)[SAVE_VERDICT_KEY],
+		"pendingSaveVerdict",
 	);
 	const nextPending = {};
 	const carry = (server) => {
@@ -521,42 +522,33 @@ export function refreshSaveVerdictTable(text, measured, opts = {}) {
 			measured: observed,
 			verdict: row[table.header[detailIdx]],
 		};
-		if (
-			SAVE_VERDICT_SETTLED.has(prior) &&
-			!SAVE_VERDICT_SETTLED.has(observed)
-		) {
-			// A night that could not tell is no night that found the opposite: it
-			// neither advances nor clears a pending flip.
+		// #3405: a settled answer changes only after two consecutive nights agree
+		// on the new one; a night that could not tell neither advances nor clears
+		// a pending flip (`holdSettledCell`).
+		const decision = holdSettledCell({
+			prior,
+			observed,
+			pending: priorPending[server]
+				? {
+						value: priorPending[server].pendingSaveVerdict,
+						runs: priorPending[server].runs,
+					}
+				: undefined,
+			isSettled: (value) => SAVE_VERDICT_SETTLED.has(value),
+		});
+		if (!decision.publish) {
 			merged.push(cells);
-			heldBack.push(held);
-			carry(server);
-			continue;
-		}
-		if (SAVE_VERDICT_SETTLED.has(prior) && observed !== prior) {
-			// #3405: a settled answer changes only after two consecutive nights
-			// agree on the new one. A night that disagrees with the pending one
-			// restarts the count at one; a night that returns to the published
-			// answer takes the branch below and clears the entry.
-			const advanced = advancePendingClass(
-				prior,
-				priorPending[server]
-					? {
-							value: priorPending[server].pendingSaveVerdict,
-							runs: priorPending[server].runs,
-						}
-					: undefined,
-				observed,
-				TIER_CHANGE_AGREE_RUNS,
+			heldBack.push(
+				decision.held === "pending"
+					? { ...held, pendingRuns: decision.pending.runs }
+					: held,
 			);
-			if (!advanced.committed) {
-				merged.push(cells);
-				heldBack.push({ ...held, pendingRuns: advanced.pending.runs });
+			if (decision.pending)
 				nextPending[server] = {
-					pendingSaveVerdict: advanced.pending.value,
-					runs: advanced.pending.runs,
+					pendingSaveVerdict: decision.pending.value,
+					runs: decision.pending.runs,
 				};
-				continue;
-			}
+			continue;
 		}
 		// A first measurement (the prior holds no settled answer), the same answer
 		// again, or the committing night: the row is written and nothing is pending.
@@ -574,7 +566,7 @@ export function refreshSaveVerdictTable(text, measured, opts = {}) {
 	// flips or clears nothing leaves the doc's bytes alone.
 	if (
 		JSON.stringify(priorPending) !==
-		JSON.stringify(sanitizeSaveVerdictState(nextPending))
+		JSON.stringify(sanitizePendingFlips(nextPending, "pendingSaveVerdict"))
 	)
 		out = setRefreshStateKey(out, SAVE_VERDICT_KEY, nextPending);
 	return {
