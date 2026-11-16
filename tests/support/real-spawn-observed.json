@@ -323,12 +323,6 @@
       "execFile:getconf via tests/clients/lsp/cascade-rust-references-position-5559.integration.test.ts:161"
     ]
   },
-  "clients/lsp/code-action-unanswered-5258.test.ts": {
-    "reason": "a codeAction that the server never answers (it exits, answers ContentModified, or sends a non-list) is observable only through a real JSON-RPC connection to a real child: the client's request sender, the stream loss and the retry are what the case measures, and a mock of the connection would restate the implementation. The shared fake server (tests/support/fake-lsp-server.ts) is the child; lsp-spawn-heavy serializes the file.",
-    "routes": [
-      "spawn:node via tests/support/fake-lsp-server.ts:65"
-    ]
-  },
   "clients/lsp/diagnostics-health-unavailable-primary-4322.test.ts": {
     "reason": "starts real `node` child process(es) (spawn), called from the file itself (tests/clients/lsp/diagnostics-health-unavailable-primary-4322.test.ts:105), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
     "routes": [

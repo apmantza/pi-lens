@@ -4,4 +4,4 @@ audience: user
 area: lsp
 ---
 
-- **A language-server check that did not answer no longer reads as clean.** A failed capability lookup now reports the file as unconfirmed, and a code-action request that died, was cancelled or came back malformed keeps a carried warning instead of retiring it. (refs #5258)
+- **A dead or cancelled language server no longer retires a carried code-action warning as clean.** A code-action request that died, was cancelled or came back malformed keeps the warning. A failed capability lookup, a defensive path no real lookup reaches today, now reports the file as unconfirmed. (refs #5258)
