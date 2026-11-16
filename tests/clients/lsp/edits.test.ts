@@ -2136,6 +2136,21 @@ describe("LSP workspace edits — mixed line endings take the edited range's end
 		expect(insertAt("a\r\nb\nc", 2, 1, "\nd")).toBe("a\r\nb\nc\nd");
 	});
 
+	it("a multi-line range takes the ending of the line where it starts", () => {
+		const range = {
+			start: { line: 1, character: 1 },
+			end: { line: 2, character: 1 },
+		};
+		expect(
+			applyTextEditsToString("x\na\r\nb\nc\n", [{ range, newText: "\nq\nr" }]),
+		).toBe("x\na\r\nq\r\nr\nc\n");
+		expect(
+			applyTextEditsToString("x\r\na\nb\r\nc\r\n", [
+				{ range, newText: "\nq\nr" },
+			]),
+		).toBe("x\r\na\nq\nr\r\nc\r\n");
+	});
+
 	it("each edit of one batch takes the ending of its own start line", () => {
 		const result = applyTextEditsToString("a\nb\r\nc\n", [
 			{
