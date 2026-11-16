@@ -34,7 +34,7 @@ const previous = vi.hoisted(() => {
 		exec: process.env.PI_LENS_LSP_EXECUTE_COMMAND_TIMEOUT_MS,
 	};
 	process.env.PI_LENS_LSP_NAV_REQUEST_TIMEOUT_MS = "1200";
-	process.env.PI_LENS_LSP_LIVENESS_PING_TIMEOUT_MS = "300";
+	process.env.PI_LENS_LSP_LIVENESS_PING_TIMEOUT_MS = "1200";
 	process.env.PI_LENS_LSP_EXECUTE_COMMAND_TIMEOUT_MS = "600";
 	return saved;
 });
@@ -47,6 +47,7 @@ import {
 } from "../../../clients/actionable-warnings.js";
 import { resetDegradationLedger } from "../../../clients/degradation-ledger.js";
 import { _setServersForFileForTests } from "../../../clients/lsp/config.js";
+import { bounded } from "../../../clients/deadline-utils.js";
 import { runPersistentReverify } from "../../../clients/persistent-reverify.js";
 import {
 	createLSPClient,
@@ -178,6 +179,23 @@ describe("one request sender owns cancel and release (#5097)", () => {
 		});
 	}, 15_000);
 
+	it("an aborted liveness ping is cancelled and released and answers dead, never alive", async () => {
+		await withHangingServer("workspace/symbol", async (ctx) => {
+			const abort = new AbortController();
+			const ping = ctx.client.pingLiveness?.(undefined, abort.signal);
+			await ctx.received("workspace/symbol");
+			const abortedAt = Date.now();
+			abort.abort();
+			// Aborted well inside the 1200 ms ping ceiling: the verdict is the
+			// abort's, and an abort proves nothing about the server.
+			expect(await ping).toBe(false);
+			expect(Date.now() - abortedAt).toBeLessThan(500);
+			expect(ctx.client.isBusy?.()).toBe(false);
+			await ctx.barrier();
+			expect(ctx.cancels()).toBe(1);
+		});
+	}, 15_000);
+
 	it("a timed-out codeAction/resolve is cancelled and released, and the lightweight action is kept", async () => {
 		await withHangingServer("codeAction/resolve", async (ctx) => {
 			const actions = await ctx.client.codeAction(ctx.file, 0, 0, 0, 5);
@@ -294,13 +312,17 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 		removeTempDirSync(tmp);
 	});
 
-	/** One pull-mode server on `.fkr` files that hangs `hang` and ignores cancels. */
-	function register(hang: string): string {
+	/**
+	 * One server on `.fkr` files that hangs `hang` and ignores cancels: pull-mode
+	 * by default, or push-only and silent under the wait-policy id `lua`, whose
+	 * strategy marks it `silentOnClean` (the id that reaches the clean-confirm ping).
+	 */
+	function register(hang: string, serverId = "fake-rust"): string {
 		const filePath = path.join(tmp, "main.fkr");
 		fs.writeFileSync(filePath, "fn main() {}\n");
 		const server = {
-			id: "fake-rust",
-			name: "fake-rust",
+			id: serverId,
+			name: serverId,
 			extensions: [".fkr"],
 			idleEviction: "resident",
 			root: async () => tmp,
@@ -311,6 +333,7 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 						...process.env,
 						FAKE_LSP_HANG_METHODS: hang,
 						FAKE_LSP_TRACE_FILE: trace,
+						...(serverId === "lua" && { FAKE_LSP_NO_DIAGNOSTIC_PROVIDER: "1" }),
 						PI_LENS_LSP_PULL_REQUEST_TIMEOUT_MS: "4000",
 					},
 				});
@@ -448,6 +471,35 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 		loop.abort();
 		// Not checked is not clean: the file contributes no records.
 		await expect(enriched).resolves.toEqual([]);
+		await cancelledWithin500ms(abortedAt);
+	}, 20_000);
+
+	// The clean-confirm ping in `touchFile` (`lsp_silent_clean_confirm`): a push-only
+	// server silent on clean is trusted only after it answers a round trip, and
+	// that round trip read no abort either. The ping's own ceiling is 1200 ms
+	// here, so a cancel inside 500 ms of the abort is the abort's, not the timer's.
+	it("the clean-confirm ping is cancelled when the bound aborts, and the touch stays unconfirmed", async () => {
+		const filePath = register("workspace/symbol", "lua");
+		const turn = new AbortController();
+		const touch = bounded(
+			() =>
+				service.touchFile(filePath, "fn main() {}\n", {
+					diagnostics: "document",
+					collectDiagnostics: true,
+					clientScope: "primary",
+					source: "dispatch",
+				}),
+			{
+				ms: 20_000,
+				signal: turn.signal,
+				hook: "turn_end",
+				label: "ambient-5097",
+			},
+		);
+		await received("workspace/symbol");
+		const abortedAt = Date.now();
+		turn.abort();
+		await expect(touch).resolves.toBeUndefined();
 		await cancelledWithin500ms(abortedAt);
 	}, 20_000);
 });

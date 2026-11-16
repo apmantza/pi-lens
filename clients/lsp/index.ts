@@ -6479,7 +6479,10 @@ export class LSPService {
 								const liveness = await Promise.all(
 									outstanding.map((entry) =>
 										(
-											entry.client.pingLiveness?.() ?? Promise.resolve(true)
+											entry.client.pingLiveness?.(
+												undefined,
+												getAmbientAbortSignal(),
+											) ?? Promise.resolve(true)
 										).catch(() => false),
 									),
 								);
@@ -6763,7 +6766,10 @@ export class LSPService {
 						// responding before its silence is trusted as a clean confirm; a
 						// server that doesn't answer in time leaves the touch inconclusive.
 						const alive = await (
-							spawned[0].client.pingLiveness?.() ?? Promise.resolve(true)
+							spawned[0].client.pingLiveness?.(
+								undefined,
+								getAmbientAbortSignal(),
+							) ?? Promise.resolve(true)
 						).catch(() => false);
 						if (alive) {
 							diagnosticsTimedOut = false;

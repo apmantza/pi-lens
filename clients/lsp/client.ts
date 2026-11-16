@@ -349,8 +349,12 @@ export interface LSPClientInfo {
 	 * it don't need updating; callers treat a missing implementation as alive
 	 * (`pingLiveness?.() ?? true`), matching the codebase's existing optional-
 	 * capability-accessor pattern (`getRawCapabilityKeys`, `getLaunchVariant`).
+	 *
+	 * #5097: `signal` cancels the round trip and releases it; an aborted ping
+	 * answers `false`, never "alive". Only a caller that owns the ping passes
+	 * one: a ping several callers share (`paceAuxNotify`'s drain) takes none.
 	 */
-	pingLiveness?: (timeoutMs?: number) => Promise<boolean>;
+	pingLiveness?: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
 	/**
 	 * #5487: why the server has announced it cannot give a verdict right now
 	 * (`experimental/serverStatus`): still loading (`quiescent: false`) or its
@@ -6777,6 +6781,7 @@ function firstOpenDocumentUri(state: LSPClientState): string | undefined {
 async function clientPingLiveness(
 	state: LSPClientState,
 	timeoutMs: number = LIVENESS_PING_TIMEOUT_MS,
+	signal?: AbortSignal,
 ): Promise<boolean> {
 	if (!isClientAlive(state)) return false;
 	const probe = chooseLivenessProbe(state);
@@ -6803,17 +6808,23 @@ async function clientPingLiveness(
 	}
 	try {
 		// #5097: a timed-out probe is cancelled and released, so a wedged server
-		// holds one pending request at a time, not one per touch. No signal: the
-		// ping is a shared barrier (`paceAuxNotify`'s `record.drain`), and an
-		// aborted ping must not read as alive.
+		// holds one pending request at a time, not one per touch. The signal is the
+		// caller's own, never the ambient one: the ping is also a shared barrier
+		// (`paceAuxNotify`'s `record.drain`), and one waiter's Esc must not cancel
+		// the barrier the others wait on. An abort cancels and releases it the
+		// same way.
 		await safeSendRequest(
 			state.connection,
 			probe.method,
 			probe.params,
-			undefined,
+			signal,
 			undefined,
 			{ timeoutMs, cancel: true },
 		);
+		// The sender settles an aborted call with `undefined`, as it does an
+		// answered probe that returned nothing: an abort proves nothing about the
+		// server, so it must not fall through to the alive re-check below.
+		if (signal?.aborted) return false;
 	} catch (err) {
 		if (err instanceof Error && err.message.startsWith("Timeout after")) {
 			return false;
@@ -7676,7 +7687,8 @@ export async function createLSPClient(options: {
 		checkAlive: () => checkProcessAlive(),
 
 		/** #1277: cheap request round-trip proving the server still responds. */
-		pingLiveness: (timeoutMs?: number) => clientPingLiveness(state, timeoutMs),
+		pingLiveness: (timeoutMs?: number, signal?: AbortSignal) =>
+			clientPingLiveness(state, timeoutMs, signal),
 
 		/** #5487: the server announced it is still loading (see interface doc). */
 		readinessBlock: () => readinessBlockOf(state),
