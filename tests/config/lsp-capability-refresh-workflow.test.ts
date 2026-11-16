@@ -1,5 +1,16 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+// flake-shape: real-process-spawn — the subject is the census tracker step's own bash (`bash -c` over the workflow run text, #5676); only that shell shows which verdict its clean loop reaches, and the stubs are gh and the tracker script, host boundaries a test cannot reach.
+import { spawnSync } from "node:child_process";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
 import { workflowDocument } from "../../scripts/dispatch-safety.mjs";
@@ -153,7 +164,6 @@ describe("nightly LSP capability refresh contract (#4277)", () => {
 			expect(smoke.outputs[output]).toBeDefined();
 			expect(run).toContain(`$${variable}`);
 		}
-		expect(run).toContain("$JOB_STATUS");
 	});
 
 	it("keeps coloured census diagnostics in the tracking issue body", () => {
@@ -228,6 +238,197 @@ describe("nightly LSP capability refresh contract (#4277)", () => {
 // no workflow, so every refresh waited for a maintainer's close and reopen; and
 // a missed-probe verdict that never reached the notifier job (a stale cell
 // stood unread, as the five `direct` cells did before they were rewritten).
+/** The job outputs the census tracker's clean verdict reads (its `*_OUTCOME` env). */
+const CENSUS_OUTPUTS = [
+	"census",
+	"seed_matrix",
+	"lsp_matrix",
+	"clean_signal",
+	"server_capabilities",
+	"idle_measurement",
+	"idle_promote",
+	"docs_diff",
+] as const;
+
+type CensusCase = {
+	jobResult: string;
+	outputs: Partial<Record<(typeof CENSUS_OUTPUTS)[number], string>>;
+};
+
+/**
+ * #5676: the census tracker's clean verdict read `needs.tool-smoke.result`
+ * beside the census outputs, so a job failure outside the census (#5675, the
+ * jdtls cascade row) filed `nightly: LSP capability census drift` with an
+ * empty census section (run 43886738152; #5626 on 2026-11-15). These cases
+ * drive the step's own shell. Each `${{ needs.tool-smoke.outputs.<name> }}`
+ * takes the case's value, unset when the job never set it, as the runner
+ * renders an unset output, and `${{ needs.tool-smoke.result }}` takes the job
+ * verdict. The host boundary is the tracker and `gh`: stubs in a scratch
+ * directory record their argv and never reach GitHub.
+ */
+const TRACKER_STUB = `import { appendFileSync, readFileSync } from "node:fs";
+const args = process.argv.slice(2);
+const at = args.indexOf("--body-file");
+const body = at < 0 ? null : readFileSync(args[at + 1], "utf8");
+appendFileSync(process.env.CENSUS_TRACKER_RECORD, JSON.stringify({ args, body }) + "\\n");
+`;
+
+function resolveCensusExpression(
+	expression: string,
+	census: CensusCase,
+	runnerTemp: string,
+): string {
+	if (expression === "needs.tool-smoke.result") return census.jobResult;
+	const output = /^needs\.tool-smoke\.outputs\.([a-z_]+)$/.exec(expression);
+	if (output)
+		return census.outputs[output[1] as (typeof CENSUS_OUTPUTS)[number]] ?? "";
+	if (expression === "runner.temp") return runnerTemp;
+	if (expression.startsWith("github.")) return `<${expression}>`;
+	throw new Error(
+		`census tracker env reads \`${expression}\`, which this harness does not model`,
+	);
+}
+
+/** Runs the census tracker step's shell once and reports the tracker call it made. */
+function runCensusTracker(census: CensusCase): {
+	verdict: "clean" | "drift" | "silent";
+	title: string;
+	body: string;
+} {
+	const step = loadWorkflow().jobs["tool-smoke-notify"].steps.find(
+		(candidate: any) =>
+			candidate.name ===
+			"Notify on LSP capability census (file/update/close tracking issue)",
+	);
+	const root = mkdtempSync(join(tmpdir(), "pi-lens-census-tracker-"));
+	try {
+		const bin = join(root, "bin");
+		const work = join(root, "work");
+		const runnerTemp = join(root, "runner-temp");
+		const record = join(root, "tracker.ndjson");
+		mkdirSync(bin);
+		mkdirSync(join(work, "scripts"), { recursive: true });
+		mkdirSync(runnerTemp);
+		writeFileSync(join(bin, "gh"), "#!/bin/sh\nexit 0\n");
+		chmodSync(join(bin, "gh"), 0o755);
+		writeFileSync(
+			join(work, "scripts", "upsert-tracking-issue.mjs"),
+			TRACKER_STUB,
+		);
+		const env: Record<string, string> = {
+			PATH: [bin, dirname(process.execPath), "/usr/bin", "/bin"].join(
+				delimiter,
+			),
+			HOME: root,
+			TMPDIR: root,
+			RUNNER_TEMP: runnerTemp,
+			CENSUS_TRACKER_RECORD: record,
+		};
+		for (const [key, raw] of Object.entries<string>(step.env)) {
+			env[key] = String(raw).replace(
+				/\$\{\{\s*([^}]+?)\s*\}\}/g,
+				(_match, expression: string) =>
+					resolveCensusExpression(expression, census, runnerTemp),
+			);
+		}
+		const result = spawnSync("bash", ["-c", String(step.run)], {
+			cwd: work,
+			env,
+			encoding: "utf8",
+		});
+		expect(result.status, result.stderr).toBe(0);
+		const calls = existsSync(record)
+			? readFileSync(record, "utf8")
+					.split("\n")
+					.filter(Boolean)
+					.map(
+						(line) =>
+							JSON.parse(line) as { args: string[]; body: string | null },
+					)
+			: [];
+		expect(calls.length, "one tracker call per run").toBeLessThanOrEqual(1);
+		const [call] = calls;
+		if (!call) return { verdict: "silent", title: "", body: "" };
+		return {
+			verdict: call.args.includes("--clean") ? "clean" : "drift",
+			title: call.args[call.args.indexOf("--title") + 1] ?? "",
+			body: call.body ?? "",
+		};
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+}
+
+const allCensus = (state: string): CensusCase["outputs"] =>
+	Object.fromEntries(CENSUS_OUTPUTS.map((output) => [output, state]));
+
+const outcomesLine = (body: string): string =>
+	body.split("\n").find((line) => line.startsWith("Outcomes: ")) ?? "";
+
+// The step runs under bash on the hosted runner; the harness drives the same
+// shell, so a Windows host has nothing to add to the case.
+describe.skipIf(process.platform === "win32")(
+	"census tracker clean verdict reads the census outputs, not the job verdict (#5676)",
+	() => {
+		it.each(["failure", "cancelled"])(
+			"a %s job with every census output success stays clean: a failure outside the census files nothing",
+			(jobResult) => {
+				const run = runCensusTracker({
+					jobResult,
+					outputs: allCensus("success"),
+				});
+				expect(run.verdict).toBe("clean");
+				expect(run.title).toBe("nightly: LSP capability census drift");
+			},
+		);
+
+		it("a green job with every census output success stays clean", () => {
+			expect(
+				runCensusTracker({
+					jobResult: "success",
+					outputs: allCensus("success"),
+				}).verdict,
+			).toBe("clean");
+		});
+
+		// Rows are [output, label, state]: the state is what the runner passes,
+		// an empty string for an output the job never set.
+		const UNCLEAN = CENSUS_OUTPUTS.flatMap((output) => [
+			[output, "skipped", "skipped"],
+			[output, "unset", ""],
+		]);
+		it.each(UNCLEAN)(
+			"a census output %s that is %s is not clean, even under a failed job",
+			(output, _label, state) => {
+				const run = runCensusTracker({
+					jobResult: "failure",
+					outputs: { ...allCensus("success"), [output]: state },
+				});
+				expect(run.verdict).toBe("drift");
+			},
+		);
+
+		it("a failure before the census leaves every output unset and still files, with job=failure on the Outcomes line", () => {
+			const run = runCensusTracker({ jobResult: "failure", outputs: {} });
+			expect(run.verdict).toBe("drift");
+			expect(outcomesLine(run.body)).toBe(
+				"Outcomes: job=failure seed= matrix= clean-signal= capabilities= idle= promotion= docs-diff= census=",
+			);
+		});
+
+		it("keeps the job verdict on the drift body's Outcomes line for context", () => {
+			const run = runCensusTracker({
+				jobResult: "failure",
+				outputs: { ...allCensus("success"), census: "failure" },
+			});
+			expect(run.verdict).toBe("drift");
+			expect(outcomesLine(run.body)).toBe(
+				"Outcomes: job=failure seed=success matrix=success clean-signal=success capabilities=success idle=success promotion=success docs-diff=success census=failure",
+			);
+		});
+	},
+);
+
 describe("nightly LSP refresh landing and stale-cell notifier (#4512)", () => {
 	const prSteps = () => loadWorkflow().jobs["tool-smoke-prs"].steps as any[];
 	const stepByName = (steps: any[], fragment: string) =>
