@@ -362,6 +362,23 @@ describe("git-guard", () => {
 		}
 	});
 
+	// Recurrence prevented (#5648 review F1): the removed blank-collapse
+	// pass turned `\<blank><newline>` and `\<CR><LF>` into a line
+	// continuation, so the gate read the next line as echo's word and
+	// allowed the commit. The real-bash oracle for these rows is ROWS in
+	// git-guard-decoded-word.test.ts.
+	it("reads the commit after an escaped blank or CR, then a newline", () => {
+		for (const command of [
+			"echo a \\ \ngit commit -m x",
+			"echo a \\\r\ngit commit -m x",
+		]) {
+			expect(
+				isGitCommitOrPushAttempt("bash", { command }),
+				JSON.stringify(command),
+			).toBe(true);
+		}
+	});
+
 	it("blocks runtime blockers and preserves their details", () => {
 		const runtime = new RuntimeCoordinator();
 		runtime.updateGitGuardStatus(true, "blocker in src/app.ts:12");

@@ -30,6 +30,13 @@ describe("planStagedCommit", () => {
 
 	it.each([
 		{ command: 'git commit -m "a b"', globals: [], args: ["-m", "a b"] },
+		// #5638: the blanks of a message are the shell's, ANSI-C quote included;
+		// a blank-collapse pass with its own quote model turned `a'  b` into `a' b`.
+		{
+			command: "git commit -m $'a\\'  b'",
+			globals: [],
+			args: ["-m", "a'  b"],
+		},
 		{
 			command: "git -C sub -c k=v commit -a",
 			globals: ["-C", "sub", "-c", "k=v"],

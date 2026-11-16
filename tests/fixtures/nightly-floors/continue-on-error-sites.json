@@ -15,6 +15,10 @@
 			"status": "no-floor",
 			"reason": "A pull request that adds or changes no test file legitimately shuffles zero files, so a count floor would red a docs-only PR. scripts/ci-shuffle-changed-tests.mjs prints 'no test file added or changed' for that case, exits 3 (unproven) when a vitest start answers 'No test files found' or never finishes, the job is advisory by its name suffix, and a job-level continue-on-error still lets its check row read failure."
 		},
+		".github/workflows/ci.yml#test#Test timeout headroom": {
+			"status": "no-floor",
+			"reason": "The check prints its own population on every run ('timeout-headroom: N tests read, M over 60% (K known, J new), U with an unresolved cap, scale S'), so a run that measured nothing says so by count rather than passing quietly, and exit 2 (no report, unreadable baseline, malformed flag) adds a '::warning title=test-timeout-headroom::could not measure: <cause>' annotation on the step. It is advisory by design: its verdict is a recommendation to widen a budget, and a measurement failure must not redden the shard it reports on (#5311 r1 F1). tests/config/test-timeout-headroom-workflow.test.ts pins the advisory posture, the report basename the shard run writes, and the scale both steps pass; tests/scripts/test-timeout-headroom.test.ts drives the CLI on a missing report, an unreadable baseline and a truncated flag and asserts exit 2 with both records."
+		},
 		".github/workflows/compat-smoke.yml#compat-smoke#Layer A — pinned-contract verification (no pi, no LLM)": {
 			"status": "no-floor",
 			"reason": "The alert job reads its step outcome. Any non-success (contract drift, an infra failure, or a crash before it verified anything) files or refreshes ONE tracking issue by fixed title, and a green run closes that issue, so an empty layer is never silent."
