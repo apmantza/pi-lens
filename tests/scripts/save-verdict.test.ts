@@ -793,9 +793,13 @@ describe("refreshSaveVerdictTable: a settled verdict flips only after two agreei
 	it("drops a pending entry whose server has no table row, and a malformed one", () => {
 		const withJunk = setRefreshStateKey(MASTER, "save-verdict", {
 			ghost: { pendingSaveVerdict: "yes", runs: 1 },
-			powershell: { pendingSaveVerdict: 7, runs: "x" },
+			badValue: { pendingSaveVerdict: 7, runs: 1 },
+			emptyValue: { pendingSaveVerdict: "", runs: 1 },
+			stringRuns: { pendingSaveVerdict: "yes", runs: "1" },
+			zeroRuns: { pendingSaveVerdict: "yes", runs: 0 },
+			fractionRuns: { pendingSaveVerdict: "yes", runs: 1.5 },
 		});
-		// The renderer sanitizes: the malformed entry never survives a write.
+		// The renderer sanitizes: no malformed entry survives a write.
 		expect(Object.keys(pendingOf(withJunk) ?? {})).toEqual(["ghost"]);
 		const night = refreshSaveVerdictTable(withJunk, [savedWrite()]);
 		expect(pendingOf(night.text)).toEqual({
@@ -809,6 +813,20 @@ describe("refreshSaveVerdictTable: a settled verdict flips only after two agreei
 		expect(again.text).toBe(settled.text);
 		const noState = refreshSaveVerdictTable(DOC, [measure()]);
 		expect(noState.text).not.toContain("refresh state");
+	});
+
+	it("leaves a state block it did not need to change exactly as it found it", () => {
+		// Recurrence it prevents: a night that holds, flips or clears nothing
+		// re-rendering the whole block, so a hand-formatted block (or any key the
+		// renderer drops) turned into a diff in the refresh PR.
+		const lines = MASTER.split("\n");
+		const at = lines.findIndex((l) => l.startsWith('{"clean-behavior"'));
+		lines[at] = JSON.stringify(JSON.parse(lines[at]), null, 1);
+		const handFormatted = lines.join("\n");
+		const night = refreshSaveVerdictTable(handFormatted, [publishes()]);
+		expect(night.text.split("```json")[1]).toBe(
+			handFormatted.split("```json")[1],
+		);
 	});
 
 	it("survives every other writer of the refresh-state block", () => {
