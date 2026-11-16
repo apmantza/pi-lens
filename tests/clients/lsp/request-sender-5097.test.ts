@@ -520,30 +520,36 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 	// server silent on clean is trusted only after it answers a round trip, and
 	// that round trip read no abort either. The ping's own ceiling is 1200 ms
 	// here, so a cancel inside 500 ms of the abort is the abort's, not the timer's.
-	it("the clean-confirm ping is cancelled when the bound aborts, and the touch stays unconfirmed", async () => {
-		const filePath = register("workspace/symbol", "lua");
-		const turn = new AbortController();
-		const touch = bounded(
-			() =>
-				service.touchFile(filePath, "fn main() {}\n", {
-					diagnostics: "document",
-					collectDiagnostics: true,
-					clientScope: "primary",
-					source: "dispatch",
-				}),
-			{
-				ms: 20_000,
-				signal: turn.signal,
-				hook: "turn_end",
-				label: "ambient-5097",
-			},
-		);
-		await received("workspace/symbol");
-		const abortedAt = Date.now();
-		turn.abort();
-		await expect(touch).resolves.toBeUndefined();
-		await cancelledWithin500ms(abortedAt);
-	}, 20_000);
+	// Two call sites send it: the single-server gate (`primary`) and the
+	// aggregate gate (`all`).
+	it.each(["primary", "all"] as const)(
+		"the %s-scope clean-confirm ping is cancelled when the bound aborts, and the touch stays unconfirmed",
+		async (clientScope) => {
+			const filePath = register("workspace/symbol", "lua");
+			const turn = new AbortController();
+			const touch = bounded(
+				() =>
+					service.touchFile(filePath, "fn main() {}\n", {
+						diagnostics: "document",
+						collectDiagnostics: true,
+						clientScope,
+						source: "dispatch",
+					}),
+				{
+					ms: 20_000,
+					signal: turn.signal,
+					hook: "turn_end",
+					label: "ambient-5097",
+				},
+			);
+			await received("workspace/symbol");
+			const abortedAt = Date.now();
+			turn.abort();
+			await expect(touch).resolves.toBeUndefined();
+			await cancelledWithin500ms(abortedAt);
+		},
+		20_000,
+	);
 
 	// Recurrence: reading the ambient abort in the pull makes every caller of the
 	// pull a reader of whatever scope it inherited. A server-initiated re-pull
