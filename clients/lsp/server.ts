@@ -1068,8 +1068,8 @@ async function lookupManagedTool(
 	toolId: string,
 	cwd: string,
 	refusals: NonNullable<ResolveAndLaunchSpec["refusals"]>,
-	ensureOptions?: { allowInstall?: boolean },
-): Promise<{ path: string | undefined; storeOnly: boolean }> {
+	...ensureOptions: [] | [{ allowInstall?: boolean }]
+): Promise<{ found: string | undefined; storeOnly: boolean }> {
 	const storeOnly =
 		refusals.refused &&
 		(refusals.bareRefused || commandSearchReachesProject(cwd));
@@ -1086,9 +1086,9 @@ async function lookupManagedTool(
 		`lsp launch ensure-tool start tool=${toolId} cwd=${cwd} storeOnly=${storeOnly}`,
 	);
 	return {
-		path: await (storeOnly
+		found: await (storeOnly
 			? getToolPath(toolId, { storeOnly: true })
-			: ensureTool(toolId, ensureOptions)),
+			: ensureTool(toolId, ...ensureOptions)),
 		storeOnly,
 	};
 }
@@ -1319,7 +1319,7 @@ export async function resolveAndLaunch(
 			evidence: classifiedFailure.evidence,
 		});
 		const installStartedAt = Date.now();
-		const { path: installed, storeOnly } = await lookupManagedTool(
+		const { found: installed, storeOnly } = await lookupManagedTool(
 			spec.managedToolId,
 			spec.cwd,
 			refusals,
@@ -3533,7 +3533,7 @@ export const PythonServer: LSPServerInfo = {
 		// Discover a globally-installed pyright even when install is disabled;
 		// only the download is gated by canInstall. After a refusal that a
 		// bare-name lookup could reach, only the store is read (#5674).
-		const { path: pyrightPath } = await lookupManagedTool(
+		const { found: pyrightPath } = await lookupManagedTool(
 			"pyright",
 			root,
 			refusals,

@@ -2700,7 +2700,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// threading stays #2523 AC4. 137 -> 139 (#5522 F2): the alias launch awaits
 	// the classic fallback (`launchClassicTypeScript` and its caller) on the same
 	// spawn path.
-	"clients/lsp/server.ts": 139,
+	// #5674: 139 -> 140. The managed lookup moved into `lookupManagedTool`,
+	// which the resolver and the Python spawn both await; the helper holds the
+	// lookup's own await, so the resolver's call is the one new site. Same
+	// spawn path, which no hook awaits; hook-signal threading stays #2523 AC4.
+	"clients/lsp/server.ts": 140,
 	"clients/map-with-concurrency.ts": 2,
 	"clients/observed-mutation.ts": 18,
 	// #4493: 10 -> 12, the `git rev-parse` in readGitHead and the `git diff`
