@@ -1151,6 +1151,14 @@ export type DegradationKind =
 	 */
 	| "lsp-edit-stale-content"
 	/**
+	 * `lsp-empty-classification-failed`: #5258: the silent-on-clean classification of an empty (or
+	 * severity-filtered) `lsp_diagnostics` answer could not run (a rejected
+	 * capability read or a throwing registry), so the file reads unconfirmed
+	 * instead of "confirmed clean". Subject is the file path;
+	 * `recordDegradationOnce` keeps it at one row per file per session.
+	 */
+	| "lsp-empty-classification-failed"
+	/**
 	 * `lsp-environment-gap-demoted`: #4532: a TypeScript diagnostic was demoted from blocking to warning
 	 * because the file's root resolves no `node_modules`, so its ambient
 	 * declarations (`node:*` module types, the `NodeJS` namespace, `node`'s

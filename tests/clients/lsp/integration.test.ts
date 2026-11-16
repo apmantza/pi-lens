@@ -160,8 +160,8 @@ describe("LSP Client Integration", () => {
 		const actions = await client!.codeAction(filePath, 0, 0, 0, 5);
 
 		expect(actions).toHaveLength(1);
-		expect(actions[0].title).toBe("Replace greeting");
-		expect(actions[0].edit).toBeDefined();
+		expect(actions?.[0].title).toBe("Replace greeting");
+		expect(actions?.[0].edit).toBeDefined();
 	});
 
 	it("finds nested symbol via document symbol children", async () => {
@@ -696,8 +696,8 @@ describe("LSP Client Integration — nested capability gates (#1971)", () => {
 				const actions = await client.codeAction(filePath, 0, 0, 0, 5);
 				await new Promise((resolve) => setImmediate(resolve));
 				expect(client.getOperationSupport().codeActionResolve).toBe(supported);
-				if (supported) expect(actions[0]?.edit).toBeDefined();
-				else expect(actions[0]?.edit).toBeUndefined();
+				if (supported) expect(actions?.[0]?.edit).toBeDefined();
+				else expect(actions?.[0]?.edit).toBeUndefined();
 				expect(received).toEqual(
 					supported
 						? ["textDocument/codeAction", "codeAction/resolve"]

@@ -1971,6 +1971,12 @@
       "spawn:node via tests/tools/lsp-diagnostics-2776.test.ts:101"
     ]
   },
+  "tools/lsp-diagnostics-classify-5258.test.ts": {
+    "reason": "the production lsp_diagnostics handler asks its empty-result classification only after a real server answered a pull with a finding the severity filter drops; the case needs that answer over a real stdio wire, and a mock of the service would hide the cached-clean replay it must avoid. The child is the shared fake server behind a one-line shim; lsp-spawn-heavy serializes the file.",
+    "routes": [
+      "spawn:node via tests/tools/lsp-diagnostics-classify-5258.test.ts:57"
+    ]
+  },
   "tools/lsp-diagnostics-created-module-4320.test.ts": {
     "reason": "starts real `git`, `getconf`, `node` child process(es) (spawn, exec, execFile), called from the file itself (tests/tools/lsp-diagnostics-created-module-4320.test.ts:193), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
     "routes": [

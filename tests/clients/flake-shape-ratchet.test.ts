@@ -943,6 +943,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
 	},
+	"real-process-spawn:clients/lsp/code-action-unanswered-5258.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"#5258: a server that exits, answers ContentModified or sends a non-list mid-codeAction is the subject; the request sender's stream loss and retry cannot be stood in for without a real JSON-RPC stream.",
+	},
 	"real-process-spawn:clients/lsp/config-section-answers-4758.test.ts": {
 		detector: "real-process-spawn",
 		reason:

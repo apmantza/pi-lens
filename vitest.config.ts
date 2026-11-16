@@ -454,6 +454,9 @@ const lspSpawnHeavyInclude = [
 	// kill — same process-death-timing budget and contention class as the
 	// watchdog test above.
 	"tests/tools/lsp-diagnostics-2776.test.ts",
+	// #5258: the production lsp_diagnostics handler and LSPService over a real
+	// stdio fake-server child whose warning the severity filter drops.
+	"tests/tools/lsp-diagnostics-classify-5258.test.ts",
 	// #4320: the production LSPService and the workspace-diagnostics cache over a
 	// real stdio fake-server child configured as a project custom server; waits on
 	// a real handshake and two diagnostics rounds like its lane siblings.
@@ -636,6 +639,8 @@ export const wallClockBudgetInclude = [
 	"tests/clients/lsp/client-crash-logging.test.ts",
 	"tests/clients/lsp/client-exit-cause-ledger.test.ts",
 	"tests/clients/lsp/client-retention-process-scope.test.ts",
+	// #5258: a codeAction the real fake-server child never answers (exit, ContentModified, a non-list), observed through the client and the re-verify verdict (flake-shape admission).
+	"tests/clients/lsp/code-action-unanswered-5258.test.ts",
 	// #4758: the production LSPService over a real stdio fake-server child that
 	// pulls `workspace/configuration` after `initialized`; waits on a real
 	// handshake and the answer's trace line, the same #1022/#2332 shape as its

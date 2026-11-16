@@ -1359,10 +1359,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :280, :1016, :1612, :1672, :2400
 	"tools/lsp-diagnostics.ts": {
-		silent: 10,
-		identities: "2e5c32f96dcee285",
+		silent: 8,
+		identities: "d7917f8d652d88ff",
 		reason: PRE_RULE,
-	}, // :371, :405, :628, :861, :1026, :1084, :1184, :1405, :1452, :2477
+	}, // :472, :506, :786, :1088, :1418, :1651, :1698, :2839
 	"tools/lsp-navigation.ts": {
 		silent: 9,
 		identities: "0ea45645359d3e6d",

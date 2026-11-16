@@ -312,7 +312,7 @@ const CENSUS_FILES = [
 	"clients/runtime-turn.ts",
 	"clients/runtime-tool-result.ts",
 ];
-const OWN_CLAIM_CEILING = 39;
+const OWN_CLAIM_CEILING = 38;
 
 /**
  * Registered delivery surfaces outside the census, each with why it renders no

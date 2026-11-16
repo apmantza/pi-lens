@@ -685,14 +685,20 @@ export interface LSPClientInfo {
 	closeDocument(filePath: string): Promise<void>;
 	/** Workspace-wide symbol search */
 	workspaceSymbol(query: string): Promise<LSPSymbol[]>;
-	/** Available code actions at a range */
+	/**
+	 * Available code actions at a range. An array (empty included) is the
+	 * server's answer; `undefined` is no answer (dead client, cancelled or
+	 * stale request, lost stream, ContentModified, a reply that is not a list),
+	 * which a caller that retires a finding must not read as "no actions"
+	 * (#5258).
+	 */
 	codeAction(
 		filePath: string,
 		line: number,
 		character: number,
 		endLine: number,
 		endCharacter: number,
-	): Promise<LSPCodeAction[]>;
+	): Promise<LSPCodeAction[] | undefined>;
 	/** Rename symbol at position */
 	rename(
 		filePath: string,
@@ -8039,7 +8045,7 @@ export async function createLSPClient(options: {
 		},
 
 		async codeAction(filePath, line, character, endLine, endCharacter) {
-			if (!isClientAlive(state)) return [];
+			if (!isClientAlive(state)) return undefined;
 			const uri = pathToFileURL(filePath).href;
 			// navRequest adds the sender's shared ceiling + single-file
 			// stale-drop (matches documentSymbol); a hung server no longer awaits
@@ -8062,7 +8068,13 @@ export async function createLSPClient(options: {
 				},
 				filePath,
 			);
-			if (!result || !Array.isArray(result)) return [];
+			// #5258: only the server's own list (or its `null`, the protocol's "no
+			// actions") is an answer. `undefined` is a request that was cancelled,
+			// ContentModified twice, lost its stream or went stale; a reply that is
+			// neither a list nor `null` is malformed, not "no actions".
+			if (result === undefined) return undefined;
+			if (result === null) return [];
+			if (!Array.isArray(result)) return undefined;
 			const actions = result.filter(
 				(item): item is LSPCodeAction =>
 					typeof item === "object" && item !== null && "title" in item,

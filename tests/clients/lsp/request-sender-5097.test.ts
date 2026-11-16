@@ -271,8 +271,8 @@ describe("one request sender owns cancel and release (#5097)", () => {
 		await withHangingServer("codeAction/resolve", async (ctx) => {
 			const actions = await ctx.client.codeAction(ctx.file, 0, 0, 0, 5);
 			expect(actions).toHaveLength(1);
-			expect(actions[0]?.title).toBe("Replace greeting");
-			expect(actions[0]?.edit).toBeUndefined();
+			expect(actions?.[0]?.title).toBe("Replace greeting");
+			expect(actions?.[0]?.edit).toBeUndefined();
 			expect(ctx.client.isBusy?.()).toBe(false);
 			await ctx.barrier();
 			expect(ctx.cancels()).toBe(1);
@@ -291,7 +291,7 @@ describe("one request sender owns cancel and release (#5097)", () => {
 			const actions = await call;
 			expect(Date.now() - abortedAt).toBeLessThan(500);
 			expect(actions).toHaveLength(1);
-			expect(actions[0]?.edit).toBeUndefined();
+			expect(actions?.[0]?.edit).toBeUndefined();
 			expect(ctx.client.isBusy?.()).toBe(false);
 			await ctx.barrier();
 			expect(ctx.cancels()).toBe(1);
