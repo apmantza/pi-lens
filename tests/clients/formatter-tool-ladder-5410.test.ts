@@ -619,4 +619,26 @@ describe("resolveInstalledToolCommand answers (#5492 r2)", () => {
 	it("a tool nothing provides reports no rejection", async () => {
 		expect(await ask("shfmt")).toEqual({ command: null });
 	});
+
+	// #5410 S1 review V1: the path-first project rung takes each bin dir's own
+	// Windows launcher (`PROJECT_BIN_DIR_WINDOWS_EXT`). pyright's spec says `.cmd`,
+	// so only the per-dir map finds a pip venv's `Scripts\pyright.exe`; without
+	// it the rung falls to the npm `.cmd` beside it. Recurrence it prevents: the
+	// map dropped from this rung, which every formatter reaches through here.
+	it("win32: a venv Scripts pyright.exe outranks a node_modules/.bin pyright.cmd", async () => {
+		const saved = Object.getOwnPropertyDescriptor(process, "platform");
+		Object.defineProperty(process, "platform", { value: "win32" });
+		try {
+			const project = path.join(root, "proj");
+			const venvExe = plant(
+				path.join(project, ".venv", "Scripts", "pyright.exe"),
+				GOOD,
+			);
+			plant(path.join(project, "node_modules", ".bin", "pyright.cmd"), GOOD);
+
+			expect(await ask("pyright")).toEqual({ command: venvExe });
+		} finally {
+			if (saved) Object.defineProperty(process, "platform", saved);
+		}
+	});
 });
