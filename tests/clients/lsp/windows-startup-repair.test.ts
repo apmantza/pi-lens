@@ -537,6 +537,7 @@ describe("Windows LSP startup repair classification (#4263)", () => {
 	// would run the root's own file, so the lookup refuses it before any spawn.
 	// Windows only: the cwd lookup is cmd.exe's, which a POSIX host cannot
 	// simulate (its lookup does not search the cwd).
+	// lane: windows-vitest
 	it.runIf(process.platform === "win32")(
 		"refuses a bare .cmd command in the cwd of a root not admitted for project code (#5674)",
 		async () => {
