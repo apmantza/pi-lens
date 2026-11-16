@@ -48,6 +48,7 @@ import { registeredBackgroundWriteDrainsForTests } from "../../../clients/backgr
 import {
 	checkProbeCache,
 	flushProbeCache,
+	probeCacheUpdatesPendingSizeForTests,
 	resetProbeCacheStateForTesting,
 	updateProbeCache,
 } from "../../../clients/installer/index.js";
@@ -460,6 +461,45 @@ describe("updateProbeCache", () => {
 
 		expect(mockWriteFileAtomicAsync).toHaveBeenCalledTimes(1);
 		expect(await flushProbeCache()).toBe("idle");
+	});
+
+	// Recurrence: #5657. The pending Set keeps an update only until it settles. A
+	// Set that kept settled entries would grow by one per `ensureTool` for the life
+	// of the process. The in-flight read proves the count is live, so the 0 after
+	// settling is not an empty Set that was never filled.
+	it("empties the pending set once a successful stat settles", async () => {
+		mockFsReadFile.mockResolvedValue(JSON.stringify({}));
+		mockFsStat.mockResolvedValue({ mtimeMs: MTIME_MS, size: 1 });
+
+		const pending = updateProbeCache(TOOL_ID, TOOL_PATH);
+		expect(probeCacheUpdatesPendingSizeForTests()).toBe(1);
+		await pending;
+
+		expect(probeCacheUpdatesPendingSizeForTests()).toBe(0);
+	});
+
+	it("empties the pending set once a failing stat settles", async () => {
+		mockFsReadFile.mockResolvedValue(JSON.stringify({}));
+		mockFsStat.mockRejectedValue(new Error("ENOENT"));
+
+		const pending = updateProbeCache(TOOL_ID, TOOL_PATH);
+		expect(probeCacheUpdatesPendingSizeForTests()).toBe(1);
+		await pending;
+
+		expect(probeCacheUpdatesPendingSizeForTests()).toBe(0);
+	});
+
+	// Recurrence: #5657 review F4. A stat that never settles keeps its entry, and
+	// the reset must clear it, or every later settle in the file waits on it.
+	it("the reset clears an update that never settles", () => {
+		mockFsReadFile.mockResolvedValue(JSON.stringify({}));
+		mockFsStat.mockReturnValue(new Promise(() => {}));
+
+		void updateProbeCache(TOOL_ID, TOOL_PATH);
+		expect(probeCacheUpdatesPendingSizeForTests()).toBe(1);
+
+		resetProbeCacheStateForTesting();
+		expect(probeCacheUpdatesPendingSizeForTests()).toBe(0);
 	});
 
 	it("retains an update that arrives during the atomic write", async () => {

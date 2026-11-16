@@ -442,6 +442,11 @@ describe("#2981 long-lived containers are bounded or admitted", () => {
 		"clients/installer/index.ts#getInstallFailureReason:d74e98d9",
 		"clients/installer/index.ts#getInstallAttempt:c20998b0",
 		"clients/installer/index.ts#_probeCacheChangeGeneration:1040840d",
+		// #5657: this key is the Set `_probeCacheUpdatesPending` in
+		// clients/installer/index.ts. The scanner names a declaration after the
+		// one above it, so the key carries the Map's name and the Set's own line
+		// hash. Bound: one entry per `updateProbeCache` call in flight, deleted when
+		// that call settles and cleared by the test reset. The Set is empty when idle.
 		"clients/installer/index.ts#_probeCacheChangeVersions:119f05be",
 		"clients/installer/index.ts#_probeCacheChanges:509e90ff",
 		"clients/installer/index.ts#extractVersionToken:e8cefebf",

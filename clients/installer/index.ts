@@ -2297,7 +2297,12 @@ let _probeCacheChangeGeneration = 0;
 const _probeCacheChanges = new Map<string, ProbeCacheEntry | null>();
 const _probeCacheChangeVersions = new Map<string, number>();
 
-/** `updateProbeCache` calls that have not yet marked their change (#5657). */
+/**
+ * `updateProbeCache` calls that have not settled yet (#5657). Bound: one entry
+ * per call in flight, deleted when that call settles, so the Set is empty when
+ * the installer is idle. A call that never settles keeps its entry until
+ * `resetProbeCacheStateForTesting` clears the Set.
+ */
 const _probeCacheUpdatesPending = new Set<Promise<void>>();
 
 async function readProbeCache(): Promise<ProbeCache> {
@@ -2539,6 +2544,12 @@ async function settleProbeCacheForTests(): Promise<string | undefined> {
 	return `probe-cache flush did not land (${result})`;
 }
 
+// Exported for testing only. Updates not yet settled (#5657); reads 0 once every
+// update settles.
+export function probeCacheUpdatesPendingSizeForTests(): number {
+	return _probeCacheUpdatesPending.size;
+}
+
 // #4937: the debounced flush timer above lives in this evaluation of the module;
 // the tier-2 harness's loaded extension copy owns one the test's own import
 // cannot reach, so its write lands after the fixture root is removed. The
@@ -2662,6 +2673,7 @@ export function resetProbeCacheStateForTesting(): void {
 	_probeCacheDirty = false;
 	_probeCacheChanges.clear();
 	_probeCacheChangeVersions.clear();
+	_probeCacheUpdatesPending.clear();
 	_probeCacheChangeGeneration = 0;
 	_probeCacheRetryAttempt = 0;
 	resetResolvedPathCache();
