@@ -150,14 +150,15 @@ export function seedMatrixFromBotBranch(deps = {}) {
 	};
 	const decision = seedDoc(MATRIX_DOC);
 	// #5667: the idle-eviction doc is the published row the matrix's pending
-	// `idle-eviction-doc` flips are held against. Seeding the matrix alone leaves
-	// master's older row under a restored pending night, so the held row would
-	// flip back and forth every night the refresh PR stays unmerged. It follows
-	// the matrix's decision and has its own staleness check.
-	if (decision.source === "bot") {
-		const idle = seedDoc(IDLE_DOC);
-		log(`idle-eviction doc seed: using ${idle.source} doc (${idle.reason})`);
-	}
+	// `idle-eviction-doc` flips are held against, so it is restored on its own
+	// decision, never gated on the matrix's. The flip-commit night clears the
+	// pending flip and leaves the matrix at master's exact bytes: the next
+	// night's matrix decision is `master`, and a restore gated on it would
+	// drop the committed row and flip it back every other night while the
+	// refresh PR stays unmerged. Its staleness check stays: a bot branch built
+	// before master's idle doc changed (merged, hand-edited) must not revert it.
+	const idle = seedDoc(IDLE_DOC);
+	log(`idle-eviction doc seed: using ${idle.source} doc (${idle.reason})`);
 	return done(decision);
 }
 

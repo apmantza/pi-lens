@@ -13,7 +13,7 @@
  * or the refresh PR stops committing the doc the seed restores.
  */
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
 import {
@@ -68,8 +68,42 @@ describe("the seed step restores the idle-eviction doc with the matrix (#5667)",
 			log: () => {},
 		});
 		expect(decision.source).toBe("bot");
-		expect(writes[`/work/${MATRIX_DOC}`]).toBe(`bot:${MATRIX_DOC}`);
-		expect(writes[`/work/${IDLE_DOC}`]).toBe(`bot:${IDLE_DOC}`);
+		// Keyed through path.join: the script writes path.join(cwd, doc), which is
+		// backslash-separated on Windows (PR #5681 G1).
+		expect(writes[join("/work", MATRIX_DOC)]).toBe(`bot:${MATRIX_DOC}`);
+		expect(writes[join("/work", IDLE_DOC)]).toBe(`bot:${IDLE_DOC}`);
+	});
+
+	it("restores the idle doc on its own decision when the matrix is back at master's bytes (G2)", () => {
+		// The flip-commit night leaves the matrix equal to master's; a restore
+		// gated on the matrix decision dropped the committed idle row.
+		const botRef = `refs/remotes/origin/${BOT_BRANCH}`;
+		const blobs: Record<string, string> = {
+			[`HEAD:${MATRIX_DOC}`]: "m",
+			[`${botRef}:${MATRIX_DOC}`]: "m",
+			[`${botRef}^:${MATRIX_DOC}`]: "m",
+			[`HEAD:${IDLE_DOC}`]: "idle-master",
+			[`${botRef}:${IDLE_DOC}`]: "idle-bot",
+			[`${botRef}^:${IDLE_DOC}`]: "idle-master",
+		};
+		const writes: Record<string, string> = {};
+		const decision = seedMatrixFromBotBranch({
+			cwd: "/work",
+			git: (args) => {
+				if (args[0] === "fetch") return "";
+				const blob = blobs[args.at(-1) as string];
+				if (blob === undefined)
+					throw Object.assign(new Error("exit 1"), { status: 1 });
+				return args[0] === "rev-parse" ? `${blob}\n` : blob;
+			},
+			writeFile: (file, text) => {
+				writes[file] = text;
+			},
+			log: () => {},
+		});
+		expect(decision.source).toBe("master");
+		expect(Object.keys(writes)).toEqual([join("/work", IDLE_DOC)]);
+		expect(writes[join("/work", IDLE_DOC)]).toBe("idle-bot");
 	});
 
 	it("keeps the restored doc among the files the refresh PR commits", () => {
