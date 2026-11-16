@@ -75,9 +75,9 @@ const EXEMPT_SITES: Readonly<Record<string, string>> = {
 	'clients/safe-spawn.ts:"/F", "/T", "/PID"':
 		"killPidTreeSync runs from process exit and signal handlers. The process is already tearing down, so there is no event loop left to protect, and a timeout would only orphan the kill it was asked to perform.",
 	"clients/safe-spawn.ts:spawnCmd, spawnArgs,":
-		"safeSpawn's Windows-resolved-path spawnSync fallback (the PATH+PATHEXT resolved-path branch) spreads the CALLER's options, which is where the timeout comes from. Its in-repo callers each pass one: findCommand in safe-spawn.ts and metrics-history.ts (timeout: 5000 each), lsp/launch.ts (timeout: 3000).",
+		"safeSpawn's Windows-resolved-path spawnSync fallback (the PATH+PATHEXT resolved-path branch) spreads the CALLER's options, which is where the timeout comes from. Its in-repo callers each pass one: metrics-history.ts (timeout: 5000), lsp/launch.ts (timeout: 3000).",
 	"clients/safe-spawn.ts:// Explicit override, not just the spread above":
-		"safeSpawn's plain-command spawnSync fallback (the non-Windows-resolved branch) spreads the CALLER's options for the identical reason as the Windows-resolved-path sibling above: the timeout comes from the caller. Same in-repo callers: findCommand in safe-spawn.ts and metrics-history.ts (timeout: 5000 each), lsp/launch.ts (timeout: 3000).",
+		"safeSpawn's plain-command spawnSync fallback (the non-Windows-resolved branch) spreads the CALLER's options for the identical reason as the Windows-resolved-path sibling above: the timeout comes from the caller. Same in-repo callers: metrics-history.ts (timeout: 5000), lsp/launch.ts (timeout: 3000).",
 };
 
 interface CallSite {

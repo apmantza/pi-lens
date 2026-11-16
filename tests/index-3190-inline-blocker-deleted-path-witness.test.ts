@@ -134,8 +134,6 @@ vi.mock("../clients/safe-spawn.js", async (importOriginal) => ({
 		spawnRouter.run(command, args),
 	isCommandAvailableAsync: async (command: string) =>
 		spawnRouter.isDoubled(command),
-	findCommand: (command: string) =>
-		spawnRouter.isDoubled(command) ? command : null,
 	findCommandAsync: async (command: string) =>
 		spawnRouter.isDoubled(command) ? command : null,
 }));

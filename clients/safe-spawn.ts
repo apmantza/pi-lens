@@ -2888,10 +2888,9 @@ export async function findCommandAsync(
  * This blocks the entire Node.js event loop until the process exits.
  * If the process hangs, pi will freeze.
  *
- * Kept for backward compatibility during migration (today's only caller:
- * `test-runner-client.ts`'s synchronous pytest-on-PATH probe, called from a
- * sync detection path with many sync callers/tests — not a trivial async
- * migration, see #817 follow-up discussion).
+ * Kept for the two callers that sit on a synchronous path: the stderr-guarded
+ * PowerShell probe in `clients/lsp/launch.ts` and the git-HEAD read in
+ * `clients/metrics-history.ts` (see the #817 follow-up discussion).
  *
  * #817: the Windows branch used to build a `cmd.exe`/`shell:true` command
  * line from unvalidated caller input (CodeQL #17/#18/#19), same unsoundness
@@ -3032,17 +3031,4 @@ export function safeSpawn(
 		error: result.error,
 		...(spawnFailure ? { failure: "spawn" as const, spawnFailure } : {}),
 	};
-}
-
-/**
- * Find the full path to a command (sync version - deprecated)
- * @deprecated Use findCommandAsync
- */
-export function findCommand(command: string): string | null {
-	const finder = process.platform === "win32" ? "where" : "which";
-	const result = safeSpawn(finder, [command], { timeout: 5000 });
-
-	if (result.status !== 0) return null;
-
-	return admittedLookupAnswer(result.stdout);
 }

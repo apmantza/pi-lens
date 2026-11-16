@@ -914,7 +914,8 @@ const ROWS: Readonly<Record<string, Row>> = {
 		"clients/process-snapshot.ts#spawnCollectStdoutResult": 2,
 		// #5289: `safeSpawnBatch` and the sync `isCommandAvailable` (deleted)
 		// each held one computed-command site.
-		"clients/safe-spawn.ts#safeSpawn": 1,
+		// #5410 S5: the sync `findCommand` (deleted) held the one `safeSpawn` site
+		// left here, so its row goes with it.
 		"clients/safe-spawn.ts#safeSpawnAsync": 2,
 		"clients/tool-probe.ts#safeSpawnAsync": 1,
 	}),
