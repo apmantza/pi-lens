@@ -107,6 +107,7 @@
 		"config/gitignore-tracked-shadow.test.ts": 2,
 		"config/global-dir-probe-redirect.test.ts": 2,
 		"config/heavy-advisory-gate-workflow.test.ts": 3,
+		"config/lsp-capability-refresh-workflow.test.ts": 2,
 		"config/oxlint-advisory-rule-floor-gate.test.ts": 3,
 		"config/tracked-control-bytes.test.ts": 1,
 		"index-2050-worktree-bash-dispatch-witness.test.ts": 1,

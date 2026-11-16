@@ -1274,12 +1274,15 @@ jobs:
 
       # #4277: a census mismatch belongs in its own persistent issue, not in a
       # refresh PR that can be closed while its red logs go unread. This is an
-      # explicit always-path and inspects every best-effort LSP step as well as
-      # the job result, so failures before the census are reported too.
+      # explicit always-path. Its clean verdict reads only the census outputs
+      # (#5676): a job failure in a step outside the census (#5675) files
+      # nothing, and a failure before the census leaves its outputs unset,
+      # which reads as not clean, so it is still reported.
       - name: Notify on LSP capability census (file/update/close tracking issue)
         if: always()
         continue-on-error: true
         env:
+          # Context for the drift body's Outcomes line only, not a clean input.
           JOB_STATUS: ${{ needs.tool-smoke.result }}
           CENSUS_OUTCOME: ${{ needs.tool-smoke.outputs.census }}
           SEED_OUTCOME: ${{ needs.tool-smoke.outputs.seed_matrix }}
@@ -1296,7 +1299,7 @@ jobs:
           set -euo pipefail
           TITLE='nightly: LSP capability census drift'
           clean=true
-          for outcome in "$JOB_STATUS" "$CENSUS_OUTCOME" "$SEED_OUTCOME" "$MATRIX_OUTCOME" "$CLEAN_OUTCOME" "$CAPABILITIES_OUTCOME" "$IDLE_OUTCOME" "$PROMOTE_OUTCOME" "$DIFF_OUTCOME"; do
+          for outcome in "$CENSUS_OUTCOME" "$SEED_OUTCOME" "$MATRIX_OUTCOME" "$CLEAN_OUTCOME" "$CAPABILITIES_OUTCOME" "$IDLE_OUTCOME" "$PROMOTE_OUTCOME" "$DIFF_OUTCOME"; do
             [ "$outcome" = success ] || clean=false
           done
           if [ "$clean" = true ]; then
