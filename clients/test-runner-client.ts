@@ -693,7 +693,12 @@ function findPathPytest(): string | null {
 		try {
 			fs.accessSync(found, fs.constants.X_OK);
 		} catch {
-			// none: EACCES is the verdict itself, a pytest exec cannot start.
+			// Exec would refuse this file: no runner, said once per file.
+			recordDegradationOnce({
+				kind: "test-runner-pytest-not-executable",
+				subject: found,
+				reason: "the pytest found on PATH lacks the execute bit",
+			});
 			return null;
 		}
 	}

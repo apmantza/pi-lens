@@ -1426,6 +1426,13 @@ describe.runIf(process.platform !== "win32")(
 					project.root,
 				),
 			).toBeNull();
+			expect(getDegradationSummary()).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						kind: "test-runner-pytest-not-executable",
+					}),
+				]),
+			);
 		});
 
 		it("anchors a relative PATH entry where the walk read it", async () => {
