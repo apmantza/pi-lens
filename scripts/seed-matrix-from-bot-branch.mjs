@@ -39,6 +39,7 @@ import { isMainModule } from "./lib/is-main-module.mjs";
 
 export const BOT_BRANCH = "bot/lsp-docs-refresh";
 export const MATRIX_DOC = "docs/lsp-capability-matrix.md";
+export const IDLE_DOC = "docs/lsp-idle-eviction.md";
 const BOT_REF = `refs/remotes/origin/${BOT_BRANCH}`;
 
 /**
@@ -125,21 +126,37 @@ export function seedMatrixFromBotBranch(deps = {}) {
 			reason: `bot branch absent or unreachable (${firstLine})`,
 		});
 	}
-	const decision = decideMatrixSeed({
-		masterBlob: blob(`HEAD:${MATRIX_DOC}`),
-		botBlob: blob(`${BOT_REF}:${MATRIX_DOC}`),
-		botBaseBlob: blob(`${BOT_REF}^:${MATRIX_DOC}`),
-	});
-	if (decision.source === "bot") {
+	// One doc's decision and, when the bot branch wins, its restore. Fail-open:
+	// an unreadable bot doc leaves master's.
+	const seedDoc = (doc) => {
+		const decision = decideMatrixSeed({
+			masterBlob: blob(`HEAD:${doc}`),
+			botBlob: blob(`${BOT_REF}:${doc}`),
+			botBaseBlob: blob(`${BOT_REF}^:${doc}`),
+		});
+		if (decision.source !== "bot") return decision;
 		try {
-			const text = git(["show", `${BOT_REF}:${MATRIX_DOC}`], { cwd });
-			writeFile(path.join(cwd, MATRIX_DOC), text);
+			writeFile(
+				path.join(cwd, doc),
+				git(["show", `${BOT_REF}:${doc}`], { cwd }),
+			);
 		} catch (error) {
-			return done({
+			return {
 				source: "master",
 				reason: `bot doc unreadable (${String(error?.message ?? error).split("\n")[0]})`,
-			});
+			};
 		}
+		return decision;
+	};
+	const decision = seedDoc(MATRIX_DOC);
+	// #5667: the idle-eviction doc is the published row the matrix's pending
+	// `idle-eviction-doc` flips are held against. Seeding the matrix alone leaves
+	// master's older row under a restored pending night, so the held row would
+	// flip back and forth every night the refresh PR stays unmerged. It follows
+	// the matrix's decision and has its own staleness check.
+	if (decision.source === "bot") {
+		const idle = seedDoc(IDLE_DOC);
+		log(`idle-eviction doc seed: using ${idle.source} doc (${idle.reason})`);
 	}
 	return done(decision);
 }

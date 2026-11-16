@@ -225,19 +225,53 @@ describe("a settled cell changes after two agreeing nights (a751c7a65)", () => {
 		expect(rowLine(third.doc, "csharp")).toBe(CSHARP_NEW);
 	});
 
-	it("publishes a first measurement over an unavailable prior on night one", () => {
-		const out = night(PRIOR, MATRIX_5677, {
-			elixir: {
-				result: "eligible",
-				reason: undefined,
-				respawn: "ok",
-				coverage: "preserved",
-			},
-		});
-		expect(rowLine(out.doc, "elixir")).toBe(
-			"| elixir | primary | unmeasured | eligible | · | ok | preserved |",
+	// a751c7a65 (2026-11-06): the doc as master carried it the day before, with
+	// csharp, dart, fsharp and elixir all `unavailable | tool-unavailable`.
+	const DAY_BEFORE = PRIOR.replace(
+		/^\| (csharp|dart|elixir|fsharp) \| primary \| unmeasured \| \w+ \| [^|]+ \| [^|]+ \| [^|]+ \|$/gm,
+		"| $1 | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |",
+	);
+	const ELIGIBLE = {
+		result: "eligible",
+		reason: undefined,
+		respawn: "ok",
+		coverage: "preserved",
+	} as const;
+
+	it("holds a first measurement over an unavailable prior for two nights (a751c7a65)", () => {
+		expect(rowLine(DAY_BEFORE, "csharp")).toContain(
+			"| unavailable | tool-unavailable |",
 		);
-		expect(pendingOf(out.matrixText)).toEqual({});
+		const over = {
+			csharp: ELIGIBLE,
+			dart: ELIGIBLE,
+			fsharp: NO_BASELINE,
+			elixir: UNAVAILABLE,
+		};
+		const first = night(DAY_BEFORE, MATRIX_5677, over);
+		for (const id of ["csharp", "dart", "fsharp", "elixir"])
+			expect(rowLine(first.doc, id)).toBe(rowLine(DAY_BEFORE, id));
+		expect(pendingOf(first.matrixText).csharp.runs).toBe(1);
+		expect(pendingOf(first.matrixText).elixir).toBeUndefined();
+		const second = night(first.doc, first.matrixText, over);
+		expect(rowLine(second.doc, "csharp")).toBe(
+			"| csharp | primary | unmeasured | eligible | · | ok | preserved |",
+		);
+		expect(rowLine(second.doc, "dart")).toContain("| eligible |");
+		expect(rowLine(second.doc, "fsharp")).toContain(
+			"| inconclusive | no-baseline |",
+		);
+		// elixir never spawned: its row, and its host-noise reason, stand.
+		expect(rowLine(second.doc, "elixir")).toBe(rowLine(DAY_BEFORE, "elixir"));
+		expect(pendingOf(second.matrixText)).toEqual({});
+	});
+
+	it("restarts a first-measurement hold when the second night is not spawned or differs", () => {
+		const first = night(PRIOR, MATRIX_5677, { elixir: ELIGIBLE });
+		expect(pendingOf(first.matrixText).elixir.runs).toBe(1);
+		const dark = night(first.doc, first.matrixText, { elixir: UNAVAILABLE });
+		expect(rowLine(dark.doc, "elixir")).toContain("| unavailable |");
+		expect(pendingOf(dark.matrixText).elixir.runs).toBe(1);
 	});
 
 	it("publishes a server the prior doc has no row for, and drops a pending flip of one the registry lost", () => {
@@ -263,6 +297,22 @@ describe("a settled cell changes after two agreeing nights (a751c7a65)", () => {
 			"| unavailable | server-not-started |",
 		);
 		expect(pendingOf(out.matrixText)).toEqual({});
+		// A server with no prior row at all has nothing to protect: even a
+		// measured first night publishes at once.
+		const measuredFresh = publishIdleEvictionDoc({
+			rows: [
+				...measured(),
+				{ serverId: "fresh", role: "primary", ...ELIGIBLE } as IdleEvictionRow,
+			],
+			declared: new Map([...declared, ["fresh", "unmeasured"]]),
+			date: "2026-11-17",
+			platform: "linux",
+			priorDoc: PRIOR,
+			matrixText: MATRIX_5677,
+		});
+		expect(rowLine(measuredFresh.doc, "fresh")).toContain(
+			"| eligible | · | ok | preserved |",
+		);
 	});
 });
 

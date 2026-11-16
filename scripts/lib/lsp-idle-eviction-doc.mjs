@@ -167,7 +167,7 @@ export function buildIdleEvictionDriftBody(findings, options = {}) {
 	const lines = [
 		"Auto-filed by the nightly `tool-smoke` idle-eviction measurement (#3645).",
 		"",
-		'The registry declares these servers `idleEviction: "transparent"`, so the shared idle timer releases them, but this run\'s respawn of each one failed or reported fewer findings than before eviction. Declare them `resident` (with a reason in `tests/config/lsp-idle-eviction-reasons.json`) or fix the respawn. The per-server rows are in `docs/lsp-idle-eviction.md`.',
+		"The registry declares these servers `idleEviction: \"transparent\"`, so the shared idle timer releases them, but this run's respawn of each one failed or reported fewer findings than before eviction. Declare them `resident` (with a reason in `tests/config/lsp-idle-eviction-reasons.json`) or fix the respawn. This run's measurement is in its step log and job summary; `docs/lsp-idle-eviction.md` shows the prior row until two nights agree.",
 		"",
 		...drift.map((f) => `- **${f.serverId}**: ${f.detail}`),
 	];
@@ -369,11 +369,12 @@ const isMeasured = (cells) => !cells.startsWith("unavailable|");
  *
  * The document is the published answer, not one night's reading. A server this
  * host could not spawn keeps its prior row (#390's merge guard, as for the
- * capability matrix), and a measured row that differs from a published measured
- * one changes only after two agreeing nights (`holdSettledCell`, the seam the
- * save-verdict column uses). The pending night is kept in the capability
- * matrix's refresh-state block under `idle-eviction-doc`, which this returns
- * rewritten; `matrixText` absent means there is nowhere to keep it, so the
+ * capability matrix), and a measured row that differs from the published one,
+ * `unavailable` included, changes only after two agreeing nights
+ * (`holdSettledCell`, the seam the save-verdict column uses). A server with no
+ * prior row at all publishes on its first night. The pending night is kept in
+ * the capability matrix's refresh-state block under `idle-eviction-doc`, which
+ * this returns rewritten; `matrixText` absent means there is nowhere to keep it, so the
  * night publishes unheld rather than never committing. The caller keeps the
  * measured rows for the summary, the drift issue and the evaluated floor.
  *
@@ -426,7 +427,11 @@ export function publishIdleEvictionDoc({
 						value: pending.pendingCells,
 						runs: pending.runs,
 					},
-					isSettled: isMeasured,
+					// Every published row is an answer worth protecting, an `unavailable`
+					// one too (a751c7a65: csharp, dart and elixir moved between
+					// `unavailable` and `eligible` on one night); only a night that could
+					// not spawn the server is not one, and it is handled below.
+					isSettled: () => true,
 				})
 			: // A night that could not tell neither advances nor clears a pending flip.
 				{

@@ -316,6 +316,16 @@ describe("buildIdleEvictionDriftBody", () => {
 		expect(body).toContain("closed automatically");
 	});
 
+	// #5667 review Q4: the drift issue reads the MEASURED rows, while the doc
+	// shows the prior row until two nights agree, so a first-night veto must not
+	// send the reader to a doc row that contradicts the issue.
+	it("says the doc shows the prior row while a change is pending and points at the raw measurement", () => {
+		const body = buildIdleEvictionDriftBody([finding("a", "drift")]) ?? "";
+		expect(body).toContain("two nights agree");
+		expect(body).toContain("step log");
+		expect(body).not.toContain("The per-server rows are in");
+	});
+
 	it("keeps a stable title, because the tracking issue is found by exact title", () => {
 		expect(IDLE_EVICTION_DRIFT_TITLE).toBe(
 			"nightly: LSP idle-eviction drift (declared transparent, measured vetoed)",

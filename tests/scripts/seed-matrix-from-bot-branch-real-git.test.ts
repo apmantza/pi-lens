@@ -24,6 +24,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	BOT_BRANCH,
+	IDLE_DOC,
 	MATRIX_DOC,
 	seedMatrixFromBotBranch,
 } from "../../scripts/seed-matrix-from-bot-branch.mjs";
@@ -56,6 +57,22 @@ function commitDoc(repo: string, text: string, message: string): void {
 	fs.writeFileSync(path.join(repo, MATRIX_DOC), text);
 	git(repo, "add", MATRIX_DOC);
 	git(repo, "commit", "-q", "-m", message);
+}
+
+function commitIdleDoc(repo: string, text: string, message: string): void {
+	fs.mkdirSync(path.join(repo, "docs"), { recursive: true });
+	fs.writeFileSync(path.join(repo, IDLE_DOC), text);
+	git(repo, "add", IDLE_DOC);
+	git(repo, "commit", "-q", "-m", message);
+}
+
+/** The bot's night is ONE commit over both docs, as the refresh PR writes it. */
+function commitBotNight(repo: string, idleText: string): void {
+	fs.mkdirSync(path.join(repo, "docs"), { recursive: true });
+	fs.writeFileSync(path.join(repo, MATRIX_DOC), "BOT DOC (pending flip)\n");
+	fs.writeFileSync(path.join(repo, IDLE_DOC), idleText);
+	git(repo, "add", MATRIX_DOC, IDLE_DOC);
+	git(repo, "commit", "-q", "-m", "bot refresh");
 }
 
 /** A throwaway "origin" with master at `docs` and an unrelated later commit. */
@@ -123,5 +140,58 @@ describe("#3401 seedMatrixFromBotBranch on real git (depth-1 CI checkout)", () =
 		expect(result.decision.source).toBe("master");
 		expect(result.logs[0]).toMatch(/absent or unreachable/);
 		expect(result.doc).toBe("MASTER DOC v1\n");
+	});
+});
+
+/**
+ * #5667: the idle-eviction doc's pending flips live in the matrix, and its
+ * published row is `docs/lsp-idle-eviction.md`. Seeding the matrix alone put a
+ * restored pending night over master's older row, so while the refresh PR sat
+ * unmerged the held row flipped every other night.
+ */
+describe("#5667 the seed restores the idle-eviction doc with the matrix (real git)", () => {
+	const idleOf = (work: string) =>
+		fs.readFileSync(path.join(work, IDLE_DOC), "utf8");
+
+	it("restores the idle doc from the bot branch when the matrix is seeded", () => {
+		const { root, origin } = makeOrigin();
+		commitIdleDoc(origin, "IDLE DOC v1\n", "master idle doc");
+		git(origin, "checkout", "-q", "-b", BOT_BRANCH);
+		commitBotNight(origin, "IDLE DOC (published by the bot night)\n");
+		git(origin, "checkout", "-q", "master");
+		const work = ciCheckout(root, origin, "work-idle");
+		const result = seed(work);
+		expect(result.decision.source).toBe("bot");
+		expect(idleOf(work)).toBe("IDLE DOC (published by the bot night)\n");
+		expect(
+			result.logs.some((l) =>
+				l.startsWith("idle-eviction doc seed: using bot"),
+			),
+		).toBe(true);
+	});
+
+	it("keeps master's idle doc when a maintainer edited it since the bot branch was built", () => {
+		const { root, origin } = makeOrigin();
+		commitIdleDoc(origin, "IDLE DOC v1\n", "master idle doc");
+		git(origin, "checkout", "-q", "-b", BOT_BRANCH);
+		commitBotNight(origin, "IDLE DOC (bot)\n");
+		git(origin, "checkout", "-q", "master");
+		commitIdleDoc(
+			origin,
+			"IDLE DOC v2 (hand edit)\n",
+			"hand edit of the idle doc",
+		);
+		const work = ciCheckout(root, origin, "work-idle-stale");
+		const result = seed(work);
+		expect(result.decision.source).toBe("bot");
+		expect(idleOf(work)).toBe("IDLE DOC v2 (hand edit)\n");
+	});
+
+	it("leaves master's idle doc alone when the matrix is not seeded", () => {
+		const { root, origin } = makeOrigin();
+		commitIdleDoc(origin, "IDLE DOC v1\n", "master idle doc");
+		const work = ciCheckout(root, origin, "work-idle-nobot");
+		seed(work);
+		expect(idleOf(work)).toBe("IDLE DOC v1\n");
 	});
 });
