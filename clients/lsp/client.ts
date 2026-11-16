@@ -4870,27 +4870,21 @@ export async function clientRequestWorkspaceDiagnostics(
 
 /**
  * #5487: resolves true once the server is not (or no longer) loading, false when
- * `budgetMs` lapses first, the client dies or `signal` aborts (#5097). A server
- * that announced nothing is not loading. Listeners and timer are removed on
- * every exit.
+ * `budgetMs` lapses first or the client dies. A server that announced nothing is
+ * not loading. Listener and timer are removed on every exit.
  */
 function waitForQuiescence(
 	state: LSPClientState,
 	budgetMs: number,
-	signal?: AbortSignal,
 ): Promise<boolean> {
 	if (state.serverStatus?.quiescent !== false) return Promise.resolve(true);
-	if (budgetMs <= 0 || !isClientAlive(state) || signal?.aborted)
-		return Promise.resolve(false);
+	if (budgetMs <= 0 || !isClientAlive(state)) return Promise.resolve(false);
 	return new Promise<boolean>((resolve) => {
 		const finish = (ready: boolean): void => {
 			clearTimeout(timer);
 			state.diagnosticEmitter.off(SERVER_STATUS_CHANGED, onChange);
-			signal?.removeEventListener("abort", onAbort);
 			resolve(ready);
 		};
-		const onAbort = (): void => finish(false);
-		signal?.addEventListener("abort", onAbort, { once: true });
 		const onChange = (): void => {
 			if (!isClientAlive(state)) finish(false);
 			else if (state.serverStatus?.quiescent !== false) finish(true);
@@ -4990,11 +4984,14 @@ async function pullDiagnosticsWhenReady(
 		if (state.serverStatus?.quiescent === false) {
 			waitedForReadiness = true;
 			noteReadinessGate(state);
-			if (
-				!(await waitForQuiescence(state, deadlineAt - Date.now(), abortSignal))
-			) {
-				return PULL_UNSETTLED;
-			}
+			// The abort ends this caller's wait; the listener and timer under it
+			// go with the server's next status or the budget, as they always did.
+			const ready = await untilAborted(
+				waitForQuiescence(state, deadlineAt - Date.now()),
+				abortSignal,
+				false,
+			);
+			if (!ready) return PULL_UNSETTLED;
 			requestBudgetMs = deadlineAt - Date.now();
 		}
 		const sentAt = state.serverStatus;
