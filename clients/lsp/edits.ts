@@ -35,7 +35,7 @@ import { peekOwnedLspService } from "./service-singleton.js";
 import { FILE_CREATED, FILE_DELETED } from "./watch-queue.js";
 import { logLatency } from "../latency-logger.js";
 import {
-	detectLineEnding,
+	lineEndingAtLine,
 	normalizeToLF,
 	restoreLineEndings,
 } from "../host-edit-normalize.js";
@@ -488,14 +488,12 @@ function normalizeTextEditsForContent(
 ): LSPTextEdit[] {
 	const lines = content.split("\n");
 	const lastLine = Math.max(0, lines.length - 1);
-	// The target file's dominant EOL style, detected the same way the host edit
-	// tool does (first-occurrence-wins). Every `newText` is normalized to this
-	// style below so a server-supplied bare `\n` can never be spliced verbatim
-	// into a CRLF file and produce mixed line endings — the LSP workspace-edit
-	// apply path now shares the exact contract the host-edit path already
-	// enforces via `host-edit-normalize.ts` (#1147 P3-5, general class). A no-op
-	// for LF files: `restoreLineEndings` is the identity when `ending === "\n"`.
-	const ending = detectLineEnding(content);
+	// Every `newText` takes the line ending of the line where its range starts
+	// (`lineEndingAtLine` over the original lines), the rule pi 1.5.2's edit tool
+	// applies per replaced range, so a server-supplied bare `\n` is never spliced
+	// verbatim into a CRLF range and a mixed-ending file keeps each range's style
+	// (#1147 P3-5, #5670). Pure LF and pure CRLF files see no change:
+	// `restoreLineEndings` is the identity when the ending is `\n`.
 	const clamp = (position: LSPPosition): LSPPosition => {
 		// LSP 3.17: a line past the end of the document defaults to the end of the
 		// document (last line, its length). Clamp rather than throw so a large
@@ -514,7 +512,10 @@ function normalizeTextEditsForContent(
 		return {
 			...edit,
 			range: { start, end },
-			newText: restoreLineEndings(normalizeToLF(edit.newText), ending),
+			newText: restoreLineEndings(
+				normalizeToLF(edit.newText),
+				lineEndingAtLine(lines, start.line),
+			),
 		};
 	});
 	// Return array order (validated, deduped); the single application-ordering

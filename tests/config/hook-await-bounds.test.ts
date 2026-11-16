@@ -2431,7 +2431,9 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// `resolveCommandArgsWithInstallFallback` (five awaits) are deleted;
 	// `toolOnPath` and `resolveRubocopCommand` add three, each an await of the
 	// checker's own probe.
-	"clients/dispatch/runners/utils/runner-helpers.ts": 31,
+	// #5410 D8: 31 -> 29 — `resolveLocalFirstAsync` (its global-bin lookup and
+	// its PATH probe) is deleted, so two unbounded awaits go with it.
+	"clients/dispatch/runners/utils/runner-helpers.ts": 29,
 	// #5087: the edit's re-measure plus its one default-branch read (9 in
 	// all; 10 -> 9 when the first touch took its table from the analyzer's
 	// own measure, #5443 review F6). Its awaits are the shared parser (init,
