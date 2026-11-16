@@ -461,6 +461,17 @@ night goes to the run log (`save-verdict: held back <server>`), to one
 `--summary` JSON (`heldBack`). No counter or issue tracks consecutive held
 nights.
 
+A settled answer also changes only when two nights agree (#3405), as
+`clean-behavior` does. The first night that measures a different settled answer
+leaves the row as published and records the night under `save-verdict` in the
+refresh-state JSON below (`pendingSaveVerdict`, `runs`); the run log line reads
+`flip pending, night 1 of 2`. The next night that measures the same answer
+writes the row and clears the entry, and a night that measures the published
+answer again clears it without a change. A night that measures a third answer
+restarts the count at one, and an `inconclusive` night changes nothing. A row
+that holds no settled answer (`unknown`, `inconclusive`, `cannot measure`) has
+nothing to protect, so its first measurement publishes on the first night.
+
 A pull-mode server answers a `textDocument/diagnostic` request rather than
 publishing, so no arm of its run has the save as its only new input: it reads
 `no (pull)` when the request answered without a save and `inconclusive`
@@ -569,8 +580,9 @@ _None observed as of the last probe run._
 
 Bookkeeping for the two-run `first-publish`/`clean-behavior` hysteresis, the
 first-miss stamps (#3401, #4615), the consecutive-night `missed-probe`
-streaks behind the `stale` column (#4512) and consecutive-night
-`idle-eviction` counts (#3989). Regenerated every run; never a measurement.
+streaks behind the `stale` column (#4512), consecutive-night
+`idle-eviction` counts (#3989) and the pending `save-verdict` flips (#3405).
+Regenerated every run; never a measurement.
 
 ```json
 {"clean-behavior":{"fallow":{"pendingBehavior":"silent","pendingTier":"3","runs":1}},"first-publish":{"fallow":{"pendingFirstPublish":"direct","runs":1},"opengrep":{"firstMissed":"2026-11-14"}},"idle-eviction":{"dart":{"nights":[{"day":"2026-11-06","rssMb":75,"coldMs":511},{"day":"2026-11-07","rssMb":75,"coldMs":538}]},"go":{"nights":[{"day":"2026-11-06","rssMb":89,"coldMs":567},{"day":"2026-11-07","rssMb":90,"coldMs":595}]}},"missed-probe":{"opengrep":{"clean-behavior":{"since":"2026-11-14","last":"2026-11-15","misses":2},"first-publish":{"since":"2026-11-14","last":"2026-11-15","misses":2}}}}
