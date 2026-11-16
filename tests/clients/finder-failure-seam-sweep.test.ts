@@ -79,7 +79,7 @@ const FINDER_FILES: ReadonlyArray<readonly [string, FinderForm, string]> = [
 	[
 		"clients/safe-spawn.ts",
 		"status-only",
-		"`findCommand*` and `isCommandAvailableAsync` reduce each call to a path or a boolean",
+		"`findCommandAsync` and `isCommandAvailableAsync` reduce each call to a path or a boolean",
 	],
 	[
 		"scripts/smoke-availability-lifecycle.mjs",

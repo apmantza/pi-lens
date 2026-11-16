@@ -11,7 +11,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createLSPClient } from "../../../clients/lsp/client.js";
 import { launchLSP, stopLSP } from "../../../clients/lsp/launch.js";
-import { findCommand } from "../../../clients/safe-spawn.js";
+import { findCommandOnPath } from "../../../clients/command-path.js";
 import { setupTestEnvironment } from "../test-utils.js";
 
 // Detect clangd availability at module load time.
@@ -20,11 +20,14 @@ import { setupTestEnvironment } from "../test-utils.js";
 // which intermittently failed to spawn at all under the process-creation
 // pressure of a full parallel test-suite run on windows-latest CI
 // (ENOENT/EAGAIN from the OS, not a real "clangd unavailable" signal).
-// `findCommand` (shared with production, `clients/safe-spawn.ts`) already
-// implements this exact where/which probe via the cached PATH+PATHEXT
-// resolution `safeSpawn` uses — reused here instead of a second, less
-// careful spawn strategy (single source of truth, #883).
-const CLANGD: string | null = findCommand("clangd");
+// `findCommandOnPath` (shared with production, `clients/command-path.ts`)
+// walks PATH with the Windows extensions and spawns nothing, so the probe
+// reads the same PATH the runtime does (single source of truth, #883). The
+// sync `findCommand` it replaces spawned `which`/`where` (#5410 S5).
+const CLANGD: string | null = findCommandOnPath(
+	"clangd",
+	process.platform === "win32",
+);
 
 function createCompileCommandsJson(projectDir: string, files: string[]): void {
 	const entries = files.map((f) => ({
