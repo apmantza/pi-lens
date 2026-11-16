@@ -113,11 +113,11 @@ vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
 }));
 
 /** Plant a `pyright` file the doubled child process treats as a binary. */
-function plantPyright(dir: string, ext = ""): string {
+function plantPyright(dir: string): string {
 	fs.mkdirSync(dir, { recursive: true });
 	const file = path.join(
 		dir,
-		process.platform === "win32" ? "pyright.cmd" : `pyright${ext}`,
+		process.platform === "win32" ? "pyright.cmd" : "pyright",
 	);
 	fs.writeFileSync(file, "#!/bin/sh\n");
 	fs.chmodSync(file, 0o755);
