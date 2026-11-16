@@ -14,7 +14,7 @@ import { access, lstat, readFile, stat } from "node:fs/promises";
 import * as os from "node:os";
 import { pathToFileURL } from "node:url";
 import { emitBounded } from "../bounded-telemetry.js";
-import { withTimeout } from "../deadline-utils.js";
+import { untilAborted, withTimeout } from "../deadline-utils.js";
 import { minimatch } from "../deps/minimatch.js";
 import { mapWithConcurrency } from "../map-with-concurrency.js";
 import {
@@ -4103,6 +4103,9 @@ function aggregatePullOutcomes(
 		: { status: "unavailable" };
 }
 
+/** {@link pullDiagnosticSource}: the call's abort ended the wait for the reply. */
+const PULL_ABORTED = Symbol("pull-aborted");
+
 async function pullDiagnosticSource(
 	state: LSPClientState,
 	filePath: string,
@@ -4110,6 +4113,12 @@ async function pullDiagnosticSource(
 	identifier: string | undefined,
 ): Promise<PullSourceOutcome> {
 	if (!isClientAlive(state)) return { status: "unavailable" };
+	// #5097: the abort of the call or bound this pull runs under. Read here, in
+	// the caller's own async context, and never captured by a long-lived handler
+	// (the server-initiated re-pull steps out of the scope, see
+	// `runRefreshRepullPool`). An abort before the send claims and sends nothing.
+	const abortSignal = getAmbientAbortSignal();
+	if (abortSignal?.aborted) return { status: "unavailable" };
 	const normalizedPath = normalizeMapKey(filePath);
 	// #1773: a budget at or below the usable floor cannot complete a real
 	// round trip. Skip the dispatch entirely — no `safeSendRequest` call, no
@@ -4201,8 +4210,22 @@ async function pullDiagnosticSource(
 		// smaller of the absolute ceiling and the caller's remaining wait budget.
 		// On timeout the caught error yields `unavailable` below (never a false
 		// `clean`), so it falls through to the push-wait/timeout backstop.
-		const report = await withTimeout(requestPromise, effectiveTimeoutMs);
+		const report = await withTimeout(
+			untilAborted(requestPromise, abortSignal, PULL_ABORTED),
+			effectiveTimeoutMs,
+		);
 
+		if (report === PULL_ABORTED) {
+			// #5097: the abort is the timeout's transition without its record. The
+			// request is cancelled on the wire and tracked as abandoned, so a repeat
+			// touch of a server that ignores the cancel does not stack a second pull
+			// behind it (#1889); an Esc is no degradation, so no timeout telemetry,
+			// no late-answer watch and no failure-history row. `unavailable`, never
+			// `clean`: nothing was stored (#240).
+			trackAbandonedPullRequest(state, sourceKey, requestPromise);
+			pullAbort.abort();
+			return { status: "unavailable" };
+		}
 		if (!report) {
 			recordPullFailure(
 				state,
