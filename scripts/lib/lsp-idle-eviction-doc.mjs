@@ -13,7 +13,11 @@
 // evidence, not diff noise, so they go to the run's step log, its job summary
 // and the JSON summary.
 
-import { compareStableStrings, parseTable } from "./md-matrix.mjs";
+import {
+	compareStableStrings,
+	parseTable,
+	TIER_CHANGE_AGREE_RUNS,
+} from "./md-matrix.mjs";
 
 /**
  * Bounded vocabulary for a row's reason. The document never renders free text
@@ -330,5 +334,54 @@ export function parseIdleEvictionDoc(text) {
 		declared: cells[index("declared")],
 		result: cells[index("result")],
 		reason: cells[index("reason")] === "·" ? undefined : cells[index("reason")],
+		respawn: cells[index("respawn")],
+		coverage: cells[index("coverage")],
 	}));
+}
+
+/**
+ * The one entry the measurement script publishes through (#5667): tonight's
+ * measured rows in, the document text and the refresh-state text out.
+ *
+ * @param {{ rows: object[], declared: Map<string, string>, date: string, platform: string, priorDoc?: string, matrixText?: string }} night
+ */
+export function publishIdleEvictionDoc({
+	rows,
+	declared,
+	date,
+	platform,
+	matrixText,
+}) {
+	return {
+		doc: renderIdleEvictionDoc({ rows, declared, date, platform }),
+		matrixText,
+		held: [],
+	};
+}
+
+/**
+ * The run-log record of the cells the hold kept (#5667): one line per server
+ * per run, however often a row repeats, and under GitHub Actions one
+ * `::warning::` annotation naming them all. A held night leaves the document
+ * unchanged, so the refresh PR shows nothing; the log is where it is recorded.
+ *
+ * @param {Array<{ serverId: string, prior: string, measured: string, pendingRuns?: number }>} held
+ * @param {{ env: Record<string, string | undefined>, log: (line: string) => void }} sink
+ */
+export function reportIdleEvictionHeld(held, { env, log }) {
+	const seen = new Set();
+	for (const h of held) {
+		if (seen.has(h.serverId)) continue;
+		seen.add(h.serverId);
+		const why = h.pendingRuns
+			? `flip pending, night ${h.pendingRuns} of ${TIER_CHANGE_AGREE_RUNS}`
+			: "server not spawned";
+		log(
+			`idle-eviction doc: held back ${h.serverId}: kept "${h.prior}", this night measured "${h.measured}" (${why})`,
+		);
+	}
+	if (seen.size > 0 && env.GITHUB_ACTIONS)
+		log(
+			`::warning::idle-eviction doc: held back ${seen.size} server(s): ${[...seen].join(", ")}`,
+		);
 }
