@@ -552,14 +552,19 @@ function guardSubstitutions(command: string): {
  * Whether a command substitution of `command` runs a verb `matcher` governs.
  * A read that does not finish (see `shellSubstitutions`) answers yes when the
  * text names such a verb anywhere: the part it could not read may run it, and
- * a here-doc misread swallowed a whole commit that way (#5553 R4-2).
+ * a here-doc misread swallowed a whole commit that way (#5553 R4-2). That
+ * holds only where bash reads `command` (`lexer` "bash"): in other text a `'`
+ * or a backtick is a character, and `--body "Don't push yet"` is no command
+ * (#5652 r2).
  */
 function containsGuardedSubstitution(
 	command: string,
 	matcher: GitVerbMatcher,
+	lexer: "bash" | "text",
 ): boolean {
 	const read = guardSubstitutions(command);
-	if (!read.complete && namesGuardedVerb(command, matcher)) return true;
+	if (lexer === "bash" && !read.complete && namesGuardedVerb(command, matcher))
+		return true;
 	return read.bodies.some((substitution) =>
 		decodeShellWords(substitution.body).some((segment) =>
 			containsGuardedGitVerb(segment.words, substitution.depth, matcher),
@@ -779,26 +784,67 @@ export function collectGitInvocations(
 }
 
 /**
+ * Who reads a command string (#5652 r2). `bash`: bash lexes all of it
+ * (`eval`, `nix-shell --run`). `posix-c`: a POSIX shell's `-c`, which lexes
+ * its first word; the words after it are its `$0` and positional parameters.
+ * `text`: no grammar the gate knows (an unknown launcher's switch value, a
+ * word after one the model cannot read). `windows-shell`: PowerShell or cmd.
+ */
+type CommandStringReader = "bash" | "posix-c" | "text" | "windows-shell";
+
+/**
+ * What a `text` command string costs of the depth a shell's string spends
+ * whole (#5652 r3). A chain of launchers (`ssh -t h sudo -u u docker exec -ti
+ * c sh -c '…'`) is ordinary and reads one `text` level per switch, so a whole
+ * level each would end the read at the fourth launcher and refuse it. None at
+ * all would read `find` with a thousand `-o` terms a thousand levels deep:
+ * quadratic, and past the stack. An eighth ends the read after 24 launchers.
+ */
+const TEXT_LEVEL = 1 / 8;
+
+/**
  * A command string is a shell's, so its words are lexed again as one (the
  * decoded text of each word, joined): `bash -c $'git\x20push'` reads
- * `git push` (#4739 round 5).
+ * `git push` (#4739 round 5). `callerDepth` is the caller's level; the string
+ * is read one shell level deeper, or {@link TEXT_LEVEL} deeper as `text`.
  */
 function commandStringHasGuardedVerb(
 	words: readonly DecodedShellWord[],
-	depth: number,
+	callerDepth: number,
 	matcher: GitVerbMatcher,
-	whitespace: "bash" | "windows-shell" = "bash",
+	reader: CommandStringReader,
 ): boolean {
-	const joined = words.map((word) => word.text).join(" ");
+	const depth = callerDepth + (reader === "text" ? TEXT_LEVEL : 1);
 	// PowerShell and cmd read their own whitespace: Char.IsWhiteSpace, which
 	// holds NBSP, U+0085, the Unicode spaces, CR, VT and FF
 	// (CharTraits.IsWhitespace in the PowerShell parser). Bash's blanks apply
 	// to the bash path only; `pwsh -Command "git<NBSP>commit"` is a commit (#5649).
-	return decodeShellWords(
-		canonicalizeGuardCommand(
-			whitespace === "windows-shell" ? joined.replace(/[^\S\n]/g, " ") : joined,
-		),
-	).some((segment) => containsGuardedGitVerb(segment.words, depth, matcher));
+	const canonical = (part: readonly DecodedShellWord[]) => {
+		const joined = part.map((word) => word.text).join(" ");
+		return canonicalizeGuardCommand(
+			reader === "windows-shell" ? joined.replace(/[^\S\n]/g, " ") : joined,
+		);
+	};
+	const command = canonical(words);
+	// A substitution in the string runs, whatever the word before it
+	// (`bash -c 'echo $(git commit)'`, #5652). In a `-c` only its body word is
+	// lexed: `bash -c 'echo ok' '$(git commit)'` commits nothing, and a body
+	// that reads its parameters (`"$@"`, `eval "$1"`) is the word walk's. An
+	// option word after `-c` (`bash -c -e '…'`) leaves the body unknown.
+	const lexed =
+		reader === "posix-c" && !/^[-+]/.test(words[0]?.text ?? "")
+			? canonical(words.slice(0, 1))
+			: command;
+	return (
+		containsGuardedSubstitution(
+			lexed,
+			matcher,
+			reader === "bash" || reader === "posix-c" ? "bash" : "text",
+		) ||
+		decodeShellWords(command).some((segment) =>
+			containsGuardedGitVerb(segment.words, depth, matcher),
+		)
+	);
 }
 
 /**
@@ -835,7 +881,7 @@ function hidesGuardedVerb(
 				(word) =>
 					(firstHidden === 0 && word.hidden) ||
 					matcher.matchesVerb(word.text, []) ||
-					commandStringHasGuardedVerb([word], depth + 1, matcher),
+					commandStringHasGuardedVerb([word], depth, matcher, "text"),
 			)
 	);
 }
@@ -845,7 +891,12 @@ function containsGuardedGitVerb(
 	depth: number,
 	matcher: GitVerbMatcher,
 ): boolean {
-	if (depth > 3 || words.length === 0) return false;
+	if (words.length === 0) return false;
+	// Past three levels the gate reads no further, so it answers as a read
+	// that does not finish does: a word naming a governed verb may run it
+	// (`echo $(echo $(eval "sh -c \"git commit\""))`, #5652 r2).
+	if (depth > 3)
+		return namesGuardedVerb(words.map((word) => word.text).join(" "), matcher);
 	let commandWords = words;
 	while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(commandWords[0]?.text ?? "")) {
 		commandWords = commandWords.slice(1);
@@ -868,8 +919,9 @@ function containsGuardedGitVerb(
 		if (runIndex >= 0 && runIndex + 1 < commandTokens.length) {
 			return commandStringHasGuardedVerb(
 				commandWords.slice(runIndex + 2),
-				depth + 1,
+				depth,
 				matcher,
+				"bash",
 			);
 		}
 	}
@@ -887,7 +939,9 @@ function containsGuardedGitVerb(
 	// `eval "git push"` is the `git push` it runs (#4739 round 3). Like a
 	// non-leading git, an `eval` after the first word is read too: `builtin eval`,
 	// `command eval` and `if eval` run it (round 4). A string built by data flow
-	// (`eval "$CMD"`) stays out of reach: it exists only at run time.
+	// (`eval "$CMD"`) stays out of reach: it exists only at run time. Only a
+	// leading `eval` is surely bash's; a later one may be an argument
+	// (`npm run eval -- --note "it's a push"`), so its text is read as text.
 	const evalIndex = commandTokens.findIndex(
 		(token) => executableName(token) === "eval",
 	);
@@ -895,8 +949,9 @@ function containsGuardedGitVerb(
 		evalIndex >= 0 &&
 		commandStringHasGuardedVerb(
 			commandWords.slice(evalIndex + 1),
-			depth + 1,
+			depth,
 			matcher,
+			evalIndex === 0 ? "bash" : "text",
 		)
 	) {
 		return true;
@@ -944,17 +999,25 @@ function containsGuardedGitVerb(
 		if (commandIndex >= commandTokens.length) return false;
 		return commandStringHasGuardedVerb(
 			commandWords.slice(commandIndex),
-			depth + 1,
+			depth,
 			matcher,
+			"text",
 		);
 	}
+	const windowsShell = ["pwsh", "powershell", "cmd"].includes(
+		executableName(leadingExecutable),
+	);
+	// A POSIX shell takes `-c` anywhere in a flag cluster (`bash -ce`, `-eci`,
+	// #5652 r3). PowerShell options hold a `c` too (`-noninteractive`), so
+	// there only a cluster ending in `c` is the switch.
+	const commandCluster = windowsShell ? /^-[^-]*c$/ : /^-[^-]*c[^-]*$/;
 	const lower = commandTokens.slice(1).map((token) => token.toLowerCase());
 	const switchIndex = lower.findIndex(
 		(token) =>
 			token === "-c" ||
 			token === "--run" ||
 			token === "-lc" ||
-			(/^-[^-]*c$/.test(token) && !token.startsWith("--")) ||
+			(commandCluster.test(token) && !token.startsWith("--")) ||
 			token === "/c" ||
 			token === "-command" ||
 			token === "-command:" ||
@@ -972,11 +1035,9 @@ function containsGuardedGitVerb(
 	if (commandTokens[commandIndex] === "--") commandIndex += 1;
 	return commandStringHasGuardedVerb(
 		commandWords.slice(commandIndex),
-		depth + 1,
+		depth,
 		matcher,
-		["pwsh", "powershell", "cmd"].includes(executableName(leadingExecutable))
-			? "windows-shell"
-			: "bash",
+		windowsShell ? "windows-shell" : "posix-c",
 	);
 }
 
@@ -997,7 +1058,7 @@ export function detectGuardedGitVerb(
 	const command = getShellCommand(input);
 	if (!command) return false;
 	const canonical = canonicalizeGuardCommand(command);
-	if (containsGuardedSubstitution(canonical, matcher)) return true;
+	if (containsGuardedSubstitution(canonical, matcher, "bash")) return true;
 	return decodeShellWords(canonical).some((segment) =>
 		containsGuardedGitVerb(segment.words, 0, matcher),
 	);
@@ -1101,7 +1162,7 @@ export function resolveCommitScope(
 	const command = getShellCommand(input);
 	if (!command) return undefined;
 	const canonical = canonicalizeGuardCommand(command);
-	if (containsGuardedSubstitution(canonical, COMMIT_PUSH_MATCHER)) {
+	if (containsGuardedSubstitution(canonical, COMMIT_PUSH_MATCHER, "bash")) {
 		return undefined;
 	}
 	const trees: GitCheckout[] = [];
