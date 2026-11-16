@@ -244,9 +244,9 @@ describe("push-only dependent whose only answer predates the edit (#5675)", () =
 			b: r.verdict("src/b.ts"),
 			c: r.verdict("src/c.ts"),
 		}).toEqual({ b: "unconfirmed", c: "unconfirmed" });
-		expect(r.run.result?.formatted).toContain("no clean result was confirmed");
 		// One re-touch each, even though the first touch's wait expired.
 		expect([r.bChanges, r.cChanges]).toEqual([1, 1]);
+		expect(r.run.result?.formatted).toContain("no clean result was confirmed");
 		const record = getDegradationSummary().find(
 			(group) => group.kind === "cascade-pre-edit-answer",
 		);
