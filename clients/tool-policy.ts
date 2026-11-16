@@ -1115,6 +1115,19 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 		},
 	],
 	[
+		// The installer's pyright is an npm package (`.cmd` on Windows). A pip
+		// venv's `Scripts/pyright.exe` is matched through the bin dir's own
+		// extension (`PROJECT_BIN_DIR_WINDOWS_EXT`), not this row. Unprobed on
+		// Windows (#5410 S1).
+		"pyright",
+		{
+			command: "pyright",
+			windowsExt: ".cmd",
+			versionArgs: ["--version"],
+			managedToolId: "pyright",
+		},
+	],
+	[
 		"stylelint",
 		{
 			command: "stylelint",

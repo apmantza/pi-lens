@@ -78,6 +78,20 @@ export const VENV_BIN_DIRS: readonly string[] = [
 	path.join("venv", "Scripts"),
 ];
 
+/**
+ * The launcher extension each project bin dir holds on Windows (#5410 S1 F2).
+ * One registry `windowsExt` cannot serve both: pip writes `<venv>/Scripts/x.exe`,
+ * npm writes `node_modules/.bin/x.cmd`. The walker tries a mapped dir's own
+ * extension first, then the caller's `windowsExt` (a bun `.exe` shim in
+ * `node_modules/.bin`), then the bare name; a dir not named here keeps the
+ * caller's `windowsExt` alone.
+ */
+export const PROJECT_BIN_DIR_WINDOWS_EXT: Readonly<Record<string, string>> =
+	Object.fromEntries([
+		...VENV_BIN_DIRS.map((dir): [string, string] => [dir, ".exe"]),
+		...NODE_MODULES_BIN_DIRS.map((dir): [string, string] => [dir, ".cmd"]),
+	]);
+
 /** Every project-local bin layout supported by the canonical resolver. */
 export const PROJECT_LOCAL_BIN_DIRS: readonly string[] = [
 	...NODE_MODULES_BIN_DIRS,

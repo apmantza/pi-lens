@@ -55,6 +55,7 @@ import { withDeadline } from "./deadline-utils.js";
 // which the spawn seam can import; existing importers keep this seam.
 export {
 	NODE_MODULES_BIN_DIRS,
+	PROJECT_BIN_DIR_WINDOWS_EXT,
 	PROJECT_LOCAL_BIN_DIRS,
 	VENDOR_BIN_DIRS,
 	VENV_BIN_DIRS,
@@ -673,6 +674,13 @@ export interface LocalBinWalkOptions {
 	 * be probed twice and reported twice.
 	 */
 	readonly windowsExt?: string;
+	/**
+	 * The launcher extension a bin dir holds on Windows, keyed by the dir as
+	 * listed in `binDirs` (`PROJECT_BIN_DIR_WINDOWS_EXT`). A mapped dir tries its
+	 * own extension first, then `windowsExt`; an unmapped dir tries `windowsExt`
+	 * alone. Absent, every dir takes `windowsExt` (#5410 S1 F2).
+	 */
+	readonly binDirWindowsExt?: Readonly<Record<string, string>> | undefined;
 	/** HOME ceiling; injectable so tests never touch the real home. */
 	readonly homeDir?: string;
 	/**
@@ -740,29 +748,46 @@ export interface LocalBinWalkOptions {
  * `.venv/Scripts` walker did before the fold.
  */
 /**
- * Expand `tools` into the actual candidate file names for one directory,
- * EXT-OUTER: on Windows every tool's extended name is tried before any tool's
- * bare name (`windowsExt === ""` means the caller already spelled every name
- * it wants, in an order this option cannot express).
+ * Every `<dir>/<binDir>/<tool>` that exists, for exactly `dir` — no walk.
+ *
+ * Candidate order per tool is EXT-OUTER. On Windows, each `binDir` has an
+ * extension list: its launcher from `binDirWindowsExt` when the map names it,
+ * then `windowsExt`. Duplicates and empty values drop out. Round `r` tries the
+ * `r`-th extension of every `binDir`, in `binDirs` order. The bare name comes
+ * last, in every `binDir`. A `windowsExt` of `""` does not mean bare name only.
+ * An unmapped `binDir` tries the bare name alone, and a mapped `binDir` still
+ * tries its own extension. Off Windows, the walk tries bare names only.
  */
-function expandCandidateNames(
-	tools: readonly string[],
-	windowsExt: string,
-	isWindows: boolean,
-): string[] {
-	return isWindows && windowsExt !== ""
-		? tools.flatMap((tool) => [`${tool}${windowsExt}`, tool])
-		: [...tools];
-}
-
-/** Every `<dir>/<binDir>/<name>` that exists, for exactly `dir` — no walk. */
 function* matchesInDir(
 	dir: string,
-	names: readonly string[],
+	tools: readonly string[],
 	binDirs: readonly string[],
+	windowsExt: string,
+	binDirWindowsExt: Readonly<Record<string, string>> | undefined,
+	isWindows: boolean,
 ): Generator<string, undefined> {
-	for (const name of names) {
-		for (const binDir of binDirs) {
+	const extsByDir = binDirs.map((binDir) =>
+		isWindows
+			? [
+					...new Set(
+						[binDirWindowsExt?.[binDir], windowsExt].flatMap((ext) =>
+							ext ? [ext] : [],
+						),
+					),
+				]
+			: [],
+	);
+	const rounds = Math.max(0, ...extsByDir.map((exts) => exts.length));
+	for (const tool of tools) {
+		const candidates: Array<[binDir: string, name: string]> = [];
+		for (let round = 0; round < rounds; round++) {
+			for (const [i, binDir] of binDirs.entries()) {
+				const ext = extsByDir[i]?.[round];
+				if (ext !== undefined) candidates.push([binDir, tool + ext]);
+			}
+		}
+		for (const binDir of binDirs) candidates.push([binDir, tool]);
+		for (const [binDir, name] of candidates) {
 			const full = path.join(dir, binDir, name);
 			if (fs.existsSync(full)) yield full;
 		}
@@ -778,10 +803,10 @@ function* localBinMatches(
 		windowsExt = ".cmd",
 		homeDir = os.homedir(),
 		binDirs = NODE_MODULES_BIN_DIRS,
+		binDirWindowsExt,
 		isWindows = onWindows(),
 		ceiling = true,
 	} = options;
-	const names = expandCandidateNames(tools, windowsExt, isWindows);
 	// The ceiling compares real paths (#4911): a HOME or an ancestor spelled
 	// through a link is still the home folder. A start whose spelling is its
 	// real path has no link in it, so neither has any ancestor the walk yields:
@@ -810,7 +835,14 @@ function* localBinMatches(
 			isAtOrAboveHomeDir(startIsReal ? dir : realpathOrResolve(dir), home)
 		)
 			return;
-		yield* matchesInDir(dir, names, binDirs);
+		yield* matchesInDir(
+			dir,
+			tools,
+			binDirs,
+			windowsExt,
+			binDirWindowsExt,
+			isWindows,
+		);
 	}
 }
 
@@ -859,16 +891,25 @@ export function findLocalBinsAt(
 	dir: string,
 	options: Pick<
 		LocalBinWalkOptions,
-		"windowsExt" | "binDirs" | "isWindows"
+		"windowsExt" | "binDirs" | "binDirWindowsExt" | "isWindows"
 	> = {},
 ): LocalBinLookup[] {
 	const {
 		windowsExt = ".cmd",
 		binDirs = NODE_MODULES_BIN_DIRS,
+		binDirWindowsExt,
 		isWindows = onWindows(),
 	} = options;
-	const names = expandCandidateNames(tools, windowsExt, isWindows);
-	const matches = [...matchesInDir(path.resolve(dir), names, binDirs)];
+	const matches = [
+		...matchesInDir(
+			path.resolve(dir),
+			tools,
+			binDirs,
+			windowsExt,
+			binDirWindowsExt,
+			isWindows,
+		),
+	];
 	if (matches.length === 0 || getProjectTrustState() === "trusted")
 		return matches;
 	return [refuseLocalBin(tools.join(","), dir)];
@@ -880,7 +921,7 @@ export function findLocalBinAt(
 	dir: string,
 	options: Pick<
 		LocalBinWalkOptions,
-		"windowsExt" | "binDirs" | "isWindows"
+		"windowsExt" | "binDirs" | "binDirWindowsExt" | "isWindows"
 	> = {},
 ): LocalBinLookup | undefined {
 	const match = findLocalBinsAt([tool], dir, options)[0];

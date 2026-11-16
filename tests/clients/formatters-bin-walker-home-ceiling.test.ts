@@ -35,6 +35,9 @@ import {
 	findLocalBinsAt,
 	findLocalBinUpwards,
 	type LocalBinWalkOptions,
+	NODE_MODULES_BIN_DIRS,
+	PROJECT_BIN_DIR_WINDOWS_EXT,
+	VENDOR_BIN_DIRS,
 	VENV_BIN_DIRS,
 } from "../../clients/package-manager.js";
 import { removeTempDirSync, setupTestEnvironment } from "./test-utils.js";
@@ -293,6 +296,129 @@ describe("findLocalBinUpwards candidate order (#2544 F4)", () => {
 					isWindows: true,
 				}),
 			).toEqual([path.join(project, ".venv", "Scripts", "ruff")]);
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+});
+
+/**
+ * #5410 S1 review F2: a registry spec carries ONE `windowsExt`, but the launcher
+ * a project bin dir holds depends on the dir: pip writes `<venv>/Scripts/x.exe`,
+ * npm writes `node_modules/.bin/x.cmd`. Pyright's spec says `.cmd`, so a pip
+ * venv's `Scripts\pyright.exe` was never matched on Windows and the runner fell
+ * through to a managed install. The map names each dir's own launcher extension;
+ * the spec's value stays the second candidate and the only one for an unmapped
+ * dir, so a bun `.exe` shim in `node_modules/.bin` is still found.
+ *
+ * Driven through the injected `isWindows`, so every lane sees both platforms.
+ */
+describe("per-bin-dir Windows extension (#5410 S1 F2)", () => {
+	let tmpDir: string;
+	const ALL_DIRS = [...VENV_BIN_DIRS, ...NODE_MODULES_BIN_DIRS];
+
+	function plant(...files: string[]): string {
+		const env = setupTestEnvironment("pi-lens-bin-dir-ext-");
+		tmpDir = env.tmpDir;
+		for (const file of files) {
+			const full = path.join(tmpDir, file);
+			fs.mkdirSync(path.dirname(full), { recursive: true });
+			fs.writeFileSync(full, "x");
+		}
+		return tmpDir;
+	}
+	const find = (
+		root: string,
+		isWindows: boolean,
+		windowsExt = ".cmd",
+		binDirs: readonly string[] = ALL_DIRS,
+	) =>
+		findLocalBinsAt(["pyright"], root, {
+			windowsExt,
+			binDirs,
+			binDirWindowsExt: PROJECT_BIN_DIR_WINDOWS_EXT,
+			isWindows,
+		});
+
+	it.each([
+		["venv Scripts", path.join(".venv", "Scripts", "pyright.exe")],
+		["venv bin", path.join("venv", "bin", "pyright.exe")],
+		["node_modules/.bin", path.join("node_modules", ".bin", "pyright.cmd")],
+	])("win32: %s resolves its own launcher extension", (_cell, file) => {
+		const root = plant(file);
+		try {
+			expect(find(root, true)).toEqual([path.join(root, file)]);
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+
+	it("win32: keeps the spec extension for a dir the map does not name", () => {
+		const file = path.join("vendor", "bin", "phpunit.bat");
+		const root = plant(file);
+		try {
+			expect(
+				findLocalBinsAt(["phpunit"], root, {
+					windowsExt: ".bat",
+					binDirs: VENDOR_BIN_DIRS,
+					binDirWindowsExt: PROJECT_BIN_DIR_WINDOWS_EXT,
+					isWindows: true,
+				}),
+			).toEqual([path.join(root, file)]);
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+
+	it("win32: still finds the spec extension after the dir's own (a bun .exe shim)", () => {
+		const file = path.join("node_modules", ".bin", "pyright.exe");
+		const root = plant(file);
+		try {
+			expect(find(root, true, ".exe")).toEqual([path.join(root, file)]);
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+
+	it("win32: the dir's own extension outranks the spec's within one dir", () => {
+		const root = plant(
+			path.join(".venv", "Scripts", "pyright.cmd"),
+			path.join(".venv", "Scripts", "pyright.exe"),
+		);
+		try {
+			expect(find(root, true)[0]).toBe(
+				path.join(root, ".venv", "Scripts", "pyright.exe"),
+			);
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+
+	it("win32: a venv launcher outranks the node_modules one", () => {
+		const root = plant(
+			path.join("node_modules", ".bin", "pyright.cmd"),
+			path.join(".venv", "Scripts", "pyright.exe"),
+		);
+		try {
+			expect(find(root, true)[0]).toBe(
+				path.join(root, ".venv", "Scripts", "pyright.exe"),
+			);
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+
+	it("posix: the bare name only, whatever the map says", () => {
+		const root = plant(
+			path.join(".venv", "Scripts", "pyright.exe"),
+			path.join("node_modules", ".bin", "pyright.cmd"),
+		);
+		try {
+			expect(find(root, false)).toEqual([]);
+			fs.writeFileSync(path.join(root, "node_modules", ".bin", "pyright"), "x");
+			expect(find(root, false)).toEqual([
+				path.join(root, "node_modules", ".bin", "pyright"),
+			]);
 		} finally {
 			removeTempDirSync(tmpDir);
 		}

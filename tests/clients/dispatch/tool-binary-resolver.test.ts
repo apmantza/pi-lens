@@ -335,6 +335,9 @@ describe("#5410 one tool-binary resolver through the real dispatcher", () => {
 	it.each([
 		["htmlhint", "htmlhint.cmd"],
 		["swiftlint", "swiftlint.exe"],
+		// #5410 S1 F2: oxlint's spec says `.exe`, but npm writes `.cmd` into
+		// `node_modules/.bin`; the dir's own extension finds it.
+		["oxlint", "oxlint.cmd"],
 	])(
 		"resolves a trusted project's Windows %s shim (%s)",
 		async (toolId, shimName) => {

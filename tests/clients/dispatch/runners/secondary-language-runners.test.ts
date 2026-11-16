@@ -32,6 +32,11 @@ vi.mock(
 			}),
 			getCommand: () => command,
 		}),
+		// pyright resolves through the registry resolver, which binds the real
+		// checker inside runner-helpers, so the checker double above never reaches
+		// it (#5410 S1). Same answer, at the seam pyright now calls.
+		resolveToolCommandWithInstallFallback: async (_cwd: string, id: string) =>
+			availabilityCheck(id) ? id : null,
 	}),
 );
 

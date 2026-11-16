@@ -55,7 +55,6 @@
 	"tests/clients/dispatch/runners/nonzero-exit-no-output.test.ts:../../../../clients/tool-policy.js:[\"getAutofixCapability\",\"getLinterPolicyForCwd\"]": 2,
 	"tests/clients/dispatch/runners/oxlint.test.ts:../../../../clients/installer/index.js:[\"ensureTool\"]": 52,
 	"tests/clients/dispatch/runners/parsed-nothing.test.ts:../../../../clients/safe-spawn.js:[\"safeSpawnAsync\"]": 14,
-	"tests/clients/dispatch/runners/pyright-environment.test.ts:../../../../clients/safe-spawn.js:[\"safeSpawnAsync\"]": 16,
 	"tests/clients/dispatch/runners/ruff.test.ts:../../../../clients/installer/index.js:[\"ensureTool\"]": 52,
 	"tests/clients/dispatch/runners/ruff.test.ts:../../../../clients/safe-spawn.js:[\"safeSpawn\",\"safeSpawnAsync\"]": 13,
 	"tests/clients/dispatch/runners/runner-helpers.test.ts:../../../../clients/installer/index.js:[\"ensureTool\",\"findManagedToolBinary\",\"getInstallAttempt\",\"getLastEnsureResolutionSource\",\"getToolInstallStrategy\",\"isSpawnableCommand\",\"resetPathWalkMemo\",\"verifyToolBinary\"]": 45,
