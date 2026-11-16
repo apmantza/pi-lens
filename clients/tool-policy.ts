@@ -1391,6 +1391,16 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 		},
 	],
 	[
+		// The prisma-validate runner's CLI. No managedToolId: the installer has no
+		// `prisma` entry and pi-lens never installs it (#5410 D8).
+		"prisma",
+		{
+			command: "prisma",
+			windowsExt: ".cmd",
+			versionArgs: ["--version"],
+		},
+	],
+	[
 		"htmlhint",
 		{
 			command: "htmlhint",

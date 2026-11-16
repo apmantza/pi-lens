@@ -430,7 +430,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/utils/availability-policy.ts": 4,
 		"clients/dispatch/runners/utils/candidate-probe.ts": 1,
 		"clients/dispatch/runners/utils/lazy-installer.ts": 3,
-		"clients/dispatch/runners/utils/runner-helpers.ts": 6,
+		"clients/dispatch/runners/utils/runner-helpers.ts": 5,
 		"clients/dispatch/runners/utils/spawn-outcome.ts": 2,
 		"clients/dispatch/runners/vale.ts": 1,
 		"clients/dispatch/runners/zig-check.ts": 1,
@@ -1184,7 +1184,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `resolution.path` through the evidence seam, adding seven same-sense
 		// path identifiers while preserving the four-rung lookup ladder.
 		// 30 -> 28 (#4268): `resolveNodeToolCommand` and `resolveLocalFirstAsync`
-		// stop building `.bin` paths by hand and route through the shared lookup.
+		// (deleted in #5410 D8) stop building `.bin` paths by hand and route through the shared lookup.
 		// #5410: 18 -> 19, the PATH-only resolution's `{ path, rung }` value
 		// (the existing VenvResolution shape).
 		// 19 -> 20 (#5492 r2): the path-first project rung's `{ path, rung }`
@@ -1946,7 +1946,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/utils/lazy-installer.ts": 3,
 		// 7 -> 5 (#5410): the rubocop bundler form and its install-fallback pair
 		// left the file.
-		"clients/dispatch/runners/utils/runner-helpers.ts": 5,
+		"clients/dispatch/runners/utils/runner-helpers.ts": 4,
 		// 9 -> 10 (#4130 r2): `processCutShort` reads the exit status once.
 		"clients/dispatch/runners/utils/spawn-outcome.ts": 10,
 		// 19 -> 20 (#4130 r2): `faultIfCutShort` builds the one partial-findings `failed` result.

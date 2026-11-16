@@ -94,10 +94,6 @@ vi.mock(
 			_cwd: string,
 			toolId: string,
 		) => toolId,
-		resolveLocalFirstAsync: async (toolName: string) => ({
-			cmd: toolName,
-			args: [],
-		}),
 		createCwdCachedProbe: () =>
 			Object.assign(async () => true, {
 				getVerdict: () => ({ outcome: "ok" as const }),

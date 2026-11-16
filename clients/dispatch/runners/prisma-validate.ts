@@ -8,7 +8,8 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { resolveLocalFirstAsync } from "./utils/runner-helpers.js";
+import { findGlobalBinary } from "../../package-manager.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import { getIsolatedNpxSpawnOptions } from "../../tool-probe.js";
 import {
 	faultIfCutShort,
@@ -59,6 +60,22 @@ function parsePrismaValidateOutput(
 	];
 }
 
+/**
+ * The command that runs prisma for `cwd`: the registry ladder (the project's
+ * own copy at exactly `cwd`, then PATH with a version check, the verdict held
+ * in the shared latch, #5410), then a package manager's global bin dir, then
+ * the cache-only `npx --no prisma`, which never downloads.
+ */
+async function resolvePrisma(
+	cwd: string,
+): Promise<{ cmd: string; args: string[] }> {
+	const resolved = await resolveToolCommandWithInstallFallback(cwd, "prisma");
+	if (resolved) return { cmd: resolved, args: [] };
+	const globalBin = await findGlobalBinary("prisma");
+	if (globalBin) return { cmd: globalBin, args: [] };
+	return { cmd: "npx", args: ["--no", "prisma"] };
+}
+
 const prismaValidateRunner: RunnerDefinition = {
 	id: "prisma-validate",
 	appliesTo: ["prisma"],
@@ -67,7 +84,7 @@ const prismaValidateRunner: RunnerDefinition = {
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "prisma-validate");
-		const resolved = await resolveLocalFirstAsync("prisma", cwd);
+		const resolved = await resolvePrisma(cwd);
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const result = await safeSpawnAsync(
 			resolved.cmd,
