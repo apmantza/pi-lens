@@ -391,9 +391,11 @@ describe.skipIf(process.platform === "win32")(
 			).toBe("clean");
 		});
 
+		// Rows are [output, label, state]: the state is what the runner passes,
+		// an empty string for an output the job never set.
 		const UNCLEAN = CENSUS_OUTPUTS.flatMap((output) => [
 			[output, "skipped", "skipped"],
-			[output, "", "unset"],
+			[output, "unset", ""],
 		]);
 		it.each(UNCLEAN)(
 			"a census output %s that is %s is not clean, even under a failed job",
