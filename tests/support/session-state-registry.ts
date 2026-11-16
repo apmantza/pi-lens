@@ -2557,7 +2557,11 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"hashline-anchor.ts": 1,
 	// #2442 review F2: the container regex now recognises BoundedFifoMap /
 	// BoundedLruCache, so this file's module-level bounded cache is counted.
-	"installer/index.ts": 12,
+	// 12 -> 13 (#5657): `_probeCacheUpdatesPending` holds the `updateProbeCache`
+	// calls until they settle. Each entry deletes itself when its call settles,
+	// and `resetProbeCacheStateForTesting` clears the rest, so no entry outlives
+	// a session.
+	"installer/index.ts": 13,
 	"instance-registry-lock.ts": 0,
 	"instance-registry-tail.ts": 0,
 	"instance-registry.ts": 0,

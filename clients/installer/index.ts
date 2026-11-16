@@ -2297,6 +2297,14 @@ let _probeCacheChangeGeneration = 0;
 const _probeCacheChanges = new Map<string, ProbeCacheEntry | null>();
 const _probeCacheChangeVersions = new Map<string, number>();
 
+/**
+ * `updateProbeCache` calls that have not settled yet (#5657). Bound: one entry
+ * per call in flight, deleted when that call settles, so the Set is empty when
+ * the installer is idle. A call that never settles keeps its entry until
+ * `resetProbeCacheStateForTesting` clears the Set.
+ */
+const _probeCacheUpdatesPending = new Set<Promise<void>>();
+
 async function readProbeCache(): Promise<ProbeCache> {
 	if (_probeCache !== null) return _probeCache;
 	try {
@@ -2518,10 +2526,15 @@ export async function flushProbeCache(): Promise<ProbeCacheFlushResult> {
 /**
  * Test-only strict form of {@link flushProbeCache}: a flush that fails or is
  * deferred behind another process's lock arms a retry timer, and that retry
- * would write after a fixture root was removed. Settled only on a flush that
+ * would write after a fixture root was removed. Also joins the in-flight
+ * `updateProbeCache` calls first (#5657). Settled only on a flush that
  * left nothing pending; otherwise cancel the retry and report it.
  */
 async function settleProbeCacheForTests(): Promise<string | undefined> {
+	// #5657: an update that has not marked its change yet is invisible to the
+	// flush below, which would report idle and let the debounce timer the update
+	// then arms write after the fixture root is gone.
+	await Promise.allSettled(_probeCacheUpdatesPending);
 	const result = await flushProbeCache();
 	if (result === "idle" || result === "written") return undefined;
 	if (_probeCacheFlushTimer !== null) {
@@ -2618,34 +2631,46 @@ export async function checkProbeCache(
 }
 
 // Exported for testing only.
-export async function updateProbeCache(
+export function updateProbeCache(
 	toolId: string,
 	resolvedPath: string,
 	transient = false,
 ): Promise<void> {
-	try {
-		const stat = await fs.stat(resolvedPath);
-		const cache = await readProbeCache();
-		const entry: ProbeCacheEntry = {
-			path: resolvedPath,
-			mtimeMs: stat.mtimeMs,
-			sizeBytes: stat.size,
-			cachedAt: Date.now(),
-			...(transient && { transient: true }),
-		};
-		cache[toolId] = entry;
-		markProbeCacheChange(toolId, entry);
-	} catch {
-		// best-effort
-	}
+	const pending = (async () => {
+		try {
+			const stat = await fs.stat(resolvedPath);
+			const cache = await readProbeCache();
+			const entry: ProbeCacheEntry = {
+				path: resolvedPath,
+				mtimeMs: stat.mtimeMs,
+				sizeBytes: stat.size,
+				cachedAt: Date.now(),
+				...(transient && { transient: true }),
+			};
+			cache[toolId] = entry;
+			markProbeCacheChange(toolId, entry);
+		} catch {
+			// best-effort
+		}
+	})();
+	// #5657: `ensureTool` calls this with `void`, so an update can still be
+	// between its `stat` and its `markProbeCacheChange` when a teardown asks the
+	// cache to settle. The settle joins this set before it flushes.
+	_probeCacheUpdatesPending.add(pending);
+	void pending.finally(() => _probeCacheUpdatesPending.delete(pending));
+	return pending;
 }
 
-// Exported for testing only.
-export function resetProbeCacheStateForTesting(): void {
+// Exported for testing only. Returns how many `updateProbeCache` calls were still
+// unsettled and drops them (#5657), so a test reads the pending set through this
+// seam rather than a separate export.
+export function resetProbeCacheStateForTesting(): number {
+	const unsettled = _probeCacheUpdatesPending.size;
 	_probeCache = null;
 	_probeCacheDirty = false;
 	_probeCacheChanges.clear();
 	_probeCacheChangeVersions.clear();
+	_probeCacheUpdatesPending.clear();
 	_probeCacheChangeGeneration = 0;
 	_probeCacheRetryAttempt = 0;
 	resetResolvedPathCache();
@@ -2660,6 +2685,7 @@ export function resetProbeCacheStateForTesting(): void {
 		clearTimeout(_probeCacheFlushTimer);
 		_probeCacheFlushTimer = null;
 	}
+	return unsettled;
 }
 
 /**

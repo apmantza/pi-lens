@@ -2601,7 +2601,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// managed bin: one awaited readdir and one awaited rename per DLL, local
 	// filesystem calls inside the install the 120 s archive-command bound already
 	// frames. No hook handler reaches the install without its own deadline.
-	"clients/installer/index.ts": 229,
+	// #5657: 229 -> 230. `settleProbeCacheForTests` awaits the in-flight
+	// `updateProbeCache` calls (one `Promise.allSettled` of local stat/read work,
+	// each swallowing its own error) before its flush. Test-registry only; no hook
+	// handler reaches it.
+	"clients/installer/index.ts": 230,
 	// 29 -> 56 (#4765): refreshOpengrepRulePack (the background registry-pack
 	// refresh) awaits the pack download, its temp-file write, the
 	// `opengrep --validate` spawn, a stat/read/rename of the cached file and a

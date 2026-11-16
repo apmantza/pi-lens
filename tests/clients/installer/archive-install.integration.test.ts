@@ -10,6 +10,7 @@ import {
 	it,
 	vi,
 } from "vitest";
+import { drainRegisteredBackgroundWritesForTests } from "../../support/background-write-drains.js";
 import { createArchivePinScope } from "../../support/archive-pin.js";
 import { removeTempDirSync } from "../test-utils.js";
 
@@ -87,6 +88,7 @@ vi.mock("../../../clients/sessionstart-logger.js", () => ({
 }));
 import {
 	ensureTool,
+	flushProbeCache,
 	resolveArchiveUrl,
 	TOOLS,
 } from "../../../clients/installer/index.js";
@@ -103,12 +105,22 @@ afterEach(() => {
 	pins.restoreAll();
 });
 
-afterAll(() => {
-	// #2912: this module-scoped HOME is a real /tmp fixture, including the
-	// installer's data and log trees. Remove the whole root so archive coverage
-	// cannot leave a top-level pi-lens-3020-* entry for hygiene to report.
-	removeTempDirSync(HOME);
-	delete process.env.PI_LENS_TEST_PLATFORM;
+afterAll(async () => {
+	try {
+		// #5657: a successful `ensureTool` leaves a dirty probe-cache entry. Its
+		// 300 ms debounced flush writes `probe-cache.json` and its `.locks` under
+		// this root, and a flush after removal re-creates the root. Settle the
+		// writer through the registry, then prove the flush landed: it reads idle
+		// only when nothing is pending.
+		await drainRegisteredBackgroundWritesForTests();
+		expect(await flushProbeCache()).toBe("idle");
+	} finally {
+		// #2912: this module-scoped HOME is a real /tmp fixture, including the
+		// installer's data and log trees. Remove the whole root so archive coverage
+		// cannot leave a top-level pi-lens-3020-* entry for hygiene to report.
+		removeTempDirSync(HOME);
+		delete process.env.PI_LENS_TEST_PLATFORM;
+	}
 });
 
 beforeEach(() => {
