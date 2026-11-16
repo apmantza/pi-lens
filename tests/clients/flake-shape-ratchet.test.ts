@@ -1875,6 +1875,15 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the helper's real git fixture, node_modules symlink state, and unlink-before-remove ordering are the subject; an in-process double restates none of them",
 	},
+	// 2026-11-16 (#5528): the census's silence on 40+ shard-5 runs means clean
+	// only if its production readers (`ps`, the `/proc` environ read, the
+	// managed-name match) see a real managed process under a reaped owner; a
+	// fabricated table answers only what it was told.
+	"real-process-spawn:support/dead-owner-census-real-process.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the census must find a real managed process whose real owner tag names a reaped pid through the production process-table and environ readers; a faked table cannot show those readers see a leak",
+	},
 	["real-process-spawn:support/fake-lsp-" + "server.test.ts"]: {
 		detector: "real-process-spawn",
 		reason:

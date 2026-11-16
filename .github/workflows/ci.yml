@@ -663,7 +663,8 @@ jobs:
           fi
           files=$(grep -c '^owner ' "$log" 2>/dev/null || true)
           leaks=$(grep -c '^leak ' "$log" 2>/dev/null || true)
-          echo "dead-owner census: ${files:-0} test files recorded, ${leaks:-0} dead-owner pids"
+          unjudged=$(grep -c '^leak [0-9]* untagged ' "$log" 2>/dev/null || true)
+          echo "dead-owner census: ${files:-0} test files recorded, ${leaks:-0} dead-owner pids, of which ${unjudged:-0} with no readable owner tag"
           grep '^leak ' "$log" 2>/dev/null || true
           # A scan that could not run (`ps` failed or timed out) logs one
           # `scanfail` line per file; without this count a failing census reads

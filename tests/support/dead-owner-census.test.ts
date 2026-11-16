@@ -15,8 +15,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
 	CENSUS_MAX_LINES_PER_FILE,
-	censusFile,
 	type CensusSeams,
+	censusFile,
 	DEAD_OWNER_CENSUS_FILE_ENV,
 	loadActualCensusSeams,
 	recordCensusWorker,
@@ -102,12 +102,12 @@ describe("#5528 dead-owner census", () => {
 		]);
 	});
 
-	it("spares a live owner, an untagged process, and an unmanaged one", async () => {
+	it("spares a live owner, an untagged process a live worker owns, and an unmanaged one", async () => {
 		const seams = await seamsOver(
 			[
 				SELF_ROW,
 				{ pid: 7001, ppid: 1, ageMs: 9_000, command: "ast-grep lsp" },
-				{ pid: 7002, ppid: 1, ageMs: 9_000, command: "ast-grep lsp" },
+				{ pid: 7002, ppid: process.pid, ageMs: 9_000, command: "ast-grep lsp" },
 				{ pid: 7003, ppid: 1, ageMs: 9_000, command: "sleep 100" },
 			],
 			// 7001's owner is this live worker; 7002 has no tag; 7003 is not managed.
@@ -309,6 +309,41 @@ describe("#5528 dead-owner census", () => {
 			await runDeadOwnerCensus("a.test.ts", { log, seams, write }),
 		).toEqual([]);
 		expect(lines).toEqual([]);
+	});
+
+	// #5528: the owner rule judges a process by its tag, so a managed process
+	// whose tag could not be read (environ unreadable, a pid namespace, no tag at
+	// all) passed as "not a dead-owner leak" and the census read clean. A row
+	// nothing owns any more (parent init or gone) is listed as unjudgeable; one a
+	// live worker still owns is not (a concurrent file's own ast-grep call).
+	it("lists a managed process with no readable owner tag and no live parent, once, and spares one with a live parent", async () => {
+		const seams = await seamsOver(
+			[
+				SELF_ROW,
+				{ pid: 7001, ppid: 1, ageMs: 5_000, command: "ast-grep lsp" },
+				{ pid: 7002, ppid: DEAD_PID, command: "ast-grep lsp" },
+				{ pid: 7003, ppid: process.pid, command: "ast-grep lsp" },
+			],
+			{},
+		);
+		const first = await runDeadOwnerCensus("a.test.ts", { log, seams, write });
+		const second = await runDeadOwnerCensus("b.test.ts", { log, seams, write });
+		expect({ first, second: second.length }).toEqual({
+			first: [
+				"[dead-owner-census] pid=7001 untagged=no-readable-owner-tag-and-no-live-parent age=5s seen_after=a.test.ts cmd=ast-grep lsp",
+				"[dead-owner-census] pid=7002 untagged=no-readable-owner-tag-and-no-live-parent age=? seen_after=a.test.ts cmd=ast-grep lsp",
+			],
+			second: 0,
+		});
+		expect(
+			fs
+				.readFileSync(log, "utf8")
+				.split("\n")
+				.filter((line) => line.startsWith("leak ")),
+		).toEqual([
+			"leak 7001 untagged seen_after=a.test.ts",
+			"leak 7002 untagged seen_after=a.test.ts",
+		]);
 	});
 
 	// The setup answers every `Name`-filtered table query with an empty table

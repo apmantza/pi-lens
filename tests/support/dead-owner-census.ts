@@ -15,6 +15,12 @@
  * owner was not a worker (a child process of one). `seen_after` is the file
  * whose teardown first saw the process, which brackets when it appeared.
  *
+ * A managed process whose owner tag could not be read (an unreadable environ,
+ * a foreign pid namespace, no tag) cannot be judged by the owner rule. It is
+ * listed as `untagged=…` when nothing owns it any more (its parent is init or
+ * gone), so an unreadable tag never reads as a clean scan. One whose parent is
+ * a live process is skipped: it is a concurrent worker's own child.
+ *
  * It reuses, not rebuilds, the production readers: the process-table seam
  * (`queryProcessTable`), the owner-tag reader (`readOwnerTags`), the managed
  * name match (`matchesManagedBinary`), the liveness check (`realIsPidAlive`)
@@ -44,7 +50,11 @@ const CENSUS_COMMAND_CHARS = 120;
 
 export interface DeadOwnerLeak {
 	pid: number;
-	ownerPid: number;
+	/**
+	 * The pid the owner tag names. Undefined for an unjudgeable orphan: a
+	 * managed process with no readable tag and no live parent (#5528).
+	 */
+	ownerPid?: number | undefined;
 	ageMs?: number | undefined;
 	command: string;
 }
@@ -122,6 +132,8 @@ export function formatLeakLine(
 	const command = leak.command
 		.replace(/\s+/g, " ")
 		.slice(0, CENSUS_COMMAND_CHARS);
+	if (leak.ownerPid === undefined)
+		return `[dead-owner-census] pid=${leak.pid} untagged=no-readable-owner-tag-and-no-live-parent age=${age} seen_after=${seenAfter} cmd=${command}`;
 	return `[dead-owner-census] pid=${leak.pid} owner=${leak.ownerPid} age=${age} owner_file=${ownerFile} seen_after=${seenAfter} cmd=${command}`;
 }
 
@@ -178,7 +190,7 @@ export async function findDeadOwnerLeaks(
 		ownerTag: tagScan.tags.get(row.pid),
 	}));
 	const dead = seams.partition(processes, [], seams.isPidAlive, { graceMs: 0 });
-	return dead.eligible.flatMap((proc) =>
+	const leaks: DeadOwnerLeak[] = dead.eligible.flatMap((proc) =>
 		proc.ownerTag === undefined
 			? []
 			: [
@@ -190,6 +202,20 @@ export async function findDeadOwnerLeaks(
 					},
 				],
 	);
+	// A managed process with no readable owner tag cannot be judged by the
+	// owner rule: its environ was unreadable (another user, a pid namespace, a
+	// process that exited mid-scan) or it never carried a tag. Counting every
+	// such row would blame whichever file a concurrent worker is running, so
+	// only the ones nothing owns any more are listed: parent gone or init.
+	// "Nothing to judge" must not read as a clean scan (#5528).
+	const unjudged: DeadOwnerLeak[] = managed
+		.filter(
+			(row) =>
+				!tagScan.tags.has(row.pid) &&
+				(row.ppid <= 1 || !seams.isPidAlive(row.ppid)),
+		)
+		.map((row) => ({ pid: row.pid, ageMs: row.ageMs, command: row.command }));
+	return [...leaks, ...unjudged];
 }
 
 /** Run `emit` the first time `kind` is noted in this run's log. */
@@ -261,7 +287,9 @@ export async function runDeadOwnerCensus(
 		for (const leak of fresh.slice(0, CENSUS_MAX_LINES_PER_FILE)) {
 			const line = formatLeakLine(
 				leak,
-				resolveOwnerFile(logText, leak.ownerPid),
+				leak.ownerPid === undefined
+					? "unknown"
+					: resolveOwnerFile(logText, leak.ownerPid),
 				seenAfter,
 			);
 			lines.push(line);
@@ -272,7 +300,10 @@ export async function runDeadOwnerCensus(
 		fs.appendFileSync(
 			log,
 			fresh
-				.map((leak) => `leak ${leak.pid} seen_after=${seenAfter}\n`)
+				.map(
+					(leak) =>
+						`leak ${leak.pid}${leak.ownerPid === undefined ? " untagged" : ""} seen_after=${seenAfter}\n`,
+				)
 				.join(""),
 		);
 		if (fresh.length > lines.length) {
