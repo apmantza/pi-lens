@@ -153,7 +153,11 @@ describe("Tool registry parity (#5418)", () => {
 		"every CLI a dispatch runner probes is installable or carries a written skip reason",
 		() => {
 			const { names, problems, scanned } = runnerCliCommands();
-			assertNonEmptyScan("runner CLI probe sites", names.size, 25);
+			assertNonEmptyScan("runner CLI probe sites", names.size, 19);
+			// The floor alone lets a stray createAvailabilityChecker re-added to a
+			// folded runner pass (#5410 S2). Lower the ceiling when a later slice
+			// removes a name.
+			expect(names.size).toBeLessThanOrEqual(19);
 			const notInstallable = [...names.entries()]
 				.filter(([cli]) => !installerIds.has(cli))
 				.map(([cli, files]) => ({
@@ -338,11 +342,10 @@ const RUNNER_CLI_SKIP_REASONS: Record<string, string> = {
 	fish_indent: HOST_TOOLCHAIN,
 	mix: HOST_TOOLCHAIN,
 	elixirc: HOST_TOOLCHAIN,
-	// #5418's two rows: both runners skip while their CLI is absent, and the
-	// installer registry has no entry for either name (`typos-lsp` is the
-	// separate LSP server binary, not the `typos` CLI).
+	// #5418's row: the runner skips while its CLI is absent, and the installer
+	// registry has no entry for the name. (`typos` moved to the command specs
+	// in #5410 S2, so its reason lives in COMMAND_SPEC_INSTALL_REASONS now.)
 	phpstan: NO_INSTALLER_ENTRY,
-	typos: NO_INSTALLER_ENTRY,
 };
 
 /**
@@ -354,6 +357,9 @@ const COMMAND_SPEC_INSTALL_REASONS: Record<string, string> = {
 	"eslint->eslint":
 		"The runner resolves the project's own node_modules/.bin eslint first; pi-lens has no eslint installer entry, and whether it should is an open install-opt-in decision.",
 	"phpstan->phpstan": NO_INSTALLER_ENTRY,
+	// `typos-lsp` is the separate LSP server binary, not the `typos` CLI the
+	// spellcheck runner spawns (#5410 S2).
+	"typos->typos": NO_INSTALLER_ENTRY,
 	// #5410 moved both runners' checkers onto the registry, so these two rows
 	// carry the reasons the runner-CLI table held for them.
 	"detekt->detekt":

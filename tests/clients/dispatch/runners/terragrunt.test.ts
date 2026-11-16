@@ -34,19 +34,13 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: (command: string) => ({
-			isAvailableAsync: async () => toolState.available,
-			getVerdict: () => ({
-				outcome: "missing",
-				cause: "not-found",
-				elapsedMs: 0,
-				latched: true,
-				retryAtMs: 0,
-			}),
-			getCommand: () => (toolState.available ? command : null),
-		}),
-		resolveAvailableOrInstall: async (_checker: unknown, toolId: string) =>
-			toolState.available ? "terragrunt" : ensureTool(toolId),
+		// The runner resolves through the registry resolver, which binds the real
+		// checker inside runner-helpers, so a checker double never reaches it
+		// (#5410 S2). Same answer, at the seam the runner now calls.
+		resolveToolCommandWithInstallFallback: async (
+			_cwd: string,
+			toolId: string,
+		) => (toolState.available ? "terragrunt" : ensureTool(toolId)),
 	}),
 );
 
