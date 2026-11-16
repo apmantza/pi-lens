@@ -256,8 +256,7 @@
 		"scripts/playground-verify-rule-bounded-wait.test.ts": 2,
 		"scripts/prune-agent-worktrees.test.ts": 1,
 		"scripts/suite-lock.test.ts": 1,
-		"support/fault-injection.test.ts": 1,
-		"tools/lsp-diagnostics.test.ts": 1
+		"support/fault-injection.test.ts": 1
 	},
 	"raw-timer-wait": {
 		"clients/actionable-warnings-bounds.test.ts": 2,
