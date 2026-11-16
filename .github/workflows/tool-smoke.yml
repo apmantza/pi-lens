@@ -328,7 +328,7 @@ jobs:
         continue-on-error: true
         with:
           ruby-version: '3.3'
-      - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
+      - uses: dart-lang/setup-dart@2286a0c042b44434fe26d292bbce8d34f7ec662b # v1.8.2
         continue-on-error: true
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         continue-on-error: true
@@ -1007,7 +1007,7 @@ jobs:
         id: refresh_pr
         if: needs.tool-smoke.outputs.docs_changed == 'true' && needs.tool-smoke.outputs.census == 'success'
         continue-on-error: true
-        uses: peter-evans/create-pull-request@15733dbdfeedb4f7fdb73d13c6f5ac83b710fab8 # v8.1.2
+        uses: peter-evans/create-pull-request@3ffccacd46053766916f087ce41d627c0b8cf2d1 # v8.1.3
         with:
           token: ${{ steps.app_token.outputs.token || secrets.GITHUB_TOKEN }}
           branch: bot/lsp-docs-refresh
@@ -1065,7 +1065,7 @@ jobs:
         id: promote_pr
         if: needs.tool-smoke.outputs.promoted == 'true'
         continue-on-error: true
-        uses: peter-evans/create-pull-request@15733dbdfeedb4f7fdb73d13c6f5ac83b710fab8 # v8.1.2
+        uses: peter-evans/create-pull-request@3ffccacd46053766916f087ce41d627c0b8cf2d1 # v8.1.3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: bot/lsp-idle-evict-promote
