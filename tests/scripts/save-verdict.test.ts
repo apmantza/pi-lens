@@ -572,7 +572,7 @@ describe("refreshSaveVerdictTable: a night with no answer keeps the last answer 
 		expect(again.heldBack).toEqual([]);
 	});
 
-	it("still replaces an older answer once two nights agree, and the flip stays visible", () => {
+	it("still replaces an older answer once two nights agree", () => {
 		// #3405: the replacement needs the second agreeing night (see the hold
 		// describe below); what this case keeps pinned is that a settled answer is
 		// still replaceable and the flip reaches the refresh PR's diff.
@@ -663,7 +663,7 @@ describe("refreshSaveVerdictTable: a settled verdict flips only after two agreei
 		expect(savedWrite()[SAVE_VERDICT_COLUMN]).toBe("yes (saved write)");
 	});
 
-	it("holds a one-night flip: the published row is untouched and the night is pending", () => {
+	it("holds a one-night flip as pending", () => {
 		const night1 = refreshSaveVerdictTable(MASTER, [savedWrite()]);
 		expect(verdictOf(night1.text)).toBe("no");
 		expect(night1.measured).toEqual([]);
@@ -697,7 +697,7 @@ describe("refreshSaveVerdictTable: a settled verdict flips only after two agreei
 		);
 	});
 
-	it("flips on the second agreeing night and clears the pending entry", () => {
+	it("flips on the second agreeing night", () => {
 		const night1 = refreshSaveVerdictTable(MASTER, [savedWrite()]);
 		const night2 = refreshSaveVerdictTable(night1.text, [savedWrite()]);
 		expect(verdictOf(night2.text)).toBe("yes (saved write)");
@@ -711,7 +711,7 @@ describe("refreshSaveVerdictTable: a settled verdict flips only after two agreei
 		).toBeGreaterThan(0);
 	});
 
-	it("clears the pending entry when the second night contradicts it", () => {
+	it("clears pending on a contradicting night", () => {
 		const night1 = refreshSaveVerdictTable(MASTER, [savedWrite()]);
 		const night2 = refreshSaveVerdictTable(night1.text, [publishes()]);
 		expect(verdictOf(night2.text)).toBe("no");
@@ -723,7 +723,7 @@ describe("refreshSaveVerdictTable: a settled verdict flips only after two agreei
 		expect(pendingOf(night3.text)?.powershell?.runs).toBe(1);
 	});
 
-	it("restarts the count when the second night disagrees with the pending verdict too", () => {
+	it("restarts the count on a third answer", () => {
 		const yes = powershell({
 			noSave: arm(0),
 			silence: arm(0),
@@ -737,7 +737,7 @@ describe("refreshSaveVerdictTable: a settled verdict flips only after two agreei
 		});
 	});
 
-	it("publishes a first measurement on night one: no settled answer to protect", () => {
+	it("publishes a first measurement on night one", () => {
 		// `unknown` is the pre-measurement value and `inconclusive` holds no answer,
 		// so holding either would keep a guess published for another night. This is
 		// the one place the column differs from `clean-behavior`, which holds even
@@ -765,7 +765,7 @@ describe("refreshSaveVerdictTable: a settled verdict flips only after two agreei
 		expect(pendingOf(night2.text)).toBeUndefined();
 	});
 
-	it("keeps the pending night through a night that could not tell", () => {
+	it("keeps pending through an inconclusive night", () => {
 		// #5060: a night with no answer is not a night that found the opposite, so
 		// it neither advances nor clears the pending flip.
 		const night1 = refreshSaveVerdictTable(MASTER, [savedWrite()]);
@@ -782,7 +782,7 @@ describe("refreshSaveVerdictTable: a settled verdict flips only after two agreei
 		expect(verdictOf(night3.text)).toBe("yes (saved write)");
 	});
 
-	it("keeps the pending night when the server is not measured tonight", () => {
+	it("keeps pending for an unmeasured server", () => {
 		const night1 = refreshSaveVerdictTable(MASTER, [savedWrite()]);
 		const other = refreshSaveVerdictTable(night1.text, [
 			measure({ server: "cpp", save: "save", fixture: { lang: "cpp" } }),
@@ -790,7 +790,7 @@ describe("refreshSaveVerdictTable: a settled verdict flips only after two agreei
 		expect(pendingOf(other.text)).toEqual(pendingOf(night1.text));
 	});
 
-	it("drops a pending entry whose server has no table row, and a malformed one", () => {
+	it("drops orphan and malformed pending entries", () => {
 		const withJunk = setRefreshStateKey(MASTER, "save-verdict", {
 			ghost: { pendingSaveVerdict: "yes", runs: 1 },
 			badValue: { pendingSaveVerdict: 7, runs: 1 },
@@ -815,7 +815,7 @@ describe("refreshSaveVerdictTable: a settled verdict flips only after two agreei
 		expect(noState.text).not.toContain("refresh state");
 	});
 
-	it("leaves a state block it did not need to change exactly as it found it", () => {
+	it("leaves an unmoved state block byte-identical", () => {
 		// Recurrence it prevents: a night that holds, flips or clears nothing
 		// re-rendering the whole block, so a hand-formatted block (or any key the
 		// renderer drops) turned into a diff in the refresh PR.
@@ -829,7 +829,7 @@ describe("refreshSaveVerdictTable: a settled verdict flips only after two agreei
 		);
 	});
 
-	it("survives every other writer of the refresh-state block", () => {
+	it("survives the other refresh-state writers", () => {
 		const night1 = refreshSaveVerdictTable(MASTER, [savedWrite()]);
 		// The clean-signal refresh rebuilds the block every night, before this step.
 		const afterClean = refreshCapabilityMatrix(
