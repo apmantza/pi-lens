@@ -179,6 +179,44 @@ describe("one request sender owns cancel and release (#5097)", () => {
 		});
 	}, 15_000);
 
+	// Recurrence: an Esc'd pull treated as a timeout's twin must leave the same
+	// bookkeeping (#1889: a repeat touch of a server that ignores the cancel
+	// must not stack a second pull behind the first) and none of the timeout's
+	// records (an Esc is no degradation), and one begun after the Esc must not
+	// be sent only to be cancelled.
+	it("an aborted pull is tracked as abandoned and records no failure, and a pull begun after the abort sends nothing", async () => {
+		await withHangingServer("textDocument/diagnostic", async (ctx) => {
+			const pulls = () =>
+				fs
+					.readFileSync(path.join(path.dirname(ctx.file), "trace.log"), "utf-8")
+					.split("\n")
+					.filter((line) => line.startsWith("recv textDocument/diagnostic"))
+					.length;
+			const abort = new AbortController();
+			const first = spawnAbortScope.run(abort.signal, () =>
+				ctx.client.waitForDiagnostics(ctx.file, 600),
+			);
+			await ctx.received("textDocument/diagnostic");
+			abort.abort();
+			await first;
+			expect(pulls()).toBe(1);
+			// The server ignored the cancel, so the request is still pending: a
+			// touch outside any scope must not send a second one behind it.
+			await ctx.client.waitForDiagnostics(ctx.file, 300);
+			await ctx.barrier();
+			expect(pulls()).toBe(1);
+			expect(ctx.client.getPullFailureHistory?.()).toEqual([]);
+			// Begun under a scope that is already aborted: nothing is sent.
+			const gone = new AbortController();
+			gone.abort();
+			await spawnAbortScope.run(gone.signal, () =>
+				ctx.client.waitForDiagnostics(ctx.file, 300),
+			);
+			await ctx.barrier();
+			expect(pulls()).toBe(1);
+		});
+	}, 15_000);
+
 	it("an aborted liveness ping is cancelled and released and answers dead, never alive", async () => {
 		await withHangingServer("workspace/symbol", async (ctx) => {
 			const abort = new AbortController();
@@ -554,21 +592,33 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 	// server's whole group. The cut touch used to be able to finish in the
 	// background and clear it; now that its pull is cancelled it cannot, so an
 	// abort has to leave no verdict (#5097).
-	it("a warm-up cut by Esc is not remembered as a cold server", async () => {
-		const filePath = register("textDocument/diagnostic");
-		const sweep = new AbortController();
-		const warm = spawnAbortScope.run(sweep.signal, () =>
-			service.ensureWarmForSweep(filePath, {
-				timeoutMs: 6000,
-				signal: sweep.signal,
-			}),
-		);
-		await received("textDocument/diagnostic");
-		sweep.abort();
-		await warm;
-		expect(
-			(service as unknown as { state: { demonstratedCold: Set<string> } }).state
-				.demonstratedCold.size,
-		).toBe(0);
-	}, 20_000);
+	// The two spellings of the one Esc: the sweep's own signal, and the call's
+	// ambient scope (the only one a caller that passes no signal has).
+	it.each([
+		["the sweep's own signal", "option"],
+		["the call's ambient scope", "scope"],
+	] as const)(
+		"a warm-up cut by Esc through %s is not remembered as a cold server",
+		async (_name, channel) => {
+			const filePath = register("textDocument/diagnostic");
+			const esc = new AbortController();
+			const warm =
+				channel === "option"
+					? service.ensureWarmForSweep(filePath, {
+							timeoutMs: 6000,
+							signal: esc.signal,
+						})
+					: spawnAbortScope.run(esc.signal, () =>
+							service.ensureWarmForSweep(filePath, { timeoutMs: 6000 }),
+						);
+			await received("textDocument/diagnostic");
+			esc.abort();
+			await warm;
+			expect(
+				(service as unknown as { state: { demonstratedCold: Set<string> } })
+					.state.demonstratedCold.size,
+			).toBe(0);
+		},
+		30_000,
+	);
 });
