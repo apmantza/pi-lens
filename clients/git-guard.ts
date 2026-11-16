@@ -557,17 +557,12 @@ function guardSubstitutions(command: string): {
 function containsGuardedSubstitution(
 	command: string,
 	matcher: GitVerbMatcher,
-	outerDepth = 0,
 ): boolean {
 	const read = guardSubstitutions(command);
 	if (!read.complete && namesGuardedVerb(command, matcher)) return true;
 	return read.bodies.some((substitution) =>
 		decodeShellWords(substitution.body).some((segment) =>
-			containsGuardedGitVerb(
-				segment.words,
-				outerDepth + substitution.depth,
-				matcher,
-			),
+			containsGuardedGitVerb(segment.words, substitution.depth, matcher),
 		),
 	);
 }
@@ -805,7 +800,7 @@ function commandStringHasGuardedVerb(
 	// The string is a command: a substitution in it runs, whatever the word
 	// before it (`bash -c 'echo $(git commit)'`, #5652).
 	return (
-		containsGuardedSubstitution(canonical, matcher, depth) ||
+		containsGuardedSubstitution(canonical, matcher) ||
 		decodeShellWords(canonical).some((segment) =>
 			containsGuardedGitVerb(segment.words, depth, matcher),
 		)
