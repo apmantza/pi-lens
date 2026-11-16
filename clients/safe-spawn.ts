@@ -2888,9 +2888,10 @@ export async function findCommandAsync(
  * This blocks the entire Node.js event loop until the process exits.
  * If the process hangs, pi will freeze.
  *
- * Kept for the two callers that sit on a synchronous path: the stderr-guarded
- * PowerShell probe in `clients/lsp/launch.ts` and the git-HEAD read in
- * `clients/metrics-history.ts` (see the #817 follow-up discussion).
+ * Kept for the three callers that sit on a synchronous path: the stderr-guarded
+ * PowerShell probe in `clients/lsp/launch.ts`, the git-HEAD read in
+ * `clients/metrics-history.ts` (see the #817 follow-up discussion), and the
+ * ast-grep self-scan in `scripts/lib/astgrep-self-scan.mjs`.
  *
  * #817: the Windows branch used to build a `cmd.exe`/`shell:true` command
  * line from unvalidated caller input (CodeQL #17/#18/#19), same unsoundness
