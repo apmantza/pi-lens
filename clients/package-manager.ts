@@ -647,21 +647,37 @@ export function isProjectLocalBinPath(
 }
 
 /**
- * #4515: whether a bare command spawned with this process's PATH can resolve
- * into the project at `cwd`. An entry counts when it is a project-local bin dir
+ * #4515/#5674: whether one search-path entry can resolve a bare command into
+ * the project at `cwd`. An entry counts when it is a project-local bin dir
  * (the classifier above), lies at or under `cwd`, or is relative: a relative
  * entry follows each spawn's cwd, and on POSIX an empty entry is the cwd.
  */
+export function searchPathEntryReachesProject(
+	entry: string,
+	cwd: string,
+): boolean {
+	if (entry === "") return process.platform !== "win32";
+	return (
+		!path.isAbsolute(entry) ||
+		isUnderDir(entry, cwd) ||
+		isProjectLocalBinPath(entry, cwd)
+	);
+}
+
+/**
+ * #4515: whether a bare name this process spawns (its PATH, pi's cwd) can
+ * resolve into the project at `cwd`. #5674: an entry the spawn seam already
+ * strips from every start (#4530: an absolute entry in the session repository,
+ * under pi trust other than `trusted`) does not count. Relative and empty
+ * entries always count: they follow each spawn's cwd.
+ */
 export function commandSearchReachesProject(cwd: string): boolean {
-	const posix = process.platform !== "win32";
 	return (process.env.PATH ?? "")
 		.split(path.delimiter)
-		.some((entry) =>
-			entry === ""
-				? posix
-				: !path.isAbsolute(entry) ||
-					isUnderDir(entry, cwd) ||
-					isProjectLocalBinPath(entry, cwd),
+		.some(
+			(entry) =>
+				searchPathEntryReachesProject(entry, cwd) &&
+				!(path.isAbsolute(entry) && isUntrustedProjectPath(entry)),
 		);
 }
 

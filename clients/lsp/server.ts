@@ -119,6 +119,7 @@ import {
 import {
 	type LSPProcess,
 	admitProjectSuppliedTsserver,
+	isLspProjectCodeAdmitted,
 	launchLSP,
 	launchViaNode,
 } from "./launch.js";
@@ -1058,21 +1059,36 @@ export interface ResolveAndLaunchSpec {
 }
 
 /**
- * #4515: the managed rung of a launch. After a trust refusal the repair must
- * not run project code. The installer spawns bare names (its PATH rung, npm and
- * Python probes, the package manager), so when a refused bare candidate or a
- * PATH entry reaches the project, only pi-lens's own store is read and nothing
- * is installed. The resolver and Python's own managed stage both use it.
+ * #4515/#5674: whether a bare-name lookup this process starts (the installer's
+ * PATH rung, its npm and Python probes, a runtime install) can reach a root the
+ * spawn has not admitted for project code: a PATH entry reaches the root, or a
+ * stage already refused a bare candidate that resolved into it. The launcher
+ * drops those entries from its own child's PATH; these lookups read the
+ * process PATH, so their callers skip the lookup instead.
+ */
+function bareLookupReachesUnadmittedRoot(
+	cwd: string,
+	refusals?: ResolveAndLaunchSpec["refusals"],
+): boolean {
+	return (
+		!isLspProjectCodeAdmitted() &&
+		(refusals?.bareRefused === true || commandSearchReachesProject(cwd))
+	);
+}
+
+/**
+ * #4515: the managed rung of a launch. The repair must not run project code,
+ * so when a bare-name lookup can reach an unadmitted root, only pi-lens's own
+ * store is read and nothing is installed. Every LSP managed lookup goes
+ * through here: the resolver, Python's managed stage, and TypeScript's.
  */
 async function lookupManagedTool(
 	toolId: string,
 	cwd: string,
-	refusals: NonNullable<ResolveAndLaunchSpec["refusals"]>,
-	...ensureOptions: [] | [{ allowInstall?: boolean }]
+	refusals: ResolveAndLaunchSpec["refusals"],
+	...ensureOptions: [] | [{ allowInstall?: boolean; forceReinstall?: boolean }]
 ): Promise<{ found: string | undefined; storeOnly: boolean }> {
-	const storeOnly =
-		refusals.refused &&
-		(refusals.bareRefused || commandSearchReachesProject(cwd));
+	const storeOnly = bareLookupReachesUnadmittedRoot(cwd, refusals);
 	if (storeOnly) {
 		recordDegradationOnce({
 			kind: "lsp-registry-decision",
@@ -1506,7 +1522,12 @@ export async function resolveAndLaunch(
 
 	// Step 4 — language-native runtime install (go install, gem install, …).
 	// #4515: it runs a runtime in the project cwd, so any refusal skips it.
-	const runtimeInstall = refusals.refused ? undefined : spec.runtimeInstall;
+	// #5674: so does a PATH that reaches an unadmitted root (the runtime is a
+	// bare name resolved through the process PATH).
+	const runtimeInstall =
+		refusals.refused || bareLookupReachesUnadmittedRoot(spec.cwd, refusals)
+			? undefined
+			: spec.runtimeInstall;
 	const runtimeAvailable = runtimeInstall
 		? await isCommandAvailableAsync(runtimeInstall.runtimeCommand)
 		: false;
@@ -2559,14 +2580,18 @@ async function findTsserverPath(
 	// #4414: `ensureTool` answers a PATH hit with the bare command name. Resolve
 	// it to the real file once, so the tsserver layout probe and the version
 	// read below see the same absolute path a managed or npm-global hit has.
-	const discoveredTsc = await absoluteCommandPath(
-		await ensureTool("typescript", { allowInstall: installAllowed }),
-	);
+	// #5674: through the store-only rule, so an unadmitted root's `tsc` on PATH
+	// is never version-probed and never repaired over.
+	const discovered = await lookupManagedTool("typescript", root, undefined, {
+		allowInstall: installAllowed,
+	});
+	const discoveredTsc = await absoluteCommandPath(discovered.found);
 	const discoveredTsserver = await tsserverForTsc(discoveredTsc);
 	if (
 		discoveredTsserver ||
 		!discoveredTsc ||
 		!installAllowed ||
+		discovered.storeOnly ||
 		classicTsRepairState().attempted
 	) {
 		return discoveredTsserver;
@@ -2592,10 +2617,12 @@ async function findTsserverPath(
 			: `lsp typescript: managed compiler resolved to TypeScript ${discoveredVersion?.version}, which ships no tsserver.js; reinstalling pinned classic fallback`,
 	);
 	const repairedTsc = await absoluteCommandPath(
-		await ensureTool("typescript", {
-			allowInstall: true,
-			forceReinstall: true,
-		}),
+		(
+			await lookupManagedTool("typescript", root, undefined, {
+				allowInstall: true,
+				forceReinstall: true,
+			})
+		).found,
 	);
 	return tsserverForTsc(repairedTsc);
 }
@@ -3228,11 +3255,15 @@ async function launchClassicTypeScript(
 	// Fall back to a discovered or managed install. ensureTool() runs PATH /
 	// npm-global discovery even when install is disabled (only the download is
 	// gated by canInstall), so a globally-installed typescript-language-server
-	// resolves even without a per-project node_modules/.bin entry.
+	// resolves even without a per-project node_modules/.bin entry. #5674: the
+	// store-only rule applies, as for every LSP managed lookup.
 	if (!lspPath) {
-		lspPath = await ensureTool("typescript-language-server", {
-			allowInstall: canInstall(options?.allowInstall),
-		});
+		({ found: lspPath } = await lookupManagedTool(
+			"typescript-language-server",
+			root,
+			undefined,
+			{ allowInstall: canInstall(options?.allowInstall) },
+		));
 		if (lspPath) source = "managed";
 		if (!lspPath) {
 			return undefined;

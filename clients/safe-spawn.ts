@@ -1448,37 +1448,46 @@ function posixSearchPathEntryDir(entry: string, cwd: string): string {
  * and a value that loses every entry is removed rather than emptied, because an
  * empty PATH makes the kernel search the child's cwd (measured: `PATH=""` ran a
  * planted `git` from the cwd, an absent PATH ran the system one). Each removed
- * directory is recorded once per session.
+ * directory is recorded once per session. #5674: `rootEntry` names more
+ * entries to drop whatever the trust; the LSP launcher passes the entries that
+ * reach a root it has not admitted for project code.
  */
 export function trustScopedSearchPath(
 	pathValue: string | undefined,
 	cwd: string = process.cwd(),
 	env: NodeJS.ProcessEnv = process.env,
+	rootEntry?: (entry: string) => boolean,
 ): string | undefined {
 	if (pathValue === undefined) return undefined;
 	const trust = getProjectTrustState();
-	if (trust === "trusted") return pathValue;
-	const owned = sessionRepositoryJudge();
+	if (trust === "trusted" && rootEntry === undefined) return pathValue;
+	const owned = trust === "trusted" ? () => false : sessionRepositoryJudge();
 	const kept: string[] = [];
 	for (const entry of pathValue.split(path.delimiter)) {
 		const dir = searchPathEntryDir(entry, cwd, env);
-		if (dir === undefined || !owned(dir)) {
+		const bySession = dir !== undefined && owned(dir);
+		const byRoot = !bySession && rootEntry?.(entry) === true;
+		if (!bySession && !byRoot) {
 			kept.push(entry);
 			continue;
 		}
-		const real = realpathOrResolve(dir);
+		const real = realpathOrResolve(dir ?? path.resolve(cwd, entry));
 		if (
 			recordDegradationOnce({
 				kind: "trust-refusal",
 				subject: `project-path-entry:${real}`,
-				reason: `search-path entry inside the project ignored: pi project trust is ${trust}`,
+				reason: byRoot
+					? `search-path entry inside an LSP root not admitted for project code ignored: pi project trust is ${trust}`
+					: `search-path entry inside the project ignored: pi project trust is ${trust}`,
 			})
 		) {
 			logExtension({
 				subsystem: "project-trust",
 				level: "warn",
 				message:
-					"search-path entry inside the project ignored: mark the project trusted in pi or upgrade pi",
+					trust === "trusted"
+						? "search-path entry inside an LSP root not admitted for project code ignored"
+						: "search-path entry inside the project ignored: mark the project trusted in pi or upgrade pi",
 				metadata: { entry, dir: real, trust },
 			});
 		}
@@ -1495,6 +1504,7 @@ export function trustScopedSearchPath(
 export function trustScopedEnvironment(
 	env: NodeJS.ProcessEnv,
 	cwd: string = process.cwd(),
+	rootEntry?: (entry: string) => boolean,
 ): NodeJS.ProcessEnv {
 	// POSIX names the key exactly; only Windows needs the scan for spellings.
 	// An absent value scopes to itself, so it returns `env` below.
@@ -1505,7 +1515,7 @@ export function trustScopedEnvironment(
 	const lastKey = keys.at(-1);
 	if (lastKey === undefined) return env;
 	const value = env[lastKey];
-	const scoped = trustScopedSearchPath(value, cwd, env);
+	const scoped = trustScopedSearchPath(value, cwd, env, rootEntry);
 	if (scoped === value) return env;
 	const next: NodeJS.ProcessEnv = { ...env };
 	for (const key of keys) {

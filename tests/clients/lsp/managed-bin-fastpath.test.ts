@@ -40,6 +40,8 @@ vi.mock("../../../clients/lsp/launch.js", () => ({
 	launchLSP,
 	launchViaNode: vi.fn(),
 	admitProjectSuppliedTsserver: (tsserverPath: string) => tsserverPath,
+	// The launcher double admits project code, as its tsserver admission does.
+	isLspProjectCodeAdmitted: () => true,
 }));
 vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../../clients/safe-spawn.js")>()),

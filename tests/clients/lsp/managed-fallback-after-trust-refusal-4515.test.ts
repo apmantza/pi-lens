@@ -83,6 +83,7 @@ import { withLspProjectCodePermission } from "../../../clients/lsp/launch.js";
 import {
 	PythonJediServer,
 	PythonServer,
+	TypeScriptServer,
 	resolveAndLaunch as resolveAndLaunchRaw,
 } from "../../../clients/lsp/server.js";
 
@@ -287,13 +288,15 @@ describe("Python managed stage after a project refusal (#5674 review F5)", () =>
 		expect(decisionRows("store-only-repair")).toHaveLength(0);
 	});
 
-	it.skipIf(process.platform === "win32")(
-		"keeps jedi's managed tier off the project's python after its project tier is refused",
-		async () => {
-			// The same shape one server over: jedi's project tier refuses the
-			// venv's jedi-language-server, and its managed tier's pip probe then
-			// ran the activated venv's `python -m site --user-base`.
-			setProjectTrustState("trusted");
+	it.skipIf(process.platform === "win32").each(["trusted", "unknown"] as const)(
+		"keeps jedi's managed tier off the activated venv's python with trust=%s",
+		async (trust) => {
+			// The same shape one server over: jedi's managed tier's pip probe ran
+			// the activated venv's `python -m site --user-base`. Under `trusted`
+			// the project tier refuses the venv's jedi first; under `unknown`
+			// detectPythonEnvironment refuses the venv, so no stage refuses at
+			// all (#5674 r3 item 4).
+			setProjectTrustState(trust);
 			const tool = "jedi-language-server";
 			const {
 				spec,
@@ -320,6 +323,162 @@ describe("Python managed stage after a project refusal (#5674 review F5)", () =>
 		},
 	);
 });
+
+/** A recording script at `<root>/<dir>/<name>`, leaving `marker` if it runs. */
+function plantRecorder(file: string, marker: string): void {
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	fs.writeFileSync(
+		file,
+		`#!/bin/sh\necho "$0 $@" >> ${JSON.stringify(marker)}\necho 1.0.0\n`,
+		{ mode: 0o755 },
+	);
+}
+
+function pathEntryRefusals() {
+	return getDegradationSummary()
+		.filter((group) => group.kind === "trust-refusal")
+		.flatMap((group) => group.latestReasons)
+		.filter((row) => row.subject.startsWith("project-path-entry:"));
+}
+
+describe.skipIf(process.platform === "win32")(
+	"PATH entries that reach a root not admitted for project code (#5674 r3)",
+	() => {
+		it.each([
+			["trusted", "relative"],
+			["unknown", "relative"],
+			["trusted", "absolute"],
+			["unknown", "absolute"],
+		] as const)(
+			"never runs a bare candidate planted in the root with trust=%s through a %s entry",
+			async (trust, shape) => {
+				// Item 1 (review F1): a relative entry (`bin`, `.`) resolves against
+				// the launch cwd, the root, so a bare candidate ran the root's file.
+				// Item 2: an absolute dir under the root (direnv's PATH_add) did too.
+				setProjectTrustState(trust);
+				const { spec, bin, marker } = makeProject("fixture-lsp", false, "bin");
+				plantRecorder(path.join(bin, "fixture-lsp"), marker);
+				process.env.PATH = [
+					outsideBin,
+					shape === "relative" ? "bin" : bin,
+				].join(path.delimiter);
+
+				const outcome = await withLspProjectCodePermission(false, () =>
+					resolveAndLaunchRaw(
+						{ candidates: ["fixture-lsp"], args: [], cwd: spec.cwd },
+						false,
+					),
+				).catch((err: unknown) => err);
+
+				expect(fs.existsSync(marker)).toBe(false);
+				expect(outcome).toBeUndefined();
+				expect(pathEntryRefusals().map((row) => row.subject)).toContain(
+					`project-path-entry:${fs.realpathSync(bin)}`,
+				);
+			},
+		);
+
+		it("refuses a PATH link whose target is inside the root", async () => {
+			// A global bin dir holding a link into the project (`npm link`): the
+			// entry is outside the root, the file it answers with is not.
+			setProjectTrustState("trusted");
+			const { spec, bin, marker } = makeProject("fixture-lsp", false, "bin");
+			plantRecorder(path.join(bin, "fixture-lsp"), marker);
+			fs.symlinkSync(
+				path.join(bin, "fixture-lsp"),
+				path.join(outsideBin, "fixture-lsp"),
+			);
+
+			const outcome = await withLspProjectCodePermission(false, () =>
+				resolveAndLaunchRaw(
+					{ candidates: ["fixture-lsp"], args: [], cwd: spec.cwd },
+					false,
+				),
+			).catch((err: unknown) => err);
+
+			expect(fs.existsSync(marker)).toBe(false);
+			expect(outcome).toBeUndefined();
+		});
+
+		it("skips the runtime install when PATH reaches the root", async () => {
+			// The runtime (`go install`, `gem install`) is a bare name resolved
+			// through the process PATH; no stage refuses a missing bare candidate.
+			setProjectTrustState("trusted");
+			const whichDir = (originalPath ?? "")
+				.split(path.delimiter)
+				.find((dir) => dir && fs.existsSync(path.join(dir, "which")));
+			expect(whichDir).toBeDefined();
+			const { spec, bin } = makeProject("fixture-lsp", false, "bin");
+			process.env.PATH = [bin, outsideBin, whichDir].join(path.delimiter);
+			const install = vi.fn(async () => true);
+
+			await withLspProjectCodePermission(false, () =>
+				resolveAndLaunchRaw(
+					{
+						candidates: ["fixture-lsp"],
+						args: [],
+						cwd: spec.cwd,
+						runtimeInstall: { runtimeCommand: "sh", install },
+					},
+					true,
+				),
+			);
+
+			expect(install).not.toHaveBeenCalled();
+		});
+
+		it.each(["trusted", "unknown"] as const)(
+			"keeps Python's PATH stages off a langserver in an ordinary root dir with trust=%s",
+			async (trust) => {
+				// Item 2: this PR made the PATH stages reachable for an adopted root.
+				setProjectTrustState(trust);
+				const { spec, bin, marker } = makeProject(
+					"pyright-langserver",
+					false,
+					"bin",
+				);
+				for (const name of ["pyright-langserver", "pyright"])
+					plantRecorder(path.join(bin, name), marker);
+				process.env.PATH = [bin, outsideBin].join(path.delimiter);
+
+				const result = await withLspProjectCodePermission(false, () =>
+					PythonServer.spawn(spec.cwd, { allowInstall: true }),
+				);
+
+				expect(fs.existsSync(marker)).toBe(false);
+				expect(result).toBeUndefined();
+			},
+		);
+
+		it.each(["trusted", "unknown"] as const)(
+			"never version-probes the root's tsc for the TypeScript server with trust=%s",
+			async (trust) => {
+				// Item 3: findTsserverPath's ensureTool("typescript") ran the
+				// project's `tsc --version` through PATH after refusing its tsserver.
+				setProjectTrustState(trust);
+				const { spec, bin, marker } = makeProject("tsc", false);
+				for (const name of ["tsc", "typescript-language-server"])
+					plantRecorder(path.join(bin, name), marker);
+				const pkg = path.join(spec.cwd, "node_modules", "typescript");
+				fs.mkdirSync(path.join(pkg, "lib"), { recursive: true });
+				fs.writeFileSync(path.join(pkg, "lib", "tsserver.js"), "//\n");
+				fs.writeFileSync(
+					path.join(pkg, "package.json"),
+					JSON.stringify({ version: "5.9.3" }),
+				);
+				fs.writeFileSync(path.join(spec.cwd, "tsconfig.json"), "{}\n");
+				process.env.PATH = [bin, outsideBin].join(path.delimiter);
+
+				await withLspProjectCodePermission(false, () =>
+					TypeScriptServer.spawn(spec.cwd, { allowInstall: true }),
+				).catch(() => undefined);
+
+				expect(fs.existsSync(marker)).toBe(false);
+				expect(decisionRows("store-only-repair:typescript")).toHaveLength(1);
+			},
+		);
+	},
+);
 
 describe("Python adopted-root fallback (#5674)", () => {
 	it.each([

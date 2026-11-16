@@ -1333,7 +1333,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 29 -> 30 (#5305): `isCmdShimValid` resolves a bare shim name against
 		// the child's cwd with `path.resolve`; a filesystem path, not the retired
 		// `path` domain term.
-		"clients/lsp/launch.ts": 30,
+		// 30 -> 31 (#5674 r3): a lookup answer is judged by its directory
+		// (`path.dirname`) against an LSP root not admitted for project code.
+		"clients/lsp/launch.ts": 31,
 		"clients/lsp/lombok.ts": 14,
 		// #4299: 121 -> 124; OS path namespace calls for canonical compiler
 		// validation replace the wrapper-relative guess. No path-key owner changes.
@@ -1417,7 +1419,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `path.delimiter` and tests each entry with `path.isAbsolute`.
 		// 23 -> 16 (#4530): the bin layouts and their walk moved to
 		// session-repository.ts, below the spawn seam.
-		"clients/package-manager.ts": 16,
+		// 16 -> 17 (#5674 r3): an absolute entry the spawn seam already strips
+		// (`path.isAbsolute`) does not count as reaching the project.
+		"clients/package-manager.ts": 17,
 		"clients/package-root.ts": 4,
 		// #5371: the `paths` glob matcher and its bounded walk arrive from
 		// `clients/lens-engine.ts` with their `node:path` uses — the namespace
@@ -1575,7 +1579,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/rust-client.ts": 5,
 		// 26 -> 32 (#4530): the search-path scoping and lookup split PATH on
 		// `path.delimiter` and resolve each entry with `path` namespace calls.
-		"clients/safe-spawn.ts": 32,
+		// 32 -> 33 (#5674 r3): a relative entry dropped for an LSP root is
+		// recorded by the directory it resolves to (`path.resolve`).
+		"clients/safe-spawn.ts": 33,
 		"clients/search-read-registration.ts": 3,
 		"clients/security-scan-client.ts": 4,
 		// #4530: the bin layouts moved here from package-manager.ts.

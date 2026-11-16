@@ -4,4 +4,4 @@ audience: user
 area: lsp
 ---
 
-- **Python servers now reach global fallbacks for adopted projects.** Refused project candidates no longer end a launch stage when installation is disabled. Project binaries remain refused, and when PATH reaches the project the later managed lookup reads only the pi-lens tool store. (refs #5674)
+- **Python servers reach global fallbacks, and PATH never runs unadmitted project files.** Python servers now reach global fallbacks for adopted projects: refused project candidates no longer end a launch stage when installation is disabled. For an adopted project, or one pi has not trusted, a PATH entry inside the project (relative entries such as `bin` or `.` included) is skipped when a language server is looked up, and a PATH link into the project is refused. When PATH reaches such a project, managed lookups read only the pi-lens tool store, so the TypeScript and Jedi fallbacks and the Go, Ruby and .NET runtime installs no longer probe or run its `tsc`, `python` or `go`. (refs #5674)

@@ -19,6 +19,8 @@ vi.mock("../../../clients/lsp/launch.js", () => ({
 	launchLSP,
 	launchViaNode: vi.fn(),
 	admitProjectSuppliedTsserver: (tsserverPath: string) => tsserverPath,
+	// The launcher double admits project code, as its tsserver admission does.
+	isLspProjectCodeAdmitted: () => true,
 }));
 // #5410 S5: the PATH answer (`which`, behind clients/safe-spawn) is the process
 // boundary; `onPath` stands in for what it reports.

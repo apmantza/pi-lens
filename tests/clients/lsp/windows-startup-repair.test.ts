@@ -143,14 +143,24 @@ describe("Windows LSP startup repair classification (#4263)", () => {
 		try {
 			const { resolveAndLaunch } =
 				await import("../../../clients/lsp/server.js");
-			await resolveAndLaunch(
-				{
-					candidates: ["missing-language-server"],
-					args: ["--stdio"],
-					cwd: "C:\\project",
-					managedToolId: "missing-language-server",
-				},
-				true,
+			// An admitted root: on a POSIX host `C:\project` is relative, so the
+			// runner's own `node_modules/.bin` on PATH would otherwise reach it and
+			// hold the repair to the tool store (#5674).
+			const { withLspProjectCodePermission } =
+				await import("../../../clients/lsp/launch.js");
+			const { setProjectTrustState } =
+				await import("../../../clients/project-trust.js");
+			setProjectTrustState("trusted");
+			await withLspProjectCodePermission(true, () =>
+				resolveAndLaunch(
+					{
+						candidates: ["missing-language-server"],
+						args: ["--stdio"],
+						cwd: "C:\\project",
+						managedToolId: "missing-language-server",
+					},
+					true,
+				),
 			);
 			expect(ensureTool).toHaveBeenCalledWith("missing-language-server");
 		} finally {
