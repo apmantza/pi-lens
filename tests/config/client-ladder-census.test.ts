@@ -30,9 +30,18 @@
  * and lookup order; the S1/S2 slices folded the runners, and the audit of
  * 2026-11-16 found the same disagreement in the clients the census never read.
  *
+ * The primitives are the lookup helpers AND the two seams every hand-built
+ * ladder reaches: the installer ask (`ensureTool`, `getInstallAttempt`,
+ * `isSpawnableCommand`) and the version probe (`probeToolAsync`). A ladder
+ * assembled from `safeSpawnAsync` plus `ensureTool` is seen through the
+ * second. Not seen: a probe made with `safeSpawn*` directly that never asks
+ * the installer, and any lookup helper added later under a new name until it
+ * joins this list.
+ *
  * Out of the population, with the owner of each: `clients/dispatch/runners/`
- * (the runner census above), `clients/installer/` and
- * `clients/package-manager.ts` (the owners of the lookups themselves), and
+ * (the runner census above), `clients/installer/`,
+ * `clients/package-manager.ts` and `clients/tool-probe.ts` (the owners of the
+ * lookups and the probe themselves), and
  * `clients/lsp/` (the LSP launch ladder stays distributed by the #5666
  * consolidation verdict, and its launch order is lane #5674's).
  */
@@ -64,6 +73,13 @@ const LADDER_PRIMITIVES: ReadonlySet<string> = new Set([
 	"findManagedNodeToolBinary",
 	"findManagedReleaseBinary",
 	"discoverManagedTool",
+	// The seams a ladder reaches when it builds its own probe-then-install
+	// sequence from parts (#5410 review r1 F2): a client that asks the installer
+	// or runs a version probe is a ladder whether or not it names a lookup helper.
+	"ensureTool",
+	"getInstallAttempt",
+	"isSpawnableCommand",
+	"probeToolAsync",
 ]);
 
 /** Source this census leaves to its owner; see the header. */
@@ -72,6 +88,7 @@ const EXCLUDED_PREFIXES: readonly string[] = [
 	"clients/installer/",
 	"clients/lsp/",
 	"clients/package-manager.ts",
+	"clients/tool-probe.ts",
 ];
 
 /** The primitives a source file uses (plain imports excluded), by name. */
@@ -119,34 +136,68 @@ const CLIENT_LADDER_ADMISSIONS: Record<string, string> = {
 		"BiomeClient resolves the binary it spawns for formatting and linting: project shim at the file's cwd, managed, pm-global bins, then npx. The registry ladder answers availability for the runner; folding the spawn ladder waits on #5410 D10.",
 	"clients/biome-client.ts::findLocalBinAt":
 		"BiomeClient's project rung at the exact cwd, the same lookup the registry ladder makes; its spawn ladder stays with its other rungs (see findGlobalBinary).",
+	"clients/biome-client.ts::getInstallAttempt":
+		"Reads the install attempt to explain a missing biome in the availability record; the write side is resolveManagedToolClient's (see its row).",
+	"clients/biome-client.ts::probeToolAsync":
+		"BiomeClient's own version probe of the candidates in its spawn ladder (see findGlobalBinary); folding waits on #5410 D10.",
 	"clients/biome-client.ts::resolveManagedToolClient":
 		"Typed install seam with a caller-supplied probe and an acceptInstalled validation; biome is one of its two callers. Staying: the install-attempt state it writes is runner-helpers' own, shared with resolveAvailableOrInstall, so there is one memory.",
 	"clients/dead-code-client.ts::findLocalBinsAt":
 		"vulture's venv candidate list at exactly the root, trust-gated; vulture has no registry spec row and no install path.",
+	"clients/dead-code-client.ts::probeToolAsync":
+		"vulture's candidate probe (python, python3, pipx); vulture has no registry spec row and no install path.",
 	"clients/dependency-checker.ts::discoverManagedTool":
 		"madge spawn resolution: read-only managed discovery, never an install, on the spawn path.",
 	"clients/dependency-checker.ts::findNodeToolBinary":
 		"madge spawn resolution walks to the project's own hoisted copy and the pm-global bins; the shared resolver reads only <cwd>/node_modules/.bin (#2544 r4 F2), so folding is the maintainer's trust-scope decision (#5410 D10).",
+	"clients/dependency-checker.ts::isSpawnableCommand":
+		"madge spawn resolution asks whether the managed install result is spawnable before running it; read-only, on the spawn path.",
 	"clients/dispatch/dispatcher.ts::createAvailabilityChecker":
 		"The PATH-only checker behind DispatchContext.hasTool; its fold is #5410's own acceptance item and not this slice's.",
+	"clients/dispatch/dispatcher.ts::isSpawnableCommand":
+		"The PATH walk behind DispatchContext.hasTool, the same admitted checker as its createAvailabilityChecker row.",
+	"clients/formatters.ts::ensureTool":
+		"The formatter install fallbacks after a missing formatter; the formatter ladders are #5410's formatter remainder.",
 	"clients/formatters.ts::findGlobalBinary":
 		"Formatter ladders (biome, prettier): pm-global bins after the project walk; tracked in #5410's formatter remainder.",
 	"clients/formatters.ts::findLocalBinUpwards":
 		"The formatter walker climbs to the HOME ceiling by design; the project-scope decision is #5410 D10.",
+	"clients/formatters.ts::probeToolAsync":
+		"The go toolchain probes behind gofmt and the legacy formatter check; toolchain presence, not a registry tool.",
+	"clients/govulncheck-client.ts::probeToolAsync":
+		"GovulncheckClient's go toolchain and govulncheck probes with its own go-install step; folding it is the security-scanner remainder of #5410.",
 	"clients/jscpd-client.ts::findNodeToolBinary":
 		"jscpd scan resolves the project's own copy against the scanned root, ancestors and pm-global bins included; the shared resolver reads only the exact cwd, so the scope decision is #5410 D10.",
 	"clients/knip-client.ts::findLocalBinUpwards":
 		"resolveProjectKnipBinary: the project's pinned knip, found by walking up so a workspace package gets the monorepo's hoisted copy (#1721); the scope decision is #5410 D10.",
+	"clients/mcp/session.ts::ensureTool":
+		"Wires the installer into the session-start dependency bag for the MCP host; no lookup of its own.",
+	"clients/pipeline.ts::probeToolAsync":
+		"The cargo and dart toolchain presence probes of the language pipelines; not registry tools and never installed.",
+	"clients/runtime-session.ts::ensureTool":
+		"The session-start install of the essential tools, a separate caller of the installer from any availability ladder.",
+	"clients/security-scan-client.ts::ensureTool":
+		"The scanners' install step after a missing probe (ensureViaInstaller); its managed rung is the registry's (see findManagedReleaseBinary), the rest of this ladder is the security-scanner remainder of #5410.",
 	"clients/security-scan-client.ts::findManagedReleaseBinary":
 		"The security scanners' probe asks for the managed release binary through the runners' own verified rung, so a managed binary that fails its version check falls through to PATH.",
+	"clients/security-scan-client.ts::getInstallAttempt":
+		"Reads the install attempt to tell a failed install from a skipped one in the scanners' availability record.",
+	"clients/security-scan-client.ts::probeToolAsync":
+		"The scanners' version probe, run on the candidate the registry's managed rung verified.",
 	"clients/sg-runner.ts::findGlobalBinary":
 		"SgRunner's multi-candidate ast-grep ladder (sg, ast-grep, npx) with provisional sweeps; it has no registry spec row.",
+	"clients/sg-runner.ts::getInstallAttempt":
+		"Reads the install attempt for SgRunner's availability record (see resolveManagedToolClient).",
+	"clients/sg-runner.ts::probeToolAsync":
+		"SgRunner's version probe of its ast-grep candidates (see findGlobalBinary).",
 	"clients/sg-runner.ts::resolveManagedToolClient":
 		"SgRunner's install step after its own ladder concluded missing; see biome-client's row for why the typed entry stays.",
 	"clients/test-runner-client.ts::findGlobalBinary":
 		"The test runner's pm-global rung for the runner binary it detects; tracked with the test-runner PATH probes in #5410's remainder.",
 	"clients/test-runner-client.ts::findLocalBinAt":
 		"The test runner's project rung at the exact root, the same lookup the registry ladder makes.",
+	"index.ts::ensureTool":
+		"Wires the installer into the session-start dependency bag for pi; no lookup of its own.",
 };
 
 describe("Client ladder census (#5410)", () => {
@@ -204,6 +255,27 @@ describe("Client ladder scanner (#5410)", () => {
 		],
 	])("counts %s", (_name, source) => {
 		expect([...ladderUses(source)]).toEqual(["findNodeToolBinary"]);
+	});
+
+	// Recurrence: #5685 review F2. The census listed lookup helpers only, so a
+	// ladder built from a version probe, an npx spawn and an installer ask
+	// passed it. The probe and the installer ask are what any such ladder uses.
+	it("counts a ladder built from a probe, an npx spawn and an installer ask", () => {
+		const planted = `
+import { probeToolAsync } from "./tool-probe.js";
+import { safeSpawnAsync } from "./safe-spawn.js";
+export async function resolveStray(cwd: string) {
+	const direct = await probeToolAsync("stray", ["--version"], { cwd });
+	if (direct.available) return "stray";
+	const viaNpx = await safeSpawnAsync("npx", ["stray", "--version"], { cwd });
+	if (viaNpx.status === 0) return "npx";
+	const { ensureTool } = await import("./installer/index.js");
+	return ensureTool("stray");
+}`;
+		expect([...ladderUses(planted)].sort()).toEqual([
+			"ensureTool",
+			"probeToolAsync",
+		]);
 	});
 
 	it("does not count a plain import, a comment or an unrelated name", () => {

@@ -900,6 +900,48 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 		);
 	});
 
+	// Recurrence: #5685 review F11. jscpd asked its availability at the host
+	// process cwd (the MCP child's cwd is not the project) while the scan ran at
+	// the analysis root, so a project's own jscpd read as missing here.
+	it("asks jscpd availability for the analysis root, not the host cwd (#5410)", async () => {
+		const shimDir = path.join(tmp, "node_modules", ".bin");
+		fs.mkdirSync(shimDir, { recursive: true });
+		fs.writeFileSync(path.join(shimDir, "jscpd"), "#!/bin/sh\necho 1.0.0\n", {
+			mode: 0o755,
+		});
+		const host = path.join(tmp, "host-cwd");
+		fs.mkdirSync(host);
+		setProjectTrustState("trusted");
+		const cwd = vi.spyOn(process, "cwd").mockReturnValue(host);
+		try {
+			const { JscpdClient } = await import("../../../clients/jscpd-client.js");
+			const jscpdClient = new JscpdClient();
+			const scan = vi.spyOn(jscpdClient, "scan").mockResolvedValue({
+				success: true,
+				analyzed: true,
+				duplicatedLines: 0,
+				totalLines: 0,
+				percentage: 0,
+				clones: [],
+			} as never);
+			const clients = {
+				...makeClients({ jscpdAvailable: true }),
+				jscpdClient,
+			} as unknown as BootstrapClients;
+
+			const result = await fetchFreshProjectDiagnostics(
+				makeCacheManager(),
+				tmp,
+				clients,
+			);
+
+			expect(scan).toHaveBeenCalled();
+			expect(result.cold).not.toContain("jscpd");
+		} finally {
+			cwd.mockRestore();
+		}
+	});
+
 	it("writes to the jscpd-ts cache key when a tsconfig.json is present", async () => {
 		fs.writeFileSync(path.join(tmp, "tsconfig.json"), "{}");
 		const cacheManager = makeCacheManager();

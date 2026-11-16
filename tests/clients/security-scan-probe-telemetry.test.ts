@@ -12,7 +12,10 @@
  * before and after.
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setupTestEnvironment } from "./test-utils.js";
 import { withEnv } from "../support/with-env.js";
 import { TRANSIENT_BASE_COOLDOWN_MS } from "../../clients/dispatch/runners/utils/availability-policy.js";
 
@@ -166,21 +169,26 @@ beforeEach(async () => {
 });
 
 it("uses a present managed binary as the only availability probe (#2140)", async () => {
-	findManagedToolBinary.mockResolvedValue("C:/managed/opengrep.exe");
+	// #5410: the managed rung is verified, which stats the binary first, so the
+	// fixture has to be a file that exists (a path nothing created is "absent").
+	const env = setupTestEnvironment("pi-lens-sec-managed-");
+	const managed = path.join(env.tmpDir, "opengrep.exe");
+	fs.writeFileSync(managed, "");
+	findManagedToolBinary.mockResolvedValue(managed);
 	safeSpawnAsync.mockImplementation(async (cmd: string, args: string[]) => {
 		if (args[0] === "scan") {
 			const reportPath = args[args.indexOf("--json-output") + 1];
 			const fs = await import("node:fs/promises");
 			await fs.writeFile(reportPath, JSON.stringify({ results: [] }));
 		}
-		return okResult(cmd === "C:/managed/opengrep.exe" ? "opengrep 1.0.0" : "");
+		return okResult(cmd === managed ? "opengrep 1.0.0" : "");
 	});
 	const client = await makeClient("opengrep");
 
 	expect(await client.ensureAvailable()).toBe(true);
 	expect(safeSpawnAsync).toHaveBeenCalledTimes(1);
 	expect(safeSpawnAsync).toHaveBeenCalledWith(
-		"C:/managed/opengrep.exe",
+		managed,
 		["--version"],
 		expect.any(Object),
 	);
@@ -192,7 +200,8 @@ it("uses a present managed binary as the only availability probe (#2140)", async
 	await (client as unknown as { scan(cwd: string): Promise<unknown> }).scan(
 		process.cwd(),
 	);
-	expect(safeSpawnAsync.mock.calls.at(-1)?.[0]).toBe("C:/managed/opengrep.exe");
+	expect(safeSpawnAsync.mock.calls.at(-1)?.[0]).toBe(managed);
+	env.cleanup();
 });
 
 it("shares opengrep availability across independent clients (#2131)", async () => {
