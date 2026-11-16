@@ -139,9 +139,16 @@ describe("a server this host cannot spawn keeps its prior row (49ed14a6a)", () =
 
 	it("publishes nothing when every row reads as before", () => {
 		const out = night(PRIOR, MATRIX_5677);
-		const undated = (doc: string) =>
-			doc.replace(/^_Last generated: \S+ /m, "_Last generated: DAY ");
-		expect(undated(out.doc)).toBe(undated(PRIOR));
+		// The fixture predates the doc's hold prose, so compare what a night
+		// measures: the rows, the counts and the findings, not the date or prose.
+		const measuredLines = (doc: string) =>
+			doc
+				.split("\n")
+				.filter((l) => /^(\| |- \*\*|_Last generated)/.test(l))
+				.map((l) =>
+					l.replace(/^_Last generated: \S+ /, "_Last generated: DAY "),
+				);
+		expect(measuredLines(out.doc)).toEqual(measuredLines(PRIOR));
 		expect(out.matrixText).toBe(MATRIX_5677);
 		expect(out.held).toEqual([]);
 	});

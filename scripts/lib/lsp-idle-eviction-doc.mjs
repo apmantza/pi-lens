@@ -15,7 +15,12 @@
 
 import {
 	compareStableStrings,
+	holdSettledCell,
+	IDLE_EVICTION_DOC_KEY,
+	parseRefreshState,
 	parseTable,
+	sanitizePendingFlips,
+	setRefreshStateKey,
 	TIER_CHANGE_AGREE_RUNS,
 } from "./md-matrix.mjs";
 
@@ -251,6 +256,12 @@ export function renderIdleEvictionDoc({ rows, declared, date, platform }) {
 		"brought the server back, **coverage** is whether the respawned server kept",
 		"every baseline finding.",
 		"",
+		"The rows are the published answer, not one night's reading (#5667): a row's",
+		"`result`, `reason`, `respawn` and `coverage` change together, and only after",
+		"two consecutive nights measure the same new row. A night that could not spawn",
+		"a server (`unavailable`) leaves its row as it was. The pending night is kept",
+		"in the capability matrix's refresh-state block (`idle-eviction-doc`).",
+		"",
 		"A server that reports extra findings after the respawn (`widened`) still reads",
 		"`preserved`, because nothing was lost, but a first scan that grows on respawn",
 		"is a sign the baseline was partial. Any policy flip needs `preserved` on",
@@ -339,23 +350,130 @@ export function parseIdleEvictionDoc(text) {
 	}));
 }
 
+// The cells the hold moves together, as one comparable string: a row's
+// `result`, `reason`, `respawn` and `coverage` are one measurement (a vetoed
+// result without its reason or coverage is a different claim), so they flip or
+// hold as a group. `role` and `declared` are registry facts and never held.
+const cellsOf = (row) =>
+	[row.result, row.reason ?? "·", cell(row.respawn), cell(row.coverage)].join(
+		"|",
+	);
+
+// `unavailable` is a night that could not tell (the host cannot spawn the
+// server, no fixture routes to it, the budget ended), never a finding.
+const isMeasured = (cells) => !cells.startsWith("unavailable|");
+
 /**
  * The one entry the measurement script publishes through (#5667): tonight's
  * measured rows in, the document text and the refresh-state text out.
  *
+ * The document is the published answer, not one night's reading. A server this
+ * host could not spawn keeps its prior row (#390's merge guard, as for the
+ * capability matrix), and a measured row that differs from a published measured
+ * one changes only after two agreeing nights (`holdSettledCell`, the seam the
+ * save-verdict column uses). The pending night is kept in the capability
+ * matrix's refresh-state block under `idle-eviction-doc`, which this returns
+ * rewritten; `matrixText` absent means there is nowhere to keep it, so the
+ * night publishes unheld rather than never committing. The caller keeps the
+ * measured rows for the summary, the drift issue and the evaluated floor.
+ *
  * @param {{ rows: object[], declared: Map<string, string>, date: string, platform: string, priorDoc?: string, matrixText?: string }} night
+ * @returns {{ doc: string, matrixText: string | undefined, held: Array<{ serverId: string, prior: string, measured: string, pendingRuns?: number }> }}
  */
 export function publishIdleEvictionDoc({
 	rows,
 	declared,
 	date,
 	platform,
+	priorDoc,
 	matrixText,
 }) {
+	const render = (published) =>
+		renderIdleEvictionDoc({ rows: published, declared, date, platform });
+	if (matrixText === undefined)
+		return { doc: render(rows), matrixText, held: [] };
+	// A prior row counts only when every held cell is present and its result is
+	// a state this module renders; anything else has nothing to protect.
+	const priorRows = new Map();
+	for (const r of parseIdleEvictionDoc(priorDoc ?? "") ?? []) {
+		if (
+			RESULT_STATES.includes(r.result) &&
+			r.respawn !== undefined &&
+			r.coverage !== undefined
+		)
+			priorRows.set(r.serverId, { ...r, cells: cellsOf(r) });
+	}
+	const priorPending = sanitizePendingFlips(
+		parseRefreshState(matrixText)[IDLE_EVICTION_DOC_KEY],
+		"pendingCells",
+	);
+	const nextPending = {};
+	const published = [];
+	const held = [];
+	for (const row of rows) {
+		const prior = priorRows.get(row.serverId);
+		const observed = cellsOf(row);
+		if (!prior || observed === prior.cells) {
+			published.push(row);
+			continue;
+		}
+		const pending = priorPending[row.serverId];
+		const decision = isMeasured(observed)
+			? holdSettledCell({
+					prior: prior.cells,
+					observed,
+					pending: pending && {
+						value: pending.pendingCells,
+						runs: pending.runs,
+					},
+					isSettled: isMeasured,
+				})
+			: // A night that could not tell neither advances nor clears a pending flip.
+				{
+					publish: false,
+					pending: pending && {
+						value: pending.pendingCells,
+						runs: pending.runs,
+					},
+				};
+		if (decision.publish) {
+			published.push(row);
+			continue;
+		}
+		published.push({
+			...row,
+			result: prior.result,
+			reason: prior.reason,
+			respawn: prior.respawn,
+			coverage: prior.coverage,
+		});
+		if (decision.pending)
+			nextPending[row.serverId] = {
+				pendingCells: decision.pending.value,
+				runs: decision.pending.runs,
+			};
+		// Two unavailable rows differing only in their reason are host noise, not
+		// a held answer: the prior row stands and nothing is recorded.
+		if (!(row.result === "unavailable" && prior.result === "unavailable"))
+			held.push({
+				serverId: row.serverId,
+				prior: prior.cells,
+				measured: observed,
+				...(decision.held === "pending" && {
+					pendingRuns: decision.pending.runs,
+				}),
+			});
+	}
+	// Rewrite the block only when a pending flip moved, so a night that holds,
+	// flips or clears nothing leaves the matrix's bytes alone.
+	const next = sanitizePendingFlips(nextPending, "pendingCells");
 	return {
-		doc: renderIdleEvictionDoc({ rows, declared, date, platform }),
-		matrixText,
-		held: [],
+		doc: render(published),
+		matrixText:
+			JSON.stringify(priorPending) === JSON.stringify(next)
+				? matrixText
+				: setRefreshStateKey(matrixText, IDLE_EVICTION_DOC_KEY, next),
+		held,
 	};
 }
 

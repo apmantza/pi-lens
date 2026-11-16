@@ -145,6 +145,8 @@ describe("renderIdleEvictionDoc", () => {
 				declared: "transparent",
 				result: "eligible",
 				reason: undefined,
+				respawn: "ok",
+				coverage: "preserved",
 			},
 			{
 				serverId: "bravo",
@@ -152,6 +154,8 @@ describe("renderIdleEvictionDoc", () => {
 				declared: "unmeasured",
 				result: "eligible",
 				reason: undefined,
+				respawn: "ok",
+				coverage: "preserved",
 			},
 			{
 				serverId: "charlie",
@@ -159,6 +163,8 @@ describe("renderIdleEvictionDoc", () => {
 				declared: "resident",
 				result: "vetoed",
 				reason: "findings-narrowed",
+				respawn: "ok",
+				coverage: "narrowed",
 			},
 			{
 				serverId: "delta",
@@ -166,6 +172,8 @@ describe("renderIdleEvictionDoc", () => {
 				declared: "unmeasured",
 				result: "unavailable",
 				reason: "tool-unavailable",
+				respawn: "n/a",
+				coverage: "n/a",
 			},
 			{
 				serverId: "echo",
@@ -173,6 +181,8 @@ describe("renderIdleEvictionDoc", () => {
 				declared: "unmeasured",
 				result: "unavailable",
 				reason: "budget-exhausted",
+				respawn: "n/a",
+				coverage: "n/a",
 			},
 		]);
 		expect(parseIdleEvictionDoc("# nothing here\n")).toBeNull();
