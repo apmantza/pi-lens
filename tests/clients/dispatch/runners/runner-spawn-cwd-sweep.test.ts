@@ -183,7 +183,9 @@ const EXPECTED_FILES = 81;
 // in ORIGIN_ADMISSION_ROWS; its one caller is a NO_CWD_EXEMPTION_ROWS row.
 // 130 -> 129 (#5410 D2): `detectRunner`'s `which pytest` spawn became a PATH
 // walk (`findCommandOnPath`), so its NO_CWD_EXEMPTION_ROWS row went with it.
-const EXPECTED_DIRECT_SITES = 129;
+// 129 -> 128 (#5410 S5): the sync `findCommand` in `clients/safe-spawn.ts` had
+// no production caller; its `which`/`where` spawn and its row are deleted.
+const EXPECTED_DIRECT_SITES = 128;
 /**
  * Every same-file spawn-routing wrapper call site the scan discovers. Pinned
  * as a LIST, not a count, because the list is the part round 2 got wrong: it
@@ -392,10 +394,6 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/safe-spawn.ts#findCommandAsync:45a177c3",
 		"`which`/`where <command>` PATH lookup that returns the resolved path",
-	],
-	[
-		"clients/safe-spawn.ts#findCommand:e3470221",
-		"`which`/`where <command>` PATH lookup returning the path (deprecated sync form)",
 	],
 	[
 		"clients/sg-runner.ts#SgRunner.probeHomebrew:4df45ecb",

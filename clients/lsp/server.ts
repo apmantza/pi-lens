@@ -1484,7 +1484,7 @@ export async function resolveAndLaunch(
 	// Step 4 — language-native runtime install (go install, gem install, …)
 	const runtimeInstall = trustRefused ? undefined : spec.runtimeInstall;
 	const runtimeAvailable = runtimeInstall
-		? await isOnPath(runtimeInstall.runtimeCommand)
+		? await isCommandAvailableAsync(runtimeInstall.runtimeCommand)
 		: false;
 	if (staleLaunch(generation, `${toolLabel}:runtimeAvailability`)) {
 		return undefined;
@@ -1556,7 +1556,7 @@ async function resolveAndLaunchBundle(
 	// hang; just probe). No runtime → graceful skip (coverage notice).
 	let runtime: string | undefined;
 	for (const candidate of spec.runtimeCandidates) {
-		if (await isOnPath(candidate)) {
+		if (await isCommandAvailableAsync(candidate)) {
 			runtime = candidate;
 			break;
 		}
@@ -2226,19 +2226,6 @@ export function NearestRoot(
 export const createRootDetector = NearestRoot;
 
 // --- Runtime Tool Helpers ---
-
-/**
- * Check if a command is available on system PATH.
- *
- * Async (was a blocking `spawnSync("where"/"which")`): runs on the spawn
- * fall-through path (Step 4, runtime-install gate). The shared
- * `isCommandAvailableAsync` spawns the same finder via `safeSpawnAsync` with a
- * 5s timeout, so a stalled finder can no longer freeze the loop. Semantics are
- * preserved: true iff the finder exits 0.
- */
-function isOnPath(command: string): Promise<boolean> {
-	return isCommandAvailableAsync(command);
-}
 
 /**
  * Try to install gopls via `go install`. Resolves true if the install succeeded.
