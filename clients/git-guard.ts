@@ -446,10 +446,19 @@ function canonicalizeGuardCommand(command: string): string {
 		const positional = command.slice(i).match(/^\$IFS(?:\$[0-9]+)?/)?.[0];
 		if (parameter || positional) {
 			const length = (parameter ?? positional ?? "").length;
-			// Bash reads `$IFS#` as one word, so the `#` starts no comment; the
-			// blank this fold writes would make it one. Escape that `#` (#5649).
-			result += command[i + length] === "#" ? " \\" : " ";
-			i += length - 1;
+			// Bash removes each `\<newline>` before it reads words, so
+			// `$IFS\<newline>#` is `$IFS#`: one word, no comment. The blank this
+			// fold writes would make a comment; escape that `#` and drop the
+			// pairs before it (#5649).
+			let next = i + length;
+			while (command[next] === "\\" && command[next + 1] === "\n") next += 2;
+			if (command[next] === "#") {
+				result += " \\";
+				i = next - 1;
+			} else {
+				result += " ";
+				i += length - 1;
+			}
 			continue;
 		}
 		result += ch;
@@ -810,9 +819,17 @@ function commandStringHasGuardedVerb(
 	words: readonly DecodedShellWord[],
 	depth: number,
 	matcher: GitVerbMatcher,
+	whitespace: "bash" | "windows-shell" = "bash",
 ): boolean {
+	const joined = words.map((word) => word.text).join(" ");
+	// PowerShell and cmd read their own whitespace: Char.IsWhiteSpace, which
+	// holds NBSP, U+0085, the Unicode spaces, CR, VT and FF
+	// (CharTraits.IsWhitespace in the PowerShell parser). Bash's blanks apply
+	// to the bash path only; `pwsh -Command "git<NBSP>commit"` is a commit (#5649).
 	return decodeShellWords(
-		canonicalizeGuardCommand(words.map((word) => word.text).join(" ")),
+		canonicalizeGuardCommand(
+			whitespace === "windows-shell" ? joined.replace(/[^\S\n]/g, " ") : joined,
+		),
 	).some((segment) => containsGuardedGitVerb(segment.words, depth, matcher));
 }
 
@@ -989,6 +1006,9 @@ function containsGuardedGitVerb(
 		commandWords.slice(commandIndex),
 		depth + 1,
 		matcher,
+		["pwsh", "powershell", "cmd"].includes(executableName(leadingExecutable))
+			? "windows-shell"
+			: "bash",
 	);
 }
 

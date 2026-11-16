@@ -248,6 +248,57 @@ const ROWS: readonly Row[] = [
 		guard: true,
 	},
 	{
+		// Review r1 F5: bash removes `\<newline>` before it reads the comment
+		// boundary, so the `#` after `${IFS}\<newline>` is still a word
+		// character. The lookahead read the raw `\` and wrote a plain blank.
+		row: "${IFS} then a line continuation, then a hash is no comment",
+		command: "echo a${IFS}\\\n#$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "$IFS then a line continuation, then a hash is no comment",
+		command: "echo a$IFS\\\n#$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "${IFS} then a line continuation, then a blank hash is a comment",
+		command: "echo a${IFS}\\\n #$(git commit -m y)",
+		bash: null,
+		guard: false,
+	},
+	// Review r1 F1 (regression, fail-open): CR is a word character, so the
+	// here-doc delimiter keeps it and the closing line `EOF\r` matches it
+	// exactly. The body scan stripped the CR from candidate lines, so a CRLF
+	// here-doc never closed and the commit after it was read as body text.
+	{
+		row: "CRLF here-doc, then a hidden commit",
+		command: "cat <<EOF\r\nbody\r\nEOF\r\ngit $'\\x63ommit' -m x\r\n",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "CRLF quoted here-doc, then a hidden commit",
+		command: "cat <<'EOF'\r\nbody\r\nEOF\r\ngit $'\\x63ommit' -m x\r\n",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		// The closing line is not tab-indented: the canonical collapse turns a
+		// leading tab into a blank, a miss on the base too that #5648 removes.
+		row: "CRLF `<<-` here-doc, then a hidden commit",
+		command: "cat <<-EOF\r\n\tbody\r\nEOF\r\ngit $'\\x63ommit' -m x\r\n",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "git commit text inside a CRLF here-doc body is no commit",
+		command: "cat <<EOF\r\ngit commit -m x\r\nEOF\r\n",
+		bash: null,
+		guard: false,
+	},
+	{
 		// The here-doc delimiter is `EOF<NBSP>x`, one word, so the body runs to
 		// the line that holds all of it and the commit in it is text. The lexer
 		// ended the delimiter at the NBSP and ran the line after `EOF`.
@@ -1098,6 +1149,27 @@ describe.skipIf(process.platform === "win32")(
 			}
 			expect(failures).toEqual([]);
 		}, 60_000);
+
+		// Review r1 F6 (CodeRabbit): a PowerShell command string is read by
+		// PowerShell, whose whitespace is Char.IsWhiteSpace (NBSP, U+0085, the
+		// Unicode spaces, CR, VT, FF; CharTraits.IsWhitespace in the PowerShell
+		// parser). Only the bash path takes bash's blanks. pwsh is not run
+		// here: the rows are string-level, and the bash row is the oracle.
+		it("reads a PowerShell or cmd command string with its own whitespace", () => {
+			const nbsp = "\u00a0";
+			const failures: string[] = [];
+			for (const [command, want] of [
+				[`pwsh -NoProfile -Command "git${nbsp}commit -m x"`, true],
+				[`powershell.exe -c 'git${nbsp}push'`, true],
+				[`cmd /c "git${nbsp}commit -m x"`, true],
+				[`pwsh -Command "git\u2003commit -m x"`, true],
+				[`bash -c "git${nbsp}commit -m x"`, false],
+				[`git${nbsp}commit -m x`, false],
+			] as const)
+				if (guarded(command) !== want)
+					failures.push(`${JSON.stringify(command)}: want ${want}`);
+			expect(failures).toEqual([]);
+		});
 
 		it("guards every generated spelling bash runs as commit or push", () => {
 			const failures: string[] = [];

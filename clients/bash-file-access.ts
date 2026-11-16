@@ -346,7 +346,9 @@ function consumeHeredocBodies(
 			const end = lineEnd < 0 ? command.length : lineEnd;
 			let line = command.slice(cursor, end);
 			if (heredoc.stripTabs) line = line.replace(/^\t+/, "");
-			if (line.replace(/\r$/, "") === heredoc.delimiter) {
+			// Exact, as bash does: CR is a word character, so the delimiter of a
+			// CRLF here-doc keeps it and its closing line does too (#5649).
+			if (line === heredoc.delimiter) {
 				if (!heredoc.quoted) expanding.push(command.slice(bodyStart, cursor));
 				cursor = lineEnd < 0 ? end : end + 1;
 				found = true;
