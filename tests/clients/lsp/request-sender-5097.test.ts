@@ -186,12 +186,24 @@ describe("one request sender owns cancel and release (#5097)", () => {
 	// be sent only to be cancelled.
 	it("an aborted pull is tracked as abandoned and records no failure, and a pull begun after the abort sends nothing", async () => {
 		await withHangingServer("textDocument/diagnostic", async (ctx) => {
-			const pulls = () =>
-				fs
-					.readFileSync(path.join(path.dirname(ctx.file), "trace.log"), "utf-8")
-					.split("\n")
-					.filter((line) => line.startsWith("recv textDocument/diagnostic"))
-					.length;
+			const pulls = () => {
+				const trace = path.join(path.dirname(ctx.file), "trace.log");
+				return fs.existsSync(trace)
+					? fs
+							.readFileSync(trace, "utf-8")
+							.split("\n")
+							.filter((line) => line.startsWith("recv textDocument/diagnostic"))
+							.length
+					: 0;
+			};
+			// Begun under a scope that is already aborted: nothing is sent.
+			const gone = new AbortController();
+			gone.abort();
+			await spawnAbortScope.run(gone.signal, () =>
+				ctx.client.waitForDiagnostics(ctx.file, 300),
+			);
+			await ctx.barrier();
+			expect(pulls()).toBe(0);
 			const abort = new AbortController();
 			const first = spawnAbortScope.run(abort.signal, () =>
 				ctx.client.waitForDiagnostics(ctx.file, 600),
@@ -206,14 +218,6 @@ describe("one request sender owns cancel and release (#5097)", () => {
 			await ctx.barrier();
 			expect(pulls()).toBe(1);
 			expect(ctx.client.getPullFailureHistory?.()).toEqual([]);
-			// Begun under a scope that is already aborted: nothing is sent.
-			const gone = new AbortController();
-			gone.abort();
-			await spawnAbortScope.run(gone.signal, () =>
-				ctx.client.waitForDiagnostics(ctx.file, 300),
-			);
-			await ctx.barrier();
-			expect(pulls()).toBe(1);
 		});
 	}, 15_000);
 
