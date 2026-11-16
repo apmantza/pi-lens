@@ -1258,6 +1258,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the subject is the real `Record Windows Vitest outcome` bash block under GitHub's bash flags (a fixture Node program at the population-script path runs under the real `node`, so no PATH, delimiter, or executable name is mocked) and the ref-deleted Git fetch form through the git-fixture-env seam",
 	},
+	// 2026-11-16 (#5676): the census tracker's clean verdict is observable only by
+	// running the real step's bash; gh and the tracker script are the host boundary.
+	"real-process-spawn:config/lsp-capability-refresh-workflow.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the subject is the census tracker step's own bash (`bash -c` over the workflow run text) under GitHub's shell flags, and its clean loop's verdict is observable only by running it; the one fakes are gh and the tracker script at the host boundary",
+	},
 	"real-process-spawn:config/oxlint-advisory-rule-floor-gate.test.ts": {
 		detector: "real-process-spawn",
 		reason:
