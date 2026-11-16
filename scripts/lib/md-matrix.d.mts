@@ -180,6 +180,8 @@ export interface RefreshState {
 	"idle-eviction"?: Record<string, { nights: IdleEvictionNight[] }>;
 	/** #3405: the settled save verdict a night measured against the published one. */
 	"save-verdict"?: Record<string, { pendingSaveVerdict: string; runs: number }>;
+	/** #5667: the settled idle-eviction row a night measured against the published one. */
+	"idle-eviction-doc"?: Record<string, { pendingCells: string; runs: number }>;
 	/** #4512: consecutive-night misses per lang and axis behind the `stale` column. */
 	"missed-probe"?: Record<
 		string,
@@ -200,10 +202,26 @@ export const IDLE_EVICTION_KEY: "idle-eviction";
 /** #3405: the refresh-state key holding the pending save-verdict flips. */
 export const SAVE_VERDICT_KEY: "save-verdict";
 
-/** #3405: the well-formed pending flips of a parsed `save-verdict` key, by server. */
-export function sanitizeSaveVerdictState(
+/** #5667: the refresh-state key holding the pending idle-eviction doc flips. */
+export const IDLE_EVICTION_DOC_KEY: "idle-eviction-doc";
+
+/** #3405, #5667: the well-formed pending flips of a parsed key, by server; `field` names the pending value. */
+export function sanitizePendingFlips(
 	map: unknown,
-): Record<string, { pendingSaveVerdict: string; runs: number }>;
+	field: string,
+): Record<string, Record<string, string | number>>;
+
+/** #3405, #5667: the two-night hold of one published cell group. */
+export function holdSettledCell(night: {
+	prior: string;
+	observed: string;
+	pending?: { value: string; runs: number };
+	isSettled: (value: string) => boolean;
+}): {
+	publish: boolean;
+	pending?: { value: string; runs: number };
+	held?: "unsettled" | "pending";
+};
 
 export interface IdleEvictionNight {
 	day: string;

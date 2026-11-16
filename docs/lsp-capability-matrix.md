@@ -581,7 +581,8 @@ _None observed as of the last probe run._
 Bookkeeping for the two-run `first-publish`/`clean-behavior` hysteresis, the
 first-miss stamps (#3401, #4615), the consecutive-night `missed-probe`
 streaks behind the `stale` column (#4512), consecutive-night
-`idle-eviction` counts (#3989) and the pending `save-verdict` flips (#3405).
+`idle-eviction` counts (#3989), the pending `save-verdict` flips (#3405) and
+the pending `idle-eviction-doc` flips (#5667).
 Regenerated every run; never a measurement.
 
 ```json
