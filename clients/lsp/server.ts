@@ -1049,6 +1049,48 @@ export interface ResolveAndLaunchSpec {
 		/** After a successful install, retry these candidates (defaults to spec.candidates) */
 		retryCandidates?: string[];
 	};
+	/**
+	 * #5674: the trust refusals of a spawn that tries several stages. The spawn
+	 * passes one object to every stage; each call adds the refusals it met, so a
+	 * later managed lookup obeys a refusal an earlier stage met (#4515).
+	 */
+	refusals?: { refused: boolean; bareRefused: boolean };
+}
+
+/**
+ * #4515: the managed rung of a launch. After a trust refusal the repair must
+ * not run project code. The installer spawns bare names (its PATH rung, npm and
+ * Python probes, the package manager), so when a refused bare candidate or a
+ * PATH entry reaches the project, only pi-lens's own store is read and nothing
+ * is installed. The resolver and Python's own managed stage both use it.
+ */
+async function lookupManagedTool(
+	toolId: string,
+	cwd: string,
+	refusals: NonNullable<ResolveAndLaunchSpec["refusals"]>,
+	ensureOptions?: { allowInstall?: boolean },
+): Promise<{ path: string | undefined; storeOnly: boolean }> {
+	const storeOnly =
+		refusals.refused &&
+		(refusals.bareRefused || commandSearchReachesProject(cwd));
+	if (storeOnly) {
+		recordDegradationOnce({
+			kind: "lsp-registry-decision",
+			subject: `store-only-repair:${toolId}`,
+			reason:
+				"LSP repair read only the pi-lens tool store: after a trust refusal a bare-name lookup reaches the project, so nothing was probed on PATH or installed",
+			metadata: { field: "store-only-repair", tool: toolId },
+		});
+	}
+	logSessionStart(
+		`lsp launch ensure-tool start tool=${toolId} cwd=${cwd} storeOnly=${storeOnly}`,
+	);
+	return {
+		path: await (storeOnly
+			? getToolPath(toolId, { storeOnly: true })
+			: ensureTool(toolId, ensureOptions)),
+		storeOnly,
+	};
 }
 
 export async function resolveAndLaunch(
@@ -1204,6 +1246,12 @@ export async function resolveAndLaunch(
 		);
 		trackRuntimeFailure(failure.err);
 	}
+	const refusals = spec.refusals ?? { refused: false, bareRefused: false };
+	for (const failure of candidateFailures) {
+		if (!hasSpawnFailureKind(failure.err, "trust-refused")) continue;
+		refusals.refused = true;
+		if (isSimpleCommand(failure.command)) refusals.bareRefused = true;
+	}
 	// #4515: a project-local candidate refused by trust is repairable too: the
 	// managed install lives outside the project, so it needs no trust.
 	const hasOnlyRepairableCandidateFailures = candidateFailures.every(
@@ -1236,23 +1284,8 @@ export async function resolveAndLaunch(
 		return undefined;
 	}
 
-	// #4515: after a trust refusal the repair must not run project code. The
-	// installer spawns bare names (its PATH rung, npm and Python probes, the
-	// package manager), so when a refused bare candidate or a PATH entry reaches
-	// the project, only pi-lens's own store is read and nothing is installed.
-	// Step 4 runs a runtime in the project cwd, so it is skipped after any
-	// refusal.
-	const isRefusal = (failure: (typeof candidateFailures)[number]): boolean =>
-		hasSpawnFailureKind(failure.err, "trust-refused");
-	const trustRefused = candidateFailures.some(isRefusal);
-	const storeOnly =
-		trustRefused &&
-		(candidateFailures.some(
-			(failure) => isRefusal(failure) && isSimpleCommand(failure.command),
-		) ||
-			commandSearchReachesProject(spec.cwd));
-
-	// Step 3 — managed install via installer registry
+	// Step 3 — managed install via installer registry (#4515: store only after
+	// a refusal that a bare-name lookup could reach; see lookupManagedTool)
 	if (spec.managedToolId) {
 		// Neither the managed-dir stat (#2140) nor any bare-PATH candidate
 		// resolved this tool — the negative counterpart to the fast-path
@@ -1285,22 +1318,12 @@ export async function resolveAndLaunch(
 			producer: "lsp-launch",
 			evidence: classifiedFailure.evidence,
 		});
-		if (storeOnly) {
-			recordDegradationOnce({
-				kind: "lsp-registry-decision",
-				subject: `store-only-repair:${spec.managedToolId}`,
-				reason:
-					"LSP repair read only the pi-lens tool store: after a trust refusal a bare-name lookup reaches the project, so nothing was probed on PATH or installed",
-				metadata: { field: "store-only-repair", tool: spec.managedToolId },
-			});
-		}
-		logSessionStart(
-			`lsp launch ensure-tool start tool=${spec.managedToolId} cwd=${spec.cwd} storeOnly=${storeOnly}`,
-		);
 		const installStartedAt = Date.now();
-		const installed = await (storeOnly
-			? getToolPath(spec.managedToolId, { storeOnly: true })
-			: ensureTool(spec.managedToolId));
+		const { path: installed, storeOnly } = await lookupManagedTool(
+			spec.managedToolId,
+			spec.cwd,
+			refusals,
+		);
 		const installAttempt = storeOnly
 			? undefined
 			: captureInstallAttempt(spec.managedToolId);
@@ -1481,8 +1504,9 @@ export async function resolveAndLaunch(
 		}
 	}
 
-	// Step 4 — language-native runtime install (go install, gem install, …)
-	const runtimeInstall = trustRefused ? undefined : spec.runtimeInstall;
+	// Step 4 — language-native runtime install (go install, gem install, …).
+	// #4515: it runs a runtime in the project cwd, so any refusal skips it.
+	const runtimeInstall = refusals.refused ? undefined : spec.runtimeInstall;
 	const runtimeAvailable = runtimeInstall
 		? await isCommandAvailableAsync(runtimeInstall.runtimeCommand)
 		: false;
@@ -3416,6 +3440,9 @@ export const PythonServer: LSPServerInfo = {
 		const toolEnvironment = await getToolEnvironment();
 		const env = augmentPythonEnvironment(toolEnvironment, pythonEnvironment);
 		let source: "direct" | "managed" | "package-manager" = "direct";
+		// #5674: the stages share one refusal record, so the managed stage below
+		// reads only the store after a refusal a bare-name lookup could reach.
+		const refusals = { refused: false, bareRefused: false };
 
 		// Project ownership outranks checker preference: exhaust explicit project
 		// candidates before a bare command can resolve to pi-lens's managed bin or
@@ -3438,6 +3465,7 @@ export const PythonServer: LSPServerInfo = {
 				args: ["--stdio"],
 				cwd: root,
 				env,
+				refusals,
 			},
 			false,
 		);
@@ -3459,6 +3487,7 @@ export const PythonServer: LSPServerInfo = {
 				args: ["server"],
 				cwd: root,
 				env,
+				refusals,
 			},
 			false,
 		);
@@ -3475,6 +3504,7 @@ export const PythonServer: LSPServerInfo = {
 				args: ["--stdio"],
 				cwd: root,
 				env,
+				refusals,
 			},
 			false,
 		);
@@ -3492,6 +3522,7 @@ export const PythonServer: LSPServerInfo = {
 				args: ["server"],
 				cwd: root,
 				env,
+				refusals,
 			},
 			false,
 		);
@@ -3500,10 +3531,14 @@ export const PythonServer: LSPServerInfo = {
 		}
 
 		// Discover a globally-installed pyright even when install is disabled;
-		// only the download is gated by canInstall.
-		const pyrightPath = await ensureTool("pyright", {
-			allowInstall: canInstall(options?.allowInstall),
-		});
+		// only the download is gated by canInstall. After a refusal that a
+		// bare-name lookup could reach, only the store is read (#5674).
+		const { path: pyrightPath } = await lookupManagedTool(
+			"pyright",
+			root,
+			refusals,
+			{ allowInstall: canInstall(options?.allowInstall) },
+		);
 		if (!pyrightPath) return undefined;
 		source = "managed";
 

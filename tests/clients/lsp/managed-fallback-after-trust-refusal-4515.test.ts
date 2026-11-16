@@ -202,6 +202,91 @@ afterEach(() => {
 	while (dirs.length) removeTempDirSync(dirs.pop() as string);
 });
 
+/** Seed pyright in the store the way npm lays it out, both of its bins. */
+function seedStorePyright(): void {
+	const pkg = path.join(storeRoot(), "node_modules", "pyright");
+	fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+	fs.writeFileSync(
+		path.join(pkg, "package.json"),
+		JSON.stringify({
+			version: "1.1.414",
+			bin: {
+				pyright: "dist/pyright.js",
+				"pyright-langserver": "dist/pyright-langserver.js",
+			},
+		}),
+	);
+	for (const name of ["pyright", "pyright-langserver"]) {
+		fs.writeFileSync(path.join(pkg, "dist", `${name}.js`), "// fixture\n");
+		fs.mkdirSync(storeBin(), { recursive: true });
+		fs.writeFileSync(path.join(storeBin(), name), "#!/bin/sh\n", {
+			mode: 0o755,
+		});
+	}
+}
+
+/**
+ * An adopted root whose node_modules/.bin, on PATH as `npm run` or direnv
+ * puts it, holds both pyright bins, each leaving the marker if it ever runs.
+ */
+function makePyrightProjectOnPath() {
+	const project = makeProject("pyright-langserver", true);
+	fs.copyFileSync(
+		path.join(project.bin, "pyright-langserver"),
+		path.join(project.bin, "pyright"),
+	);
+	process.env.PATH = [project.bin, outsideBin].join(path.delimiter);
+	return project;
+}
+
+describe("Python managed stage after a project refusal (#5674 review F5)", () => {
+	it.each([
+		["trusted", true],
+		["trusted", false],
+		["unknown", true],
+		["unknown", false],
+	] as const)(
+		"never runs the project's pyright with trust=%s allowInstall=%s and its bin on PATH",
+		async (trust, allowInstall) => {
+			// Review F5: once the project stage's refusal no longer ended the
+			// launch, Python's own managed lookup ran the installer's PATH rung,
+			// `pyright --version`, which is the project's planted pyright.
+			setProjectTrustState(trust);
+			const { spec, marker } = makePyrightProjectOnPath();
+
+			const result = await withLspProjectCodePermission(false, () =>
+				PythonServer.spawn(spec.cwd, { allowInstall }),
+			);
+
+			expect(fs.existsSync(marker)).toBe(false);
+			expect(result).toBeUndefined();
+			expect(managedLaunch).not.toHaveBeenCalled();
+			expect(getInstallAttempt("pyright")).toBeUndefined();
+			expect(decisionRows("store-only-repair:pyright")).toHaveLength(1);
+		},
+	);
+
+	it("still installs pyright when PATH is clear of the project", async () => {
+		// #5674's own state: a first run with no managed pyright yet. A clean
+		// PATH reaches no project code, so the refusal must not cost the install.
+		// The setup's PI_LENS_DISABLE_TOOL_INSTALL=1 makes the install decline.
+		setProjectTrustState("unknown");
+		const { spec, marker } = makeProject("pyright-langserver", true);
+
+		const result = await withLspProjectCodePermission(false, () =>
+			PythonServer.spawn(spec.cwd, { allowInstall: true }),
+		);
+
+		expect(result).toBeUndefined();
+		expect(fs.existsSync(marker)).toBe(false);
+		expect(getInstallAttempt("pyright")).toMatchObject({
+			outcome: "declined",
+			reason: expect.stringContaining("PI_LENS_DISABLE_TOOL_INSTALL"),
+		});
+		expect(decisionRows("store-only-repair")).toHaveLength(0);
+	});
+});
+
 describe("Python adopted-root fallback (#5674)", () => {
 	it.each([
 		[false, "trusted"],
@@ -214,25 +299,7 @@ describe("Python adopted-root fallback (#5674)", () => {
 			// #5674: Python's no-install project stage must not abort the later managed stage.
 			setProjectTrustState(trust);
 			const { spec, marker } = makeProject("pyright-langserver", planted);
-			const pkg = path.join(storeRoot(), "node_modules", "pyright");
-			fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
-			fs.writeFileSync(
-				path.join(pkg, "package.json"),
-				JSON.stringify({
-					version: "1.1.414",
-					bin: {
-						pyright: "dist/pyright.js",
-						"pyright-langserver": "dist/pyright-langserver.js",
-					},
-				}),
-			);
-			for (const name of ["pyright", "pyright-langserver"]) {
-				fs.writeFileSync(path.join(pkg, "dist", `${name}.js`), "// fixture\n");
-				fs.mkdirSync(storeBin(), { recursive: true });
-				fs.writeFileSync(path.join(storeBin(), name), "#!/bin/sh\n", {
-					mode: 0o755,
-				});
-			}
+			seedStorePyright();
 			const result = await withLspProjectCodePermission(false, () =>
 				PythonServer.spawn(spec.cwd, { allowInstall: false }),
 			);
