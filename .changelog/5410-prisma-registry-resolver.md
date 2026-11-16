@@ -4,4 +4,4 @@ audience: user
 area: runners
 ---
 
-- **Editing a Prisma schema no longer starts a second prisma process on every save.** The runner probed `prisma --version` on PATH before each validate and kept no answer, so a prisma that was slow to start or failed its probe cost every edit again. It now reads the shared per-project verdict like every other runner, then falls back to a package manager's global copy and the cache-only `npx --no prisma`. (refs #5410)
+- **Editing a Prisma or Vite+ file no longer starts an extra process per save.** The prisma and oxlint runners probed `prisma --version` and `vp --version` on PATH and kept no answer, so a tool that was slow to start or failed its probe cost every edit again. Both now read the shared per-project verdict like every other runner. (refs #5410)
