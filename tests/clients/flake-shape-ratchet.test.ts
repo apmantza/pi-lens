@@ -233,7 +233,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"elapsed-time-assertion:clients/lsp/request-sender-5097.test.ts": {
 		detector: "elapsed-time-assertion",
 		reason:
-			"#5097 acceptance 3: Esc must return a navigation call on a silent server within 500 ms, and a firing bound must put the cancel of its pull and ping on the wire within 500 ms, and must end the touch and the wait it ran within a bound that the server's own 800 ms answer and 5 s loading window would otherwise exceed; the bound is the behavior and a fake clock cannot time a child process's wire",
+			"#5097 acceptance 3: Esc must return a navigation call on a silent server within 500 ms, and a firing bound must put the cancel of its pull and ping on the wire within 500 ms, and must end the touch and the wait it ran within a bound that the server's own 800 ms answer and 5 s loading window would otherwise exceed, and Esc must return a workspace pull and a read-only tsserver command within 500 ms of the abort, where their 5 s and 2.5 s ceilings would otherwise answer; the bound is the behavior and a fake clock cannot time a child process's wire",
 	},
 	"elapsed-time-assertion:clients/lsp/server-status-readiness-5487.test.ts": {
 		detector: "elapsed-time-assertion",
@@ -1266,6 +1266,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the subject is the real `Record Windows Vitest outcome` bash block under GitHub's bash flags (a fixture Node program at the population-script path runs under the real `node`, so no PATH, delimiter, or executable name is mocked) and the ref-deleted Git fetch form through the git-fixture-env seam",
 	},
+	// 2026-11-16 (#5676): the census tracker's clean verdict is observable only by
+	// running the real step's bash; gh and the tracker script are the host boundary.
+	"real-process-spawn:config/lsp-capability-refresh-workflow.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the subject is the census tracker step's own bash (`bash -c` over the workflow run text) under GitHub's shell flags, and its clean loop's verdict is observable only by running it; the one fakes are gh and the tracker script at the host boundary",
+	},
 	"real-process-spawn:config/oxlint-advisory-rule-floor-gate.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -2055,7 +2062,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"ungoverned-wait-for:clients/lsp/request-sender-5097.test.ts": {
 		detector: "ungoverned-wait-for",
 		reason:
-			"#5097: the abort must land after the request is on the wire (and the server's own refresh must reach a re-pull, and a loading server must be reported loading), and only the server's own trace shows that; the poll is bounded by its own timeout",
+			"#5097: the abort must land after the request is on the wire (and the server's own refresh must reach a re-pull, and a loading server must be reported loading, and the workspace pull and the read-only command must be on the wire before the Esc), and only the server's own trace shows that; the poll is bounded by its own timeout",
 	},
 	"ungoverned-wait-for:clients/session-repository-trust-4530.test.ts": {
 		detector: "ungoverned-wait-for",
