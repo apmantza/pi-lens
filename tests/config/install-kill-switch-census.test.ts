@@ -988,7 +988,6 @@ const ROWS: Readonly<Record<string, Row>> = {
 		"clients/security-scan-client.ts#probeToolAsync": 1,
 		"clients/sg-runner.ts#probeToolAsync": 1,
 		"clients/sg-runner.ts#safeSpawnAsync": 4,
-		"clients/test-runner-client.ts#safeSpawn": 1,
 		"clients/test-runner-client.ts#safeSpawnAsync": 1,
 		"clients/trivy-client.ts#safeSpawnAsync": 1,
 	}),

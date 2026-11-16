@@ -2216,6 +2216,11 @@ export type DegradationKind =
 	 */
 	| "test-runner-failed-target-state"
 	/**
+	 * `test-runner-pytest-not-executable` (#5410): the pytest on PATH has no
+	 * execute bit, so it is no runner; once per file.
+	 */
+	| "test-runner-pytest-not-executable"
+	/**
 	 * `test-target-foreign-checkout`: The final automatic-test gate rejected a positively foreign checkout.
 	 * Self and deferred targets may have no discovery/cache record; keep this
 	 * decision visible even with dbg disabled, once per hashed cwd/target/owner.

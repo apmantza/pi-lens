@@ -56,8 +56,9 @@ import {
 	toProjectRelativePath,
 } from "./path-utils.js";
 import { findNearestDirWithAnyBasename } from "./workspace-topology.js";
+import { findCommandOnPath } from "./command-path.js";
 import { isMeasuredDuration, toMeasuredDurationMs } from "./run-duration.js";
-import { safeSpawn, safeSpawnAsync } from "./safe-spawn.js";
+import { safeSpawnAsync } from "./safe-spawn.js";
 import { scannerReportParentDir } from "./scanner-temp-root.js";
 import { stripAnsi } from "./sanitize.js";
 import { resolveGitCheckout } from "./review-graph/git-identity.js";
@@ -677,6 +678,35 @@ export const RUNNERS: Record<string, RunnerConfig> = {
  * `["test", "-run", …]`, rspec's `["exec", "rspec", file]` once binName is
  * "bundle", etc.) is a real subcommand/argv and is returned unchanged (#1098).
  */
+/**
+ * #5410 D2: the PATH `pytest` file both detection and the run answer from, or
+ * null. `findCommandOnPath` walks PATH without a spawn and refuses a project
+ * entry until pi trusts the project. On POSIX a file without the execute bit
+ * is no answer (exec would refuse it). A relative PATH entry is anchored at
+ * the cwd the walk read it from, never the child's cwd.
+ */
+function findPathPytest(): string | null {
+	const isWindows = process.platform === "win32";
+	const found = findCommandOnPath("pytest", isWindows);
+	if (!found) return null;
+	if (!isWindows) {
+		try {
+			fs.accessSync(found, fs.constants.X_OK);
+		} catch {
+			// Exec would refuse this file: no runner, said once per file.
+			recordDegradationOnce({
+				kind: "test-runner-pytest-not-executable",
+				subject: found,
+				reason: "the pytest found on PATH lacks the execute bit",
+			});
+			return null;
+		}
+	}
+	return isAbsoluteFilePath(found)
+		? found
+		: `${process.cwd()}${path.sep}${found}`;
+}
+
 export function stripWrapperArgs(binName: string, args: string[]): string[] {
 	if (args[0] === binName) return args.slice(1);
 	if (args[0] === "-m" && args[1] === binName) return args.slice(2);
@@ -1067,17 +1097,11 @@ export class TestRunnerClient {
 			typeof sourceFilePath === "string" && sourceFilePath.endsWith(".py");
 		if (!isPythonSource) return null;
 
-		try {
-			const whichCmd = process.platform === "win32" ? "where" : "which";
-			const result = safeSpawn(whichCmd, ["pytest"], {
-				timeout: 2000,
-			});
-			if (result.status === 0) {
-				this.log("Detected pytest globally");
-				return { runner: "pytest", config: RUNNERS.pytest };
-			}
-		} catch (err) {
-			void err;
+		// #5410 D2: `resolveExec` runs this answer when the project has no
+		// Python environment.
+		if (findPathPytest()) {
+			this.log("Detected pytest on PATH");
+			return { runner: "pytest", config: RUNNERS.pytest };
 		}
 
 		return null;
@@ -3562,6 +3586,28 @@ export class TestRunnerClient {
 					args: config.args(testFile, spawnCwd),
 					env: augmentPythonEnvironment(process.env, pythonEnvironment),
 					ownInstall: true,
+				};
+			}
+			// #5410 D2: with no project environment, the pytest on PATH (the file
+			// detection admits, trust-scoped) runs, not a bare `python -m pytest`.
+			// Resolved here, where every target executes, so a deferred re-run
+			// built from `RUNNERS` takes the same binary as a fresh one.
+			const pathPytest = findPathPytest();
+			if (pathPytest) {
+				// `python -m pytest` puts its cwd on `sys.path`; the console script
+				// does not, so the spawn cwd goes first on PYTHONPATH and a root
+				// module imports as it did under `-m`.
+				const pythonPath = process.env.PYTHONPATH;
+				return {
+					command: pathPytest,
+					args: stripWrapperArgs("pytest", config.args(testFile, spawnCwd)),
+					env: {
+						...process.env,
+						PYTHONPATH: pythonPath
+							? `${spawnCwd}${path.delimiter}${pythonPath}`
+							: spawnCwd,
+					},
+					ownInstall: false,
 				};
 			}
 		}

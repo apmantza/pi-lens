@@ -1613,7 +1613,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 74 -> 72 (#4689 batch 2): two `path.resolve` locals dropped from the root and
 		// failed-target keys.
 		// 68 -> 70 (#5257): the per-run report scratch path (`reportDir`, `reportPath`).
-		"clients/test-runner-client.ts": 70,
+		// 70 -> 72 (#5410 D2): the PATH pytest's spawn root on PYTHONPATH and
+		// its relative PATH entry anchored at the cwd the walk read.
+		"clients/test-runner-client.ts": 72,
 		"clients/todo-scanner.ts": 3,
 		// 4 -> 10 (#3655): the Node lockfile walk-up and supplier selection
 		// resolve pnpm/yarn evidence through `path.join`, `path.relative`,
@@ -2033,7 +2035,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// git rm replay and of the git mv replay's five reads.
 		"clients/staged-delta.ts": 16,
 		// 15 -> 16 (#5257): the JSON parser reads the failed suite that explains an unsuccessful run.
-		"clients/test-runner-client.ts": 16,
+		// 16 -> 15 (#5410 D2): the `which pytest` exit status went with its spawn.
+		"clients/test-runner-client.ts": 15,
 		"clients/tree-sitter-logger.ts": 2,
 		// 1 -> 4 (#2678): the health-check record reads the resource status
 		// twice and writes metadata.status; none denotes a delivery status.

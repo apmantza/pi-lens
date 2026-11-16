@@ -1067,3 +1067,48 @@ describe("#3871 test root: the checkout that owns the edit", () => {
 		});
 	});
 });
+
+describe("deferred pytest re-run (#5410 D2)", () => {
+	// Recurrence (#5410 r1 F2): the cut-batch re-run rebuilds its config from
+	// `RUNNERS`, so a binary carried on the detected config never reached it
+	// and the re-run started a bare `python -m pytest` (spawn ENOENT on a
+	// host without `python`).
+	it("runs the PATH pytest for a deferred target re-run from the registry config", async () => {
+		const pipxBin = path.join(env.tmpDir, "pipx", "bin");
+		fs.mkdirSync(pipxBin, { recursive: true });
+		const pytest = path.join(pipxBin, "pytest");
+		fs.writeFileSync(pytest, "#!/bin/sh\nexit 0\n");
+		fs.chmodSync(pytest, 0o755);
+		vi.stubEnv("PATH", [pipxBin, process.env.PATH ?? ""].join(path.delimiter));
+		const pyTest = write(
+			main,
+			"tests/test_widget.py",
+			"def test_w():\n    pass\n",
+		);
+		cacheManager.writeCache(
+			"test-runner-findings",
+			{
+				content: "deferred",
+				deferredTargets: [
+					{
+						testFile: pyTest,
+						runner: "pytest",
+						attempts: 1,
+						sessionId: runtime.telemetrySessionId,
+					},
+				],
+			},
+			main,
+		);
+		// An edit with no companion test: the carried target is the only work.
+		write(main, "src/lonely.ts", "export const lonely = 1;\n");
+		edit(path.join(main, "src", "lonely.ts"));
+
+		await turnEnd();
+		await batchSettled(1);
+
+		expect(spawned()).toEqual([
+			expect.objectContaining({ file: real(pyTest), command: pytest }),
+		]);
+	});
+});
