@@ -442,10 +442,7 @@ function canonicalizeGuardCommand(command: string): string {
 		}
 		result += ch;
 	}
-	// Not the trailing end: a backslash-newline there is a line continuation
-	// that joins the last word to nothing, and `git push\<newline>` is
-	// `git push` (#4739).
-	return result.trimStart();
+	return result;
 }
 
 /** Normalize only a command-position token; never apply this to path args. */
