@@ -48,7 +48,6 @@ import { registeredBackgroundWriteDrainsForTests } from "../../../clients/backgr
 import {
 	checkProbeCache,
 	flushProbeCache,
-	probeCacheUpdatesPendingSizeForTests,
 	resetProbeCacheStateForTesting,
 	updateProbeCache,
 } from "../../../clients/installer/index.js";
@@ -465,41 +464,39 @@ describe("updateProbeCache", () => {
 
 	// Recurrence: #5657. The pending Set keeps an update only until it settles. A
 	// Set that kept settled entries would grow by one per `ensureTool` for the life
-	// of the process. The in-flight read proves the count is live, so the 0 after
-	// settling is not an empty Set that was never filled.
+	// of the process. The reset returns the count it drops, so these cases read the
+	// set without a new export. The never-settling case below proves the set holds
+	// an entry in flight, so a 0 here is not an empty set that was never filled.
 	it("empties the pending set once a successful stat settles", async () => {
 		mockFsReadFile.mockResolvedValue(JSON.stringify({}));
 		mockFsStat.mockResolvedValue({ mtimeMs: MTIME_MS, size: 1 });
 
-		const pending = updateProbeCache(TOOL_ID, TOOL_PATH);
-		expect(probeCacheUpdatesPendingSizeForTests()).toBe(1);
-		await pending;
+		await updateProbeCache(TOOL_ID, TOOL_PATH);
 
-		expect(probeCacheUpdatesPendingSizeForTests()).toBe(0);
+		expect(resetProbeCacheStateForTesting()).toBe(0);
 	});
 
 	it("empties the pending set once a failing stat settles", async () => {
 		mockFsReadFile.mockResolvedValue(JSON.stringify({}));
 		mockFsStat.mockRejectedValue(new Error("ENOENT"));
 
-		const pending = updateProbeCache(TOOL_ID, TOOL_PATH);
-		expect(probeCacheUpdatesPendingSizeForTests()).toBe(1);
-		await pending;
+		await updateProbeCache(TOOL_ID, TOOL_PATH);
 
-		expect(probeCacheUpdatesPendingSizeForTests()).toBe(0);
+		expect(resetProbeCacheStateForTesting()).toBe(0);
 	});
 
 	// Recurrence: #5657 review F4. A stat that never settles keeps its entry, and
-	// the reset must clear it, or every later settle in the file waits on it.
+	// the reset must clear it, or every later settle in the file waits on it. The
+	// first read proves the update entered the set; the second proves the reset
+	// emptied it.
 	it("the reset clears an update that never settles", () => {
 		mockFsReadFile.mockResolvedValue(JSON.stringify({}));
 		mockFsStat.mockReturnValue(new Promise(() => {}));
 
 		void updateProbeCache(TOOL_ID, TOOL_PATH);
-		expect(probeCacheUpdatesPendingSizeForTests()).toBe(1);
 
-		resetProbeCacheStateForTesting();
-		expect(probeCacheUpdatesPendingSizeForTests()).toBe(0);
+		expect(resetProbeCacheStateForTesting()).toBe(1);
+		expect(resetProbeCacheStateForTesting()).toBe(0);
 	});
 
 	it("retains an update that arrives during the atomic write", async () => {

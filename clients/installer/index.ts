@@ -2544,12 +2544,6 @@ async function settleProbeCacheForTests(): Promise<string | undefined> {
 	return `probe-cache flush did not land (${result})`;
 }
 
-// Exported for testing only. Updates not yet settled (#5657); reads 0 once every
-// update settles.
-export function probeCacheUpdatesPendingSizeForTests(): number {
-	return _probeCacheUpdatesPending.size;
-}
-
 // #4937: the debounced flush timer above lives in this evaluation of the module;
 // the tier-2 harness's loaded extension copy owns one the test's own import
 // cannot reach, so its write lands after the fixture root is removed. The
@@ -2667,8 +2661,11 @@ export function updateProbeCache(
 	return pending;
 }
 
-// Exported for testing only.
-export function resetProbeCacheStateForTesting(): void {
+// Exported for testing only. Returns how many `updateProbeCache` calls were still
+// unsettled and drops them (#5657), so a test reads the pending set through this
+// seam rather than a separate export.
+export function resetProbeCacheStateForTesting(): number {
+	const unsettled = _probeCacheUpdatesPending.size;
 	_probeCache = null;
 	_probeCacheDirty = false;
 	_probeCacheChanges.clear();
@@ -2688,6 +2685,7 @@ export function resetProbeCacheStateForTesting(): void {
 		clearTimeout(_probeCacheFlushTimer);
 		_probeCacheFlushTimer = null;
 	}
+	return unsettled;
 }
 
 /**
