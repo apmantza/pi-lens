@@ -146,6 +146,176 @@ const ROWS: readonly Row[] = [
 		guard: true,
 	},
 	{
+		// #5649 F3. The `$IFS` pass tracked quotes but not backslashes: the
+		// escaped quote flipped it into "quoted", and `git${IFS}commit` after
+		// it was never folded, while bash ran the commit.
+		row: "escaped single quote, then git${IFS}commit",
+		command: "echo \\'; git${IFS}commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "escaped double quote, then git${IFS}commit",
+		command: 'echo \\"; git${IFS}commit -m x',
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "escaped single quote, then git$IFS$9commit",
+		command: "echo \\'; git$IFS$9commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		// An escaped backslash does not escape the quote after it: the quote
+		// opens a string, so the `$IFS` inside it is literal text.
+		row: "escaped backslash, then a quote opens a string",
+		command: "echo \\\\'; git${IFS}commit -m x'",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "escaped backslash, then git${IFS}commit",
+		command: "echo \\\\; git${IFS}commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		// #5649 F4. Bash's blanks are space, tab and newline. The lexer also
+		// split on NBSP, U+FEFF, U+2003 and U+2028, so a `#` after one began a
+		// comment for the gate, and the `$(…)` after it ran in bash unseen.
+		row: "NBSP before a hash is no comment",
+		command: "echo x #$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "U+FEFF before a hash is no comment",
+		command: "echo x﻿#$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "U+2003 before a hash is no comment",
+		command: "echo x #$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "U+2028 before a hash is no comment",
+		command: "echo x #$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "a tab before a hash is a comment",
+		command: "echo x\t#$(git commit -m y)",
+		bash: null,
+		guard: false,
+	},
+	{
+		// Same family as F4, found by the fuzz comparison: the `#` after an
+		// escaped blank or operator is a word character, not a comment.
+		row: "escaped blank before a hash is no comment",
+		command: "echo \\ #$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "escaped semicolon before a hash is no comment",
+		command: "echo a\\;#$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "escaped backslash, then a blank, then a hash is a comment",
+		command: "echo \\\\ #$(git commit -m y)",
+		bash: null,
+		guard: false,
+	},
+	{
+		// Same family: bash reads `$IFS#` as one word, so the `#` starts no
+		// comment, but the fold wrote a blank there and made it one.
+		row: "$IFS before a hash is no comment",
+		command: "echo a$IFS#$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "${IFS} before a hash is no comment",
+		command: "echo a${IFS}#$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		// Review r1 F5: bash removes `\<newline>` before it reads the comment
+		// boundary, so the `#` after `${IFS}\<newline>` is still a word
+		// character. The lookahead read the raw `\` and wrote a plain blank.
+		row: "${IFS} then a line continuation, then a hash is no comment",
+		command: "echo a${IFS}\\\n#$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "$IFS then a line continuation, then a hash is no comment",
+		command: "echo a$IFS\\\n#$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "${IFS} then a line continuation, then a blank hash is a comment",
+		command: "echo a${IFS}\\\n #$(git commit -m y)",
+		bash: null,
+		guard: false,
+	},
+	// Review r1 F1 (regression, fail-open): CR is a word character, so the
+	// here-doc delimiter keeps it and the closing line `EOF\r` matches it
+	// exactly. The body scan stripped the CR from candidate lines, so a CRLF
+	// here-doc never closed and the commit after it was read as body text.
+	{
+		row: "CRLF here-doc, then a hidden commit",
+		command: "cat <<EOF\r\nbody\r\nEOF\r\ngit $'\\x63ommit' -m x\r\n",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "CRLF quoted here-doc, then a hidden commit",
+		command: "cat <<'EOF'\r\nbody\r\nEOF\r\ngit $'\\x63ommit' -m x\r\n",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		// The closing line is not tab-indented: the canonical collapse turns a
+		// leading tab into a blank, a miss on the base too that #5648 removes.
+		row: "CRLF `<<-` here-doc, then a hidden commit",
+		command: "cat <<-EOF\r\n\tbody\r\nEOF\r\ngit $'\\x63ommit' -m x\r\n",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "git commit text inside a CRLF here-doc body is no commit",
+		command: "cat <<EOF\r\ngit commit -m x\r\nEOF\r\n",
+		bash: null,
+		guard: false,
+	},
+	{
+		// The here-doc delimiter is `EOF<NBSP>x`, one word, so the body runs to
+		// the line that holds all of it and the commit in it is text. The lexer
+		// ended the delimiter at the NBSP and ran the line after `EOF`.
+		row: "NBSP inside a here-doc delimiter",
+		command: "cat <<EOF x >/dev/null\nEOF\ngit commit -m y\nEOF x\n",
+		bash: null,
+		guard: false,
+	},
+	{
+		// The gate read `git<NBSP>commit` as two words; bash runs the one
+		// command `git<NBSP>commit`, which is not git.
+		row: "NBSP between git and commit is one word",
+		command: "git commit -m x",
+		bash: null,
+		guard: false,
+	},
+	{
 		// bash removes the backslash; the path reading kept it (#4739).
 		row: "escaped letter in the executable",
 		command: "g\\it push",
@@ -996,6 +1166,27 @@ describe.skipIf(process.platform === "win32")(
 			}
 			expect(failures).toEqual([]);
 		}, 60_000);
+
+		// Review r1 F6 (CodeRabbit): a PowerShell command string is read by
+		// PowerShell, whose whitespace is Char.IsWhiteSpace (NBSP, U+0085, the
+		// Unicode spaces, CR, VT, FF; CharTraits.IsWhitespace in the PowerShell
+		// parser). Only the bash path takes bash's blanks. pwsh is not run
+		// here: the rows are string-level, and the bash row is the oracle.
+		it("reads a PowerShell or cmd command string with its own whitespace", () => {
+			const nbsp = "\u00a0";
+			const failures: string[] = [];
+			for (const [command, want] of [
+				[`pwsh -NoProfile -Command "git${nbsp}commit -m x"`, true],
+				[`powershell.exe -c 'git${nbsp}push'`, true],
+				[`cmd /c "git${nbsp}commit -m x"`, true],
+				[`pwsh -Command "git\u2003commit -m x"`, true],
+				[`bash -c "git${nbsp}commit -m x"`, false],
+				[`git${nbsp}commit -m x`, false],
+			] as const)
+				if (guarded(command) !== want)
+					failures.push(`${JSON.stringify(command)}: want ${want}`);
+			expect(failures).toEqual([]);
+		});
 
 		it("guards every generated spelling bash runs as commit or push", () => {
 			const failures: string[] = [];

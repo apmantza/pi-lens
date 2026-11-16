@@ -433,11 +433,31 @@ function canonicalizeGuardCommand(command: string): string {
 			result += ch;
 			continue;
 		}
+		if (ch === "\\") {
+			// Outside quotes a backslash escapes the next character, a quote or
+			// a `$` included: `echo \'; git${IFS}commit` still folds the second
+			// word, and `\$IFS` is literal text (#5649).
+			result += ch + (command[i + 1] ?? "");
+			i += 1;
+			continue;
+		}
 		const parameter = command.slice(i).match(/^\$\{IFS[^}]*\}/)?.[0];
 		const positional = command.slice(i).match(/^\$IFS(?:\$[0-9]+)?/)?.[0];
 		if (parameter || positional) {
-			result += " ";
-			i += (parameter ?? positional ?? "").length - 1;
+			const length = (parameter ?? positional ?? "").length;
+			// Bash removes each `\<newline>` before it reads words, so
+			// `$IFS\<newline>#` is `$IFS#`: one word, no comment. The blank this
+			// fold writes would make a comment; escape that `#` and drop the
+			// pairs before it (#5649).
+			let next = i + length;
+			while (command[next] === "\\" && command[next + 1] === "\n") next += 2;
+			if (command[next] === "#") {
+				result += " \\";
+				i = next - 1;
+			} else {
+				result += " ";
+				i += length - 1;
+			}
 			continue;
 		}
 		result += ch;
@@ -454,7 +474,9 @@ function normalizeGuardVerbToken(value: string): string {
 }
 
 function expandGuardVerbToken(value: string): string[] {
-	return normalizeGuardVerbToken(value).trim().split(/\s+/).filter(Boolean);
+	return normalizeGuardVerbToken(value)
+		.split(/[ \t\n]+/)
+		.filter(Boolean);
 }
 
 /**
@@ -765,9 +787,17 @@ function commandStringHasGuardedVerb(
 	words: readonly DecodedShellWord[],
 	depth: number,
 	matcher: GitVerbMatcher,
+	whitespace: "bash" | "windows-shell" = "bash",
 ): boolean {
+	const joined = words.map((word) => word.text).join(" ");
+	// PowerShell and cmd read their own whitespace: Char.IsWhiteSpace, which
+	// holds NBSP, U+0085, the Unicode spaces, CR, VT and FF
+	// (CharTraits.IsWhitespace in the PowerShell parser). Bash's blanks apply
+	// to the bash path only; `pwsh -Command "git<NBSP>commit"` is a commit (#5649).
 	return decodeShellWords(
-		canonicalizeGuardCommand(words.map((word) => word.text).join(" ")),
+		canonicalizeGuardCommand(
+			whitespace === "windows-shell" ? joined.replace(/[^\S\n]/g, " ") : joined,
+		),
 	).some((segment) => containsGuardedGitVerb(segment.words, depth, matcher));
 }
 
@@ -944,6 +974,9 @@ function containsGuardedGitVerb(
 		commandWords.slice(commandIndex),
 		depth + 1,
 		matcher,
+		["pwsh", "powershell", "cmd"].includes(executableName(leadingExecutable))
+			? "windows-shell"
+			: "bash",
 	);
 }
 
