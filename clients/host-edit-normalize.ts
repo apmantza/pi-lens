@@ -4,16 +4,19 @@
  * host actually applies edits (exact-then-fuzzy in normalized space).
  *
  * SOURCE OF TRUTH: `@earendil-works/pi-coding-agent`
- *   `dist/core/tools/edit-diff.js` -- `normalizeForFuzzyMatch`, `normalizeToLF`,
- *   `detectLineEnding`, `restoreLineEndings`. As of 0.85.1 the BOM
+ *   `dist/core/tools/edit-diff.js` -- `normalizeForFuzzyMatch` and `normalizeToLF`.
+ *   Before pi 1.5.2 the same file also exported `detectLineEnding` and
+ *   `restoreLineEndings`. pi 1.5.2 removed both and picks each replaced range's
+ *   ending (`applyReplacementsToOriginal`), so the pi-lens copies below keep the
+ *   first-occurrence rule. As of 0.85.1 the BOM
  *   split/strip primitive (`stripBom`'s underlying `splitBom`) moved to
  *   `dist/utils/text.js`, imported by edit-diff.js rather than inlined there
  *   -- see the sync test's two-source read.
  *
  * The host SDK is a *type-only* dependency at runtime (pi installs extensions
- * with `npm install --omit=dev`, so the SDK is not in `node_modules`). These
- * functions are therefore intentionally COPIED, not imported -- keep each one
- * behaviourally identical to the host. The companion sync test
+ * with `npm install --omit=dev`, so the SDK is not in `node_modules`). The
+ * ported functions are therefore intentionally COPIED, not imported -- keep each
+ * one behaviourally identical to the host. The companion sync test
  * (`tests/clients/host-edit-normalize-sync.test.ts`) re-reads the host source
  * from devDeps and fails if it drifts from this port, pinning the floor below.
  *
@@ -58,9 +61,13 @@ const UNICODE_DASHES_RE = charClass(HOST_UNICODE_DASHES);
 const SPECIAL_SPACES_RE = charClass(HOST_SPECIAL_SPACES);
 const BOM = String.fromCharCode(HOST_BOM_CODE_POINT);
 
-// --- verbatim host ports (edit-diff.js) ---------------------------------------
+// --- verbatim host port: normalizeToLF (edit-diff.js) -------------------------
 
-/** First-occurrence-wins line-ending detection (CRLF vs LF). */
+/**
+ * First-occurrence-wins line-ending detection (CRLF vs LF). pi-lens-owned:
+ * pi 1.5.2 removed the host's version, and the host now picks each replaced
+ * range's ending instead.
+ */
 export function detectLineEnding(content: string): "\r\n" | "\n" {
 	const crlfIdx = content.indexOf("\r\n");
 	const lfIdx = content.indexOf("\n");
@@ -74,7 +81,10 @@ export function normalizeToLF(text: string): string {
 	return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
-/** Restore LF text back to the detected ending (no-op for LF files). */
+/**
+ * Restore LF text back to the detected ending (no-op for LF files). pi-lens-owned,
+ * like `detectLineEnding`.
+ */
 export function restoreLineEndings(
 	text: string,
 	ending: "\r\n" | "\n",

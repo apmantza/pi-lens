@@ -139,6 +139,14 @@ describe("host-edit-normalize sync (host source drift guard)", () => {
 				{ matchIndex: 6, matchLength: 3, newText: "new\nline" },
 			]),
 		).toBe("first\nnew\r\nline\r\nlast\r\n");
+		// #5670 review r1 (F3): a host reverted to whole-file CRLF detection passes
+		// the case above, because its edited line also ends in CRLF. This case edits
+		// an LF line in a mixed-ending file, so that revert reds here.
+		expect(
+			host.applyReplacementsToOriginal("a\r\nold\nz\r\n", [
+				{ matchIndex: 2, matchLength: 3, newText: "new\nline" },
+			]),
+		).toBe("a\r\nnew\nline\nz\r\n");
 	});
 
 	it("host still delegates BOM stripping to splitBom, and splitBom matches our vendored copy", () => {
