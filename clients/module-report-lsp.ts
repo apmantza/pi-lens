@@ -194,12 +194,9 @@ async function enrichModuleReportWithLspNow(
 
 	const lsp = getLSPService();
 	const deadlineAt = Date.now() + budgetMs;
-	// A probe that misses the shared deadline, or rejects, contributes nothing.
-	const withinSweep = {
-		deadlineAt,
-		onTimeout: "undefined",
-		onReject: "undefined",
-	} as const;
+	// A probe that misses the shared deadline contributes nothing; one that
+	// rejects contributes nothing either (`Promise.allSettled` in `enrichOne`).
+	const withinSweep = { deadlineAt, onTimeout: "undefined" } as const;
 	const byName = new Map<
 		string,
 		{ usedBy?: ModuleSymbolUsedBy[]; hasImpl?: boolean }

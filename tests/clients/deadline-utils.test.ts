@@ -85,24 +85,13 @@ describe("withDeadline", () => {
 				withDeadline(slow("ok", 5), { deadlineAt: Date.now() + 1000 }),
 			).resolves.toBe("ok");
 		});
-		// The options the warm-attach probe and the module-report sweep pass (the
-		// former `withinRemaining`, #5550): a timer armed for a future deadline,
-		// and a rejection read as no answer.
-		it("resolves undefined when a future deadline passes first, and swallows a rejection", async () => {
-			const swallow = {
-				onTimeout: "undefined",
-				onReject: "undefined",
-			} as const;
+		// The options the warm-attach probe and the module-report sweep pass
+		// since `withinRemaining` went (#5550): a timer armed for a future deadline.
+		it("resolves undefined when a future deadline passes first", async () => {
 			await expect(
 				withDeadline(slow("x", 1000), {
 					deadlineAt: Date.now() + 10,
-					...swallow,
-				}),
-			).resolves.toBeUndefined();
-			await expect(
-				withDeadline(slowReject("boom", 5), {
-					deadlineAt: Date.now() + 1000,
-					...swallow,
+					onTimeout: "undefined",
 				}),
 			).resolves.toBeUndefined();
 		});

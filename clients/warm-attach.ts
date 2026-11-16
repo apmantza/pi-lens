@@ -119,17 +119,13 @@ function askProjectMembership(
 	if (probeDeadlineAt <= Date.now()) {
 		return Promise.resolve(abandoned("no-time-left"));
 	}
-	// A probe that rejects reads as one that did not settle: the reply goes out
-	// without the verdict either way.
+	// `fetchTsserverProjectIdentity` never rejects (it reads any failure as no
+	// identity), so only the deadline can leave the reply without a verdict.
 	return withDeadline(
 		fetchTsserverProjectIdentity(service, file).then((identity) => ({
 			identity,
 		})),
-		{
-			deadlineAt: probeDeadlineAt,
-			onTimeout: "undefined",
-			onReject: "undefined",
-		},
+		{ deadlineAt: probeDeadlineAt, onTimeout: "undefined" },
 	).then((settled) =>
 		settled === undefined ? abandoned("probe-timeout") : settled.identity,
 	);
