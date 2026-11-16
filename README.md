@@ -441,6 +441,8 @@ Thanks goes to these wonderful people:
     <tr>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/HyeokjaeLee"><img src="https://avatars.githubusercontent.com/u/71566740?v=4" width="100px;" alt=""/><br /><sub><b>HyeokjaeLee</b></sub></a><br /><a href="#code-HyeokjaeLee" title="Code">💻</a> <a href="#bug-HyeokjaeLee" title="Bug reports">🐛</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/dmarchevsky"><img src="https://avatars.githubusercontent.com/u/32597866?v=4" width="100px;" alt=""/><br /><sub><b>Dima Marchevskyi</b></sub></a><br /><a href="#bug-dmarchevsky" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://jennyleidig.straw.page/"><img src="https://avatars.githubusercontent.com/u/131712584?v=4" width="100px;" alt=""/><br /><sub><b>Jenny Leidig</b></sub></a><br /><a href="#code-jennymaeleidig" title="Code">💻</a> <a href="#ideas-jennymaeleidig" title="Ideas & Planning">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/yorch"><img src="https://avatars.githubusercontent.com/u/60499?v=4" width="100px;" alt=""/><br /><sub><b>Jorge Barnaby</b></sub></a><br /><a href="#bug-yorch" title="Bug reports">🐛</a></td>
     </tr>
   </tbody>
 </table>

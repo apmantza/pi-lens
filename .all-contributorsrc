@@ -2205,6 +2205,25 @@
       "contributions": [
         "bug"
       ]
+    },
+    {
+      "login": "jennymaeleidig",
+      "name": "Jenny Leidig",
+      "avatar_url": "https://avatars.githubusercontent.com/u/131712584?v=4",
+      "profile": "https://jennyleidig.straw.page/",
+      "contributions": [
+        "code",
+        "ideas"
+      ]
+    },
+    {
+      "login": "yorch",
+      "name": "Jorge Barnaby",
+      "avatar_url": "https://avatars.githubusercontent.com/u/60499?v=4",
+      "profile": "https://github.com/yorch",
+      "contributions": [
+        "bug"
+      ]
     }
   ]
 }
