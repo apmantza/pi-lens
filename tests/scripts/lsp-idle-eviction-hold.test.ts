@@ -135,6 +135,8 @@ describe("a server this host cannot spawn keeps its prior row (49ed14a6a)", () =
 		expect(rowLine(out.doc, "elixir")).toBe(
 			"| elixir | primary | unmeasured | unavailable | server-not-started | n/a | n/a |",
 		);
+		// Host noise between two unavailable reasons is not a held answer.
+		expect(out.held).toEqual([]);
 	});
 
 	it("publishes nothing when every row reads as before", () => {

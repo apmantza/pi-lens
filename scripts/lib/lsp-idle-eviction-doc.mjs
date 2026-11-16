@@ -413,7 +413,7 @@ export function publishIdleEvictionDoc({
 	for (const row of rows) {
 		const prior = priorRows.get(row.serverId);
 		const observed = cellsOf(row);
-		if (!prior || observed === prior.cells) {
+		if (!prior) {
 			published.push(row);
 			continue;
 		}
