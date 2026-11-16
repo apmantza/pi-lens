@@ -1271,6 +1271,8 @@ describe("selectTargetedTests — path-mirror pass", () => {
 			"tests/clients/abort-listener-release-sweep.test.ts",
 			"tests/clients/single-flight-ratchet.test.ts",
 			"tests/config/bounded-container-guard.test.ts",
+			// #5410: walks clients/, tools/ and mcp/ for client-owned binary lookups.
+			"tests/config/client-ladder-census.test.ts",
 			"tests/scripts/dist-freshness.test.ts",
 			"tests/config/turn-state-partition-owner-sweep.test.ts",
 			"tests/config/project-trust-seam-ratchet.test.ts",
