@@ -1231,8 +1231,8 @@ export async function resolveAndLaunch(
 				globalInstallDisabled: isLspInstallDisabled(),
 			},
 		});
-		// A trust refusal is not tool-not-found: keep surfacing it.
-		if (lastRuntimeFailure) throw lastRuntimeFailure;
+		// #5674: repairable candidates exhausted this stage, not the caller's
+		// later stages. Refusals retain their decision and candidate records.
 		return undefined;
 	}
 

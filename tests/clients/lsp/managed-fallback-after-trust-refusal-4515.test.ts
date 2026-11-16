@@ -39,6 +39,8 @@ import {
 	resetProjectTrust,
 	setProjectTrustState,
 } from "../../../clients/project-trust.js";
+import { resolveSearchPathCommand } from "../../../clients/safe-spawn.js";
+import { readNdjsonRows } from "../../support/ndjson-rows.js";
 import { setPlatform } from "../../support/platform-stub.js";
 import { removeTempDirSync } from "../test-utils.js";
 
@@ -61,15 +63,27 @@ vi.mock("../../../clients/lsp/launch.js", async (importOriginal) => {
 			command: string,
 			args: string[],
 			options: Parameters<typeof original.launchLSP>[2],
-		) =>
-			command.startsWith(getGlobalPiLensDir() + path.sep)
-				? managedLaunch(command, args, options)
-				: original.launchLSP(command, args, options),
+		) => {
+			// Bare Python candidates can resolve to the managed store in the augmented PATH.
+			const resolved = path.isAbsolute(command)
+				? command
+				: resolveSearchPathCommand(
+						command,
+						options?.env?.PATH,
+						String(options?.cwd ?? process.cwd()),
+					);
+			return resolved?.startsWith(getGlobalPiLensDir() + path.sep)
+				? managedLaunch(resolved, args, options)
+				: original.launchLSP(command, args, options);
+		},
 	};
 });
 
 import { withLspProjectCodePermission } from "../../../clients/lsp/launch.js";
-import { resolveAndLaunch as resolveAndLaunchRaw } from "../../../clients/lsp/server.js";
+import {
+	PythonServer,
+	resolveAndLaunch as resolveAndLaunchRaw,
+} from "../../../clients/lsp/server.js";
 
 // Production runs every launch inside the service's spawn scope; an own,
 // trusted root is granted project-code permission there.
@@ -148,27 +162,15 @@ function decisionRows(fragment: string) {
 
 async function availabilityRows(tool: string) {
 	await flushLatencyLog();
-	let text = "";
-	try {
-		text = fs.readFileSync(getLatencyLogPath(), "utf8");
-	} catch {
-		return [];
-	}
-	return text
-		.split("\n")
-		.filter(Boolean)
-		.map(
-			(line) =>
-				JSON.parse(line) as {
-					phase?: string;
-					metadata?: Record<string, unknown>;
-				},
-		)
-		.filter(
-			(entry) =>
-				entry.phase === "availability_decision" &&
-				entry.metadata?.tool === tool,
-		);
+	const { rows, skipped } = readNdjsonRows<{
+		phase?: string;
+		metadata?: Record<string, unknown>;
+	}>(getLatencyLogPath());
+	expect(skipped).toBe(0);
+	return rows.filter(
+		(entry) =>
+			entry.phase === "availability_decision" && entry.metadata?.tool === tool,
+	);
 }
 
 beforeEach(async () => {
@@ -198,6 +200,70 @@ afterEach(() => {
 	resetProbeCacheStateForTesting();
 	fs.rmSync(storeRoot(), { recursive: true, force: true });
 	while (dirs.length) removeTempDirSync(dirs.pop() as string);
+});
+
+describe("Python adopted-root fallback (#5674)", () => {
+	it.each([
+		[false, "trusted"],
+		[true, "trusted"],
+		[false, "unknown"],
+		[true, "unknown"],
+	] as const)(
+		"reaches managed pyright with planted=%s trust=%s and no project permission",
+		async (planted, trust) => {
+			// #5674: Python's no-install project stage must not abort the later managed stage.
+			setProjectTrustState(trust);
+			const { spec, marker } = makeProject("pyright-langserver", planted);
+			const pkg = path.join(storeRoot(), "node_modules", "pyright");
+			fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+			fs.writeFileSync(
+				path.join(pkg, "package.json"),
+				JSON.stringify({
+					version: "1.1.414",
+					bin: {
+						pyright: "dist/pyright.js",
+						"pyright-langserver": "dist/pyright-langserver.js",
+					},
+				}),
+			);
+			for (const name of ["pyright", "pyright-langserver"]) {
+				fs.writeFileSync(path.join(pkg, "dist", `${name}.js`), "// fixture\n");
+				fs.mkdirSync(storeBin(), { recursive: true });
+				fs.writeFileSync(path.join(storeBin(), name), "#!/bin/sh\n", {
+					mode: 0o755,
+				});
+			}
+			const result = await withLspProjectCodePermission(false, () =>
+				PythonServer.spawn(spec.cwd, { allowInstall: false }),
+			);
+			expect(result).toBeDefined();
+			expect(managedLaunch).toHaveBeenCalledWith(
+				path.join(storeBin(), "pyright-langserver"),
+				["--stdio"],
+				expect.anything(),
+			);
+			expect(fs.existsSync(marker)).toBe(false);
+			expect(decisionRows("project-local-binary").length).toBeGreaterThan(0);
+			await flushLatencyLog();
+			const { rows, skipped } = readNdjsonRows(getLatencyLogPath());
+			expect(skipped).toBe(0);
+			expect(rows).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						phase: "lsp_launch_candidate_failed",
+						filePath: spec.cwd,
+						metadata: expect.objectContaining({
+							error: expect.stringContaining("project-local binary refused"),
+						}),
+					}),
+					expect.objectContaining({
+						phase: "lsp_launch_install_blocked",
+						filePath: spec.cwd,
+					}),
+				]),
+			);
+		},
+	);
 });
 
 describe("resolveAndLaunch after a trust refusal, PATH clear of the project (#4515)", () => {
@@ -367,7 +433,7 @@ describe("resolveAndLaunch after a trust refusal, project bin dir on PATH (#4515
 });
 
 describe("resolveAndLaunch trust-refusal surface (#4515)", () => {
-	it("keeps an untrusted project refused with the registry's allowInstall=false", async () => {
+	it("keeps an untrusted project unexecuted with the registry's allowInstall=false", async () => {
 		// Review r1 F3: the registry passes allowInstall=false under untrusted
 		// (assertInstallAllowed), so the store is not consulted and nothing is
 		// installed, exactly as before #4515.
@@ -375,23 +441,21 @@ describe("resolveAndLaunch trust-refusal surface (#4515)", () => {
 		seedStoreIntelephense();
 		const { spec, marker } = makeProject("intelephense", true);
 
-		await expect(resolveAndLaunch(spec, false)).rejects.toThrow(
-			/project-local binary refused: project trust is untrusted/,
-		);
+		expect(await resolveAndLaunch(spec, false)).toBeUndefined();
+		expect(decisionRows("project-local-binary")).toHaveLength(1);
 
 		expect(managedLaunch).not.toHaveBeenCalled();
 		expect(getInstallAttempt("intelephense")).toBeUndefined();
 		expect(fs.existsSync(marker)).toBe(false);
 	});
 
-	it("still throws the refusal when installs are blocked", async () => {
+	it("returns no process and records the refusal when installs are blocked", async () => {
 		setProjectTrustState("unknown");
 		seedStoreIntelephense();
 		const { spec, marker } = makeProject("intelephense", true);
 
-		await expect(resolveAndLaunch(spec, false)).rejects.toThrow(
-			/project-local binary refused: project trust is unknown/,
-		);
+		expect(await resolveAndLaunch(spec, false)).toBeUndefined();
+		expect(decisionRows("project-local-binary")).toHaveLength(1);
 
 		expect(managedLaunch).not.toHaveBeenCalled();
 		expect(fs.existsSync(marker)).toBe(false);
