@@ -533,6 +533,7 @@
 		"clients/cascade-pre-edit-answer-5040.test.ts::clients/review-graph/service": 1,
 		"clients/cascade-turn-merge.test.ts::clients/cascade-logger": 1,
 		"clients/cascade-turn-merge.test.ts::clients/latency-logger": 1,
+		"clients/client-ladders-5410.test.ts::clients/installer/index": 1,
 		"clients/collateral-test-role.test.ts::clients/file-role": 1,
 		"clients/config-core/normalize-internal-catch.test.ts::clients/config-core/schema": 1,
 		"clients/config-core/resolve-internal-catch.test.ts::clients/config-core/merge": 1,

@@ -218,6 +218,9 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	"tests/clients/abort-listener-release-sweep.test.ts",
 	"tests/clients/single-flight-ratchet.test.ts",
 	"tests/config/bounded-container-guard.test.ts",
+	// #5410: walks clients/tools/mcp for client-owned binary-lookup primitives, so a
+	// new stray availability ladder reds until it is folded or admitted.
+	"tests/config/client-ladder-census.test.ts",
 	// #4239: walks scripts/lib for static dist/ imports and checks each is in
 	// DIST_IMPORTS, so a new governance import of dist/ cannot dodge the rebuild.
 	"tests/scripts/dist-freshness.test.ts",
