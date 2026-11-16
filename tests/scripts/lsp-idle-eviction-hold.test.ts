@@ -18,7 +18,8 @@
  * `does not prove`: a real language server (the probe is not run here).
  */
 import * as fs from "node:fs";
-import { resolve } from "node:path";
+import * as os from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	type IdleEvictionRow,
@@ -33,6 +34,7 @@ import {
 	refreshCapabilityMatrix,
 	setRefreshStateKey,
 } from "../../scripts/lib/md-matrix.mjs";
+import { promoteFromSummary } from "../../scripts/promote-lsp-idle-eviction.mjs";
 import { stripCommentsAndStrings } from "../support/session-state-scan.js";
 
 const ROOT = resolve(import.meta.dirname, "../..");
@@ -271,6 +273,31 @@ describe("the pending flips live in the refresh-state block (#5667)", () => {
 			now: "2026-11-18",
 		}).text;
 		expect(pendingOf(refreshed).csharp.runs).toBe(1);
+	});
+
+	it("survive the promotion step that rewrites the block right after the measurement", () => {
+		// The nightly runs promote-lsp-idle-eviction.mjs on the same matrix the
+		// measurement just wrote; a night with no summary is its shortest path.
+		const first = night(PRIOR, MATRIX_5677, { csharp: NO_BASELINE });
+		const dir = fs.mkdtempSync(join(os.tmpdir(), "idle-hold-"));
+		try {
+			const matrixPath = join(dir, "matrix.md");
+			fs.writeFileSync(matrixPath, first.matrixText as string);
+			promoteFromSummary({
+				matrixPath,
+				summaryPath: join(dir, "absent.json"),
+				serverPath: join(dir, "server.ts"),
+				reasonsPath: join(dir, "reasons.json"),
+				registryPath: join(dir, "registry.ts"),
+				today: "2026-11-18",
+				log: () => {},
+			});
+			const after = fs.readFileSync(matrixPath, "utf8");
+			expect(pendingOf(after).csharp.runs).toBe(1);
+			expect(parseRefreshState(after)[IDLE_EVICTION_KEY]).toBeUndefined();
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("leave the promotion nights alone and parse the block as #5677 and the pre-#5668 doc carried it", () => {
