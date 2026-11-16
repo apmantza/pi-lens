@@ -44,6 +44,7 @@ vi.mock("../../../clients/atomic-write.js", () => ({
 	writeFileAtomicAsync: mockWriteFileAtomicAsync,
 }));
 
+import { registeredBackgroundWriteDrainsForTests } from "../../../clients/background-write-drains.js";
 import {
 	checkProbeCache,
 	flushProbeCache,
@@ -422,6 +423,43 @@ describe("updateProbeCache", () => {
 		await vi.advanceTimersByTimeAsync(700);
 		expect(mockFsMkdir.mock.calls.length).toBeGreaterThan(1);
 		expect(mockWriteFileAtomicAsync).not.toHaveBeenCalled();
+	});
+
+	// Recurrence: #5657. `ensureTool` calls `void updateProbeCache(...)`; the
+	// fallow archive test's teardown settled the cache while that update was still
+	// awaiting its `stat`, saw nothing dirty, and the update then armed the
+	// debounced flush that wrote `probe-cache.json` into the removed fixture root.
+	it("the registry settle joins an update that has not marked its change yet", async () => {
+		mockFsReadFile.mockResolvedValue(JSON.stringify({}));
+		let releaseStat: (value: {
+			mtimeMs: number;
+			size: number;
+		}) => void = () => {};
+		mockFsStat.mockReturnValue(
+			new Promise((resolve) => {
+				releaseStat = resolve;
+			}),
+		);
+
+		void updateProbeCache(TOOL_ID, TOOL_PATH);
+		// The installer's own drain, by name: running the whole registry would let
+		// the other writers' drains hold the call back past the release below.
+		const drain = registeredBackgroundWriteDrainsForTests().find(
+			(fn) => fn.name === "settleProbeCacheForTests",
+		);
+		expect(
+			drain,
+			"the installer registers its probe-cache drain",
+		).toBeDefined();
+		const settle = (drain as () => Promise<string | undefined>)();
+		// A macrotask later: a settle that did not join the update has already
+		// answered idle by now, and the release below marks the change after it.
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		releaseStat({ mtimeMs: MTIME_MS, size: 1 });
+		expect(await settle).toBeUndefined();
+
+		expect(mockWriteFileAtomicAsync).toHaveBeenCalledTimes(1);
+		expect(await flushProbeCache()).toBe("idle");
 	});
 
 	it("retains an update that arrives during the atomic write", async () => {

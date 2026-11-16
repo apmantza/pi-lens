@@ -442,6 +442,7 @@ describe("#2981 long-lived containers are bounded or admitted", () => {
 		"clients/installer/index.ts#getInstallFailureReason:d74e98d9",
 		"clients/installer/index.ts#getInstallAttempt:c20998b0",
 		"clients/installer/index.ts#_probeCacheChangeGeneration:1040840d",
+		"clients/installer/index.ts#_probeCacheChangeVersions:119f05be",
 		"clients/installer/index.ts#_probeCacheChanges:509e90ff",
 		"clients/installer/index.ts#extractVersionToken:e8cefebf",
 		"clients/installer/index.ts#resolvePlatformPackageBinary:0c6ca0e4",
