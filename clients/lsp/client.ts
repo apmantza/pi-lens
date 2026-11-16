@@ -3875,14 +3875,19 @@ export function setupIncomingHandlers(
 				// never compete with this reply for the current one regardless
 				// of how many documents are open.
 				//
-				// #5097: and out of every abort scope. This runs in the context the
-				// server's streams were created in, so a server first started by a
-				// tool call would otherwise carry that call's scope, and an Esc in
+				// #5097: and under an abort nobody can fire. This runs in the context
+				// the server's streams were created in, so a server first started by
+				// a tool call would otherwise carry that call's scope, and an Esc in
 				// that turn would silence every later refresh re-pull, which reads
-				// the ambient abort (`pullDiagnosticSource`). The re-pull serves the
-				// document, not the call that happened to start the server.
+				// the ambient abort (`pullDiagnosticSource`). Clearing the scope
+				// would fall back to the hook-level turn signal, which can be
+				// aborted too (#5654 review F3), so the pool runs inside a scope
+				// whose signal never aborts: the re-pull serves the document, not
+				// the call or the turn that happened to be running.
 				setImmediate(() => {
-					void spawnAbortScope.exit(() => runRefreshRepullPool());
+					void spawnAbortScope.run(REFRESH_REPULL_SIGNAL, () =>
+						runRefreshRepullPool(),
+					);
 				});
 			}
 		}
@@ -4127,7 +4132,7 @@ async function pullDiagnosticSource(
 	if (!isClientAlive(state)) return { status: "unavailable" };
 	// #5097: the abort of the call or bound this pull runs under. Read here, in
 	// the caller's own async context, and never captured by a long-lived handler
-	// (the server-initiated re-pull steps out of the scope, see
+	// (the server-initiated re-pull runs under a scope that never aborts, see
 	// `workspace/diagnostic/refresh`). An abort before the send claims and sends nothing.
 	const abortSignal = getAmbientAbortSignal();
 	if (abortSignal?.aborted) return { status: "unavailable" };
@@ -4865,21 +4870,27 @@ export async function clientRequestWorkspaceDiagnostics(
 
 /**
  * #5487: resolves true once the server is not (or no longer) loading, false when
- * `budgetMs` lapses first or the client dies. A server that announced nothing is
- * not loading. Listener and timer are removed on every exit.
+ * `budgetMs` lapses first, the client dies or `signal` aborts (#5097). A server
+ * that announced nothing is not loading. Listeners and timer are removed on
+ * every exit.
  */
 function waitForQuiescence(
 	state: LSPClientState,
 	budgetMs: number,
+	signal?: AbortSignal,
 ): Promise<boolean> {
 	if (state.serverStatus?.quiescent !== false) return Promise.resolve(true);
-	if (budgetMs <= 0 || !isClientAlive(state)) return Promise.resolve(false);
+	if (budgetMs <= 0 || !isClientAlive(state) || signal?.aborted)
+		return Promise.resolve(false);
 	return new Promise<boolean>((resolve) => {
 		const finish = (ready: boolean): void => {
 			clearTimeout(timer);
 			state.diagnosticEmitter.off(SERVER_STATUS_CHANGED, onChange);
+			signal?.removeEventListener("abort", onAbort);
 			resolve(ready);
 		};
+		const onAbort = (): void => finish(false);
+		signal?.addEventListener("abort", onAbort, { once: true });
 		const onChange = (): void => {
 			if (!isClientAlive(state)) finish(false);
 			else if (state.serverStatus?.quiescent !== false) finish(true);
@@ -4891,6 +4902,14 @@ function waitForQuiescence(
 
 /** {@link pullDiagnosticsWhenReady}: no settled answer before the deadline. */
 const PULL_UNSETTLED = Symbol("pull-unsettled");
+
+/**
+ * The abort scope of the server-initiated refresh re-pull
+ * (`workspace/diagnostic/refresh`): a signal nothing holds the controller of,
+ * so the ambient abort reads "not aborted" whatever turn or tool call is
+ * running when the server asks.
+ */
+const REFRESH_REPULL_SIGNAL = new AbortController().signal;
 
 /**
  * #5487: was the server ready for the whole of a request that left when it had
@@ -4965,11 +4984,15 @@ async function pullDiagnosticsWhenReady(
 ): Promise<PullDiagnosticsOutcome | typeof PULL_UNSETTLED> {
 	let requestBudgetMs = budgetMs;
 	let waitedForReadiness = false;
+	// #5097: the readiness wait ends on an abort as a lapse, never a verdict.
+	const abortSignal = getAmbientAbortSignal();
 	for (;;) {
 		if (state.serverStatus?.quiescent === false) {
 			waitedForReadiness = true;
 			noteReadinessGate(state);
-			if (!(await waitForQuiescence(state, deadlineAt - Date.now()))) {
+			if (
+				!(await waitForQuiescence(state, deadlineAt - Date.now(), abortSignal))
+			) {
 				return PULL_UNSETTLED;
 			}
 			requestBudgetMs = deadlineAt - Date.now();
@@ -5128,6 +5151,7 @@ export async function clientWaitForDiagnostics(
 			return "answered";
 		}
 		let sawClean = outcome.status === "clean";
+		const abortSignal = getAmbientAbortSignal();
 
 		const strategy = getStrategy(state.serverId, state.launchVariant);
 		const retryBudgetMs =
@@ -5152,6 +5176,13 @@ export async function clientWaitForDiagnostics(
 				Math.max(0, retryBudgetMs - (Date.now() - startedAt)),
 			);
 			if (outcome.status === "clean") sawClean = true;
+		}
+		// #5097: an abort that cut the pull leaves nothing to wait for: the retry
+		// loop above ends within its own budget, and the push wait below would
+		// run out the whole one. The wait lapses; the caller reads that as no
+		// answer, and the abort (not a budget) is why, so it records no timeout.
+		if (!sawClean && outcome.status !== "found" && abortSignal?.aborted) {
+			return "deadline-expired";
 		}
 		if (options.pullOnly) {
 			const answered = outcome.status === "found" || sawClean;
