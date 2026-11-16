@@ -7,7 +7,8 @@
  *
  *   - `eslintRunner.run` — the witness the issue names — through the real
  *     `resolveToolCommand` and the real availability probe;
- *   - `resolveToolCommand`/`resolveLocalFirstAsync` for oxlint and prisma;
+ *   - `resolveToolCommand` for oxlint (prisma's project rung is witnessed in
+ *     `dispatch/runners/prisma-resolver-5410.test.ts`);
  *   - `prettierFormatter.resolveCommand` for the formatter family;
  *   - `detectPythonEnvironment` for the project `.venv` interpreter.
  *

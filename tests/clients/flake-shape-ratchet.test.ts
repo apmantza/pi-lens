@@ -340,6 +340,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"the freshness gate writes its rows through logLatency; turn_end logs more phases after the gate than the five the getRecentLoggedPhases ring keeps, and test mode skips the file sink, so a passed-through spy is the only reader",
 		},
+	// 2026-11-16 (#5410): the ladder cells count install asks through a
+	// passthrough on the installer's ensureTool; the real lookups run.
+	"in-process-mock:clients/client-ladders-5410.test.ts::clients/installer/index":
+		{
+			detector: "in-process-mock",
+			reason:
+				"an install ask to the download boundary is only observable as the ensureTool call itself; the passthrough runs the real installer, and every ladder, trust and lookup above it is real",
+		},
 	// 2026-10-29 (#4990): the demoted channel's policy pass writes its
 	// inline_blocker_policy row through logLatency; turn_end logs more phases
 	// after it than the five-phase ring keeps, and test mode skips the file
@@ -790,6 +798,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"real git children establish build identity from repository state unavailable to an in-process stub",
+	},
+	// 2026-11-16 (#5675): whether a push-only dependent is asked again is decided
+	// by the didChange frames a spawned stdio server receives and the
+	// publications they cause.
+	"real-process-spawn:clients/cascade-retouch-push-only-5675.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the subject is whether the cascade re-sends a dependent to a push-only server whose only answer predates the edit, read off the didChange frames a spawned jdtls-shaped stdio server receives and the publications they cause; an in-process client double answers only what it was told",
 	},
 	"real-process-spawn:clients/config-diagnostic-codes.test.ts": {
 		detector: "real-process-spawn",

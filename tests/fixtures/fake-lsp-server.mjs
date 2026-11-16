@@ -546,6 +546,48 @@ function checkEveryOpenDocument(changedUri) {
 	}, deferMs);
 }
 
+// #5675: a jdtls-shaped push server (1.63.0, wire-captured in the issue). It
+// answers a change by re-checking, never because it was asked. A change to the
+// exporter (`FAKE_LSP_JDTLS_EXPORTER`, a basename) republishes ONLY the importer
+// named by `FAKE_LSP_JDTLS_EARLY` (empty: none), 50 ms later; the other
+// importers keep the answer from their own open. A change to any importer
+// (identical bytes included) republishes every open importer 50 ms later, like
+// jdtls revalidating on a didChange. `FAKE_LSP_JDTLS_REVALIDATE=0` turns that
+// second rule off: the server then never answers a re-ask.
+const JDTLS_LIKE = process.env.FAKE_LSP_JDTLS_LIKE === "1";
+function jdtlsPublish(uris) {
+	for (const uri of uris)
+		if (openDocuments.has(uri))
+			send({
+				jsonrpc: "2.0",
+				method: "textDocument/publishDiagnostics",
+				params: { uri, diagnostics: checkerDiagnostics(uri) },
+			});
+}
+function jdtlsOnOpen(uri) {
+	jdtlsPublish([uri]);
+}
+function jdtlsOnChange(uri) {
+	const exporter = process.env.FAKE_LSP_JDTLS_EXPORTER ?? "";
+	const early = process.env.FAKE_LSP_JDTLS_EARLY ?? "";
+	const base = (u) => path.basename(fileURLToPath(u));
+	if (base(uri) === exporter) {
+		setTimeout(
+			() =>
+				jdtlsPublish(
+					[...openDocuments.keys()].filter((u) => early !== "" && base(u) === early),
+				),
+			50,
+		).unref?.();
+		return;
+	}
+	if (process.env.FAKE_LSP_JDTLS_REVALIDATE === "0") return;
+	setTimeout(
+		() => jdtlsPublish([...openDocuments.keys()].filter((u) => base(u) !== exporter)),
+		50,
+	).unref?.();
+}
+
 // #4763: opengrep's rule-load window. A `refreshed` element sends the param-less
 // `semgrep/rulesRefreshed` notification (opengrep@60ed3b3
 // `Scan_helpers.refresh_rules`): `empty,refreshed,dirty` is the measured cold
@@ -1328,6 +1370,7 @@ function handle(raw) {
 			data.params?.textDocument?.text ?? "",
 		);
 		recoverHealthOn(data.params?.textDocument?.text);
+		if (JDTLS_LIKE) jdtlsOnOpen(data.params?.textDocument?.uri);
 		// #5097: "FAKE_LSP_REFRESH_ON_OPEN=1" sends a server-initiated
 		// `workspace/diagnostic/refresh` shortly after each didOpen, so a client
 		// holding an open document answers it with a re-pull of that document.
@@ -1427,6 +1470,7 @@ function handle(raw) {
 			openDocuments.set(data.params?.textDocument?.uri, text);
 		}
 		recoverHealthOn(text);
+		if (JDTLS_LIKE) jdtlsOnChange(data.params?.textDocument?.uri);
 		// #4782: a dependency whose change takes the checker long to analyze.
 		// The work runs BEFORE the republish below, so the dependents' previous
 		// answers (checked against the old bytes) are the latest the client

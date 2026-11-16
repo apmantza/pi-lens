@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-	detectLineEnding,
 	hostWouldApplyOldText,
+	lineEndingAtLine,
 	normalizeForFuzzyMatch,
 	normalizeForGuardMatch,
 	normalizeToLF,
@@ -21,11 +21,18 @@ const NBSP = cp(0x00a0);
 const BOM = cp(0xfeff);
 
 describe("host-edit-normalize: line-ending primitives", () => {
-	it("detectLineEnding is first-occurrence-wins", () => {
-		expect(detectLineEnding("a\r\nb\nc")).toBe("\r\n");
-		expect(detectLineEnding("a\nb\r\nc")).toBe("\n");
-		expect(detectLineEnding("no newline")).toBe("\n");
-		expect(detectLineEnding("")).toBe("\n");
+	it("lineEndingAtLine reads the line's own ending, or the line before for the last line", () => {
+		// #5670 r2: replaces the first-occurrence rule. `lines` is content.split("\n").
+		expect(lineEndingAtLine("a\r\nb\nc".split("\n"), 0)).toBe("\r\n");
+		expect(lineEndingAtLine("a\r\nb\nc".split("\n"), 1)).toBe("\n");
+		// Unterminated last line: the line before decides.
+		expect(lineEndingAtLine("a\nb\r\nc".split("\n"), 2)).toBe("\r\n");
+		expect(lineEndingAtLine("a\r\nb\nc".split("\n"), 2)).toBe("\n");
+		// Empty line after a final CRLF.
+		expect(lineEndingAtLine("a\r\n".split("\n"), 1)).toBe("\r\n");
+		// No LF anywhere (or an empty file) gives LF.
+		expect(lineEndingAtLine(["no newline"], 0)).toBe("\n");
+		expect(lineEndingAtLine([""], 0)).toBe("\n");
 	});
 
 	it("normalizeToLF collapses CRLF and lone CR", () => {

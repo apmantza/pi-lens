@@ -80,6 +80,13 @@
   root), so the two never share an answer (#5410). A present tool that fails its
   version check and has no later rung is a failed formatter outcome carrying the
   probe's stderr, not "executable not found".
+  The clients ask the same ladder (`resolveToolCommandWithInstallFallback`,
+  `toolBinaryVerdict`) rather than build a checker: jscpd, madge, knip and the
+  security scanners' managed-binary lookup (#5410). Every client-owned lookup
+  helper, installer ask or version probe that stays is a row of
+  `CLIENT_LADDER_ADMISSIONS` in `tests/config/client-ladder-census.test.ts`
+  with its reason; a new one reds until it is folded or admitted there. A
+  probe made with `safeSpawn*` that never asks the installer is not seen.
 - Windows LSP startup exit-code-1 failures are repairable only when the shared
   command resolver finds no command or an npm shim target is absent; present
   binaries that exit 1 remain runtime failures (#4263, #1199). The launch and

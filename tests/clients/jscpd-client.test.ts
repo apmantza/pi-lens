@@ -162,9 +162,9 @@ describe("jscpd-client", () => {
 					minTokens: number,
 					isTsProject: boolean,
 				) => Promise<unknown>;
-				ensureAvailable: () => Promise<boolean>;
+				ensureAvailable: (cwd?: string) => Promise<boolean>;
 			};
-			await client.ensureAvailable();
+			await client.ensureAvailable(tmpDir);
 			vi.mocked(safeSpawnMod.safeSpawnAsync).mockClear();
 			vi.mocked(safeSpawnMod.safeSpawnAsync).mockResolvedValue({
 				error: undefined,
@@ -480,9 +480,9 @@ describe("jscpd-client", () => {
 					minTokens: number,
 					isTsProject: boolean,
 				) => Promise<unknown>;
-				ensureAvailable: () => Promise<boolean>;
+				ensureAvailable: (cwd?: string) => Promise<boolean>;
 			};
-			await client.ensureAvailable();
+			await client.ensureAvailable(tmpDir);
 			vi.mocked(safeSpawnMod.safeSpawnAsync).mockClear();
 
 			await client.scan(tmpDir, 5, 50, true);

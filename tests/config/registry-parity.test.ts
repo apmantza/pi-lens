@@ -349,6 +349,15 @@ const COMMAND_SPEC_INSTALL_REASONS: Record<string, string> = {
 	"java->java": HOST_TOOLCHAIN,
 	// Rubocop's bundler form asks whether bundler runs; pi-lens never installs it.
 	"bundle->bundle": HOST_TOOLCHAIN,
+	// The prisma-validate runner runs the project's own prisma, then a global
+	// one, then the cache-only `npx --no prisma`; the installer has no prisma
+	// entry, and whether it should is an open install-opt-in decision (#5410 D8).
+	// Vite+ is the project's own toolchain; the oxlint runner falls back to plain
+	// oxlint when `vp` is absent, and the installer has no `vp` entry (#5410 F4).
+	"vp->vp":
+		"The project's own Vite+ toolchain; the oxlint runner lint falls back to plain oxlint without it, and the installer has no vp entry.",
+	"prisma->prisma":
+		"No installer entry exists today; the runner uses the project's or a global prisma, else the cache-only `npx --no prisma`, which never downloads.",
 };
 
 describe("Runner CLI scanner (#5418)", () => {

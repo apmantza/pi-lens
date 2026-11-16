@@ -290,7 +290,10 @@ export type DegradationKind =
 	 * the run's edit (a push-only server that never republishes a dependent). The
 	 * neighbour is now unconfirmed rather than clean; the subject is
 	 * `<serverId>:<path key>` and the record counts per session, so a repeated
-	 * exporter edit does not need a new kind to be visible.
+	 * exporter edit does not need a new kind to be visible. #5675: the cascade
+	 * now re-sends the document once first; the record is still written when
+	 * that re-touch left the answer pre-edit or did not conclude, and its reason
+	 * says so.
 	 */
 	| "cascade-pre-edit-answer"
 	/**

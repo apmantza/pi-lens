@@ -64,8 +64,39 @@ export function parseIdleEvictionDoc(text: string):
 			declared: string;
 			result: string;
 			reason: string | undefined;
+			respawn: string;
+			coverage: string;
 	  }[]
 	| null;
+
+export interface IdleEvictionHeld {
+	serverId: string;
+	/** The published cells that stand: `result|reason|respawn|coverage`. */
+	prior: string;
+	/** The cells tonight measured, in the same form. */
+	measured: string;
+	/** Set when the night is a flip held for its second agreeing night. */
+	pendingRuns?: number;
+}
+
+export function publishIdleEvictionDoc(night: {
+	rows: readonly IdleEvictionRow[];
+	declared: ReadonlyMap<string, string>;
+	date: string;
+	platform: string;
+	/** The committed document the night starts from; absent or unparsable publishes unheld. */
+	priorDoc?: string;
+	/** The capability matrix carrying the pending flips; absent publishes unheld. */
+	matrixText?: string;
+}): { doc: string; matrixText: string | undefined; held: IdleEvictionHeld[] };
+
+export function reportIdleEvictionHeld(
+	held: readonly IdleEvictionHeld[],
+	sink: {
+		env: Record<string, string | undefined>;
+		log: (line: string) => void;
+	},
+): void;
 
 export const IDLE_EVICTION_DRIFT_TITLE: string;
 

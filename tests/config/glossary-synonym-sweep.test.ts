@@ -417,7 +417,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/cue-vet.ts": 9,
 		"clients/dispatch/runners/helm-lint.ts": 2,
 		"clients/dispatch/runners/helm-render.ts": 7,
-		"clients/dispatch/runners/oxlint.ts": 3,
+		"clients/dispatch/runners/oxlint.ts": 2,
 		"clients/dispatch/runners/psscriptanalyzer.ts": 3,
 		"clients/dispatch/runners/rust-clippy.ts": 1,
 		"clients/dispatch/runners/pyright.ts": 1,
@@ -429,7 +429,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/trivy-config.ts": 2,
 		"clients/dispatch/runners/utils/availability-policy.ts": 4,
 		"clients/dispatch/runners/utils/candidate-probe.ts": 1,
-		"clients/dispatch/runners/utils/runner-helpers.ts": 6,
+		"clients/dispatch/runners/utils/runner-helpers.ts": 5,
 		"clients/dispatch/runners/utils/spawn-outcome.ts": 2,
 		"clients/dispatch/runners/vale.ts": 1,
 		"clients/dispatch/runners/zig-check.ts": 1,
@@ -1183,7 +1183,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `resolution.path` through the evidence seam, adding seven same-sense
 		// path identifiers while preserving the four-rung lookup ladder.
 		// 30 -> 28 (#4268): `resolveNodeToolCommand` and `resolveLocalFirstAsync`
-		// stop building `.bin` paths by hand and route through the shared lookup.
+		// (deleted in #5410 D8) stop building `.bin` paths by hand and route through the shared lookup.
 		// #5410: 18 -> 19, the PATH-only resolution's `{ path, rung }` value
 		// (the existing VenvResolution shape).
 		// 19 -> 20 (#5492 r2): the path-first project rung's `{ path, rung }`
@@ -1908,7 +1908,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/lsp.ts": 11,
 		// 4 -> 3 (#5413): the local cooldown skip moved to the dispatcher.
 		"clients/dispatch/runners/markdownlint.ts": 1,
-		"clients/dispatch/runners/oxlint.ts": 9,
+		"clients/dispatch/runners/oxlint.ts": 8,
 		"clients/dispatch/runners/php-lint.ts": 1,
 		// 1 -> 4 (#5594): the `dump-parameters` spawn's exit `status`, read three
 		// ways before the overlay is built; the spawn-result field, the same sense
@@ -1944,7 +1944,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/utils/ignore-anchor.ts": 1,
 		// 7 -> 5 (#5410): the rubocop bundler form and its install-fallback pair
 		// left the file.
-		"clients/dispatch/runners/utils/runner-helpers.ts": 5,
+		"clients/dispatch/runners/utils/runner-helpers.ts": 4,
 		// 9 -> 10 (#4130 r2): `processCutShort` reads the exit status once.
 		"clients/dispatch/runners/utils/spawn-outcome.ts": 10,
 		// 19 -> 20 (#4130 r2): `faultIfCutShort` builds the one partial-findings `failed` result.
@@ -2069,7 +2069,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/cache/rule-cache.ts": 3,
 		"clients/call-graph.ts": 4,
 		"clients/codebase-model.ts": 3,
-		"clients/dispatch/runners/oxlint.ts": 3,
 		"clients/grammar-source.ts": 5,
 		"clients/install-diagnostics.ts": 3,
 		// 60 -> 54 (#5624): vale's asset names drop their pinned `version` constant.

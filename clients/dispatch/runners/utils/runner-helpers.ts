@@ -49,7 +49,6 @@ import { BUILTIN_SERVER_RUNNER_COVERS } from "../../../lsp/server-covers.js";
 // predicate (#1488) costs this file no edge into the registry graph.
 import { isAuxiliary } from "../../../lsp/server-traits.js";
 import {
-	findGlobalBinary,
 	findLocalBinAt,
 	findLocalBinUpwards,
 	isLocalBinTrustRefusal,
@@ -544,7 +543,7 @@ export async function findManagedNodeToolBinary(
  * `fs.access`, and an on-disk binary that cannot run must not shadow a working
  * PATH binary — it falls through instead.
  */
-async function findManagedReleaseBinary(
+export async function findManagedReleaseBinary(
 	tool: string,
 	verificationArgs: string[] = ["--version"],
 ): Promise<string | null> {
@@ -2299,49 +2298,6 @@ export function resolveAvailableOrInstall(
 	});
 	byTool.set(toolId, promise);
 	return promise;
-}
-
-// =============================================================================
-// LOCAL-FIRST BINARY RESOLUTION
-// =============================================================================
-
-/**
- * Find a tool binary preferring local node_modules/.bin, then any installed
- * package manager's global bin dir (npm/pnpm/yarn/bun), then global PATH. Only
- * falls back to `npx --no` as a last resort — the universal cache-only exec
- * (npx ships with node and never silently downloads), so this stays
- * manager-agnostic without risking a surprise `dlx` fetch on pnpm/yarn/bun.
- *
- * Returns: { cmd, args } where args may include the `["--no", toolName]` npx
- * preamble.
- */
-export async function resolveLocalFirstAsync(
-	toolName: string,
-	cwd: string,
-	windowsExt = ".cmd",
-): Promise<{ cmd: string; args: string[] }> {
-	// 1. Local node_modules/.bin (project-installed) — through the trust-gated
-	//    shared lookup, never a private join (#4268 HIGH-1).
-	const local = localBinPath(findLocalBinAt(toolName, cwd, { windowsExt }));
-	if (local) return { cmd: local, args: [] };
-
-	// 2. Global bin dir of ANY installed manager (npm/pnpm/yarn/bun) — direct
-	//    file lookup, so it finds tools installed via `pnpm add -g` / `bun add -g`
-	//    (whose bin dirs are often off PATH) and survives PATH staleness after an
-	//    `install -g`. No spawn.
-	const globalBin = await findGlobalBinary(toolName, windowsExt);
-	if (globalBin) return { cmd: globalBin, args: [] };
-
-	// 3. Global PATH (already installed system-wide, on PATH)
-	const globalCheck = await probeToolAsync(toolName, ["--version"], {
-		timeout: 3000,
-	});
-	if (!globalCheck.error && globalCheck.status === 0) {
-		return { cmd: toolName, args: [] };
-	}
-
-	// 4. npx --no fallback — universal cache-only exec (no silent download)
-	return { cmd: "npx", args: ["--no", toolName] };
 }
 
 /** Shared cwd seam for runner probes and analysis children (#2777). */

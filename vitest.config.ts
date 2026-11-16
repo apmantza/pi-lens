@@ -580,6 +580,10 @@ export const wallClockBudgetInclude = [
 	// scaling ratio of real clock deltas (flake-shape admission); the yield-count
 	// cases ride along. No sampler, so it does not belong in the timing-sensitive lane.
 	"tests/clients/cascade-graph-occupancy.test.ts",
+	// #5675: a real jdtls-shaped stdio server behind the production LSPService
+	// and cascade; the re-ask is read off the wire (flake-shape admission), so the
+	// child rides in the serialized lane.
+	"tests/clients/cascade-retouch-push-only-5675.test.ts",
 	"tests/clients/cascade-turn-merge.test.ts",
 	"tests/clients/config-diagnostic-codes.test.ts",
 	// #4990: the inline_blocker_policy row goes through logLatency; turn_end logs

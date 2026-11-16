@@ -74,6 +74,8 @@ const repoRoot = path.resolve(
 const KNOWN_GAPS: ReadonlyArray<{ id: string; why: string }> = [];
 
 /** Every consumer the #1467/#1476 sweeps migrated; the scan must still see them. */
+// DependencyChecker, KnipClient and the jscpd client are not listed: since
+// #5410 they ask the registry resolver and carry no version probe of their own.
 const KNOWN_CONSUMERS = [
 	"clients/biome-client.ts::BiomeClient",
 	// The three `createCwdCachedProbe` consumers #1494 migrated. They are visible
@@ -84,12 +86,9 @@ const KNOWN_CONSUMERS = [
 	"clients/dispatch/runners/rust-clippy.ts::refreshClippyProbe",
 	"clients/pipeline.ts::tryEslintFix",
 	"clients/dead-code-client.ts::PythonDeadCodeClient",
-	"clients/dependency-checker.ts::DependencyChecker",
 	"clients/dispatch/runners/utils/runner-helpers.ts::createAvailabilityChecker",
 	"clients/go-client.ts::GoClient",
 	"clients/govulncheck-client.ts::GovulncheckClient",
-	"clients/jscpd-client.ts::jscpdAvailability",
-	"clients/knip-client.ts::KnipClient",
 	"clients/rust-client.ts::RustClient",
 	"clients/sg-runner.ts::SgRunner",
 ];

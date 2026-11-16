@@ -29,6 +29,7 @@ import * as safeSpawn from "../../../clients/safe-spawn.js";
 import { runnerRetirementDecision } from "../../../tools/lens-diagnostics.js";
 import type { WidgetDiagnostic } from "../../../clients/widget-state.js";
 import { removeTempDirSync } from "../test-utils.js";
+import { withEnv } from "../../support/with-env.js";
 import {
 	_resetStateCacheForTests,
 	markDisposition,
@@ -898,6 +899,77 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 			expect.anything(),
 			expect.anything(),
 		);
+	});
+
+	// Recurrence: #5685 review F11. jscpd asked its availability at the host
+	// process cwd (the MCP child's cwd is not the project) while the scan ran at
+	// the analysis root, so a project's own jscpd read as missing here.
+	it("asks jscpd availability for the analysis root, not the host cwd (#5410)", async () => {
+		// Earlier cells in this file leave a `safeSpawnAsync` spy that answers every
+		// probe "ok"; this cell needs a double that tells the two cwds apart.
+		vi.restoreAllMocks();
+		const shimDir = path.join(tmp, "node_modules", ".bin");
+		fs.mkdirSync(shimDir, { recursive: true });
+		fs.writeFileSync(path.join(shimDir, "jscpd"), "#!/bin/sh\necho 1.0.0\n", {
+			mode: 0o755,
+		});
+		const shim = path.join(shimDir, "jscpd");
+		const enoent = new Error("spawn ENOENT");
+		// Only the project's own shim runs; every other candidate (a bare name on
+		// PATH, a managed path) is a binary that is not there.
+		vi.spyOn(safeSpawn, "safeSpawnAsync").mockImplementation(async (cmd) =>
+			cmd === shim
+				? { status: 0, stdout: "1.0.0", stderr: "", error: undefined }
+				: {
+						status: null,
+						stdout: "",
+						stderr: "",
+						error: enoent,
+						spawnFailure: new safeSpawn.SpawnFailureError(
+							"tool-not-found",
+							"spawn ENOENT",
+							enoent,
+						),
+					},
+		);
+		const host = path.join(tmp, "host-cwd");
+		fs.mkdirSync(host);
+		setProjectTrustState("trusted");
+		const cwd = vi.spyOn(process, "cwd").mockReturnValue(host);
+		// `npx vitest` puts this checkout's node_modules/.bin (which holds a real
+		// jscpd) on PATH, which would answer for the wrong cwd too.
+		const restorePath = withEnv({
+			PATH: "/usr/bin:/bin",
+			PI_LENS_DISABLE_TOOL_INSTALL: "1",
+		});
+		try {
+			const { JscpdClient } = await import("../../../clients/jscpd-client.js");
+			const jscpdClient = new JscpdClient();
+			const scan = vi.spyOn(jscpdClient, "scan").mockResolvedValue({
+				success: true,
+				analyzed: true,
+				duplicatedLines: 0,
+				totalLines: 0,
+				percentage: 0,
+				clones: [],
+			} as never);
+			const clients = {
+				...makeClients({ jscpdAvailable: true }),
+				jscpdClient,
+			} as unknown as BootstrapClients;
+
+			const result = await fetchFreshProjectDiagnostics(
+				makeCacheManager(),
+				tmp,
+				clients,
+			);
+
+			expect(scan).toHaveBeenCalled();
+			expect(result.cold).not.toContain("jscpd");
+		} finally {
+			restorePath();
+			cwd.mockRestore();
+		}
 	});
 
 	it("writes to the jscpd-ts cache key when a tsconfig.json is present", async () => {

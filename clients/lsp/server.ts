@@ -1779,6 +1779,8 @@ interface InteractiveServerSpec {
 	 * silently failing. Currently only "java" (jdtls).
 	 */
 	runtime?: "java";
+	/** #4782 unchanged-bytes re-check; see {@link LspResendRecheck}. */
+	resendRecheck?: LspResendRecheck;
 }
 
 function createInteractiveServer(spec: InteractiveServerSpec): LSPServerInfo {
@@ -1797,6 +1799,9 @@ function createInteractiveServer(spec: InteractiveServerSpec): LSPServerInfo {
 		fallbackFor: spec.fallbackFor,
 		requiresProjectRoot: spec.requiresProjectRoot,
 		executesProjectCode: spec.executesProjectCode,
+		...(spec.resendRecheck !== undefined && {
+			resendRecheck: spec.resendRecheck,
+		}),
 		availabilityKey:
 			typeof spec.command === "string" && isSimpleCommand(spec.command)
 				? spec.command
@@ -4162,6 +4167,12 @@ export const JavaServer = createInteractiveServer({
 	command: () => process.env.JDTLS_PATH || "jdtls",
 	args: (root) => createLombokJdtlsArgs(root),
 	runtime: "java",
+	// #5675: jdtls 1.63.0 (Temurin 25.0.5+8) answers a didChange that carries
+	// the bytes it already holds: the cascade's re-send of an importer at
+	// 19.331 was published for the new version at 19.847 (+516 ms, docVersion 1)
+	// and republished the other importer at 19.855, 3/3 on the real smoke row
+	// (see LspResendRecheck; transcripts in the PR body).
+	resendRecheck: "rechecks",
 });
 
 export const KotlinServer: LSPServerInfo = {
