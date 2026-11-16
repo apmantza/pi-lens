@@ -615,9 +615,9 @@ const WRITE_SITES: Record<string, SiteRow> = {
 		why: "the merged ast-grep rule directory and sgconfig under the scanner report directory",
 	},
 	"clients/staged-delta.ts": {
-		sites: 5,
+		sites: 6,
 		cls: "scratch",
-		why: "the commit gate's per-call scratch: a temporary directory under the OS temp dir with the index copies and the hook net, removed before the call returns",
+		why: "the commit gate's per-call scratch: a temporary directory under the OS temp dir with the index copies (each given the original index's mtime, #5650) and the hook net, removed before the call returns",
 	},
 	"clients/test-runner-client.ts": {
 		sites: 3,
