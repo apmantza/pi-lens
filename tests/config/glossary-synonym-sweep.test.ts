@@ -378,6 +378,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lsp-mutation.ts": 1,
 		"clients/mutating-tool.ts": 2,
 		"clients/observed-mutation.ts": 3,
+		// 0 -> 1 (#5551): the drain names its write in the frozen field when it
+		// records through `recordMutationOutcome`.
+		"clients/runtime-agent-end.ts": 1,
 		"tools/lens-diagnostic-mark.ts": 1,
 		"clients/read-bridge.ts": 5,
 		"clients/zizmor-config.ts": 13,
@@ -1773,7 +1776,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/project-snapshot.ts": 10,
 		"clients/read-guard-tool-lines.ts": 4,
 		"clients/read-guard.ts": 23,
-		"clients/runtime-agent-end.ts": 56,
+		"clients/runtime-agent-end.ts": 55,
 		"clients/runtime-context.ts": 2,
 		// 17 -> 23 (#3218): `noteResolvedBlockerFile` reads the removed
 		// `InlineBlockerRecord` (param, path, count, write index).

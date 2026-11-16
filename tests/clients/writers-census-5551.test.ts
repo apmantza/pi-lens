@@ -768,8 +768,10 @@ describe("the writer table", () => {
 		for (const route of WRITERS)
 			for (const recorder of route.recorders)
 				(byRecorder[recorder] ??= []).push(route.id);
-		// The hand-copied recorders #5551 has not folded onto
-		// `recordMutationOutcome` yet: a fold that lands moves its routes here.
+		// The routes still recorded apart from `recordMutationOutcome`: the
+		// classified chain's own recorder (`tool-result`, #5551's stay verdict)
+		// and the writers that record nothing. A fold that lands moves its
+		// routes into the first list.
 		expect(byRecorder).toEqual({
 			recordMutationOutcome: [
 				"foreign-named",
@@ -781,6 +783,7 @@ describe("the writer table", () => {
 				"lsp-execute-command",
 				"lsp-server-apply-edit",
 				"lens-diagnostic-mark",
+				"runner-format-autofix",
 				"agent-end-lsp-quickfix",
 			],
 			"tool-result": [
@@ -795,7 +798,6 @@ describe("the writer table", () => {
 				"foreign-path-less",
 				"runner-format-autofix",
 			],
-			"agent-end-drain": ["runner-format-autofix"],
 			none: [
 				"fix-run-restore",
 				"runner-whole-package-fix",
@@ -813,13 +815,13 @@ describe("the writer table", () => {
 		expect(unprobed).toEqual({
 			dispatch: 7,
 			"inline-stop": 3,
-			"change-log": 9,
+			"change-log": 8,
 			"commit-gate": 7,
 			"pre-edit-baseline": 13,
-			"fix-run-capture": 15,
+			"fix-run-capture": 14,
 			"deferred-queue": 12,
 			"lsp-documents": 9,
-			"read-guard": 9,
+			"read-guard": 8,
 			"word-index": 23,
 		});
 	});
