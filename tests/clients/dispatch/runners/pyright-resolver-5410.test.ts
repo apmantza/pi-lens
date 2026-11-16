@@ -87,6 +87,11 @@ const { safeSpawnAsync, findCommandAsync, spawnCalls, shim } = vi.hoisted(
 						stderr: "",
 					};
 				}
+				// A real pyright answers `--version` and no other flag it does not know,
+				// so a registry row with the wrong versionArgs reads as a rejected binary.
+				if (args[0] !== "--version") {
+					return { error: null, status: 2, stdout: "", stderr: "bad flag" };
+				}
 				return { error: null, status: 0, stdout: "1.1.400\n", stderr: "" };
 			},
 		);
