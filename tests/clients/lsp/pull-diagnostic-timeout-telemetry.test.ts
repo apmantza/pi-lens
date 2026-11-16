@@ -1,6 +1,6 @@
 /**
  * #1713: pull-diagnostic timeouts were structurally unobservable — the
- * per-request `withTimeout` at `clients/lsp/client.ts` throws on timeout, so
+ * per-request `withDeadline` at `clients/lsp/client.ts` throws on timeout, so
  * the settle emit it raced against never runs and NOTHING records that the
  * timeout happened. A late answer that arrives after the caller gave up was
  * silently discarded with zero trace.

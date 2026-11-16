@@ -159,7 +159,7 @@ describe("LSP client — unexpected close records its cause (#1969)", () => {
 		const { createLSPClient } = await import("../../../clients/lsp/client.js");
 		const proc = await spawnFakeLspServer({
 			cwd: process.cwd(),
-			// Never answers `initialize`, so `withTimeout` fires and the catch
+			// Never answers `initialize`, so `withDeadline` fires and the catch
 			// below kills the child.
 			env: { FAKE_LSP_IGNORE_INITIALIZE: "1" },
 		});

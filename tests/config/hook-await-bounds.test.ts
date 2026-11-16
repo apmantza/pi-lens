@@ -2851,8 +2851,8 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/trivy-client.ts": 1,
 	// #4645: 9 -> 10. The incumbent awaits its own membership probe (the
 	// existing non-spawning read-only probe channel) and sends the answer beside
-	// the raw rows. The probe runs under `withinRemaining(…, req.deadlineAt -
-	// WARM_REPLY_SEND_RESERVE_MS)`, so it settles before the reply's send
+	// the raw rows. The probe runs under `withDeadline` with `deadlineAt:
+	// req.deadlineAt - WARM_REPLY_SEND_RESERVE_MS`, so it settles before the reply's send
 	// reserve; that helper is deadline-only (no hook signal exists in this
 	// socket server to hand `bounded`), so the await counts here.
 	"clients/warm-attach.ts": 10,
