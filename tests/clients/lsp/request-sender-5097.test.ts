@@ -92,6 +92,13 @@ async function withHangingServer(
 		 *  it replies it has read every cancel sent before it. */
 		barrier: () => Promise<void>;
 	}) => Promise<void>,
+	options: {
+		env?: Record<string, string>;
+		serverId?: string;
+		launchVariant?: "classic";
+		/** false: the body opens the file itself, inside its own abort scope. */
+		open?: boolean;
+	} = {},
 ): Promise<void> {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-sender-5097-"));
 	const trace = path.join(tmp, "trace.log");
@@ -104,15 +111,19 @@ async function withHangingServer(
 			...process.env,
 			FAKE_LSP_HANG_METHODS: hangMethods,
 			FAKE_LSP_TRACE_FILE: trace,
+			...options.env,
 		},
 	});
 	const client = await createLSPClient({
-		serverId: "fake",
+		serverId: options.serverId ?? "fake",
 		process: proc,
 		root: tmp,
+		...(options.launchVariant && { launchVariant: options.launchVariant }),
 	});
 	try {
-		await client.notify.open(file, "function greet() {}\n", "typescript");
+		if (options.open !== false) {
+			await client.notify.open(file, "function greet() {}\n", "typescript");
+		}
 		const cancels = () =>
 			fs.existsSync(trace)
 				? fs
@@ -849,4 +860,206 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 		},
 		30_000,
 	);
+
+	// Recurrence (#5097, the remainder after #5654): `runWorkspaceDiagnostics`'s
+	// project-wide pull took only its own controller, so an Esc during a
+	// `lens_diagnostics mode=full` sweep left the request on the server, and the
+	// sweep waited out the pull's whole budget before it noticed.
+	it("Esc during a sweep's workspace pull ends the sweep at once and cancels the pull", async () => {
+		vi.stubEnv("PI_LENS_LSP_WORKSPACE_PULL", "1");
+		vi.stubEnv("PI_LENS_LSP_WORKSPACE_PULL_MS", "6000");
+		try {
+			register("workspace/diagnostic", "fake-rust", {
+				FAKE_LSP_WORKSPACE_DIAGNOSTICS: "1",
+			});
+			const esc = new AbortController();
+			const sweep = spawnAbortScope.run(esc.signal, () =>
+				service.runWorkspaceDiagnostics(tmp, { signal: esc.signal }),
+			);
+			await received("workspace/diagnostic");
+			const abortedAt = Date.now();
+			esc.abort();
+			await sweep;
+			expect(Date.now() - abortedAt).toBeLessThan(1500);
+			await cancelledWithin500ms(abortedAt);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	}, 30_000);
+});
+
+describe("the workspace pull and the read-only probe read the tool call's abort (#5097)", () => {
+	const pullsSent = (file: string): number => {
+		const trace = path.join(path.dirname(file), "trace.log");
+		return fs.existsSync(trace)
+			? fs
+					.readFileSync(trace, "utf-8")
+					.split("\n")
+					.filter((line) => line.startsWith("recv workspace/diagnostic")).length
+			: 0;
+	};
+	const pullServer = { env: { FAKE_LSP_WORKSPACE_DIAGNOSTICS: "1" } };
+
+	// Recurrence (#5097 remainder, last comment after #5654): the workspace pull
+	// owned a private controller and read no abort, so an Esc left the request
+	// on the server and the caller waiting out the pull's budget. The abort is
+	// the timeout's transition without its records: tracked as abandoned (a
+	// repeat pull must not stack behind a server that ignored the cancel), no
+	// timeout row, no failure-history row, and never a clean report.
+	it("Esc during a workspace pull the server never answers returns at once, cancels it and records no timeout", async () => {
+		resetDegradationLedger();
+		await withHangingServer(
+			"workspace/diagnostic",
+			async (ctx) => {
+				const abort = new AbortController();
+				const call = spawnAbortScope.run(abort.signal, () =>
+					ctx.client.requestWorkspaceDiagnostics(5000),
+				);
+				await ctx.received("workspace/diagnostic");
+				const abortedAt = Date.now();
+				abort.abort();
+				await expect(call).resolves.toBeUndefined();
+				expect(Date.now() - abortedAt).toBeLessThan(500);
+				await ctx.barrier();
+				expect(ctx.cancels()).toBe(1);
+				expect(ctx.client.getPullFailureHistory?.()).toEqual([]);
+				expect(
+					getDegradationSummary().filter(
+						(group) => group.kind === "lsp-pull-diagnostic-timeout",
+					),
+				).toEqual([]);
+				expect(
+					getRecentLoggedPhases().filter(
+						(row) => row.phase === "lsp_pull_diagnostic_timeout",
+					),
+				).toEqual([]);
+				// The server ignored the cancel, so the request is still pending: a
+				// pull outside any scope must not send a second one behind it.
+				await expect(
+					ctx.client.requestWorkspaceDiagnostics(5000),
+				).resolves.toBeUndefined();
+				await ctx.barrier();
+				expect(pullsSent(ctx.file)).toBe(1);
+			},
+			pullServer,
+		);
+	}, 20_000);
+
+	it("a workspace pull begun under an aborted scope sends nothing", async () => {
+		await withHangingServer(
+			"workspace/diagnostic",
+			async (ctx) => {
+				const gone = new AbortController();
+				gone.abort();
+				await expect(
+					spawnAbortScope.run(gone.signal, () =>
+						ctx.client.requestWorkspaceDiagnostics(5000),
+					),
+				).resolves.toBeUndefined();
+				await ctx.barrier();
+				expect(pullsSent(ctx.file)).toBe(0);
+				expect(ctx.cancels()).toBe(0);
+			},
+			pullServer,
+		);
+	}, 20_000);
+
+	const projectInfo = (file: string): [string, unknown[]] => [
+		"typescript.tsserverRequest",
+		["projectInfo", { file, needFileNameList: false }],
+	];
+	const wedgedTsserver = {
+		env: { FAKE_LSP_HANG_PROJECT_INFO: "1" },
+		serverId: "typescript",
+		launchVariant: "classic" as const,
+		open: false,
+	};
+
+	// Recurrence (#5097 remainder): `runReadOnlyServerCommand` passed the sender
+	// no signal, so an Esc left the read-only tsserver `projectInfo` request
+	// pending until its 2.5 s probe ceiling, holding the busy count that keeps
+	// `ClientRegistry` from evicting the client. An Esc is no degradation: no
+	// `lsp-readonly-command-released` row, and `executed:false`, never a result.
+	it("Esc during a read-only tsserver command returns at once, cancelled and released, with no released row", async () => {
+		resetDegradationLedger();
+		await withHangingServer(
+			"",
+			async (ctx) => {
+				const abort = new AbortController();
+				const call = spawnAbortScope.run(abort.signal, () =>
+					ctx.client.executeReadOnlyCommand(...projectInfo(ctx.file)),
+				);
+				await ctx.received("workspace/executeCommand");
+				const abortedAt = Date.now();
+				abort.abort();
+				const outcome = await call;
+				expect(Date.now() - abortedAt).toBeLessThan(500);
+				expect(outcome.executed).toBe(false);
+				expect(ctx.client.isBusy?.()).toBe(false);
+				await ctx.barrier();
+				expect(ctx.cancels()).toBe(1);
+				expect(
+					getDegradationSummary().filter(
+						(group) => group.kind === "lsp-readonly-command-released",
+					),
+				).toEqual([]);
+			},
+			wedgedTsserver,
+		);
+	}, 20_000);
+
+	it("a read-only command begun under an aborted scope sends nothing", async () => {
+		await withHangingServer(
+			"",
+			async (ctx) => {
+				const gone = new AbortController();
+				gone.abort();
+				const outcome = await spawnAbortScope.run(gone.signal, () =>
+					ctx.client.executeReadOnlyCommand(...projectInfo(ctx.file)),
+				);
+				expect(outcome.executed).toBe(false);
+				await ctx.barrier();
+				const trace = fs.readFileSync(
+					path.join(path.dirname(ctx.file), "trace.log"),
+					"utf-8",
+				);
+				expect(trace).not.toContain("recv workspace/executeCommand");
+				expect(ctx.cancels()).toBe(0);
+			},
+			wedgedTsserver,
+		);
+	}, 20_000);
+
+	// The production caller: the didOpen project-identity probe is detached from
+	// the touch that opened the document, but runs in its scope. Esc ends it the
+	// way it ends the touch: one cancel on the wire and the busy count released
+	// (the probe's own latency row is kept out of the recent-phase ring).
+	it("Esc after a touch opened a typescript document cancels its detached projectInfo probe", async () => {
+		await withHangingServer(
+			"",
+			async (ctx) => {
+				const abort = new AbortController();
+				await spawnAbortScope.run(abort.signal, () =>
+					ctx.client.notify.open(
+						ctx.file,
+						"function greet() {}\n",
+						"typescript",
+					),
+				);
+				await ctx.received("workspace/executeCommand");
+				const abortedAt = Date.now();
+				abort.abort();
+				await vi.waitFor(() => expect(ctx.cancels()).toBe(1), {
+					timeout: 500,
+					interval: 10,
+				});
+				await vi.waitFor(() => expect(ctx.client.isBusy?.()).toBe(false), {
+					timeout: 500,
+					interval: 10,
+				});
+				expect(Date.now() - abortedAt).toBeLessThan(500);
+			},
+			wedgedTsserver,
+		);
+	}, 20_000);
 });
