@@ -930,6 +930,19 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 				"budget many times over.",
 			owner: "#2523 slice 2",
 		},
+	"clients/runtime-session.ts#scheduleStartupScansWithClients:3e1556d5~0401ab41":
+		{
+			family: "hook-await",
+			site: "session_start",
+			reason:
+				"One heavyweight startup analyzer per await (knip, jscpd, " +
+				"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
+				"review graph, call graph, codebase model, word index). Each " +
+				"has a spawn-level timeout at the leaf and none has a wall " +
+				"bound above it; together they are session_start's 5000ms " +
+				"budget many times over.",
+			owner: "#2523 slice 2",
+		},
 	"clients/runtime-session.ts#scheduleStartupScansWithClients:498f59ca~b262f927":
 		{
 			family: "hook-await",
@@ -1084,19 +1097,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			owner: "#2523 slice 2",
 		},
 	"clients/runtime-session.ts#scheduleStartupScansWithClients:e8384622~b262f927":
-		{
-			family: "hook-await",
-			site: "session_start",
-			reason:
-				"One heavyweight startup analyzer per await (knip, jscpd, " +
-				"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
-				"review graph, call graph, codebase model, word index). Each " +
-				"has a spawn-level timeout at the leaf and none has a wall " +
-				"bound above it; together they are session_start's 5000ms " +
-				"budget many times over.",
-			owner: "#2523 slice 2",
-		},
-	"clients/runtime-session.ts#scheduleStartupScansWithClients:eb2411d7~0401ab41":
 		{
 			family: "hook-await",
 			site: "session_start",
