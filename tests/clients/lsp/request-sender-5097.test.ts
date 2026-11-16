@@ -866,12 +866,8 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 	// `lens_diagnostics mode=full` sweep left the request on the server, and the
 	// sweep waited out the pull's whole budget before it noticed.
 	it("Esc during a sweep's workspace pull ends the sweep at once and cancels the pull", async () => {
-		const before = {
-			pull: process.env.PI_LENS_LSP_WORKSPACE_PULL,
-			ms: process.env.PI_LENS_LSP_WORKSPACE_PULL_MS,
-		};
-		process.env.PI_LENS_LSP_WORKSPACE_PULL = "1";
-		process.env.PI_LENS_LSP_WORKSPACE_PULL_MS = "6000";
+		vi.stubEnv("PI_LENS_LSP_WORKSPACE_PULL", "1");
+		vi.stubEnv("PI_LENS_LSP_WORKSPACE_PULL_MS", "6000");
 		try {
 			register("workspace/diagnostic", "fake-rust", {
 				FAKE_LSP_WORKSPACE_DIAGNOSTICS: "1",
@@ -887,13 +883,7 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 			expect(Date.now() - abortedAt).toBeLessThan(1500);
 			await cancelledWithin500ms(abortedAt);
 		} finally {
-			for (const [key, value] of [
-				["PI_LENS_LSP_WORKSPACE_PULL", before.pull],
-				["PI_LENS_LSP_WORKSPACE_PULL_MS", before.ms],
-			] as const) {
-				if (value === undefined) delete process.env[key];
-				else process.env[key] = value;
-			}
+			vi.unstubAllEnvs();
 		}
 	}, 30_000);
 });
