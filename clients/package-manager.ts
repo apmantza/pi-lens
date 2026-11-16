@@ -750,11 +750,13 @@ export interface LocalBinWalkOptions {
 /**
  * Every `<dir>/<binDir>/<tool>` that exists, for exactly `dir` — no walk.
  *
- * Candidate order per tool is EXT-OUTER: on Windows each round tries one more
- * extension across every `binDir` (a mapped dir's own extension, then the
- * caller's `windowsExt`), and the bare name comes last, across every `binDir`.
- * `windowsExt === ""` means the caller already spelled every name it wants, in
- * an order this option cannot express, so only the bare name is tried.
+ * Candidate order per tool is EXT-OUTER. On Windows, each `binDir` has an
+ * extension list: its launcher from `binDirWindowsExt` when the map names it,
+ * then `windowsExt`. Duplicates and empty values drop out. Round `r` tries the
+ * `r`-th extension of every `binDir`, in `binDirs` order. The bare name comes
+ * last, in every `binDir`. A `windowsExt` of `""` does not mean bare name only.
+ * An unmapped `binDir` tries the bare name alone, and a mapped `binDir` still
+ * tries its own extension. Off Windows, the walk tries bare names only.
  */
 function* matchesInDir(
 	dir: string,
