@@ -502,4 +502,73 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 		await expect(touch).resolves.toBeUndefined();
 		await cancelledWithin500ms(abortedAt);
 	}, 20_000);
+
+	// Recurrence: reading the ambient abort in the pull makes every caller of the
+	// pull a reader of whatever scope it inherited. A server-initiated re-pull
+	// (`workspace/diagnostic/refresh`) runs in the context the server's stream was
+	// created in, so a server first started by a tool call carried that call's
+	// scope for the rest of the session, and one Esc in that turn silenced every
+	// refresh re-pull after it (#5097, the "H2" gap the first PR accepted).
+	it("a server started inside an aborted tool call still re-pulls on its own refresh", async () => {
+		const filePath = path.join(tmp, "a.ts");
+		fs.writeFileSync(filePath, "function greet() {}\n");
+		fs.writeFileSync(path.join(tmp, "package.json"), "{}");
+		const call = new AbortController();
+		const { proc, client } = await spawnAbortScope.run(
+			call.signal,
+			async () => {
+				const spawned = await spawnFakeLspServer({
+					cwd: tmp,
+					env: {
+						...process.env,
+						FAKE_LSP_REFRESH_ON_OPEN: "1",
+						FAKE_LSP_TRACE_FILE: trace,
+					},
+				});
+				procs.push(spawned);
+				return {
+					proc: spawned,
+					client: await createLSPClient({
+						serverId: "fake",
+						process: spawned,
+						root: tmp,
+					}),
+				};
+			},
+		);
+		try {
+			// The Esc that ended the call that started the server.
+			call.abort();
+			// Outside the scope, as every later touch is.
+			await client.notify.open(filePath, "function greet() {}\n", "typescript");
+			await received("textDocument/diagnostic");
+		} finally {
+			await client.shutdown().catch(() => {});
+			await stopLSP(proc).catch(() => {});
+		}
+	}, 20_000);
+
+	// Recurrence: a warm-up that an Esc cut left the server absent from
+	// `demonstratedReady`, and `ensureWarmForSweep` read that as "still cold" and
+	// wrote the session's negative cache (#799), so every later sweep skipped the
+	// server's whole group. The cut touch used to be able to finish in the
+	// background and clear it; now that its pull is cancelled it cannot, so an
+	// abort has to leave no verdict (#5097).
+	it("a warm-up cut by Esc is not remembered as a cold server", async () => {
+		const filePath = register("textDocument/diagnostic");
+		const sweep = new AbortController();
+		const warm = spawnAbortScope.run(sweep.signal, () =>
+			service.ensureWarmForSweep(filePath, {
+				timeoutMs: 6000,
+				signal: sweep.signal,
+			}),
+		);
+		await received("textDocument/diagnostic");
+		sweep.abort();
+		await warm;
+		expect(
+			(service as unknown as { state: { demonstratedCold: Set<string> } }).state
+				.demonstratedCold.size,
+		).toBe(0);
+	}, 20_000);
 });

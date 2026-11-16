@@ -49,6 +49,7 @@ import {
 	isOwnLiveChild,
 	releaseOwnChildPid,
 } from "../safe-spawn.js";
+import { spawnAbortScope } from "../spawn-abort-scope.js";
 import { raceToCompletion } from "./aggregation.js";
 import {
 	hashDiagnosticContent,
@@ -3873,8 +3874,15 @@ export function setupIncomingHandlers(
 				// (URI lookups, map bookkeeping) to the next tick, so it can
 				// never compete with this reply for the current one regardless
 				// of how many documents are open.
+				//
+				// #5097: and out of every abort scope. This runs in the context the
+				// server's streams were created in, so a server first started by a
+				// tool call would otherwise carry that call's scope, and an Esc in
+				// that turn would silence every later refresh re-pull, which reads
+				// the ambient abort (`pullDiagnosticSource`). The re-pull serves the
+				// document, not the call that happened to start the server.
 				setImmediate(() => {
-					void runRefreshRepullPool();
+					void spawnAbortScope.exit(() => runRefreshRepullPool());
 				});
 			}
 		}
@@ -4120,7 +4128,7 @@ async function pullDiagnosticSource(
 	// #5097: the abort of the call or bound this pull runs under. Read here, in
 	// the caller's own async context, and never captured by a long-lived handler
 	// (the server-initiated re-pull steps out of the scope, see
-	// `runRefreshRepullPool`). An abort before the send claims and sends nothing.
+	// `workspace/diagnostic/refresh`). An abort before the send claims and sends nothing.
 	const abortSignal = getAmbientAbortSignal();
 	if (abortSignal?.aborted) return { status: "unavailable" };
 	const normalizedPath = normalizeMapKey(filePath);

@@ -233,7 +233,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"elapsed-time-assertion:clients/lsp/request-sender-5097.test.ts": {
 		detector: "elapsed-time-assertion",
 		reason:
-			"#5097 acceptance 3: Esc must return a navigation call on a silent server within 500 ms; the bound is the behavior and a fake clock cannot time a child process's wire",
+			"#5097 acceptance 3: Esc must return a navigation call on a silent server within 500 ms, and a firing bound must put the cancel of its pull and ping on the wire within 500 ms; the bound is the behavior and a fake clock cannot time a child process's wire",
 	},
 	"elapsed-time-assertion:clients/lsp/server-status-readiness-5487.test.ts": {
 		detector: "elapsed-time-assertion",
@@ -1039,7 +1039,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"real-process-spawn:clients/lsp/request-sender-5097.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"#5097: the cancel on the wire and the connection's busy count are the subject; a server that accepts a request and never answers it, and ignores the cancel, cannot be stood in for without a real JSON-RPC stream.",
+			"#5097: the cancel on the wire and the connection's busy count are the subject, for a call's own request and for the pull and ping a firing bound started through the real service; a server that accepts a request and never answers it, and ignores the cancel, cannot be stood in for without a real JSON-RPC stream.",
 	},
 	"real-process-spawn:clients/lsp/server-status-readiness-5487.test.ts": {
 		detector: "real-process-spawn",
@@ -2025,7 +2025,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"ungoverned-wait-for:clients/lsp/request-sender-5097.test.ts": {
 		detector: "ungoverned-wait-for",
 		reason:
-			"#5097: the abort must land after the request is on the wire, and only the server's own trace shows that; the poll is bounded by its own timeout",
+			"#5097: the abort must land after the request is on the wire (and the server's own refresh must reach a re-pull), and only the server's own trace shows that; the poll is bounded by its own timeout",
 	},
 	"ungoverned-wait-for:clients/session-repository-trust-4530.test.ts": {
 		detector: "ungoverned-wait-for",

@@ -9146,7 +9146,13 @@ export class LSPService {
 			}
 		}
 
-		if (failedServerIds.length > 0) {
+		// #5097: an abort cut this warm-up, and its pull was cancelled with it, so
+		// the server was never asked to finish: unknown, not cold. The sweep's own
+		// signal and the call's ambient scope are two spellings of the same Esc.
+		const abandoned =
+			options.signal?.aborted === true ||
+			getAmbientAbortSignal()?.aborted === true;
+		if (failedServerIds.length > 0 && !abandoned) {
 			// #799: record the negative cache so a LATER sweep this session
 			// skips straight past re-paying this warm-up (initial + retry).
 			// Cleared automatically the moment the server demonstrates

@@ -232,11 +232,11 @@ type BoundCause = "deadline" | "caller-abort" | "shutdown";
  * - A thunk `(signal) => work` is RUN by `bounded`, inside
  *   `spawnAbortScope.run(signal, ...)`, so every `safeSpawnAsync` and every
  *   request that reads `getAmbientAbortSignal()` (`navRequest`: document
- *   symbols, code actions) inherits `signal` with no threading, and `signal`
- *   aborts when a bound fires: what reads it is cancelled, not only
- *   abandoned. A request that never reads it (`touchFile`, `getDiagnostics`
- *   and `openFile` today) is only abandoned, until the LSP request sender
- *   (#5097) wires them.
+ *   symbols, code actions, the diagnostic pull `touchFile` and `getDiagnostics`
+ *   send, the clean-confirm ping) inherits `signal` with no threading, and
+ *   `signal` aborts when a bound fires: what reads it is cancelled, not only
+ *   abandoned. Work that sends no request (`openFile`: a notification cannot be
+ *   cancelled, and its write finishes on the notify queue) is only abandoned.
  * - An already-started promise is only abandoned (the pre-#5550 form). It is
  *   still admitted for work that is a pure read or that must outlive its hook,
  *   and the `work` column of `BOUNDED_CALL_SITES`
@@ -380,8 +380,10 @@ export interface BoundedOptions {
  * so every `safeSpawnAsync` and every request that reads
  * `getAmbientAbortSignal()` under it inherits `signal`, and the bound's firing
  * (deadline, shutdown or the caller's abort) aborts it. The scope reaches only
- * what reads it: `touchFile`, `getDiagnostics` and `openFile` do not yet
- * (#5097), so a thunk over them is handed the signal but cancels nothing. The
+ * what reads it: the pull and the clean-confirm ping under `touchFile` and
+ * `getDiagnostics` (#5097), not `openFile`, which sends only a notification.
+ * A thunk over a request that does not read it is handed the signal and
+ * cancels nothing. The
  * thunk's signal is NOT aborted when the work settles in time. A site that
  * keeps the promise form says why in the `work` column of
  * `BOUNDED_CALL_SITES` (`pure-read`, `outlives:<owner>` or `migrate:#<n>`), so a
