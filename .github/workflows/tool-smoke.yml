@@ -481,7 +481,10 @@ jobs:
       # bot PR unmerged does NOT reset the bookkeeping (the branch is kept,
       # `delete-branch: false`, and keeps seeding); only deleting
       # `bot/lsp-docs-refresh` does. `timeout-minutes` bounds a hung fetch,
-      # which `continue-on-error` does not.
+      # which `continue-on-error` does not. #5667: when the matrix is seeded the
+      # script restores docs/lsp-idle-eviction.md too (its own staleness check),
+      # because the matrix's pending `idle-eviction-doc` flips are held against
+      # that doc's published rows.
       - name: Seed the capability matrix from the last unmerged refresh
         id: seed_matrix
         if: github.event_name == 'schedule' || github.ref == 'refs/heads/master'
