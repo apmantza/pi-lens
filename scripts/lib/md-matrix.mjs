@@ -731,6 +731,35 @@ function sanitizeMissedProbeState(map) {
 /** The refresh-state key holding the idle-eviction promotion bookkeeping (#3989). */
 export const IDLE_EVICTION_KEY = "idle-eviction";
 
+/** The refresh-state key holding the pending save-verdict flips (#3405). */
+export const SAVE_VERDICT_KEY = "save-verdict";
+
+/**
+ * #3405: keep only well-formed pending save verdicts, `{ [server]: {
+ * pendingSaveVerdict, runs } }`: the settled verdict one night measured against
+ * the published one, and how many consecutive nights agreed on it. A hand-edited
+ * or old block cannot carry garbage into the section: an entry that is not a
+ * non-empty string with a positive whole count is dropped. The value is not
+ * checked against the verdict set here (that set lives in `save-verdict.mjs`,
+ * which imports this module): the hold only ever compares it for equality with
+ * a settled night, so a value nobody planned can never commit.
+ */
+export function sanitizeSaveVerdictState(map) {
+	const out = {};
+	if (!map || typeof map !== "object") return out;
+	for (const server of Object.keys(map).sort(compareStableStrings)) {
+		const e = map[server];
+		if (
+			typeof e?.pendingSaveVerdict === "string" &&
+			e.pendingSaveVerdict !== "" &&
+			Number.isInteger(e.runs) &&
+			e.runs > 0
+		)
+			out[server] = { pendingSaveVerdict: e.pendingSaveVerdict, runs: e.runs };
+	}
+	return out;
+}
+
 /**
  * #3989: keep only well-formed idle-eviction nights, at most two per server
  * (the promotion window), so a hand-edited or old block cannot carry garbage
@@ -759,18 +788,18 @@ function sanitizeIdleEvictionState(map) {
 }
 
 /**
- * #3989: replace the `idle-eviction` key of the refresh-state block in `text`,
- * leaving the other keys as parsed. An empty map removes the key (and the
- * section when nothing else is left).
+ * Replace one key of the refresh-state block in `text` (`idle-eviction`,
+ * `save-verdict`: the keys whose own nightly step writes them), leaving the
+ * other keys as parsed. An empty map removes the key (and the section when
+ * nothing else is left). The render below sanitizes the value, so a key it does
+ * not know is dropped, never carried.
  *
  * @param {string} text
- * @param {Record<string, { nights: { day: string, rssMb: number | null, coldMs: number }[] }>} idleEviction
+ * @param {string} key
+ * @param {Record<string, unknown>} value
  */
-export function setIdleEvictionState(text, idleEviction) {
-	const state = {
-		...parseRefreshState(text),
-		[IDLE_EVICTION_KEY]: idleEviction,
-	};
+export function setRefreshStateKey(text, key, value) {
+	const state = { ...parseRefreshState(text), [key]: value };
 	return replaceRefreshStateSection(text, renderRefreshStateSection(state));
 }
 
@@ -815,6 +844,7 @@ function renderRefreshStateSection(state) {
 	}
 	const idleEviction = sanitizeIdleEvictionState(state?.[IDLE_EVICTION_KEY]);
 	const missedProbe = sanitizeMissedProbeState(state?.[MISSED_PROBE_KEY]);
+	const saveVerdict = sanitizeSaveVerdictState(state?.[SAVE_VERDICT_KEY]);
 	const payload = {};
 	if (Object.keys(cleanBehavior).length)
 		payload["clean-behavior"] = cleanBehavior;
@@ -822,14 +852,16 @@ function renderRefreshStateSection(state) {
 	if (Object.keys(idleEviction).length)
 		payload[IDLE_EVICTION_KEY] = idleEviction;
 	if (Object.keys(missedProbe).length) payload[MISSED_PROBE_KEY] = missedProbe;
+	if (Object.keys(saveVerdict).length) payload[SAVE_VERDICT_KEY] = saveVerdict;
 	if (Object.keys(payload).length === 0) return [];
 	return [
 		REFRESH_STATE_HEADING,
 		"",
 		"Bookkeeping for the two-run `first-publish`/`clean-behavior` hysteresis, the",
 		"first-miss stamps (#3401, #4615), the consecutive-night `missed-probe`",
-		"streaks behind the `stale` column (#4512) and consecutive-night",
-		"`idle-eviction` counts (#3989). Regenerated every run; never a measurement.",
+		"streaks behind the `stale` column (#4512), consecutive-night",
+		"`idle-eviction` counts (#3989) and the pending `save-verdict` flips (#3405).",
+		"Regenerated every run; never a measurement.",
 		"",
 		REFRESH_STATE_FENCE,
 		JSON.stringify(payload),
@@ -931,6 +963,8 @@ export function refreshCapabilityMatrix(text, observations, opts = {}) {
 		// The idle-eviction bookkeeping belongs to its own nightly step; this
 		// refresh must carry it through, not drop it (#3989).
 		[IDLE_EVICTION_KEY]: prior[IDLE_EVICTION_KEY],
+		// Likewise the save-verdict probe's pending flips (#3405).
+		[SAVE_VERDICT_KEY]: prior[SAVE_VERDICT_KEY],
 	};
 	const staleLangs = [];
 	const raisedLangs = [];

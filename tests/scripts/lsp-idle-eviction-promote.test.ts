@@ -43,7 +43,7 @@ import {
 	type IdleEvictionNight,
 	parseRefreshState,
 	refreshCapabilityMatrix,
-	setIdleEvictionState,
+	setRefreshStateKey,
 } from "../../scripts/lib/md-matrix.mjs";
 import { promoteFromSummary } from "../../scripts/promote-lsp-idle-eviction.mjs";
 import { checkChangelogFragments } from "../../scripts/check-changelog-fragments.mjs";
@@ -535,16 +535,18 @@ describe("the refresh-state seam (#3989)", () => {
 	};
 
 	it("round-trips through the shared block", () => {
-		const text = setIdleEvictionState(MATRIX, state);
+		const text = setRefreshStateKey(MATRIX, IDLE_EVICTION_KEY, state);
 		expect(parseRefreshState(text)[IDLE_EVICTION_KEY]).toEqual(state);
-		expect(setIdleEvictionState(text, {})).toBe(`${MATRIX.trimEnd()}\n`);
+		expect(setRefreshStateKey(text, IDLE_EVICTION_KEY, {})).toBe(
+			`${MATRIX.trimEnd()}\n`,
+		);
 	});
 
 	// #3401 shape: the matrix refresh rewrites the whole block every night, before
 	// the promotion step reads it. Without the carry-through it would erase the
 	// night memory each night and no server could ever reach two nights.
 	it("survives the nightly matrix refresh that rewrites the block", () => {
-		const text = setIdleEvictionState(MATRIX, state);
+		const text = setRefreshStateKey(MATRIX, IDLE_EVICTION_KEY, state);
 		const refreshed = refreshCapabilityMatrix(
 			text,
 			[{ lang: "vue", firstPublish: "direct" }],
@@ -556,7 +558,7 @@ describe("the refresh-state seam (#3989)", () => {
 	it("keeps the other keys when it writes, and drops malformed nights", () => {
 		const withFp = refreshCapabilityMatrix(MATRIX, [], { now: D1 }).text;
 		expect(parseRefreshState(withFp)["first-publish"]).toBeDefined();
-		const text = setIdleEvictionState(withFp, {
+		const text = setRefreshStateKey(withFp, IDLE_EVICTION_KEY, {
 			...state,
 			junk: { nights: [{ day: "nope", rssMb: 1, coldMs: 1 }] },
 			// biome-ignore lint: deliberately malformed

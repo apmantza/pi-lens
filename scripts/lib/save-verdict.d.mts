@@ -71,6 +71,8 @@ export interface SaveVerdictHeldBack {
 	prior: string;
 	measured: string;
 	verdict: string;
+	/** #3405: set when the night is a flip held for its second agreeing night. */
+	pendingRuns?: number;
 }
 
 export function describeHeldBack(held: SaveVerdictHeldBack): string;

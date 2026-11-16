@@ -17,7 +17,13 @@
 import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { GENERATED_LSP_DOCS } from "../../scripts/lib/md-matrix.mjs";
+import {
+	GENERATED_LSP_DOCS,
+	IDLE_EVICTION_KEY,
+	parseRefreshState,
+	refreshCapabilityMatrix,
+	setRefreshStateKey,
+} from "../../scripts/lib/md-matrix.mjs";
 import { listRefreshFlips } from "../../scripts/lib/refresh-flips.mjs";
 import { stripCommentsAndStrings } from "../support/session-state-scan.js";
 import {
@@ -566,14 +572,22 @@ describe("refreshSaveVerdictTable: a night with no answer keeps the last answer 
 		expect(again.heldBack).toEqual([]);
 	});
 
-	it("still replaces an older answer with a new one, and the flip stays visible", () => {
-		const flipped = refreshSaveVerdictTable(REAL_DOC, [
-			measure({
-				server: "expert",
-				fixture: { lang: "expert", lspGate: true },
-				arms: { noSave: arm(0), silence: arm(0), saveAlone: arm(2) },
-			}),
-		]);
+	it("still replaces an older answer once two nights agree", () => {
+		// #3405: the replacement needs the second agreeing night (see the hold
+		// describe below); what this case keeps pinned is that a settled answer is
+		// still replaceable and the flip reaches the refresh PR's diff.
+		const night = (text: string, arms: Record<string, unknown>) =>
+			refreshSaveVerdictTable(text, [
+				measure({
+					server: "expert",
+					fixture: { lang: "expert", lspGate: true },
+					arms,
+				}),
+			]);
+		const yesArms = { noSave: arm(0), silence: arm(0), saveAlone: arm(2) };
+		const first = night(REAL_DOC, yesArms);
+		expect(first.text).toContain(EXPERT_BASE);
+		const flipped = night(first.text, yesArms);
 		expect(flipped.text).toContain("| expert | `save` | yes |");
 		expect(flipped.heldBack).toEqual([]);
 		const flips = listRefreshFlips(
@@ -586,14 +600,261 @@ describe("refreshSaveVerdictTable: a night with no answer keeps the last answer 
 		expect(
 			flips.some((f) => f.includes("+ | expert |") && f.includes("| yes |")),
 		).toBe(true);
-		const back = refreshSaveVerdictTable(flipped.text, [
-			measure({
-				server: "expert",
-				fixture: { lang: "expert", lspGate: true },
-				arms: { noSave: arm(3), saveAlone: arm(0) },
-			}),
-		]);
+		const backArms = { noSave: arm(3), saveAlone: arm(0) };
+		const backOnce = night(flipped.text, backArms);
+		expect(backOnce.text).toContain("| expert | `save` | yes |");
+		const back = night(backOnce.text, backArms);
 		expect(back.text).toContain("| expert | `save` | no |");
+	});
+});
+
+/**
+ * #3405 (found in the #5640 review, F3): the 2026-11-15 nightly moved powershell
+ * from a settled `no` to `yes (saved write)` on one night's silent no-save arm,
+ * while the same run's clean probe saw a didOpen publish. The `clean-behavior`
+ * column holds a change until two nights agree; the save column had no hold.
+ * Every case below drives the real classifier and the real table writer over the
+ * matrix doc as master carried it that day (a fixture, so the old record parses),
+ * and reads the pending night back from the refresh-state JSON.
+ */
+describe("refreshSaveVerdictTable: a settled verdict flips only after two agreeing nights (#3405)", () => {
+	const MASTER = fs.readFileSync(
+		fileURLToPath(
+			new URL(
+				"../fixtures/lsp-nightly/matrix-2026-11-15-before-3405.md",
+				import.meta.url,
+			),
+		),
+		"utf8",
+	);
+	// Master's doc once this change has landed: the same rows, with the state
+	// section's prose regenerated (the generator's prose change is itself a flip,
+	// once, and the committed doc moves with it).
+	const LANDED = setRefreshStateKey(MASTER, "save-verdict", {});
+	const verdictOf = (text: string, server = "powershell") =>
+		parseSaveVerdictRows(text).find((r) => r.server === server)?.verdict;
+	const pendingOf = (text: string) =>
+		parseRefreshState(text)["save-verdict"] as
+			| Record<string, { pendingSaveVerdict: string; runs: number }>
+			| undefined;
+	const powershell = (arms: Record<string, unknown>) =>
+		measure({
+			server: "powershell",
+			save: "save+text",
+			fixture: { lang: "powershell", lspGateExempt: "PSES is intermittent" },
+			arms,
+		});
+	// The 2026-11-15 observation, job 132931889411: no-save=0 silence=0
+	// save-alone=0 saved-write=1@1101ms.
+	const savedWrite = () =>
+		powershell({
+			noSave: arm(0),
+			silence: arm(0),
+			saveAlone: arm(0),
+			savedWrite: arm(1, 1101),
+		});
+	// Master's own measurement of the row: one publish event on didOpen.
+	const publishes = () =>
+		powershell({ noSave: arm(1, 600), saveAlone: arm(0) });
+
+	it("the fixture is master's doc: powershell `no`, and no save-verdict state", () => {
+		expect(verdictOf(MASTER)).toBe("no");
+		expect(parseRefreshState(MASTER)["save-verdict"]).toBeUndefined();
+		expect(savedWrite()[SAVE_VERDICT_COLUMN]).toBe("yes (saved write)");
+	});
+
+	it("holds a one-night flip as pending", () => {
+		const night1 = refreshSaveVerdictTable(MASTER, [savedWrite()]);
+		expect(verdictOf(night1.text)).toBe("no");
+		expect(night1.measured).toEqual([]);
+		expect(night1.heldBack).toEqual([
+			{
+				server: "powershell",
+				prior: "no",
+				measured: "yes (saved write)",
+				verdict: expect.stringContaining("only a saved write published"),
+				pendingRuns: 1,
+			},
+		]);
+		expect(pendingOf(night1.text)).toEqual({
+			powershell: { pendingSaveVerdict: "yes (saved write)", runs: 1 },
+		});
+		// The table, evidence included, is master's row byte for byte; only the
+		// refresh-state JSON moved, and the flips gate masks that payload.
+		expect(
+			listRefreshFlips({ [MATRIX_DOC]: LANDED }, { [MATRIX_DOC]: night1.text }),
+		).toEqual([]);
+		// The other keys of master's state block survive the rewrite.
+		expect(parseRefreshState(night1.text)["idle-eviction"]).toEqual(
+			parseRefreshState(MASTER)["idle-eviction"],
+		);
+		expect(parseRefreshState(night1.text)["clean-behavior"]).toEqual(
+			parseRefreshState(MASTER)["clean-behavior"],
+		);
+		expect(rowsReached(night1)).toBe(1);
+		expect(describeHeldBack(night1.heldBack[0])).toMatch(
+			/^save-verdict: held back powershell: kept "no", this night measured "yes \(saved write\)" — flip pending, night 1 of 2: Measured: only a saved write published/,
+		);
+	});
+
+	it("flips on the second agreeing night", () => {
+		const night1 = refreshSaveVerdictTable(MASTER, [savedWrite()]);
+		const night2 = refreshSaveVerdictTable(night1.text, [savedWrite()]);
+		expect(verdictOf(night2.text)).toBe("yes (saved write)");
+		expect(night2.measured).toEqual(["powershell"]);
+		expect(night2.heldBack).toEqual([]);
+		expect(pendingOf(night2.text)).toBeUndefined();
+		// The flip reaches the refresh PR's diff, so auto-merge disarms (#4512).
+		expect(
+			listRefreshFlips({ [MATRIX_DOC]: LANDED }, { [MATRIX_DOC]: night2.text })
+				.length,
+		).toBeGreaterThan(0);
+	});
+
+	it("clears pending on a contradicting night", () => {
+		const night1 = refreshSaveVerdictTable(MASTER, [savedWrite()]);
+		const night2 = refreshSaveVerdictTable(night1.text, [publishes()]);
+		expect(verdictOf(night2.text)).toBe("no");
+		expect(pendingOf(night2.text)).toBeUndefined();
+		expect(night2.heldBack).toEqual([]);
+		// A third night that again disagrees starts over at one, not two.
+		const night3 = refreshSaveVerdictTable(night2.text, [savedWrite()]);
+		expect(verdictOf(night3.text)).toBe("no");
+		expect(pendingOf(night3.text)?.powershell?.runs).toBe(1);
+	});
+
+	it("restarts the count on a third answer", () => {
+		const yes = powershell({
+			noSave: arm(0),
+			silence: arm(0),
+			saveAlone: arm(2),
+		});
+		const night1 = refreshSaveVerdictTable(MASTER, [savedWrite()]);
+		const night2 = refreshSaveVerdictTable(night1.text, [yes]);
+		expect(verdictOf(night2.text)).toBe("no");
+		expect(pendingOf(night2.text)).toEqual({
+			powershell: { pendingSaveVerdict: "yes", runs: 1 },
+		});
+	});
+
+	it("publishes a first measurement on night one", () => {
+		// `unknown` is the pre-measurement value and `inconclusive` holds no answer,
+		// so holding either would keep a guess published for another night. This is
+		// the one place the column differs from `clean-behavior`, which holds even
+		// an `unknown` cell for two nights.
+		for (const prior of ["unknown", "inconclusive", "cannot measure"]) {
+			const doc = MASTER.replace(
+				/^\| powershell \| `save\+text` \| no \|/m,
+				`| powershell | \`save+text\` | ${prior} |`,
+			);
+			expect(verdictOf(doc), prior).toBe(prior);
+			const night1 = refreshSaveVerdictTable(doc, [savedWrite()]);
+			expect(verdictOf(night1.text), prior).toBe("yes (saved write)");
+			expect(night1.heldBack, prior).toEqual([]);
+			expect(pendingOf(night1.text), prior).toBeUndefined();
+		}
+	});
+
+	it("rewrites an agreeing night (new counts) and drops a stale pending entry", () => {
+		const night1 = refreshSaveVerdictTable(MASTER, [savedWrite()]);
+		const night2 = refreshSaveVerdictTable(night1.text, [
+			powershell({ noSave: arm(2, 300), saveAlone: arm(0) }),
+		]);
+		expect(night2.measured).toEqual(["powershell"]);
+		expect(night2.text).toContain("answers without a save (2 publish events");
+		expect(pendingOf(night2.text)).toBeUndefined();
+	});
+
+	it("keeps pending through an inconclusive night", () => {
+		// #5060: a night with no answer is not a night that found the opposite, so
+		// it neither advances nor clears the pending flip.
+		const night1 = refreshSaveVerdictTable(MASTER, [savedWrite()]);
+		const unclear = refreshSaveVerdictTable(night1.text, [
+			powershell({ noSave: arm(0), silence: arm(1, 3000), saveAlone: arm(0) }),
+		]);
+		expect(verdictOf(unclear.text)).toBe("no");
+		expect(pendingOf(unclear.text)).toEqual(pendingOf(night1.text));
+		expect(unclear.heldBack[0]).toMatchObject({
+			measured: "inconclusive",
+		});
+		expect(unclear.heldBack[0]).not.toHaveProperty("pendingRuns");
+		const night3 = refreshSaveVerdictTable(unclear.text, [savedWrite()]);
+		expect(verdictOf(night3.text)).toBe("yes (saved write)");
+	});
+
+	it("keeps pending for an unmeasured server", () => {
+		const night1 = refreshSaveVerdictTable(MASTER, [savedWrite()]);
+		const other = refreshSaveVerdictTable(night1.text, [
+			measure({ server: "cpp", save: "save", fixture: { lang: "cpp" } }),
+		]);
+		expect(pendingOf(other.text)).toEqual(pendingOf(night1.text));
+	});
+
+	it("drops orphan and malformed pending entries", () => {
+		const withJunk = setRefreshStateKey(MASTER, "save-verdict", {
+			ghost: { pendingSaveVerdict: "yes", runs: 1 },
+			badValue: { pendingSaveVerdict: 7, runs: 1 },
+			emptyValue: { pendingSaveVerdict: "", runs: 1 },
+			stringRuns: { pendingSaveVerdict: "yes", runs: "1" },
+			zeroRuns: { pendingSaveVerdict: "yes", runs: 0 },
+			fractionRuns: { pendingSaveVerdict: "yes", runs: 1.5 },
+		});
+		// The renderer sanitizes: no malformed entry survives a write.
+		expect(Object.keys(pendingOf(withJunk) ?? {})).toEqual(["ghost"]);
+		const night = refreshSaveVerdictTable(withJunk, [savedWrite()]);
+		expect(pendingOf(night.text)).toEqual({
+			powershell: { pendingSaveVerdict: "yes (saved write)", runs: 1 },
+		});
+	});
+
+	it("is byte-identical when nothing moved: no state block is invented", () => {
+		const settled = refreshSaveVerdictTable(MASTER, [publishes()]);
+		const again = refreshSaveVerdictTable(settled.text, [publishes()]);
+		expect(again.text).toBe(settled.text);
+		const noState = refreshSaveVerdictTable(DOC, [measure()]);
+		expect(noState.text).not.toContain("refresh state");
+	});
+
+	it("leaves an unmoved state block byte-identical", () => {
+		// Recurrence it prevents: a night that holds, flips or clears nothing
+		// re-rendering the whole block, so a hand-formatted block (or any key the
+		// renderer drops) turned into a diff in the refresh PR.
+		const lines = MASTER.split("\n");
+		const at = lines.findIndex((l) => l.startsWith('{"clean-behavior"'));
+		lines[at] = JSON.stringify(JSON.parse(lines[at]), null, 1);
+		const handFormatted = lines.join("\n");
+		const night = refreshSaveVerdictTable(handFormatted, [publishes()]);
+		expect(night.text.split("```json")[1]).toBe(
+			handFormatted.split("```json")[1],
+		);
+	});
+
+	it("survives the other refresh-state writers", () => {
+		const night1 = refreshSaveVerdictTable(MASTER, [savedWrite()]);
+		// The clean-signal refresh rebuilds the block every night, before this step.
+		const afterClean = refreshCapabilityMatrix(
+			night1.text,
+			[{ lang: "vue", firstPublish: "direct" }],
+			{ now: "2026-11-16" },
+		).text;
+		expect(pendingOf(afterClean)).toEqual(pendingOf(night1.text));
+		// And the idle-eviction promotion step, which runs after it.
+		const afterIdle = setRefreshStateKey(
+			afterClean,
+			IDLE_EVICTION_KEY,
+			parseRefreshState(afterClean)[IDLE_EVICTION_KEY] ?? {},
+		);
+		expect(pendingOf(afterIdle)).toEqual(pendingOf(night1.text));
+	});
+
+	it("parses the master matrix's state block with every key it carried", () => {
+		const state = parseRefreshState(MASTER);
+		expect(Object.keys(state).sort()).toEqual([
+			"clean-behavior",
+			"first-publish",
+			"idle-eviction",
+			"missed-probe",
+		]);
 	});
 });
 
