@@ -4651,6 +4651,11 @@ export async function clientRequestWorkspaceDiagnostics(
 > {
 	if (!isClientAlive(state)) return undefined;
 	if (!state.workspaceDiagnosticsSupport.workspaceDiagnostics) return undefined;
+	// #5097: the abort of the call this pull runs under, read in the caller's own
+	// async context like `pullDiagnosticSource`. An abort before the send claims
+	// and sends nothing.
+	const abortSignal = getAmbientAbortSignal();
+	if (abortSignal?.aborted) return undefined;
 	if (state.abandonedPullRequests?.has(WORKSPACE_PULL_SCOPE)) return undefined;
 	// #1104: echo every resultId we hold from a PRIOR pull so the server can
 	// answer `kind: "unchanged"` for files it hasn't recomputed, instead of
@@ -4710,9 +4715,25 @@ export async function clientRequestWorkspaceDiagnostics(
 		workspacePullSettlement,
 	);
 	try {
-		const report = await withDeadline(workspaceRequestPromise, {
-			ms: workspacePullTimeoutMs,
-		});
+		const report = await withDeadline(
+			untilAborted(workspaceRequestPromise, abortSignal, PULL_ABORTED),
+			{ ms: workspacePullTimeoutMs },
+		);
+		if (report === PULL_ABORTED) {
+			// #5097: the abort is the timeout's transition without its records:
+			// cancelled on the wire and tracked as abandoned, so a repeat pull of a
+			// server that ignores the cancel does not stack a second one behind it
+			// (#1889). An Esc is no degradation, so no timeout telemetry, no
+			// late-answer watch and no failure-history row; nothing was stored, and
+			// `undefined` is the unavailable answer, never a clean report (#240).
+			trackAbandonedPullRequest(
+				state,
+				WORKSPACE_PULL_SCOPE,
+				workspaceRequestPromise,
+			);
+			workspacePullAbort.abort();
+			return undefined;
+		}
 		if (!report || !Array.isArray(report.items)) return undefined;
 		const out: Array<{
 			filePath: string;
@@ -7020,15 +7041,21 @@ export async function runReadOnlyServerCommand(
 	// when this call resumes. Without it the request stayed pending for as long
 	// as the server stayed silent, kept the connection busy, and kept
 	// `ClientRegistry` from ever evicting the client.
+	// #5097: the call's abort (Esc, a firing bound) releases the probe the way
+	// its timeout does, minus the timeout's record: an abort is no degradation.
+	const abortSignal = getAmbientAbortSignal();
 	try {
 		const result = await safeSendRequest<unknown>(
 			state.connection,
 			"workspace/executeCommand",
 			{ command, arguments: args ?? [] },
-			undefined,
+			abortSignal,
 			undefined,
 			{ timeoutMs, cancel: true },
 		);
+		if (result === undefined && abortSignal?.aborted) {
+			return { executed: false, reason: "aborted" };
+		}
 		return { executed: true, result };
 	} catch (err) {
 		if (err instanceof Error && err.message.startsWith("Timeout after")) {
