@@ -550,6 +550,70 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 		await cancelledWithin500ms(abortedAt);
 	}, 20_000);
 
+	/** The subjects `bounded` recorded as a deadline exceedance. */
+	const exceeded = (): string[] =>
+		getDegradationSummary()
+			.find((group) => group.kind === "hook-await-exceeded")
+			?.latestReasons.map((entry) => entry.subject) ?? [];
+
+	// The same two registry rows, when the bound's DEADLINE fires rather than
+	// the turn's abort (#5550). The bound is 700 ms on a client already
+	// started; the pull's own timeout follows the touch's wait (about 1.5 s
+	// here), so a cancel inside 500 ms of the return is the bound's. Recurrence:
+	// a deadline that only abandoned the touch left the pull on the server until
+	// its own timeout (the #5550 audit: "a bound that fires on its DEADLINE
+	// aborts nothing").
+	it("the persistent re-verify touch cancels its pull when the bound's deadline fires", async () => {
+		const filePath = register("textDocument/diagnostic");
+		await service.openFile(filePath, "fn main() {}\n");
+		const past = new Date(Date.now() - 60_000);
+		fs.utimesSync(filePath, past, past);
+		const pass = runPersistentReverify({
+			report: carriedReport(filePath),
+			cwd: tmp,
+			lspService: service as never,
+			signal: new AbortController().signal,
+			budgetMs: 700,
+		});
+		await received("textDocument/diagnostic");
+		const result = await pass;
+		const returnedAt = Date.now();
+		expect(result.outcomes.map((o) => o.outcome)).toEqual(["unconfirmed"]);
+		expect(exceeded()).toContain("turn_end:persistent_reverify_touch");
+		await cancelledWithin500ms(returnedAt);
+	}, 20_000);
+
+	it("the enrichment's getDiagnostics pull is cancelled when the per-trip bound's deadline fires", async () => {
+		const filePath = register("textDocument/diagnostic");
+		const args: BuildActionableWarningsArgs = {
+			cwd: tmp,
+			sessionId: "s1",
+			turnIndex: 0,
+			files: [],
+			modifiedRangesByFile: new Map(),
+			dispatchWarnings: [],
+			includeLspCodeActions: false,
+			deltaOnly: false,
+			dbg: () => {},
+		};
+		const enriched = enrichFileFromLsp(
+			tmp,
+			args,
+			{ filePath, content: "fn main() {}\n" },
+			{
+				lspService: service as never,
+				pullTimeoutMs: 700,
+				signal: new AbortController().signal,
+				site: { hook: "turn_end", label: "deadline-5550" },
+			},
+		);
+		await received("textDocument/diagnostic");
+		await expect(enriched).resolves.toEqual([]);
+		const returnedAt = Date.now();
+		expect(exceeded()).toContain("turn_end:deadline-5550");
+		await cancelledWithin500ms(returnedAt);
+	}, 20_000);
+
 	// The clean-confirm ping in `touchFile` (`lsp_silent_clean_confirm`): a push-only
 	// server silent on clean is trusted only after it answers a round trip, and
 	// that round trip read no abort either. The ping's own ceiling is 1200 ms

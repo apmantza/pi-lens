@@ -51,12 +51,7 @@ import {
 import { shouldPreferPullOnlyDiagnostics } from "../lsp-budget.js";
 import { sampleProcessTreeCpuPercent } from "../resource-sampler.js";
 import { RUNTIME_CONFIG } from "../runtime-config.js";
-import {
-	bounded,
-	untilAborted,
-	withDeadline,
-	withTimeout,
-} from "../deadline-utils.js";
+import { bounded, untilAborted, withDeadline } from "../deadline-utils.js";
 import { HOOK_WALL_BUDGET_MS } from "../hook-budgets.js";
 import { nonNegativeIntEnv } from "../env-utils.js";
 import type { LedgerHookKey } from "../hook-budgets.js";
@@ -382,7 +377,7 @@ const RENAME_NOTIFY_TIMEOUT_MS = Math.max(
 );
 
 // #1621: bound a single rename-propagation notify call and classify how it
-// failed. `withTimeout` rejects with the deterministic `"Timeout after Nms"`
+// failed. `withDeadline` rejects with the deterministic `"Timeout after Nms"`
 // message on the timer branch (see deadline-utils.ts) — the same signal
 // `navRequest`/`clientPingLiveness` in clients/lsp/client.ts already match on
 // to tell a timeout from a genuine rejection, reused here rather than forking
@@ -396,7 +391,7 @@ async function runRenameNotify(
 	timeoutMs: number,
 ): Promise<RenameNotifyResult> {
 	try {
-		await withTimeout(send(), timeoutMs);
+		await withDeadline(send(), { ms: timeoutMs });
 		return { ok: true };
 	} catch (err) {
 		const timedOut =

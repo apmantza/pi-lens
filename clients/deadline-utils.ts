@@ -1,14 +1,21 @@
 /**
  * One implementation of the "race a promise against a timer" pattern that had
- * drifted into three near-identical copies (#366): `withTimeout` (clients/lsp),
- * `withBudget` (read-expansion), and `withinRemaining` (module-report-lsp).
+ * drifted into three near-identical copies (#366): a reject-on-timeout race
+ * (clients/lsp), `withBudget` (read-expansion), and a deadline race that
+ * swallowed rejections (module-report-lsp).
  *
  * The differences between them were real — timeout can *reject* or *resolve
  * undefined*, and the raced promise's own rejection can *propagate* or be
- * *swallowed* — so they are kept as named adapters over one core. Consolidating
- * fixes two latent bugs the copies had: `withBudget` did not suppress the loser
+ * *swallowed* — so they are options of one core, `withDeadline`. Consolidating
+ * fixed two latent bugs the copies had: a missing suppression of the loser
  * promise's late rejection (an unhandled rejection if the timer won first), and
- * `withinRemaining` never cleared its timer.
+ * a timer that was never cleared. The two pass-through adapters that only
+ * preset those options (`withTimeout`, `withinRemaining`) are gone (#5550):
+ * their callers name the options on the core.
+ *
+ * A hook await takes {@link bounded} instead, whose thunk form cancels the work
+ * it bounds. `withDeadline` only abandons it, so a caller keeps it where the
+ * work cannot be cancelled or its owner does the cancelling.
  */
 
 import { recordDegradationOnce } from "./degradation-ledger.js";
@@ -163,17 +170,6 @@ export function withDeadline<T>(
 }
 
 /**
- * Resolve `promise`, or reject with `Error("Timeout after <ms>ms")` once
- * `timeoutMs` elapses. The raced promise's own rejection propagates.
- */
-export function withTimeout<T>(
-	promise: Promise<T>,
-	timeoutMs: number,
-): Promise<T> {
-	return withDeadline(promise, { ms: timeoutMs });
-}
-
-/**
  * Resolve `promise`, or `undefined` once `budgetMs` elapses (a non-positive
  * budget resolves `undefined` immediately). The raced promise's own rejection
  * propagates.
@@ -183,22 +179,6 @@ export function withBudget<T>(
 	budgetMs: number,
 ): Promise<T | undefined> {
 	return withDeadline(promise, { ms: budgetMs, onTimeout: "undefined" });
-}
-
-/**
- * Resolve `promise`, or `undefined` once the shared `deadlineAt` passes (a past
- * deadline resolves `undefined` immediately). The raced promise's own rejection
- * is swallowed to `undefined`.
- */
-export function withinRemaining<T>(
-	promise: Promise<T>,
-	deadlineAt: number,
-): Promise<T | undefined> {
-	return withDeadline(promise, {
-		deadlineAt,
-		onTimeout: "undefined",
-		onReject: "undefined",
-	});
 }
 
 /**

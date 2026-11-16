@@ -1230,7 +1230,7 @@ export type DegradationKind =
 	 */
 	| "lsp-nav-late-answer"
 	/**
-	 * `lsp-nav-request-timeout`: `navRequest`'s (`clients/lsp/client.ts`) per-request `withTimeout`
+	 * `lsp-nav-request-timeout`: `navRequest`'s (`clients/lsp/client.ts`) per-request sender bound
 	 * abandoned a hover/definition/references/etc. request (#1716). Every
 	 * timeout is counted here; only the FIRST occurrence per (method, file)
 	 * this session also writes a detailed `lsp_nav_request_timeout`
@@ -1249,7 +1249,7 @@ export type DegradationKind =
 	| "lsp-probe-finding-policy"
 	/**
 	 * `lsp-pull-diagnostic-timeout`: A `textDocument/diagnostic` or `workspace/diagnostic` pull's per-request
-	 * `withTimeout` abandoned a GENUINELY dispatched request (#1771). Every
+	 * `withDeadline` abandoned a GENUINELY dispatched request (#1771). Every
 	 * pull timeout emits a detailed `lsp_pull_diagnostic_timeout` latency.log
 	 * record already, but until now that record counted nothing in the
 	 * ledger — the bounded-telemetry rule (`clients/bounded-telemetry.ts`)
@@ -1260,7 +1260,7 @@ export type DegradationKind =
 	| "lsp-pull-diagnostic-timeout"
 	/**
 	 * `lsp-pull-late-answer`: A `textDocument/diagnostic` or `workspace/diagnostic` pull's per-request
-	 * `withTimeout` abandoned the request, and the request later settled anyway
+	 * `withDeadline` abandoned the request, and the request later settled anyway
 	 * (#1713). The answer arrived too late to serve the caller that timed out,
 	 * so it is discarded — this kind is the only trace that it ever landed.
 	 */
@@ -1301,7 +1301,7 @@ export type DegradationKind =
 	 *
 	 * This is deliberately NOT `warm-attach-membership-probe-abandoned`: that
 	 * one fires when the CALLER's remaining budget abandons the wait
-	 * (`clients/warm-attach.ts`'s `withinRemaining`), not when the request's own
+	 * (`clients/warm-attach.ts`'s `withDeadline`), not when the request's own
 	 * ceiling wins, so before this row a release left no record anywhere. The
 	 * row marks a release that happened; a regression that stopped releasing
 	 * never reaches it, so the wire test of the ceiling pins that case.

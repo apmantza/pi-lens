@@ -879,12 +879,12 @@ export function scanUngovernedWaitFor(
  * A `new Promise(...)` whose executor body is empty, outside a
  * `vi.useFakeTimers()` scope (#2885). Such a promise can never settle, so
  * anything that awaits it ends only when a REAL timer fires somewhere: a
- * production helper's budget (`withTimeout`, `withBudget`, `withDeadline` in
+ * production helper's budget (`withBudget`, `withDeadline`, `bounded` in
  * clients/deadline-utils.ts), a harness deadline, or the test's own timeout.
  * Detector 3 reads timer calls in test and support source only, so a wait
  * whose `setTimeout` lives in production code was invisible: #2866's
  * `fails a session_start handler that never settles` waited a real 5 000 ms
- * through `pi-mock.ts`'s `withTimeout` with the ratchet green. This matches
+ * through `pi-mock.ts`'s budget race with the ratchet green. This matches
  * the hang itself rather than a list of helper names, so a new wrapper
  * around a timer is covered the day it lands.
  *

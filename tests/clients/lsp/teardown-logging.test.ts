@@ -140,7 +140,7 @@ describe("clientShutdown() — lsp_client_shutdown phase", () => {
 
 	it("writes lsp_client_shutdown with shutdownRequestTimedOut=true when the graceful shutdown request hangs", async () => {
 		// The fake server respects FAKE_LSP_IGNORE_SHUTDOWN=1 to simulate a
-		// server that never replies to the "shutdown" request — the withTimeout()
+		// server that never replies to the "shutdown" request — the withDeadline()
 		// in clientShutdown will fire after SHUTDOWN_REQUEST_TIMEOUT_MS and set
 		// shutdownRequestTimedOut=true in the log entry.
 		const { createLSPClient } = await import("../../../clients/lsp/client.js");
