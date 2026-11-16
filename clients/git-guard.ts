@@ -557,12 +557,17 @@ function guardSubstitutions(command: string): {
 function containsGuardedSubstitution(
 	command: string,
 	matcher: GitVerbMatcher,
+	outerDepth = 0,
 ): boolean {
 	const read = guardSubstitutions(command);
 	if (!read.complete && namesGuardedVerb(command, matcher)) return true;
 	return read.bodies.some((substitution) =>
 		decodeShellWords(substitution.body).some((segment) =>
-			containsGuardedGitVerb(segment.words, substitution.depth, matcher),
+			containsGuardedGitVerb(
+				segment.words,
+				outerDepth + substitution.depth,
+				matcher,
+			),
 		),
 	);
 }
@@ -794,11 +799,17 @@ function commandStringHasGuardedVerb(
 	// holds NBSP, U+0085, the Unicode spaces, CR, VT and FF
 	// (CharTraits.IsWhitespace in the PowerShell parser). Bash's blanks apply
 	// to the bash path only; `pwsh -Command "git<NBSP>commit"` is a commit (#5649).
-	return decodeShellWords(
-		canonicalizeGuardCommand(
-			whitespace === "windows-shell" ? joined.replace(/[^\S\n]/g, " ") : joined,
-		),
-	).some((segment) => containsGuardedGitVerb(segment.words, depth, matcher));
+	const canonical = canonicalizeGuardCommand(
+		whitespace === "windows-shell" ? joined.replace(/[^\S\n]/g, " ") : joined,
+	);
+	// The string is a command: a substitution in it runs, whatever the word
+	// before it (`bash -c 'echo $(git commit)'`, #5652).
+	return (
+		containsGuardedSubstitution(canonical, matcher, depth) ||
+		decodeShellWords(canonical).some((segment) =>
+			containsGuardedGitVerb(segment.words, depth, matcher),
+		)
+	);
 }
 
 /**

@@ -904,6 +904,160 @@ const ROWS: readonly Row[] = [
 		bash: null,
 		guard: false,
 	},
+	// #5652: the gate read a `bash -c` or `eval` string as words and never scanned
+	// it for command substitutions, so `bash -c 'echo $(git commit -m x)'` ran a
+	// commit the gate did not see. #5652 (comment, #5651 verify V1): the `)` that
+	// closes a substitution is part of its word, so a `#` after it is no comment.
+	{
+		row: "bash -c body with a $() commit",
+		command: "bash -c 'echo $(git commit -m x)'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "sh -c body with a $() push",
+		command: "sh -c 'echo $(git push)'",
+		bash: "push",
+		guard: true,
+	},
+	{
+		row: "bash -c body with a backtick commit",
+		command: "bash -c 'echo `git commit -m x`'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "bash -c body with a double-quoted $() commit",
+		command: "bash -c 'echo \"$(git commit -m x)\"'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "bash -c body with a process substitution commit",
+		command: "bash -c 'cat <(git commit -m x)'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "bash -c body with an unquoted here-doc substitution",
+		command: "bash -c 'cat <<EOF\n$(git commit -m x)\nEOF'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "eval body with a $() commit",
+		command: "eval 'echo $(git commit -m x)'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "eval body with a backtick commit",
+		command: "eval 'echo `git commit -m x`'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "eval of two words joins them, the substitution runs",
+		command: "eval echo '$(git commit -m x)'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "bash -c inside bash -c, substitution in the inner body",
+		command: "bash -c 'bash -c \"echo \\$(git commit -m x)\"'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "bash -c inside a $(), a substitution in its body",
+		command: 'echo $(bash -c "echo \\$(git push)")',
+		bash: "push",
+		guard: true,
+	},
+	{
+		row: "bash -c body holds a hidden-verb commit in a substitution",
+		command: "bash -c 'echo $(git $'\"'\"'\\x63ommit'\"'\"' -m x)'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "bash -c body, substitution in single quotes is text",
+		command: "bash -c \"echo '\\$(git commit -m x)'\"",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "bash -c body, escaped substitution is text",
+		command: "bash -c 'echo \\$(git commit -m x)'",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "bash -c body, substitution after a comment is text",
+		command: "bash -c 'echo a #$(git commit -m x)'",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "bash -c body with a harmless substitution",
+		command: "bash -c 'echo $(git status)'",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "eval body, substitution in single quotes is text",
+		command: "eval \"echo '\\$(git commit -m x)'\"",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "a $() close is no comment boundary before a hash",
+		command: "echo $(true)#$(git commit -m x)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "a backtick close is no comment boundary before a hash",
+		command: "echo `true`#$(git commit -m x)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "a process substitution close is no comment boundary before a hash",
+		command: "cat <(true)#$(git commit -m x)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "a $(( )) close is no comment boundary before a hash",
+		command: "echo $((1))#$(git commit -m x)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "two $() before a hash, push then commit",
+		command: "echo $(git push)#$(git commit -m x)",
+		bash: "push",
+		guard: true,
+	},
+	{
+		row: "a $() close, a blank, then a hash is a comment",
+		command: "echo $(true) #$(git commit -m x)",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "a subshell close is a comment boundary before a hash",
+		command: "(true)#$(git commit -m x)",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "a $() close before a hash inside a bash -c body",
+		command: "bash -c 'echo $(true)#$(git commit -m x)'",
+		bash: "commit",
+		guard: true,
+	},
 ];
 
 /**
