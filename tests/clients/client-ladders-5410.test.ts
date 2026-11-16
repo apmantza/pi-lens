@@ -174,6 +174,46 @@ describe("client availability through the registry resolver (#5410)", () => {
 		expect(probeSpawns("jscpd")).toHaveLength(1);
 	});
 
+	// Recurrence: the registry answers for the cwd it was asked about, and a
+	// project's own shim at that cwd is that root's to run. Stored as a client's
+	// fallback command, it would be what a scan of ANOTHER root ran when that
+	// root has no jscpd of its own (the host cwd's shim, not the root's own).
+	it("jscpd: the project shim at one root is not the fallback command of another root's scan", async () => {
+		const shim = plant(nodeModulesBin(), "jscpd");
+		// The other root has jscpd on PATH only, so its own availability holds.
+		plant(pathEnv.tmpDir, "jscpd");
+		const other = setupTestEnvironment("pi-lens-5410cl-other-");
+		try {
+			fs.mkdirSync(path.join(other.tmpDir, "src"), { recursive: true });
+			fs.writeFileSync(
+				path.join(other.tmpDir, "src", "a.ts"),
+				"export const a = 1;\n",
+			);
+			const { JscpdClient } = await import("../../clients/jscpd-client.js");
+			const client = new JscpdClient();
+			expect(await client.ensureAvailable(project.tmpDir)).toBe(true);
+			spawnCalls.length = 0;
+			await client.scan(other.tmpDir, 5, 50, false);
+			const scanSpawn = spawnCalls.find((call) =>
+				call.args.includes("--reporters"),
+			);
+			expect(scanSpawn?.cmd).not.toBe(shim);
+			expect(scanSpawn?.cmd).toBe("npx");
+		} finally {
+			other.cleanup();
+		}
+	});
+
+	it("knip: the project shim at the asked cwd is not kept as the fallback command", async () => {
+		plant(nodeModulesBin(), "knip");
+		const { KnipClient } = await import("../../clients/knip-client.js");
+		const client = new KnipClient();
+		expect(await client.ensureAvailable()).toBe(true);
+		expect((client as unknown as { knipCommand: string }).knipCommand).toBe(
+			"knip",
+		);
+	});
+
 	// Characterization: the old madge checker reached the project shim through
 	// an env-PATH augmentation; the registry reaches it through the exact-cwd
 	// rung. Passes on both.

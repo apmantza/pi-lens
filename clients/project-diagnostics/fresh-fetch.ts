@@ -559,7 +559,7 @@ export async function fetchFreshProjectDiagnostics(
 		// jscpd — duplicate code detection. Cache key varies with TS-project
 		// detection, exactly mirroring session_start's own logic.
 		task("jscpd", async () => {
-			if (!(await clients.jscpdClient.ensureAvailable(analysisRoot))) {
+			if (!(await clients.jscpdClient.ensureAvailable())) {
 				markCold(
 					"jscpd",
 					reasonFromAvailabilityVerdict(

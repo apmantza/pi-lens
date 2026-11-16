@@ -1753,7 +1753,7 @@ function scheduleStartupScansWithClients(
 
 	// jscpd — duplicate code detection
 	runHeavyweightTask("jscpd", async () => {
-		if (await jscpdClient.ensureAvailable(analysisRoot)) {
+		if (await jscpdClient.ensureAvailable()) {
 			if (!runtime.isCurrentSession(sessionGeneration)) return;
 			// Detect TS projects by tsconfig.json at the analysis root. When
 			// set, JscpdClient.scan adds **/*.js and **/*.jsx to its ignore
