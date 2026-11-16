@@ -73,6 +73,11 @@ const env = setupTestEnvironment("pi-lens-5621-seed-");
 const ROOT = env.tmpDir;
 const pi = { getFlag: () => undefined };
 
+/** Blocks the test thread for `ms`, so a wall-clock second boundary is crossed. */
+function sleepMs(ms: number): void {
+	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 function git(args: string[], cwd = ROOT): string {
 	return execFileSync("git", args, {
 		cwd,
@@ -188,6 +193,15 @@ describe("#5621 a run with a lane that reads the disk still gets the copy", () =
 	// them nothing and brought back #5619's false STOP on a credited rewrite of
 	// a file that held an old finding. Here the copy cannot be written, so the
 	// gate must refuse the blob it could not judge, never pass it.
+	//
+	// Recurrence prevented (#5650): the cell went red on CI three times in an
+	// hour (block false). The gate copies the index, and a copy stamped a
+	// second later than the original made git read a file rewritten at the
+	// same size in the second of its `git add` as equal to the index, so the
+	// gate judged the working bytes, needed no copy, and passed. The cell now
+	// makes that second boundary happen on every run (the edit and the add in
+	// one second, the gate in the next), so a copy that loses the index's
+	// mtime reds here every time, not one run in ten under load.
 	it("refuses to pass an unjudged staged blob when its copy cannot be written beside the file", async (ctx) => {
 		ctx.skip(
 			!canLockDirectory,
@@ -200,8 +214,19 @@ describe("#5621 a run with a lane that reads the disk still gets the copy", () =
 		git(["add", "locked/a.ts"]);
 		git(["commit", "-qm", "locked base"]);
 		fs.writeFileSync(file, "export const a = 2;\n");
-		git(["add", "locked/a.ts"]);
-		fs.writeFileSync(file, "export const a = 3;\n");
+		const stagedInOneSecond = (): boolean => {
+			// Start in a fresh second so the edit and the add share it.
+			sleepMs(1000 - (Date.now() % 1000) + 5);
+			const second = Math.floor(Date.now() / 1000);
+			fs.writeFileSync(file, "export const a = 2;\n");
+			git(["add", "locked/a.ts"]);
+			fs.writeFileSync(file, "export const a = 3;\n");
+			return Math.floor(Date.now() / 1000) === second;
+		};
+		// A loaded host can spend the second on the add itself: stage again.
+		for (let attempt = 0; attempt < 5 && !stagedInOneSecond(); attempt++);
+		// The gate reads the index a second after the edit and the add.
+		sleepMs(1000 - (Date.now() % 1000) + 5);
 		fs.chmodSync(locked, 0o555);
 		try {
 			const decision = await gateStagedDelta(
