@@ -1981,7 +1981,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 31 -> 34 (#5487): the readiness gate reads and returns the existing
 		// `PullDiagnosticsOutcome.status` member (found / unavailable) at three
 		// sites; same member sense as every row here.
-		"clients/lsp/client.ts": 34,
+		// 34 -> 36 (#5097): the already-aborted guard and the abort branch of
+		// `pullDiagnosticSource` return the same `{ status: "unavailable" }`.
+		"clients/lsp/client.ts": 36,
 		"clients/lsp/edits.ts": 1,
 		"clients/lsp/index.ts": 4,
 		"clients/lsp/launch.ts": 1,
