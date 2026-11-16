@@ -80,6 +80,9 @@
 		"tests/tools/*.test.ts",
 		// #5146: the pi-mock root-hook witness is a serialized wall-clock lane
 		// member and must remain visible to Knip as a direct test entry.
+		// #5528: the dead-owner census witness over real processes is a
+		// serialized wall-clock lane member (flake-shape admission).
+		"tests/support/dead-owner-census-real-process.test.ts",
 		"tests/support/fake-lsp-server.test.ts",
 		"tests/support/pi-mock.test.ts",
 		// #5100: the run-time real-spawn gate's own test is a serialized

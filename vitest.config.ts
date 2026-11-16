@@ -1124,6 +1124,10 @@ export const wallClockBudgetInclude = [
 	// the registry, the node_modules symlink-or-directory state and the
 	// unlink-before-remove ordering (flake-shape admission).
 	"tests/scripts/worktree-remove.test.ts",
+	// #5528: the dead-owner census is witnessed over real managed processes and
+	// a real `ps`, one scan per case (flake-shape admission); the decoys are
+	// sleeping children, so the cost is the `ps` walk, serialized.
+	"tests/support/dead-owner-census-real-process.test.ts",
 	"tests/support/fake-lsp-server.test.ts",
 	"tests/support/fault-injection.test.ts",
 	"tests/support/git-config-guard.test.ts",
