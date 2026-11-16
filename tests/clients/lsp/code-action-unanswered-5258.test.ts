@@ -162,13 +162,17 @@ describe("a codeAction nobody answered is not an empty list (#5258)", () => {
 		expect(await clientAnswer("null")).toEqual([]);
 	}, 20_000);
 
-	it.each(["exit", "content-modified", "malformed"] as const)(
-		"a %s reply is no answer, not an empty list",
-		async (reply) => {
-			expect(await clientAnswer(reply)).toBeUndefined();
-		},
-		20_000,
-	);
+	it("a server that exits mid-request is no answer, not an empty list", async () => {
+		expect(await clientAnswer("exit")).toBeUndefined();
+	}, 20_000);
+
+	it("a ContentModified reply is no answer, not an empty list", async () => {
+		expect(await clientAnswer("content-modified")).toBeUndefined();
+	}, 20_000);
+
+	it("a reply that is not a list is no answer, not an empty list", async () => {
+		expect(await clientAnswer("malformed")).toBeUndefined();
+	}, 20_000);
 
 	it("a dead client is no answer, not an empty list", async () => {
 		const file = path.join(tmp, "a.ts");
@@ -190,13 +194,17 @@ describe("a codeAction nobody answered is not an empty list (#5258)", () => {
 		expect(result.replacementFiles[0]?.warnings).toEqual([]);
 	}, 30_000);
 
-	it.each(["exit", "content-modified"] as const)(
-		"the re-verify keeps a carried warning when the server's %s left the lookup unanswered",
-		async (reply) => {
-			const result = await reverify(reply);
-			expect(result.outcomes.map((o) => o.outcome)).toEqual(["unconfirmed"]);
-			expect(result.replacementFiles[0]?.warnings).toHaveLength(1);
-		},
-		30_000,
-	);
+	async function expectKept(reply: Reply) {
+		const result = await reverify(reply);
+		expect(result.outcomes.map((o) => o.outcome)).toEqual(["unconfirmed"]);
+		expect(result.replacementFiles[0]?.warnings).toHaveLength(1);
+	}
+
+	it("the re-verify keeps a carried warning when the server exits mid-lookup", async () => {
+		await expectKept("exit");
+	}, 30_000);
+
+	it("the re-verify keeps a carried warning when the server answers ContentModified", async () => {
+		await expectKept("content-modified");
+	}, 30_000);
 });
