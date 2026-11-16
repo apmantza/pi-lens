@@ -799,6 +799,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"real git children establish build identity from repository state unavailable to an in-process stub",
 	},
+	// 2026-11-16 (#5675): whether a push-only dependent is asked again is decided
+	// by the didChange frames a spawned stdio server receives and the
+	// publications they cause.
+	"real-process-spawn:clients/cascade-retouch-push-only-5675.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the subject is whether the cascade re-sends a dependent to a push-only server whose only answer predates the edit, read off the didChange frames a spawned jdtls-shaped stdio server receives and the publications they cause; an in-process client double answers only what it was told",
+	},
 	"real-process-spawn:clients/config-diagnostic-codes.test.ts": {
 		detector: "real-process-spawn",
 		reason:

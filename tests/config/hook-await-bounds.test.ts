@@ -2388,7 +2388,12 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// `ensureSeedCopyExcluded` before it writes a copy, and that function awaits
 	// one `git rev-parse --git-common-dir` through `safeSpawnAsync`, which holds
 	// its own 5 s timeout. Both sit under the capture's and the gate's bounded().
-	"clients/dispatch/integration.ts": 29,
+	// 29 -> 30 (#5675): the cascade's neighbour touch is sent once more when the
+	// first answer predates the run (a push-only server asked again). It is the
+	// same `touchFile` call under the same per-touch caps (`maxClientWaitMs`
+	// 1000 or 2000 ms), once per neighbour per run, inside the cascade the
+	// pipeline already holds.
+	"clients/dispatch/integration.ts": 30,
 	// 2 → 3 (#4484 review F5): `settlePendingRunnerFindingsForTests` awaits
 	// the store's runs so a test joins a collect-later settle without polling.
 	// Only tests call it; no hook handler reaches it.

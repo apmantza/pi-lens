@@ -185,6 +185,11 @@ export type LspReplyOrdering =
  * didChange right after the dependency's was answered for its version 6/6
  * (+260..265 ms), and one sent with nothing pending 3/3.
  *
+ * #5675: the cascade's one re-send of a dependent whose only answer predates
+ * the edit (`resendUnchanged`, clients/lsp/index.ts) reads the same trait, so a
+ * `rechecks` server is asked again and every other one is left as it was.
+ * jdtls 1.63.0 is one (JavaServer carries the measurement).
+ *
  * `"unmeasured"` = the default and the fail-safe: no re-send, which is what
  * every server got before the trait existed. A server that publishes nothing
  * for unchanged bytes must stay here: a re-send empties the client's answer for
