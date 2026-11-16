@@ -12,12 +12,20 @@
  * pending request. Each case below hangs ONE method on the fake server
  * (`FAKE_LSP_HANG_METHODS`), which accepts it, never answers, and ignores a
  * cancel, then reads what the wire and the busy count say.
+ *
+ * The last block is the other half of the same issue: a firing BOUND (not a
+ * timeout) cancels the pull and the ping its work started. Its recurrence is
+ * stated there.
  */
 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { getServersForFileWithConfig } = vi.hoisted(() => ({
+	getServersForFileWithConfig: vi.fn(),
+}));
 
 const previous = vi.hoisted(() => {
 	const saved = {
@@ -26,18 +34,32 @@ const previous = vi.hoisted(() => {
 		exec: process.env.PI_LENS_LSP_EXECUTE_COMMAND_TIMEOUT_MS,
 	};
 	process.env.PI_LENS_LSP_NAV_REQUEST_TIMEOUT_MS = "1200";
-	process.env.PI_LENS_LSP_LIVENESS_PING_TIMEOUT_MS = "300";
+	process.env.PI_LENS_LSP_LIVENESS_PING_TIMEOUT_MS = "1200";
 	process.env.PI_LENS_LSP_EXECUTE_COMMAND_TIMEOUT_MS = "600";
 	return saved;
 });
 
 import { afterEach } from "vitest";
 import {
+	type ActionableWarningsReport,
+	type BuildActionableWarningsArgs,
+	enrichFileFromLsp,
+} from "../../../clients/actionable-warnings.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../../clients/degradation-ledger.js";
+import { getRecentLoggedPhases } from "../../../clients/latency-logger.js";
+import { setAmbientAbortSignal } from "../../../clients/safe-spawn.js";
+import { _setServersForFileForTests } from "../../../clients/lsp/config.js";
+import { bounded } from "../../../clients/deadline-utils.js";
+import { runPersistentReverify } from "../../../clients/persistent-reverify.js";
+import {
 	createLSPClient,
 	type LSPClientInfo,
 } from "../../../clients/lsp/client.js";
 import { LSPService } from "../../../clients/lsp/index.js";
-import { stopLSP } from "../../../clients/lsp/launch.js";
+import { type LSPProcess, stopLSP } from "../../../clients/lsp/launch.js";
 import { normalizeMapKey } from "../../../clients/path-utils.js";
 import { LspRequestTimeoutError } from "../../../clients/lsp/request-timeout-error.js";
 import { spawnAbortScope } from "../../../clients/spawn-abort-scope.js";
@@ -162,6 +184,89 @@ describe("one request sender owns cancel and release (#5097)", () => {
 		});
 	}, 15_000);
 
+	// Recurrence: an Esc'd pull treated as a timeout's twin must leave the same
+	// bookkeeping (#1889: a repeat touch of a server that ignores the cancel
+	// must not stack a second pull behind the first) and none of the timeout's
+	// records (an Esc is no degradation), and one begun after the Esc must not
+	// be sent only to be cancelled.
+	it("an aborted pull is tracked as abandoned and records no failure, and a pull begun after the abort sends nothing", async () => {
+		await withHangingServer("textDocument/diagnostic", async (ctx) => {
+			const pulls = () => {
+				const trace = path.join(path.dirname(ctx.file), "trace.log");
+				return fs.existsSync(trace)
+					? fs
+							.readFileSync(trace, "utf-8")
+							.split("\n")
+							.filter((line) => line.startsWith("recv textDocument/diagnostic"))
+							.length
+					: 0;
+			};
+			// Begun under a scope that is already aborted: nothing is sent.
+			const gone = new AbortController();
+			gone.abort();
+			await spawnAbortScope.run(gone.signal, () =>
+				ctx.client.waitForDiagnostics(ctx.file, 300),
+			);
+			await ctx.barrier();
+			expect(pulls()).toBe(0);
+			const abort = new AbortController();
+			const first = spawnAbortScope.run(abort.signal, () =>
+				ctx.client.waitForDiagnostics(ctx.file, 600),
+			);
+			await ctx.received("textDocument/diagnostic");
+			abort.abort();
+			await first;
+			expect(pulls()).toBe(1);
+			// The server ignored the cancel, so the request is still pending: a
+			// touch outside any scope must not send a second one behind it.
+			await ctx.client.waitForDiagnostics(ctx.file, 300);
+			await ctx.barrier();
+			expect(pulls()).toBe(1);
+			expect(ctx.client.getPullFailureHistory?.()).toEqual([]);
+		});
+	}, 15_000);
+
+	// Recurrence (#5654 review F2): nothing pinned that an aborted pull never reads
+	// clean. Returning `clean` from the abort branch (cancel and tracking kept)
+	// passed every case: the touch would have been CONFIRMED on a request nobody
+	// answered. The wait lapses, and lapsing is the only thing it may report.
+	it("an aborted wait lapses and never answers, however fast the abort lands", async () => {
+		await withHangingServer("textDocument/diagnostic", async (ctx) => {
+			const abort = new AbortController();
+			const startedAt = Date.now();
+			const wait = spawnAbortScope.run(abort.signal, () =>
+				ctx.client.waitForDiagnostics(ctx.file, 5000),
+			);
+			await ctx.received("textDocument/diagnostic");
+			abort.abort();
+			await expect(wait).resolves.toBe("deadline-expired");
+			expect(Date.now() - startedAt).toBeLessThan(2500);
+			// Begun under a scope that is already aborted: lapsed at once too.
+			await expect(
+				spawnAbortScope.run(abort.signal, () =>
+					ctx.client.waitForDiagnostics(ctx.file, 5000),
+				),
+			).resolves.toBe("deadline-expired");
+		});
+	}, 15_000);
+
+	it("an aborted liveness ping is cancelled and released and answers dead, never alive", async () => {
+		await withHangingServer("workspace/symbol", async (ctx) => {
+			const abort = new AbortController();
+			const ping = ctx.client.pingLiveness?.(undefined, abort.signal);
+			await ctx.received("workspace/symbol");
+			const abortedAt = Date.now();
+			abort.abort();
+			// Aborted well inside the 1200 ms ping ceiling: the verdict is the
+			// abort's, and an abort proves nothing about the server.
+			expect(await ping).toBe(false);
+			expect(Date.now() - abortedAt).toBeLessThan(500);
+			expect(ctx.client.isBusy?.()).toBe(false);
+			await ctx.barrier();
+			expect(ctx.cancels()).toBe(1);
+		});
+	}, 15_000);
+
 	it("a timed-out codeAction/resolve is cancelled and released, and the lightweight action is kept", async () => {
 		await withHangingServer("codeAction/resolve", async (ctx) => {
 			const actions = await ctx.client.codeAction(ctx.file, 0, 0, 0, 5);
@@ -254,4 +359,430 @@ describe("one request sender owns cancel and release (#5097)", () => {
 			expect(ctx.cancels()).toBe(1);
 		});
 	}, 15_000);
+});
+
+describe("a firing bound cancels the request its LSP work started (#5097)", () => {
+	let tmp: string;
+	let trace: string;
+	let service: LSPService;
+	const procs: LSPProcess[] = [];
+
+	beforeEach(() => {
+		_setServersForFileForTests(getServersForFileWithConfig);
+		tmp = fs.realpathSync(
+			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ambient-5097-")),
+		);
+		trace = path.join(tmp, "trace.log");
+		resetDegradationLedger();
+		service = new LSPService();
+	});
+	afterEach(async () => {
+		_setServersForFileForTests(undefined);
+		await service.shutdown();
+		procs.length = 0;
+		removeTempDirSync(tmp);
+	});
+
+	/**
+	 * One server on `.fkr` files that hangs `hang` and ignores cancels: pull-mode
+	 * by default, or push-only and silent under the wait-policy id `lua`, whose
+	 * strategy marks it `silentOnClean` (the id that reaches the clean-confirm ping).
+	 */
+	function register(
+		hang: string,
+		serverId = "fake-rust",
+		extraEnv: Record<string, string> = {},
+	): string {
+		const filePath = path.join(tmp, "main.fkr");
+		fs.writeFileSync(filePath, "fn main() {}\n");
+		const server = {
+			id: serverId,
+			name: serverId,
+			extensions: [".fkr"],
+			idleEviction: "resident",
+			root: async () => tmp,
+			spawn: async () => {
+				const proc = await spawnFakeLspServer({
+					cwd: tmp,
+					env: {
+						...process.env,
+						FAKE_LSP_HANG_METHODS: hang,
+						FAKE_LSP_TRACE_FILE: trace,
+						...(serverId === "lua" && { FAKE_LSP_NO_DIAGNOSTIC_PROVIDER: "1" }),
+						PI_LENS_LSP_PULL_REQUEST_TIMEOUT_MS: "4000",
+						...extraEnv,
+					},
+				});
+				procs.push(proc);
+				return { process: proc, source: "test" };
+			},
+		};
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".fkr") ? [server] : [],
+		);
+		return filePath;
+	}
+
+	const lines = (): string[] =>
+		fs.existsSync(trace) ? fs.readFileSync(trace, "utf-8").split("\n") : [];
+	const cancels = (): number =>
+		lines().filter((line) => line === "recv $/cancelRequest").length;
+	/** Resolves once the server has read a request of this method. */
+	const received = (method: string) =>
+		vi.waitFor(
+			() => {
+				expect(lines().some((line) => line.startsWith(`recv ${method}`))).toBe(
+					true,
+				);
+			},
+			{ timeout: 8000, interval: 10 },
+		);
+	/** The cancel is on the wire within 500 ms of `abortedAt`. */
+	const cancelledWithin500ms = async (abortedAt: number) => {
+		await vi.waitFor(() => expect(cancels()).toBe(1), {
+			timeout: 500,
+			interval: 10,
+		});
+		expect(Date.now() - abortedAt).toBeLessThan(500);
+	};
+
+	function carriedReport(filePath: string): ActionableWarningsReport {
+		const stamp = new Date().toISOString();
+		return {
+			generatedAt: stamp,
+			scope: "turn_delta",
+			sessionId: "s1",
+			turnIndex: 1,
+			deltaOnly: true,
+			includeLspCodeActions: false,
+			files: [
+				{
+					filePath,
+					displayPath: "main.fkr",
+					origin: "deferred",
+					generatedAt: stamp,
+					warnings: [
+						{
+							id: "w1",
+							filePath,
+							displayPath: "main.fkr",
+							line: 1,
+							severity: "warning",
+							tool: "fake-rust",
+							source: "fake-rust",
+							code: "W1",
+							rule: "fake-rust:W1",
+							message: "unused",
+							actions: [],
+							suppressed: false,
+							origin: "lsp",
+						},
+					],
+				},
+			],
+			summary: {
+				warnings: 1,
+				unsuppressed: 1,
+				suppressed: 0,
+				files: 1,
+				actions: 0,
+				autoFixEligible: 0,
+			},
+		};
+	}
+
+	// The `persistent_reverify_touch` row of `BOUNDED_CALL_SITES`: the touch runs
+	// in the bound's scope; before the fix the pull it sent read no abort, so
+	// the request stayed on the server until its own 4 s ceiling.
+	it("the persistent re-verify touch cancels its pull when the turn is aborted", async () => {
+		const filePath = register("textDocument/diagnostic");
+		const past = new Date(Date.now() - 60_000);
+		fs.utimesSync(filePath, past, past);
+		const turn = new AbortController();
+		const pass = runPersistentReverify({
+			report: carriedReport(filePath),
+			cwd: tmp,
+			lspService: service as never,
+			signal: turn.signal,
+			budgetMs: 6000,
+		});
+		await received("textDocument/diagnostic");
+		const abortedAt = Date.now();
+		turn.abort();
+		const result = await pass;
+		// The carried warning is kept and labelled: an aborted touch is no answer.
+		expect(result.outcomes.map((o) => o.outcome)).toEqual(["unconfirmed"]);
+		await cancelledWithin500ms(abortedAt);
+	}, 20_000);
+
+	// The `boundedLspCall` row in actionable-warnings: `getDiagnostics` is the
+	// pull the bound's scope is meant to cancel.
+	it("the enrichment's getDiagnostics pull is cancelled when the loop's signal aborts", async () => {
+		const filePath = register("textDocument/diagnostic");
+		const loop = new AbortController();
+		const args: BuildActionableWarningsArgs = {
+			cwd: tmp,
+			sessionId: "s1",
+			turnIndex: 0,
+			files: [],
+			modifiedRangesByFile: new Map(),
+			dispatchWarnings: [],
+			includeLspCodeActions: false,
+			deltaOnly: false,
+			dbg: () => {},
+		};
+		const enriched = enrichFileFromLsp(
+			tmp,
+			args,
+			{ filePath, content: "fn main() {}\n" },
+			{
+				lspService: service as never,
+				pullTimeoutMs: 6000,
+				signal: loop.signal,
+				site: { hook: "turn_end", label: "ambient-5097" },
+			},
+		);
+		await received("textDocument/diagnostic");
+		const abortedAt = Date.now();
+		loop.abort();
+		// Not checked is not clean: the file contributes no records.
+		await expect(enriched).resolves.toEqual([]);
+		await cancelledWithin500ms(abortedAt);
+	}, 20_000);
+
+	// The clean-confirm ping in `touchFile` (`lsp_silent_clean_confirm`): a push-only
+	// server silent on clean is trusted only after it answers a round trip, and
+	// that round trip read no abort either. The ping's own ceiling is 1200 ms
+	// here, so a cancel inside 500 ms of the abort is the abort's, not the timer's.
+	// Two call sites send it: the single-server gate (`primary`) and the
+	// aggregate gate (`all`).
+	it.each(["primary", "all"] as const)(
+		"the %s-scope clean-confirm ping is cancelled when the bound aborts, and the touch stays unconfirmed",
+		async (clientScope) => {
+			const filePath = register("workspace/symbol", "lua");
+			const turn = new AbortController();
+			const touch = bounded(
+				() =>
+					service.touchFile(filePath, "fn main() {}\n", {
+						diagnostics: "document",
+						collectDiagnostics: true,
+						clientScope,
+						source: "dispatch",
+					}),
+				{
+					ms: 20_000,
+					signal: turn.signal,
+					hook: "turn_end",
+					label: "ambient-5097",
+				},
+			);
+			await received("workspace/symbol");
+			const abortedAt = Date.now();
+			turn.abort();
+			await expect(touch).resolves.toBeUndefined();
+			await cancelledWithin500ms(abortedAt);
+		},
+		20_000,
+	);
+
+	// Recurrence: reading the ambient abort in the pull makes every caller of the
+	// pull a reader of whatever scope it inherited. A server-initiated re-pull
+	// (`workspace/diagnostic/refresh`) runs in the context the server's stream was
+	// created in, so a server first started by a tool call carried that call's
+	// scope for the rest of the session, and one Esc in that turn silenced every
+	// refresh re-pull after it (#5097, the "H2" gap the first PR accepted).
+	it("a server started inside an aborted tool call still re-pulls on its own refresh", async () => {
+		const filePath = path.join(tmp, "a.ts");
+		fs.writeFileSync(filePath, "function greet() {}\n");
+		fs.writeFileSync(path.join(tmp, "package.json"), "{}");
+		const call = new AbortController();
+		const { proc, client } = await spawnAbortScope.run(
+			call.signal,
+			async () => {
+				const spawned = await spawnFakeLspServer({
+					cwd: tmp,
+					env: {
+						...process.env,
+						FAKE_LSP_REFRESH_ON_OPEN: "1",
+						FAKE_LSP_TRACE_FILE: trace,
+					},
+				});
+				procs.push(spawned);
+				return {
+					proc: spawned,
+					client: await createLSPClient({
+						serverId: "fake",
+						process: spawned,
+						root: tmp,
+					}),
+				};
+			},
+		);
+		try {
+			// The Esc that ended the call that started the server.
+			call.abort();
+			// Outside the scope, as every later touch is.
+			await client.notify.open(filePath, "function greet() {}\n", "typescript");
+			await received("textDocument/diagnostic");
+		} finally {
+			await client.shutdown().catch(() => {});
+			await stopLSP(proc).catch(() => {});
+		}
+	}, 20_000);
+
+	// Recurrence (#5654 review F1): the abort branch returned `unavailable` and the
+	// wait fell through to its retry loop and the whole push-wait budget, so an Esc
+	// during a pull a HEALTHY server was still answering ran the touch out to its
+	// budget and wrote an `lsp-diagnostics-timeout` ledger row and a latency row for
+	// a bound that never lapsed. An abort is a transition of its own: the touch
+	// ends at once, reads inconclusive with no confirmation, and records no timeout.
+	it("Esc during a pull a healthy server is still answering ends the touch at once with no timeout row", async () => {
+		const filePath = register("", "fake-rust", {
+			FAKE_LSP_DELAY_FIRST_PULL: "1",
+			FAKE_LSP_DELAY_AFTER_FIRST_PULL_MS: "800",
+		});
+		const turn = new AbortController();
+		const touch = spawnAbortScope.run(turn.signal, () =>
+			service.touchFile(filePath, "fn main() {}\n", {
+				diagnostics: "document",
+				collectDiagnostics: true,
+				clientScope: "primary",
+				source: "dispatch",
+			}),
+		);
+		await received("textDocument/diagnostic");
+		const abortedAt = Date.now();
+		turn.abort();
+		const result = await touch;
+		// The server would answer 800 ms after the pull reached it, and the
+		// unguarded wait ran 1.7 s past the abort; the retry loop's own 250 ms
+		// budget is all that may remain.
+		expect(Date.now() - abortedAt).toBeLessThan(900);
+		expect(result?.inconclusive).toBe(true);
+		expect(result?.confirmation).toBeUndefined();
+		expect(
+			getDegradationSummary().filter(
+				(group) => group.kind === "lsp-diagnostics-timeout",
+			),
+		).toEqual([]);
+		// Test mode keeps the last few phase rows in memory instead of the log file.
+		expect(
+			getRecentLoggedPhases().filter(
+				(row) => row.phase === "lsp_diagnostics_timeout",
+			),
+		).toEqual([]);
+	}, 20_000);
+
+	// Recurrence (#5097): a pull held to the readiness a loading server announced
+	// (#5487) waits for quiescence on its own listener and timer, which read no
+	// abort, so an Esc left the wait to run out the touch's whole budget.
+	it("Esc while a loading server holds the pull ends the wait at once", async () => {
+		const filePath = path.join(tmp, "a.ts");
+		fs.writeFileSync(filePath, "function greet() {}\n");
+		fs.writeFileSync(path.join(tmp, "package.json"), "{}");
+		const proc = await spawnFakeLspServer({
+			cwd: tmp,
+			env: {
+				...process.env,
+				FAKE_LSP_LOADING_MS: "6000",
+				FAKE_LSP_TRACE_FILE: trace,
+			},
+		});
+		procs.push(proc);
+		const client = await createLSPClient({
+			serverId: "fake",
+			process: proc,
+			root: tmp,
+		});
+		try {
+			await client.notify.open(filePath, "function greet() {}\n", "typescript");
+			await vi.waitFor(
+				() => expect(client.readinessBlock?.()?.reason).toBe("server-loading"),
+				{ timeout: 5000, interval: 10 },
+			);
+			const esc = new AbortController();
+			const wait = spawnAbortScope.run(esc.signal, () =>
+				client.waitForDiagnostics(filePath, 8000, { pullOnly: true }),
+			);
+			// Once the call has parked on the server's loading notice.
+			setImmediate(() => esc.abort());
+			const startedAt = Date.now();
+			await expect(wait).resolves.toBe("deadline-expired");
+			expect(Date.now() - startedAt).toBeLessThan(2000);
+		} finally {
+			await client.shutdown().catch(() => {});
+			await stopLSP(proc).catch(() => {});
+		}
+	}, 20_000);
+
+	// Recurrence (#5654 review F3): the refresh re-pull stepped out of the
+	// AsyncLocalStorage scope only, so `getAmbientAbortSignal()` fell back to the
+	// hook-level turn signal, and a server's own refresh re-pull in an aborted turn
+	// sent nothing. The re-pull serves the document, whatever the turn did.
+	it("a server's refresh re-pulls although the hook-level turn signal is aborted", async () => {
+		const filePath = path.join(tmp, "a.ts");
+		fs.writeFileSync(filePath, "function greet() {}\n");
+		fs.writeFileSync(path.join(tmp, "package.json"), "{}");
+		const proc = await spawnFakeLspServer({
+			cwd: tmp,
+			env: {
+				...process.env,
+				FAKE_LSP_REFRESH_ON_OPEN: "1",
+				FAKE_LSP_TRACE_FILE: trace,
+			},
+		});
+		procs.push(proc);
+		const client = await createLSPClient({
+			serverId: "fake",
+			process: proc,
+			root: tmp,
+		});
+		const turn = new AbortController();
+		turn.abort();
+		setAmbientAbortSignal(turn.signal);
+		try {
+			await client.notify.open(filePath, "function greet() {}\n", "typescript");
+			await received("textDocument/diagnostic");
+		} finally {
+			setAmbientAbortSignal(undefined);
+			await client.shutdown().catch(() => {});
+			await stopLSP(proc).catch(() => {});
+		}
+	}, 20_000);
+
+	// Recurrence: a warm-up that an Esc cut left the server absent from
+	// `demonstratedReady`, and `ensureWarmForSweep` read that as "still cold" and
+	// wrote the session's negative cache (#799), so every later sweep skipped the
+	// server's whole group. The cut touch used to be able to finish in the
+	// background and clear it; now that its pull is cancelled it cannot, so an
+	// abort has to leave no verdict (#5097).
+	// The two spellings of the one Esc: the sweep's own signal, and the call's
+	// ambient scope (the only one a caller that passes no signal has).
+	it.each([
+		["the sweep's own signal", "option"],
+		["the call's ambient scope", "scope"],
+	] as const)(
+		"a warm-up cut by Esc through %s is not remembered as a cold server",
+		async (_name, channel) => {
+			const filePath = register("textDocument/diagnostic");
+			const esc = new AbortController();
+			const warm =
+				channel === "option"
+					? service.ensureWarmForSweep(filePath, {
+							timeoutMs: 6000,
+							signal: esc.signal,
+						})
+					: spawnAbortScope.run(esc.signal, () =>
+							service.ensureWarmForSweep(filePath, { timeoutMs: 6000 }),
+						);
+			await received("textDocument/diagnostic");
+			esc.abort();
+			await warm;
+			expect(
+				(service as unknown as { state: { demonstratedCold: Set<string> } })
+					.state.demonstratedCold.size,
+			).toBe(0);
+		},
+		30_000,
+	);
 });

@@ -14,7 +14,7 @@ import { access, lstat, readFile, stat } from "node:fs/promises";
 import * as os from "node:os";
 import { pathToFileURL } from "node:url";
 import { emitBounded } from "../bounded-telemetry.js";
-import { withTimeout } from "../deadline-utils.js";
+import { untilAborted, withTimeout } from "../deadline-utils.js";
 import { minimatch } from "../deps/minimatch.js";
 import { mapWithConcurrency } from "../map-with-concurrency.js";
 import {
@@ -49,6 +49,7 @@ import {
 	isOwnLiveChild,
 	releaseOwnChildPid,
 } from "../safe-spawn.js";
+import { spawnAbortScope } from "../spawn-abort-scope.js";
 import { raceToCompletion } from "./aggregation.js";
 import {
 	hashDiagnosticContent,
@@ -349,8 +350,12 @@ export interface LSPClientInfo {
 	 * it don't need updating; callers treat a missing implementation as alive
 	 * (`pingLiveness?.() ?? true`), matching the codebase's existing optional-
 	 * capability-accessor pattern (`getRawCapabilityKeys`, `getLaunchVariant`).
+	 *
+	 * #5097: `signal` cancels the round trip and releases it; an aborted ping
+	 * answers `false`, never "alive". Only a caller that owns the ping passes
+	 * one: a ping several callers share (`paceAuxNotify`'s drain) takes none.
 	 */
-	pingLiveness?: (timeoutMs?: number) => Promise<boolean>;
+	pingLiveness?: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
 	/**
 	 * #5487: why the server has announced it cannot give a verdict right now
 	 * (`experimental/serverStatus`): still loading (`quiescent: false`) or its
@@ -3869,8 +3874,20 @@ export function setupIncomingHandlers(
 				// (URI lookups, map bookkeeping) to the next tick, so it can
 				// never compete with this reply for the current one regardless
 				// of how many documents are open.
+				//
+				// #5097: and under an abort nobody can fire. This runs in the context
+				// the server's streams were created in, so a server first started by
+				// a tool call would otherwise carry that call's scope, and an Esc in
+				// that turn would silence every later refresh re-pull, which reads
+				// the ambient abort (`pullDiagnosticSource`). Clearing the scope
+				// would fall back to the hook-level turn signal, which can be
+				// aborted too (#5654 review F3), so the pool runs inside a scope
+				// whose signal never aborts: the re-pull serves the document, not
+				// the call or the turn that happened to be running.
 				setImmediate(() => {
-					void runRefreshRepullPool();
+					void spawnAbortScope.run(REFRESH_REPULL_SIGNAL, () =>
+						runRefreshRepullPool(),
+					);
 				});
 			}
 		}
@@ -4103,6 +4120,9 @@ function aggregatePullOutcomes(
 		: { status: "unavailable" };
 }
 
+/** {@link pullDiagnosticSource}: the call's abort ended the wait for the reply. */
+const PULL_ABORTED = Symbol("pull-aborted");
+
 async function pullDiagnosticSource(
 	state: LSPClientState,
 	filePath: string,
@@ -4110,6 +4130,12 @@ async function pullDiagnosticSource(
 	identifier: string | undefined,
 ): Promise<PullSourceOutcome> {
 	if (!isClientAlive(state)) return { status: "unavailable" };
+	// #5097: the abort of the call or bound this pull runs under. Read here, in
+	// the caller's own async context, and never captured by a long-lived handler
+	// (the server-initiated re-pull runs under a scope that never aborts, see
+	// `workspace/diagnostic/refresh`). An abort before the send claims and sends nothing.
+	const abortSignal = getAmbientAbortSignal();
+	if (abortSignal?.aborted) return { status: "unavailable" };
 	const normalizedPath = normalizeMapKey(filePath);
 	// #1773: a budget at or below the usable floor cannot complete a real
 	// round trip. Skip the dispatch entirely — no `safeSendRequest` call, no
@@ -4201,8 +4227,22 @@ async function pullDiagnosticSource(
 		// smaller of the absolute ceiling and the caller's remaining wait budget.
 		// On timeout the caught error yields `unavailable` below (never a false
 		// `clean`), so it falls through to the push-wait/timeout backstop.
-		const report = await withTimeout(requestPromise, effectiveTimeoutMs);
+		const report = await withTimeout(
+			untilAborted(requestPromise, abortSignal, PULL_ABORTED),
+			effectiveTimeoutMs,
+		);
 
+		if (report === PULL_ABORTED) {
+			// #5097: the abort is the timeout's transition without its record. The
+			// request is cancelled on the wire and tracked as abandoned, so a repeat
+			// touch of a server that ignores the cancel does not stack a second pull
+			// behind it (#1889); an Esc is no degradation, so no timeout telemetry,
+			// no late-answer watch and no failure-history row. `unavailable`, never
+			// `clean`: nothing was stored (#240).
+			trackAbandonedPullRequest(state, sourceKey, requestPromise);
+			pullAbort.abort();
+			return { status: "unavailable" };
+		}
 		if (!report) {
 			recordPullFailure(
 				state,
@@ -4858,6 +4898,14 @@ function waitForQuiescence(
 const PULL_UNSETTLED = Symbol("pull-unsettled");
 
 /**
+ * The abort scope of the server-initiated refresh re-pull
+ * (`workspace/diagnostic/refresh`): a signal nothing holds the controller of,
+ * so the ambient abort reads "not aborted" whatever turn or tool call is
+ * running when the server asks.
+ */
+const REFRESH_REPULL_SIGNAL = new AbortController().signal;
+
+/**
  * #5487: was the server ready for the whole of a request that left when it had
  * announced `sentAt`? A server that announced nothing is, as today. One that
  * announced loading, or whose readiness changed in flight (its first notice
@@ -4930,13 +4978,20 @@ async function pullDiagnosticsWhenReady(
 ): Promise<PullDiagnosticsOutcome | typeof PULL_UNSETTLED> {
 	let requestBudgetMs = budgetMs;
 	let waitedForReadiness = false;
+	// #5097: the readiness wait ends on an abort as a lapse, never a verdict.
+	const abortSignal = getAmbientAbortSignal();
 	for (;;) {
 		if (state.serverStatus?.quiescent === false) {
 			waitedForReadiness = true;
 			noteReadinessGate(state);
-			if (!(await waitForQuiescence(state, deadlineAt - Date.now()))) {
-				return PULL_UNSETTLED;
-			}
+			// The abort ends this caller's wait; the listener and timer under it
+			// go with the server's next status or the budget, as they always did.
+			const ready = await untilAborted(
+				waitForQuiescence(state, deadlineAt - Date.now()),
+				abortSignal,
+				false,
+			);
+			if (!ready) return PULL_UNSETTLED;
 			requestBudgetMs = deadlineAt - Date.now();
 		}
 		const sentAt = state.serverStatus;
@@ -5093,6 +5148,7 @@ export async function clientWaitForDiagnostics(
 			return "answered";
 		}
 		let sawClean = outcome.status === "clean";
+		const abortSignal = getAmbientAbortSignal();
 
 		const strategy = getStrategy(state.serverId, state.launchVariant);
 		const retryBudgetMs =
@@ -5117,6 +5173,13 @@ export async function clientWaitForDiagnostics(
 				Math.max(0, retryBudgetMs - (Date.now() - startedAt)),
 			);
 			if (outcome.status === "clean") sawClean = true;
+		}
+		// #5097: an abort that cut the pull leaves nothing to wait for: the retry
+		// loop above ends within its own budget, and the push wait below would
+		// run out the whole one. The wait lapses; the caller reads that as no
+		// answer, and the abort (not a budget) is why, so it records no timeout.
+		if (!sawClean && outcome.status !== "found" && abortSignal?.aborted) {
+			return "deadline-expired";
 		}
 		if (options.pullOnly) {
 			const answered = outcome.status === "found" || sawClean;
@@ -6754,6 +6817,7 @@ function firstOpenDocumentUri(state: LSPClientState): string | undefined {
 async function clientPingLiveness(
 	state: LSPClientState,
 	timeoutMs: number = LIVENESS_PING_TIMEOUT_MS,
+	signal?: AbortSignal,
 ): Promise<boolean> {
 	if (!isClientAlive(state)) return false;
 	const probe = chooseLivenessProbe(state);
@@ -6780,17 +6844,23 @@ async function clientPingLiveness(
 	}
 	try {
 		// #5097: a timed-out probe is cancelled and released, so a wedged server
-		// holds one pending request at a time, not one per touch. No signal: the
-		// ping is a shared barrier (`paceAuxNotify`'s `record.drain`), and an
-		// aborted ping must not read as alive.
+		// holds one pending request at a time, not one per touch. The signal is the
+		// caller's own, never the ambient one: the ping is also a shared barrier
+		// (`paceAuxNotify`'s `record.drain`), and one waiter's Esc must not cancel
+		// the barrier the others wait on. An abort cancels and releases it the
+		// same way.
 		await safeSendRequest(
 			state.connection,
 			probe.method,
 			probe.params,
-			undefined,
+			signal,
 			undefined,
 			{ timeoutMs, cancel: true },
 		);
+		// The sender settles an aborted call with `undefined`, as it does an
+		// answered probe that returned nothing: an abort proves nothing about the
+		// server, so it must not fall through to the alive re-check below.
+		if (signal?.aborted) return false;
 	} catch (err) {
 		if (err instanceof Error && err.message.startsWith("Timeout after")) {
 			return false;
@@ -7653,7 +7723,8 @@ export async function createLSPClient(options: {
 		checkAlive: () => checkProcessAlive(),
 
 		/** #1277: cheap request round-trip proving the server still responds. */
-		pingLiveness: (timeoutMs?: number) => clientPingLiveness(state, timeoutMs),
+		pingLiveness: (timeoutMs?: number, signal?: AbortSignal) =>
+			clientPingLiveness(state, timeoutMs, signal),
 
 		/** #5487: the server announced it is still loading (see interface doc). */
 		readinessBlock: () => readinessBlockOf(state),

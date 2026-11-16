@@ -801,6 +801,7 @@ function send(msg) {
 // loading starts, as rust-analyzer does. Off by default.
 const LOADING_MS = Number.parseInt(process.env.FAKE_LSP_LOADING_MS ?? "0", 10);
 const LOADING_REFRESH_ID = "fake-loading-refresh";
+const OPEN_REFRESH_ID = "fake-open-refresh";
 let loadingUntil = 0;
 let clientAsksServerStatus = false;
 let loadingFlipSpent = false;
@@ -905,7 +906,11 @@ function handle(raw) {
 		return;
 	}
 	// The client's reply to our loading-time refresh request: nothing to answer.
-	if (data.id === LOADING_REFRESH_ID && data.method === undefined) return;
+	if (
+		(data.id === LOADING_REFRESH_ID || data.id === OPEN_REFRESH_ID) &&
+		data.method === undefined
+	)
+		return;
 	if (data.id === CONFIG_PULL_ID && data.method === undefined) {
 		traceConfig(`config-pull-answer ${JSON.stringify(data.result ?? null)}`);
 		return;
@@ -1317,6 +1322,20 @@ function handle(raw) {
 			data.params?.textDocument?.text ?? "",
 		);
 		recoverHealthOn(data.params?.textDocument?.text);
+		// #5097: "FAKE_LSP_REFRESH_ON_OPEN=1" sends a server-initiated
+		// `workspace/diagnostic/refresh` shortly after each didOpen, so a client
+		// holding an open document answers it with a re-pull of that document.
+		if (process.env.FAKE_LSP_REFRESH_ON_OPEN === "1") {
+			setTimeout(
+				() =>
+					send({
+						jsonrpc: "2.0",
+						id: OPEN_REFRESH_ID,
+						method: "workspace/diagnostic/refresh",
+					}),
+				20,
+			).unref?.();
+		}
 		if (isLoading() && process.env.FAKE_LSP_LOADING_PUSH_EMPTY === "1") {
 			send({
 				jsonrpc: "2.0",
