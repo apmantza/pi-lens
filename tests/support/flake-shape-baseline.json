@@ -38,6 +38,7 @@
 		"clients/lsp/client-crash-logging.test.ts": 4,
 		"clients/lsp/client-exit-cause-ledger.test.ts": 4,
 		"clients/lsp/client-retention-process-scope.test.ts": 3,
+		"clients/lsp/code-action-unanswered-5258.test.ts": 4,
 		"clients/lsp/config-section-answers-4758.test.ts": 2,
 		"clients/lsp/crash-respawn-debounce-wire.test.ts": 2,
 		"clients/lsp/did-save-notification.test.ts": 5,

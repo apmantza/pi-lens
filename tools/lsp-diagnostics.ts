@@ -1255,11 +1255,11 @@ async function classifyEmptyResult(
 		const snapshots = await lspService.getCapabilitySnapshots(file);
 		const tier = classifyCascadeWaitTier(lspService, file, snapshots);
 		return tier === "tier3-silent" ? "unconfirmed" : "clean";
-	} catch (error) {
+	} catch (cause) {
 		recordDegradationOnce({
 			kind: "lsp-empty-classification-failed",
 			subject: file,
-			reason: `the silent-on-clean classification of an empty answer failed (${error instanceof Error ? error.message : String(error)}); the file reads unconfirmed, not clean`,
+			reason: `the silent-on-clean classification of an empty answer failed (${cause instanceof Error ? cause.message : String(cause)}); the file reads unconfirmed, not clean`,
 		});
 		return "unconfirmed";
 	}

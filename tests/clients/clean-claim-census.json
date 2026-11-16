@@ -256,7 +256,7 @@
 	"tools/lsp-diagnostics.ts": {
 		"claim": {
 			"\"clean\"": {
-				"count": 9,
+				"count": 8,
 				"producer": "own",
 				"why": "outcome and confirmation values: every file and server answered with no findings"
 			},
@@ -310,7 +310,7 @@
 			"`workspace failed to load${detail ? ` (${detail})` : \"\"}; fix the project manifest`": 1,
 			"`language server answered for this file (${PRIMARY_UNAVAILABLE_CAUSE[cause]}). `": 1,
 			"\"NOT the same as 0 diagnostics; auxiliary scanners do not check the \"": 1,
-			"\"unconfirmed\"": 14,
+			"\"unconfirmed\"": 15,
 			"\"lsp-probe-finding-policy\"": 1,
 			"`${primaryUnavailable} ${describeRootFallback(rootFallback, false)}.`": 1,
 			"`Primary LSP${primaryId ? ` (${primaryId})` : \"\"}: unconfirmed — a custom server with no pull provider has not published diagnostics yet. NOT the same as 0 diagnostics; it is checked again once the server publishes.`": 1,
@@ -432,7 +432,9 @@
 			"`L${diag.range.start.line + 1}:${(diag.range.start.character ?? 0) + 1}`": 1,
 			"`[${diag.source}]`": 1,
 			"` (${diag.code})`": 1,
-			"`${loc}: ${sevName}${src}${code}: ${diag.message}`": 1
+			"`${loc}: ${sevName}${src}${code}: ${diag.message}`": 1,
+			"\"lsp-empty-classification-failed\"": 1,
+			"`the silent-on-clean classification of an empty answer failed (${cause instanceof Error ? cause.message : String(cause)}); the file reads unconfirmed, not clean`": 1
 		}
 	},
 	"index.ts": {

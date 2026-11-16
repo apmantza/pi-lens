@@ -1,4 +1,4 @@
-// flake-shape: real-process-spawn — a server that dies or answers -32801 mid-codeAction is observed through a real JSON-RPC connection to a real child; lsp-spawn-heavy serializes it.
+// flake-shape: real-process-spawn — a server that dies or answers -32801 mid-codeAction is observed through a real JSON-RPC connection to a real child; the fully serialized wall-clock-budget lane runs it.
 /**
  * #5258 (shape 10): `LSPClient.codeAction` answered `[]` for a request nobody
  * answered, so "could not ask" read as "no actions". The persistent re-verify
