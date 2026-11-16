@@ -778,7 +778,8 @@ export function _resetAnalyzerBootstrapForTests(): void {
 	bootstrapFlight.clear();
 }
 
-/** Test/diagnostic: how many builds have been STARTED this process. */
+/** @public — test/diagnostic seam accessed through a dynamic bootstrap import.
+ * How many builds have been STARTED this process. */
 export function _analyzerBootstrapLoadAttempts(): number {
 	return bootstrapLoadAttempts;
 }
