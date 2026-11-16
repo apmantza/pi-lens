@@ -1,3 +1,4 @@
+// flake-shape: in-process-mock — the installer is the tool-download boundary; the real ensureTool runs through a counting passthrough, because an install ask is only visible as the call itself (a download needs no child process), and every ladder, trust and lookup above it is real (#5410)
 /**
  * #5410 (#5666 item 1): the client-owned availability ladders (jscpd, madge,
  * knip, and the security scanners' `probeVersion`) answer through the one

@@ -83,6 +83,8 @@ const CONSUMERS = [
 	"tests/clients/socket-error-listener-sweep.test.ts",
 	"tests/config/bounded-container-guard.test.ts",
 	"tests/config/bounded-eviction-idiom-sweep.test.ts",
+	// #5410: counts every client-owned binary-lookup primitive by AST leaf.
+	"tests/config/client-ladder-census.test.ts",
 	"tests/config/flag-read-registry-sweep.test.ts",
 	"tests/config/install-kill-switch-census.test.ts",
 	"tests/config/lsp-override-copy-census.test.ts",
