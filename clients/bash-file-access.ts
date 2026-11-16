@@ -273,6 +273,16 @@ interface PendingHeredoc {
 	quoted: boolean;
 }
 
+/**
+ * Bash's blanks: space and tab, and newline as the line separator. Nothing
+ * else splits a word (#5649): NBSP, U+FEFF, U+2003, U+2028, CR, VT and FF are
+ * ordinary word characters, so `x<NBSP>#y` has no comment and `a<NBSP>b` is
+ * one word. A known-good list, never `\\s`, which admits every Unicode space.
+ */
+export function isShellBlank(ch: string | undefined): boolean {
+	return ch === " " || ch === "\t";
+}
+
 function parseHeredocDelimiter(
 	command: string,
 	start: number,
@@ -280,10 +290,10 @@ function parseHeredocDelimiter(
 	let i = start;
 	const stripTabs = command[i] === "-";
 	if (stripTabs) i += 1;
-	while (/\s/.test(command[i] ?? "")) i += 1;
+	while (isShellBlank(command[i]) || command[i] === "\n") i += 1;
 	let delimiter = "";
 	let quoted = false;
-	while (i < command.length && !/[\s;&|<>]/.test(command[i] ?? "")) {
+	while (i < command.length && !/[ \t\n;&|<>]/.test(command[i] ?? "")) {
 		const ch = command[i];
 		// Bash drops the `$` of a `$'…'` or `$"…"` delimiter: `<<$'E'` ends at `E`.
 		if (ch === "$" && /['"]/.test(command[i + 1] ?? "")) {
@@ -360,7 +370,13 @@ function consumeHeredocBodies(
 function startsWord(source: string, i: number, start: number): boolean {
 	let before = i - 1;
 	while (source[before] === "\n" && source[before - 1] === "\\") before -= 2;
-	return before < start || /[\s;&|()]/.test(source[before] ?? "");
+	if (before < start) return true;
+	// An escaped blank or operator is a word character: `echo \ #$(…)` has no
+	// comment, so the substitution runs (#5649).
+	let backslashes = 0;
+	for (let k = before - 1; k >= start && source[k] === "\\"; k--) backslashes++;
+	if (backslashes % 2 === 1) return false;
+	return /[ \t\n;&|()]/.test(source[before] ?? "");
 }
 
 /** #5553: one command substitution bash runs, and how many it sits inside (1 is outermost). */
@@ -938,7 +954,7 @@ function tokenizeShellCommandWithRanges(command: string): ShellSegmentRange[] {
 			while (i + 1 < command.length && command[i + 1] !== "\n") i++;
 			continue;
 		}
-		if (/\s/.test(ch) && ch !== "\n") {
+		if (isShellBlank(ch)) {
 			flushWord();
 			continue;
 		}

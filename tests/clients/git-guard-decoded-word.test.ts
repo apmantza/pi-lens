@@ -146,6 +146,125 @@ const ROWS: readonly Row[] = [
 		guard: true,
 	},
 	{
+		// #5649 F3. The `$IFS` pass tracked quotes but not backslashes: the
+		// escaped quote flipped it into "quoted", and `git${IFS}commit` after
+		// it was never folded, while bash ran the commit.
+		row: "escaped single quote, then git${IFS}commit",
+		command: "echo \\'; git${IFS}commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "escaped double quote, then git${IFS}commit",
+		command: 'echo \\"; git${IFS}commit -m x',
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "escaped single quote, then git$IFS$9commit",
+		command: "echo \\'; git$IFS$9commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		// An escaped backslash does not escape the quote after it: the quote
+		// opens a string, so the `$IFS` inside it is literal text.
+		row: "escaped backslash, then a quote opens a string",
+		command: "echo \\\\'; git${IFS}commit -m x'",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "escaped backslash, then git${IFS}commit",
+		command: "echo \\\\; git${IFS}commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		// #5649 F4. Bash's blanks are space, tab and newline. The lexer also
+		// split on NBSP, U+FEFF, U+2003 and U+2028, so a `#` after one began a
+		// comment for the gate, and the `$(…)` after it ran in bash unseen.
+		row: "NBSP before a hash is no comment",
+		command: "echo x #$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "U+FEFF before a hash is no comment",
+		command: "echo x﻿#$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "U+2003 before a hash is no comment",
+		command: "echo x #$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "U+2028 before a hash is no comment",
+		command: "echo x #$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "a tab before a hash is a comment",
+		command: "echo x\t#$(git commit -m y)",
+		bash: null,
+		guard: false,
+	},
+	{
+		// Same family as F4, found by the fuzz comparison: the `#` after an
+		// escaped blank or operator is a word character, not a comment.
+		row: "escaped blank before a hash is no comment",
+		command: "echo \\ #$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "escaped semicolon before a hash is no comment",
+		command: "echo a\\;#$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "escaped backslash, then a blank, then a hash is a comment",
+		command: "echo \\\\ #$(git commit -m y)",
+		bash: null,
+		guard: false,
+	},
+	{
+		// Same family: bash reads `$IFS#` as one word, so the `#` starts no
+		// comment, but the fold wrote a blank there and made it one.
+		row: "$IFS before a hash is no comment",
+		command: "echo a$IFS#$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "${IFS} before a hash is no comment",
+		command: "echo a${IFS}#$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		// The here-doc delimiter is `EOF<NBSP>x`, one word, so the body runs to
+		// the line that holds all of it and the commit in it is text. The lexer
+		// ended the delimiter at the NBSP and ran the line after `EOF`.
+		row: "NBSP inside a here-doc delimiter",
+		command: "cat <<EOF x >/dev/null\nEOF\ngit commit -m y\nEOF x\n",
+		bash: null,
+		guard: false,
+	},
+	{
+		// The gate read `git<NBSP>commit` as two words; bash runs the one
+		// command `git<NBSP>commit`, which is not git.
+		row: "NBSP between git and commit is one word",
+		command: "git commit -m x",
+		bash: null,
+		guard: false,
+	},
+	{
 		// bash removes the backslash; the path reading kept it (#4739).
 		row: "escaped letter in the executable",
 		command: "g\\it push",

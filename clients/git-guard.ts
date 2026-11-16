@@ -22,6 +22,7 @@ import {
 import {
 	decodeShellCommand,
 	decodeShellWords,
+	isShellBlank,
 	type DecodedShellWord,
 	type DecodedSimpleCommand,
 	type ShellSubstitution,
@@ -433,11 +434,22 @@ function canonicalizeGuardCommand(command: string): string {
 			result += ch;
 			continue;
 		}
+		if (ch === "\\") {
+			// Outside quotes a backslash escapes the next character, a quote or
+			// a `$` included: `echo \'; git${IFS}commit` still folds the second
+			// word, and `\$IFS` is literal text (#5649).
+			result += ch + (command[i + 1] ?? "");
+			i += 1;
+			continue;
+		}
 		const parameter = command.slice(i).match(/^\$\{IFS[^}]*\}/)?.[0];
 		const positional = command.slice(i).match(/^\$IFS(?:\$[0-9]+)?/)?.[0];
 		if (parameter || positional) {
-			result += " ";
-			i += (parameter ?? positional ?? "").length - 1;
+			const length = (parameter ?? positional ?? "").length;
+			// Bash reads `$IFS#` as one word, so the `#` starts no comment; the
+			// blank this fold writes would make it one. Escape that `#` (#5649).
+			result += command[i + length] === "#" ? " \\" : " ";
+			i += length - 1;
 			continue;
 		}
 		result += ch;
@@ -454,7 +466,7 @@ function canonicalizeGuardCommand(command: string): string {
 			pendingSpace = false;
 			continue;
 		}
-		if (!quote && /\s/.test(ch)) {
+		if (!quote && isShellBlank(ch)) {
 			pendingSpace = collapsed.length > 0;
 			continue;
 		}
@@ -485,7 +497,9 @@ function normalizeGuardVerbToken(value: string): string {
 }
 
 function expandGuardVerbToken(value: string): string[] {
-	return normalizeGuardVerbToken(value).trim().split(/\s+/).filter(Boolean);
+	return normalizeGuardVerbToken(value)
+		.split(/[ \t\n]+/)
+		.filter(Boolean);
 }
 
 /**
