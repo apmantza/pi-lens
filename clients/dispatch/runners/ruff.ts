@@ -76,6 +76,7 @@ const ruffRunner: RunnerDefinition = {
 	id: "ruff-lint",
 	appliesTo: ["python"],
 	priority: PRIORITY.FORMAT_AND_LINT_PRIMARY,
+	lintsGivenContent: true,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "ruff");
@@ -105,9 +106,17 @@ const ruffRunner: RunnerDefinition = {
 				"--output-format",
 				"json",
 				...configArgs,
-				ctx.filePath,
+				// #5621: given bytes arrive on stdin under the file's real path, so
+				// the config, the ignores and the reported filename are the file's.
+				...(ctx.givenContent === undefined
+					? [ctx.filePath]
+					: ["--stdin-filename", ctx.filePath, "-"]),
 			],
-			{ cwd, timeout: 30000 },
+			{
+				cwd,
+				timeout: 30000,
+				...(ctx.givenContent !== undefined && { input: ctx.givenContent }),
+			},
 		);
 
 		// EXIT TABLE (Ruff 0.6 docs https://docs.astral.sh/ruff/linter/): 0 = clean, 1 = findings, 2 = findings/error or

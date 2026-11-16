@@ -88,6 +88,10 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 		"behavior table over four report clients; its readdir checks one scratch parent for leftovers, not a source population sweep",
 	// #5594: the overlay seam's behaviour table. Its readdir checks that one run
 	// left nothing in its own scratch parent, so there is no source population.
+	// #5621: the seed-copy behaviour cells. Their readdir checks that one failed
+	// copy write left no `pi-lens-seed-*` file in its own scratch repo.
+	"tests/clients/dispatch/seed-content-mode-5621.test.ts":
+		"behavior cells over the seed-copy writer; its readdir checks one scratch repo for a leftover copy after a failed write, not a source population sweep",
 	"tests/clients/dispatch/runners/ignore-anchor.test.ts":
 		"behavior table over the config-overlay seam; its readdir checks one scratch parent for leftovers after a run, not a source population sweep",
 	"tests/clients/ast-grep-rule-regex-budget.test.ts":

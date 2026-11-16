@@ -24,6 +24,7 @@ import {
 	terminateReviewGraphPersistWorkerForTests,
 	waitForReviewGraphPersistsForTests,
 } from "../../clients/review-graph/builder.js";
+import { waitFor } from "./interleaving-kit.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 import { collectMemorySampleSubsystems } from "../../clients/memory-sampler.js";
 import {
@@ -70,12 +71,17 @@ function cachePathFor(cwd: string): string {
 	return path.join(getProjectDataDir(cwd), "cache", "review-graph.json.gz");
 }
 
-async function waitForFile(p: string, attempts = 20): Promise<boolean> {
-	for (let i = 0; i < attempts; i++) {
-		if (fs.existsSync(p)) return true;
-		await new Promise((r) => setTimeout(r, 25));
-	}
-	return fs.existsSync(p);
+/**
+ * Wait for the graph persist to land on disk. Shape 86 (#4865): this was a
+ * 20 x 25 ms turn count that holds idle and runs out under CPU load; the same
+ * wall clock is now a `waitFor` deadline that follows
+ * `PI_LENS_TEST_TIMEOUT_SCALE` and names its caller when it gives up.
+ */
+async function waitForFile(p: string, timeoutMs = 500): Promise<boolean> {
+	return waitFor(() => fs.existsSync(p), Boolean, {
+		timeoutMs,
+		intervalMs: 25,
+	});
 }
 
 describe("review-graph persist circuit-breaker (#260)", () => {

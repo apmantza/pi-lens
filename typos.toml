@@ -101,7 +101,8 @@ mis = "mis"
 # (clients/file-kinds.ts, clients/formatters.ts), not a truncation of "end".
 edn = "edn"
 # HashiCorp brand abbreviation inside camelCase identifiers like
-# `hashiCorpReleaseProduct` (clients/installer/index.ts, tests).
+# `deriveHashiCorpReleaseAsset`, kept in frozen fixtures under tests/fixtures/
+# (the live installer code was renamed in #5643).
 hashi = "hashi"
 # Valid English spelling, already allowlisted for typos-lsp's bundled
 # default (rules/typos/_typos.toml, #967) — repeated here so the same
@@ -138,3 +139,6 @@ stubbs = "stubbs"
 # All-contributors table entry — a real contributor's GitHub login
 # (README.md, .all-contributorsrc), not "glyph".
 glyh = "glyh"
+# `libgcc_s_seh-1.dll`, the mingw runtime that opengrep's Windows zip ships
+# (tests/clients/installer/opengrep-windows-zip-5624.test.ts), not the word "she".
+seh = "seh"

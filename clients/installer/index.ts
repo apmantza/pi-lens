@@ -441,7 +441,17 @@ interface GitHubAssetSpec {
 	 * For bare .gz files (e.g. rust-analyzer) leave undefined — the asset IS the binary.
 	 */
 	binaryInArchive?: string;
-	hashiCorpReleaseProduct?: string;
+	/**
+	 * For a project whose GitHub release does not carry the archives (HashiCorp
+	 * publishes on releases.hashicorp.com, helm on get.helm.sh): build the asset
+	 * the tool downloads from the release tag and the `assetMatch` substring.
+	 * Consulted only when no release asset matches; return undefined when the
+	 * tag yields no usable version.
+	 */
+	derivedAsset?: (
+		tagName: string,
+		assetSubstring: string,
+	) => DownloadAsset | undefined;
 	/**
 	 * Additional release assets (EXACT names) to download as bare files alongside
 	 * the primary binary. Needed when the primary is a wrapper that references a
@@ -451,6 +461,13 @@ interface GitHubAssetSpec {
 	extraAssets?: (platform: string, arch: string) => string[];
 	/** Runtime wrapper for a platform asset that is a PHAR or runnable JAR. */
 	launcher?: "php" | "java";
+	/**
+	 * A Windows zip whose executable imports DLLs shipped beside it (opengrep:
+	 * libstdc++-6, libgmp-10, libpcre2-8-0, libzstd-1 and their dependencies).
+	 * Every `.dll` next to the extracted binary moves into the managed bin
+	 * with it; without them the exe fails to load.
+	 */
+	bundleArchiveDlls?: boolean;
 }
 
 /**
@@ -616,7 +633,7 @@ function archAssetMatch(table: {
 
 // Go-style `<os>_<arch>.zip` release assets, shared verbatim by tflint and
 // terraform-ls — both entries carried byte-identical ladders, down to the asset
-// strings themselves.
+// strings themselves. tflint overrides win32/arm64: it has no such build.
 const OS_ARCH_ZIP_ASSETS = {
 	linux: { x64: "linux_amd64.zip", arm64: "linux_arm64.zip" },
 	darwin: { x64: "darwin_amd64.zip", arm64: "darwin_arm64.zip" },
@@ -1040,7 +1057,7 @@ export const TOOLS: ToolDefinition[] = [
 			repo: "hadolint/hadolint",
 			assetMatch: (platform, arch) => {
 				if (platform === "linux")
-					return arch === "arm64" ? "linux.aarch64" : "linux.x86_64";
+					return arch === "arm64" ? "linux-arm64" : "linux-x86_64";
 				if (platform === "darwin")
 					return arch === "arm64" ? "macos-arm64" : "macos-x86_64";
 				if (platform === "win32") return "windows-x86_64.exe";
@@ -1058,6 +1075,15 @@ export const TOOLS: ToolDefinition[] = [
 		binaryName: "helm",
 		github: {
 			repo: "helm/helm",
+			// The GitHub release holds only `.asc` signatures (#5643); the
+			// archives are served from get.helm.sh under the same names.
+			derivedAsset: (tagName, assetSubstring) => {
+				const name = `helm-${tagName}-${assetSubstring}`;
+				return {
+					name,
+					browser_download_url: `https://get.helm.sh/${name}`,
+				};
+			},
 			assetMatch: (platform, arch) => {
 				// helm publishes per-OS archives: tar.gz for POSIX, zip for Windows.
 				const cpu = arch === "arm64" ? "arm64" : "amd64";
@@ -1083,16 +1109,21 @@ export const TOOLS: ToolDefinition[] = [
 		github: {
 			repo: "opengrep/opengrep",
 			assetMatch: (platform, arch) => {
+				// v2.0.0 renamed the assets (#5624); each also ships .cert and .sig
+				// siblings, which `pickReleaseAsset` refuses. `releases/latest` is
+				// the only release the installer reads, so the v1 names are not kept.
 				if (platform === "linux")
 					return arch === "arm64"
-						? "opengrep_manylinux_aarch64"
-						: "opengrep_manylinux_x86";
+						? "opengrep_linux_aarch64"
+						: "opengrep_linux_x86";
 				if (platform === "darwin")
 					return arch === "arm64" ? "opengrep_osx_arm64" : "opengrep_osx_x86";
-				// One x86 Windows build; runs on arm64 Windows via emulation.
-				if (platform === "win32") return "opengrep_windows_x86.exe";
+				// One x86 Windows build; runs on arm64 Windows via emulation. It is
+				// a zip: opengrep.exe plus the mingw DLLs it imports.
+				if (platform === "win32") return "opengrep_windows_x86.zip";
 				return undefined;
 			},
+			bundleArchiveDlls: true,
 		},
 	},
 	{
@@ -1265,8 +1296,8 @@ export const TOOLS: ToolDefinition[] = [
 					return arch === "arm64" ? "linux_arm64" : "linux_amd64";
 				if (platform === "darwin")
 					return arch === "arm64" ? "darwin_arm64" : "darwin_amd64";
-				if (platform === "win32")
-					return arch === "arm64" ? "windows_arm64.exe" : "windows_amd64.exe";
+				// No windows_arm64 build upstream (#5624): x64 via emulation.
+				if (platform === "win32") return "windows_amd64.exe";
 				return undefined;
 			},
 			// bare binary, no archive
@@ -1723,7 +1754,11 @@ export const TOOLS: ToolDefinition[] = [
 		binaryName: "tflint",
 		github: {
 			repo: "terraform-linters/tflint",
-			assetMatch: archAssetMatch(OS_ARCH_ZIP_ASSETS),
+			// No windows_arm64 build upstream (#5624): x64 via emulation.
+			assetMatch: archAssetMatch({
+				...OS_ARCH_ZIP_ASSETS,
+				win32: { x64: "windows_amd64.zip", arm64: "windows_amd64.zip" },
+			}),
 			binaryInArchive: "tflint",
 		},
 	},
@@ -1853,16 +1888,17 @@ export const TOOLS: ToolDefinition[] = [
 		github: {
 			repo: "vale-cli/vale",
 			assetMatch: (platform, arch) => {
-				const version = "3.14.2";
+				// The installer reads `releases/latest`, so the asset name carries no
+				// version (a pinned 3.14.2 matched nothing once latest moved, #5624).
 				if (platform === "linux")
 					return arch === "arm64"
-						? `vale_${version}_Linux_arm64.tar.gz`
-						: `vale_${version}_Linux_64-bit.tar.gz`;
+						? "_Linux_arm64.tar.gz"
+						: "_Linux_64-bit.tar.gz";
 				if (platform === "darwin")
 					return arch === "arm64"
-						? `vale_${version}_macOS_arm64.tar.gz`
-						: `vale_${version}_macOS_64-bit.tar.gz`;
-				if (platform === "win32") return `vale_${version}_Windows_64-bit.zip`;
+						? "_macOS_arm64.tar.gz"
+						: "_macOS_64-bit.tar.gz";
+				if (platform === "win32") return "_Windows_64-bit.zip";
 				return undefined;
 			},
 			binaryInArchive: "vale",
@@ -1878,7 +1914,15 @@ export const TOOLS: ToolDefinition[] = [
 		binaryName: "terraform-ls",
 		github: {
 			repo: "hashicorp/terraform-ls",
-			hashiCorpReleaseProduct: "terraform-ls",
+			derivedAsset: (tagName, assetSubstring) => {
+				const version = tagName.replace(/^v/, "").trim();
+				if (!version) return undefined;
+				const name = `terraform-ls_${version}_${assetSubstring}`;
+				return {
+					name,
+					browser_download_url: `https://releases.hashicorp.com/terraform-ls/${version}/${name}`,
+				};
+			},
 			assetMatch: archAssetMatch(OS_ARCH_ZIP_ASSETS),
 			binaryInArchive: "terraform-ls",
 		},
@@ -4173,7 +4217,7 @@ async function installGitHubTool(
 
 	const asset =
 		pickReleaseAsset(releaseJson.assets, assetSubstring) ??
-		deriveHashiCorpReleaseAsset(tool, releaseJson.tag_name, assetSubstring);
+		deriveReleaseAsset(tool, releaseJson.tag_name, assetSubstring);
 	if (!asset) {
 		logSessionStart(
 			`github-install ${tool.id}: no asset matched "${assetSubstring}"`,
@@ -4353,6 +4397,17 @@ async function installGitHubTool(
 					)} not found in zip ${assetName}`,
 				);
 				return undefined;
+			}
+			if (spec.bundleArchiveDlls) {
+				const siblingDir = path.dirname(srcBinary);
+				for (const entry of await fs.readdir(siblingDir)) {
+					if (entry.toLowerCase().endsWith(".dll")) {
+						await fs.rename(
+							path.join(siblingDir, entry),
+							path.join(GITHUB_BIN_DIR, entry),
+						);
+					}
+				}
 			}
 			await fs.rename(srcBinary, destPath);
 			await fs.rm(tmpDir, { recursive: true, force: true });
@@ -7237,25 +7292,16 @@ export function pickReleaseAsset<T extends { name: string }>(
 	);
 }
 
-function deriveHashiCorpReleaseAsset(
+function deriveReleaseAsset(
 	tool: ToolDefinition,
 	tagName: string | undefined,
 	assetSubstring: string,
 ): DownloadAsset | undefined {
-	const product = tool.github?.hashiCorpReleaseProduct;
-	if (!product || !tagName) return undefined;
-
-	const version = tagName.replace(/^v/, "").trim();
-	if (!version) return undefined;
-
-	const assetName = `${product}_${version}_${assetSubstring}`;
-	return {
-		name: assetName,
-		browser_download_url: `https://releases.hashicorp.com/${product}/${version}/${assetName}`,
-	};
+	if (!tagName) return undefined;
+	return tool.github?.derivedAsset?.(tagName, assetSubstring);
 }
 
-export function resolveDerivedHashiCorpReleaseAsset(
+export function resolveDerivedReleaseAsset(
 	toolId: string,
 	tagName: string,
 	platform: string,
@@ -7265,5 +7311,5 @@ export function resolveDerivedHashiCorpReleaseAsset(
 	if (!tool) return undefined;
 	const assetSubstring = tool.github?.assetMatch(platform, arch);
 	if (!assetSubstring) return undefined;
-	return deriveHashiCorpReleaseAsset(tool, tagName, assetSubstring);
+	return deriveReleaseAsset(tool, tagName, assetSubstring);
 }

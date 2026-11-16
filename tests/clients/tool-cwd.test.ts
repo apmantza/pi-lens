@@ -10,6 +10,7 @@ import {
 } from "../../clients/lsp/server.js";
 import { LSPService } from "../../clients/lsp/index.js";
 import { withPlatform } from "../support/platform-stub.js";
+import { scaledTestTimeout } from "../support/test-timeout-scale.js";
 import { setupTestEnvironment, useTrackedTempDirs } from "./test-utils.js";
 
 let home: string;
@@ -283,6 +284,83 @@ describe("resolveToolCwd (#2777)", () => {
 			).toBe(nested());
 		});
 
+		// #5631: `createDispatchContext` hands runners `ctx.cwd` = the file's own
+		// package (its language root) and `ctx.projectRoot` = the workspace. The
+		// config climb stops at the session's root, which is the project root, not
+		// the package.
+		it.each([
+			["oxlint", ".oxlintrc.json"],
+			["eslint", "eslint.config.mjs"],
+		])(
+			"anchors %s at the workspace's config when ctx.cwd is the file's package (#5631)",
+			(tool, configName) => {
+				fs.mkdirSync(nested(), { recursive: true });
+				fs.writeFileSync(path.join(workspace(), configName), "{}\n");
+				fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+				expect(
+					toolCwd.resolveToolCwd("runner", tool, fileAt(nested()), {
+						cwd: nested(),
+						projectRoot: workspace(),
+					}),
+				).toEqual({
+					cwd: workspace(),
+					marker: configName,
+					packageDir: nested(),
+				});
+			},
+		);
+
+		it("ignores a config above the project root when ctx.cwd is the file's package (#5631)", () => {
+			// A session started inside the package: the root config is outside the
+			// session even though `ctx.cwd` is the package.
+			fs.mkdirSync(nested(), { recursive: true });
+			fs.writeFileSync(path.join(workspace(), ".oxlintrc.json"), "{}\n");
+			fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "oxlint", fileAt(nested()), {
+					cwd: nested(),
+					projectRoot: nested(),
+				}).cwd,
+			).toBe(nested());
+		});
+
+		it("keeps the dispatch root as the ceiling when the project root does not contain it (#5631)", () => {
+			// A project root that is not an ancestor of `ctx.cwd` says nothing about
+			// where this file's session starts, so it must not move the ceiling.
+			fs.mkdirSync(nested(), { recursive: true });
+			fs.writeFileSync(path.join(workspace(), ".oxlintrc.json"), "{}\n");
+			fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "oxlint", fileAt(nested()), {
+					cwd: nested(),
+					projectRoot: path.join(home, "elsewhere"),
+				}).cwd,
+			).toBe(nested());
+		});
+
+		it("ignores a config above a project root that sits strictly above ctx.cwd (#5631)", () => {
+			// Recurrence: #5631 F1. The cells above set `projectRoot` equal to
+			// `ctx.cwd` or to a sibling, so a ceiling one level too high (the root's
+			// parent) was never reached. Here the root is an ancestor of the package,
+			// and a config sits above the root, outside the session.
+			const outer = path.join(home, "outer");
+			const project = path.join(outer, "repo");
+			const pkg = path.join(project, "apps", "web");
+			fs.mkdirSync(pkg, { recursive: true });
+			fs.writeFileSync(path.join(outer, ".oxlintrc.json"), "{}\n");
+			fs.writeFileSync(path.join(pkg, "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "oxlint", fileAt(pkg), {
+					cwd: pkg,
+					projectRoot: project,
+				}).cwd,
+			).toBe(pkg);
+		});
+
 		it("does not anchor at a config in the home directory", () => {
 			// The seam's $HOME ceiling is exclusive: a home-level config is the
 			// user's, not this project's, even though the config seam climbs to it.
@@ -436,54 +514,68 @@ describe("resolveToolCwd (#2777)", () => {
 		).toEqual({ cwd: workspace, marker: "Cargo.toml" });
 	});
 
-	it("preserves every registry language root through the shared seam", async () => {
-		// #4864: this project used to live at `process.cwd()`, the repository root,
-		// where a repo-walking scan on a sibling worker could list it and then
-		// ENOENT when this cell removed it mid-walk. The per-test temp home is the
-		// seam every other cell in this file uses, and the markerless-root cells
-		// keep it out of any project-root walk.
-		const project = path.join(home, "language-roots");
-		try {
-			// #2846 H1: a workspace-priority wrapper must retain its marker metadata;
-			// otherwise Go silently falls back from a nested go.mod to the dispatch cwd.
-			const goServer = LSP_SERVERS.find((entry) => entry.id === "go");
-			expect(goServer?.root.rootMarkers).toEqual(
-				expect.arrayContaining(["go.mod"]),
-			);
-			const languageServers = LANGUAGES.map((language) => {
-				const serverId = language.lspId ?? language.id;
-				const server = LSP_SERVERS.find((entry) => entry.id === serverId);
-				return { language, server };
-			}).filter(
-				(
-					entry,
-				): entry is {
-					language: (typeof LANGUAGES)[number];
-					server: LSPServerInfo;
-				} => Boolean(entry.server?.root.rootMarkers?.length),
-			);
-			const table: string[] = [];
+	// #5645: a population cell, one nested project per registry language, each
+	// resolved twice through the marker walk: 814 normalizePathForm calls in
+	// all, ~130 filesystem syscalls per language (native realpath on Windows). It
+	// takes ~150 ms on Linux and 5608 ms on `Unit tests Windows`, past Vitest's
+	// 5 s default, twice on 2026-11-15. The budget is a ceiling only: 10 s on
+	// Linux, widened by the lane's own scale (3 on Windows, so 30 s).
+	it(
+		"preserves every registry language root through the shared seam",
+		async () => {
+			// #4864: this project used to live at `process.cwd()`, the repository root,
+			// where a repo-walking scan on a sibling worker could list it and then
+			// ENOENT when this cell removed it mid-walk. The per-test temp home is the
+			// seam every other cell in this file uses, and the markerless-root cells
+			// keep it out of any project-root walk.
+			const project = path.join(home, "language-roots");
+			try {
+				// #2846 H1: a workspace-priority wrapper must retain its marker metadata;
+				// otherwise Go silently falls back from a nested go.mod to the dispatch cwd.
+				const goServer = LSP_SERVERS.find((entry) => entry.id === "go");
+				expect(goServer?.root.rootMarkers).toEqual(
+					expect.arrayContaining(["go.mod"]),
+				);
+				const languageServers = LANGUAGES.map((language) => {
+					const serverId = language.lspId ?? language.id;
+					const server = LSP_SERVERS.find((entry) => entry.id === serverId);
+					return { language, server };
+				}).filter(
+					(
+						entry,
+					): entry is {
+						language: (typeof LANGUAGES)[number];
+						server: LSPServerInfo;
+					} => Boolean(entry.server?.root.rootMarkers?.length),
+				);
+				const table: string[] = [];
 
-			for (const { language, server } of languageServers) {
-				const nested = path.join(project, "packages", language.id);
-				const file = path.join(nested, "src", `main${language.extensions[0]}`);
-				fs.mkdirSync(path.dirname(file), { recursive: true });
-				for (const marker of server.root.rootMarkers ?? []) {
-					const markerName = marker.replaceAll("*", "project");
-					const markerPath = path.join(nested, markerName);
-					fs.mkdirSync(path.dirname(markerPath), { recursive: true });
-					fs.writeFileSync(markerPath, "");
+				for (const { language, server } of languageServers) {
+					const nested = path.join(project, "packages", language.id);
+					const file = path.join(
+						nested,
+						"src",
+						`main${language.extensions[0]}`,
+					);
+					fs.mkdirSync(path.dirname(file), { recursive: true });
+					for (const marker of server.root.rootMarkers ?? []) {
+						const markerName = marker.replaceAll("*", "project");
+						const markerPath = path.join(nested, markerName);
+						fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+						fs.writeFileSync(markerPath, "");
+					}
+					const before = await server.root(file);
+					const after = await resolveLspServerCwd(server, file, project);
+					table.push(`${language.id}: ${before} === ${after}`);
+					expect(after, table.at(-1)).toBe(before);
 				}
-				const before = await server.root(file);
-				const after = await resolveLspServerCwd(server, file, project);
-				table.push(`${language.id}: ${before} === ${after}`);
-				expect(after, table.at(-1)).toBe(before);
+				console.log(table.join("\n"));
+			} finally {
+				fs.rmSync(project, { recursive: true, force: true });
 			}
-			console.log(table.join("\n"));
-		} finally {
-			fs.rmSync(project, { recursive: true, force: true });
-		}
-	});
+		},
+		scaledTestTimeout(10_000),
+	);
 
 	it("routes built-in language marker tables through the same seam", () => {
 		const project = path.join(home, "repo");

@@ -528,9 +528,9 @@ const EXEMPT: Readonly<Record<string, { reason: string; pinnedBy: string }>> = {
 			"the git checkout's `spelledRoot` stays on the spelling: the graph reports roots beside the spelled cwd",
 		pinnedBy: "tests/clients/walk-identity-4689.test.ts",
 	},
-	"clients/staged-delta.ts": {
+	"clients/dispatch/integration.ts": {
 		reason:
-			"`existingDirOf` climbs the SPELLING by design (`spelling: true`) to the nearest existing directory of a moved file's destination, where the staged copy is written; it places a temp file and answers no owner",
+			"`existingDirOf` (moved here from clients/staged-delta.ts, #5621) climbs the SPELLING by design (`spelling: true`) to the nearest existing directory of a moved file's destination, where the seed copy is written; it places a temp file and answers no owner",
 		pinnedBy: "tests/index-5553-staged-delta-gate.test.ts",
 	},
 	"clients/gitleaks-client.ts": {

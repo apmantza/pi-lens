@@ -2379,7 +2379,16 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// 24 -> 25 (#5616): the capture awaits `before`, a credited script write's
 	// HEAD copy (one `git show` under its own leaf bound); its hook caller
 	// passes the capture's signal into it, under the same bounded() capture.
-	"clients/dispatch/integration.ts": 25,
+	// 25 -> 27 (#5621): `prepareSeedLaneRun` awaits the given bytes
+	// (`given.read()`, the same `before` read, moved into it) and
+	// `collectStagedLaneBlockers` awaits `prepareSeedLaneRun`; the capture's own
+	// await of it replaces its old await of `before`. Both callers keep their
+	// bounded() holds (the capture's budget, the gate's `gateStagedDelta`).
+	// 27 -> 29 (#5621): `prepareSeedLaneRun` awaits
+	// `ensureSeedCopyExcluded` before it writes a copy, and that function awaits
+	// one `git rev-parse --git-common-dir` through `safeSpawnAsync`, which holds
+	// its own 5 s timeout. Both sit under the capture's and the gate's bounded().
+	"clients/dispatch/integration.ts": 29,
 	// 2 → 3 (#4484 review F5): `settlePendingRunnerFindingsForTests` awaits
 	// the store's runs so a test joins a collect-later settle without polling.
 	// Only tests call it; no hook handler reaches it.
@@ -2588,7 +2597,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// land. Only the test helper registry calls it; no hook handler reaches it.
 	// #5561: 222 -> 227. The pip ladder now probes the selected interpreter's
 	// release after each failed candidate so the refusal names the real runtime.
-	"clients/installer/index.ts": 227,
+	// #5624: 227 -> 229. The opengrep Windows zip moves its sibling DLLs into the
+	// managed bin: one awaited readdir and one awaited rename per DLL, local
+	// filesystem calls inside the install the 120 s archive-command bound already
+	// frames. No hook handler reaches the install without its own deadline.
+	"clients/installer/index.ts": 229,
 	// 29 -> 56 (#4765): refreshOpengrepRulePack (the background registry-pack
 	// refresh) awaits the pack download, its temp-file write, the
 	// `opengrep --validate` spawn, a stat/read/rename of the cached file and a

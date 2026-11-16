@@ -45,6 +45,7 @@ import {
 	PartialApplyRecordStore,
 } from "./partial-edit-apply.js";
 import { ReadGuard } from "./read-guard.js";
+import { sanitizeCorrelationId } from "./read-guard-logger.js";
 import type { RuleScanResult } from "./rules-scanner.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
 import { TurnSummaryCollector } from "./turn-summary.js";
@@ -788,6 +789,17 @@ export class RuntimeCoordinator {
 		TOOL_CALL_ATTRIBUTION_CAPACITY,
 	);
 	/**
+	 * #5551: per tool call, the files `recordMutationOutcome` recorded for it
+	 * while its tool ran. Its `tool_result` takes the set and dispatches each
+	 * file, whatever the tool is named, so no producer reports its own writes
+	 * and no table admits it by name. A call with no `tool_result` (a blocked
+	 * call, a tool run outside pi) is evicted by the same bound as an
+	 * attribution; a set holds the files of one call.
+	 */
+	private readonly _callWrites = new BoundedLruCache<string, Set<string>>(
+		TOOL_CALL_ATTRIBUTION_CAPACITY,
+	);
+	/**
 	 * #5120: a call whose `edits` were rewritten to the matched subset of a
 	 * partly matching batch, keyed by that call's own `event.input`. pi hands
 	 * both hooks one `args` object per call (a fresh clone), so only that
@@ -928,6 +940,7 @@ export class RuntimeCoordinator {
 		// not let a NEW session inherit a DEAD session's recorded skip verdict.
 		this._toolCallAttributions.clear();
 		this._readWidenings.clear();
+		this._callWrites.clear();
 		this._lspReadWarmState.clear();
 		this._pendingInlineBlockers.clear();
 		this._owedRunners.clear();
@@ -3106,6 +3119,37 @@ export class RuntimeCoordinator {
 		const widening = this._readWidenings.get(toolCallId);
 		this._readWidenings.delete(toolCallId);
 		return widening;
+	}
+
+	/**
+	 * #5551: `recordMutationOutcome` recorded `filePath` for this call. The
+	 * id is the producer's raw one (the tool's `execute` argument); the
+	 * `tool_result` reads it as `resolveToolCallCorrelationId` spells it, so
+	 * both sides key by `sanitizeCorrelationId` (a pi-ai `call_id|item_id`
+	 * host id differs raw versus sanitized; review r1 F1 on #5635). The
+	 * result is a no-op on an id already sanitized.
+	 */
+	noteCallWrite(rawToolCallId: string, filePath: string): void {
+		const toolCallId = sanitizeCorrelationId(rawToolCallId);
+		if (toolCallId === undefined) return;
+		const written = this._callWrites.get(toolCallId);
+		if (written) written.add(filePath);
+		else this._callWrites.set(toolCallId, new Set([filePath]));
+	}
+
+	/** #5551: the files recorded for this call so far, in record order. */
+	peekCallWrites(rawToolCallId: string): string[] {
+		const toolCallId = sanitizeCorrelationId(rawToolCallId);
+		if (toolCallId === undefined) return [];
+		return [...(this._callWrites.get(toolCallId) ?? [])];
+	}
+
+	/** #5551: one-shot claim of a call's files, as with an attribution. */
+	takeCallWrites(rawToolCallId: string): string[] {
+		const written = this.peekCallWrites(rawToolCallId);
+		const toolCallId = sanitizeCorrelationId(rawToolCallId);
+		if (toolCallId !== undefined) this._callWrites.delete(toolCallId);
+		return written;
 	}
 
 	/** #3523: see {@link ToolCallAttribution.editInPlace}. */

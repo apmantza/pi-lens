@@ -378,6 +378,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lsp-mutation.ts": 1,
 		"clients/mutating-tool.ts": 2,
 		"clients/observed-mutation.ts": 3,
+		// 0 -> 1 (#5551): the drain names its write in the frozen field when it
+		// records through `recordMutationOutcome`.
+		"clients/runtime-agent-end.ts": 1,
 		"tools/lens-diagnostic-mark.ts": 1,
 		"clients/read-bridge.ts": 5,
 		"clients/zizmor-config.ts": 13,
@@ -1248,7 +1251,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/gzip-stage-write.ts": 2,
 		"clients/inline-blocker-dispositions.ts": 2,
 		"clients/install-diagnostics.ts": 11,
-		"clients/installer/index.ts": 104,
+		// 104 -> 107 (#5624): the opengrep zip's DLL move computes the extraction
+		// directory with `path.dirname` and each destination with `path.join`.
+		"clients/installer/index.ts": 107,
 		// 4 -> 9 (#4765): refreshOpengrepRulePack computes the candidate's
 		// scratch directory, cwd and sweep with `path.dirname`/`path.join`.
 		"clients/installer/managed-tool-refresh.ts": 9,
@@ -1598,7 +1603,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// the target with `path.basename`, the same call every walker path uses.
 		"clients/source-walker.ts": 4,
 		"clients/spawn-timeout-cooldown.ts": 3,
-		"clients/staged-delta.ts": 13,
+		"clients/staged-delta.ts": 10,
 		"clients/startup-scan.ts": 7,
 		// 61 -> 66: filesystem ownership/discovery operations plus the alias
 		// exception's physical policy-relative path (R4). These remain filesystem
@@ -1771,7 +1776,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/project-snapshot.ts": 10,
 		"clients/read-guard-tool-lines.ts": 4,
 		"clients/read-guard.ts": 23,
-		"clients/runtime-agent-end.ts": 56,
+		"clients/runtime-agent-end.ts": 55,
 		"clients/runtime-context.ts": 2,
 		// 17 -> 23 (#3218): `noteResolvedBlockerFile` reads the removed
 		// `InlineBlockerRecord` (param, path, count, write index).
@@ -1870,7 +1875,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/dispatcher.ts": 36,
 		// 1 -> 3 (#5553): the staged read leaves out a lane row whose `status`
 		// is skipped for a stated cause, and names the others' `status`.
-		"clients/dispatch/integration.ts": 3,
+		// 3 -> 4 (#5621): `ensureSeedCopyExcluded` reads the exit `status` of its
+		// one `git rev-parse`, the same member sense as the rows above.
+		"clients/dispatch/integration.ts": 4,
 		"clients/dispatch/pending-runner-findings.ts": 1,
 		"clients/dispatch/runners/actionlint.ts": 1,
 		"clients/dispatch/runners/ast-grep-napi.ts": 11,
@@ -2060,7 +2067,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/oxlint.ts": 3,
 		"clients/grammar-source.ts": 5,
 		"clients/install-diagnostics.ts": 3,
-		"clients/installer/index.ts": 60,
+		// 60 -> 54 (#5624): vale's asset names drop their pinned `version` constant.
+		"clients/installer/index.ts": 54,
 		// 24 -> 29 (#4765): the pack refresh stamps the cached pack with a digest
 		// `version` in the refresh-state entry (the stamp's existing field) and passes
 		// `--disable-version-check` to the validate spawn: stamp/CLI vocabulary.

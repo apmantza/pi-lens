@@ -394,9 +394,9 @@ const WRITE_SITES: Record<string, SiteRow> = {
 		why: 'the string "fs" is a boundary-category label, not a module',
 	},
 	"clients/dispatch/integration.ts": {
-		sites: 2,
-		cls: "scratch",
-		why: "a credited script write's HEAD copy, written beside the file under a pi-lens-seed- name for one seed run and removed when the run ends (#5616)",
+		sites: 5,
+		cls: "state",
+		why: "two writers. Given bytes (a credited script write's HEAD copy, the commit gate's staged blob) are written beside the file under a pi-lens-seed- name for one seed run only when a lane of the run reads the disk, and removed when the run ends or when its own write fails after creating it (#5616, #5621). Before that copy exists, one line `pi-lens-seed-*` is added to the repository's local info/exclude (the git common dir's, never a tracked .gitignore), once and only when absent (#5621)",
 	},
 	"clients/dispatch/rules/error-swallowing.ts": {
 		sites: 1,
@@ -477,7 +477,8 @@ const WRITE_SITES: Record<string, SiteRow> = {
 		exports: ["writeGzipStageFile", "reapStageFile"],
 	},
 	"clients/installer/index.ts": {
-		sites: 63,
+		// 64 since #5624: the zip branch moves an opted-in tool's bundled DLLs (bundleArchiveDlls) beside its exe.
+		sites: 64,
 		cls: "install",
 		why: "tool installs, their stamps and their locks",
 	},
@@ -614,9 +615,9 @@ const WRITE_SITES: Record<string, SiteRow> = {
 		why: "the merged ast-grep rule directory and sgconfig under the scanner report directory",
 	},
 	"clients/staged-delta.ts": {
-		sites: 7,
+		sites: 5,
 		cls: "scratch",
-		why: "the commit gate's per-call scratch: a temporary directory under the OS temp dir with the index copies and the hook net, and an index blob written beside the carried file under a pi-lens-staged- name for one lane read, each removed before the call returns",
+		why: "the commit gate's per-call scratch: a temporary directory under the OS temp dir with the index copies and the hook net, removed before the call returns",
 	},
 	"clients/test-runner-client.ts": {
 		sites: 3,
@@ -767,8 +768,10 @@ describe("the writer table", () => {
 		for (const route of WRITERS)
 			for (const recorder of route.recorders)
 				(byRecorder[recorder] ??= []).push(route.id);
-		// The hand-copied recorders #5551 has not folded onto
-		// `recordMutationOutcome` yet: a fold that lands moves its routes here.
+		// The routes still recorded apart from `recordMutationOutcome`: the
+		// classified chain's own recorder (`tool-result`, #5551's stay verdict)
+		// and the writers that record nothing. A fold that lands moves its
+		// routes into the first list.
 		expect(byRecorder).toEqual({
 			recordMutationOutcome: [
 				"foreign-named",
@@ -780,6 +783,7 @@ describe("the writer table", () => {
 				"lsp-execute-command",
 				"lsp-server-apply-edit",
 				"lens-diagnostic-mark",
+				"runner-format-autofix",
 				"agent-end-lsp-quickfix",
 			],
 			"tool-result": [
@@ -794,7 +798,6 @@ describe("the writer table", () => {
 				"foreign-path-less",
 				"runner-format-autofix",
 			],
-			"agent-end-drain": ["runner-format-autofix"],
 			none: [
 				"fix-run-restore",
 				"runner-whole-package-fix",
@@ -812,12 +815,13 @@ describe("the writer table", () => {
 		expect(unprobed).toEqual({
 			dispatch: 7,
 			"inline-stop": 3,
-			"change-log": 9,
+			"change-log": 8,
 			"commit-gate": 7,
 			"pre-edit-baseline": 13,
-			"fix-run-capture": 15,
+			"fix-run-capture": 14,
+			"deferred-queue": 12,
 			"lsp-documents": 9,
-			"read-guard": 9,
+			"read-guard": 8,
 			"word-index": 23,
 		});
 	});

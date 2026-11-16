@@ -964,7 +964,9 @@ jobs:
       # App installation token has no such limit: the docs-refresh PR below is
       # opened with it when the repository has the App configured, and falls
       # back to GITHUB_TOKEN when it does not; the dispatch step below then
-      # starts the required checks (#5062). The names `LSP_REFRESH_APP_ID` (variable) and
+      # runs the required workflows on the branch head, but its rows never
+      # reach the PR's rollup, so that PR still needs a close and reopen
+      # (#5062, #5629). The names `LSP_REFRESH_APP_ID` (variable) and
       # `LSP_REFRESH_APP_PRIVATE_KEY` (secret) are the maintainer's to confirm.
       # The token is scoped to this PR's two writes and lives for the job.
       - name: Mint the refresh App token (starts CI on the refresh PR)
@@ -1085,8 +1087,11 @@ jobs:
       # a GITHUB_TOKEN can start, so the same job dispatches every workflow that
       # produces a required check (those with a `merge_group` trigger, #3754) on
       # the branch it just pushed. The dispatched jobs report under the
-      # required names, on the PR head. Skipped when the App token opened the
-      # PR (#4512): CI already started, and a second run would only duplicate it.
+      # required names on the head commit only: they are not in the PR's
+      # statusCheckRollup, which branch protection reads, so they do not
+      # satisfy it (#5623, #5629) and close/reopen is the re-arm. Skipped when
+      # the App token opened the PR (#4512): CI already started, and a second
+      # run would only duplicate it.
       # Not `continue-on-error`: a PR that opened without checks reds the job.
       # Both dispatch steps close the job, so a failed `gh workflow run` never
       # skips the auto-merge disarm above or the promotion PR. This one keeps

@@ -11,6 +11,7 @@ import { recordDegradationOnce } from "./degradation-ledger.js";
 import { loadDispatchIntegration } from "./dispatch/lazy.js";
 import type { PreEditBytes } from "./dispatch/pre-edit-seed.js";
 import { logLatency } from "./latency-logger.js";
+import { readFileAtRef } from "./metrics/complexity-baseline.js";
 
 /** What a seed capture reads from the hook that runs it. */
 export interface WriterSeedDeps {
@@ -45,23 +46,66 @@ function captureBudgetMs(spanless: boolean): number {
 }
 
 /**
+ * #5551: where a seed's "before" bytes come from, chosen per route. `disk`:
+ * the file as it is now, for a `tool_call` that runs before its write (a host
+ * write or edit, and every writer that names its files). `head`: the file's
+ * HEAD copy, for a write that already happened and whose file was clean
+ * before it (#5616's credited script write, read at `tool_result`). Either
+ * way the seed splits the write's findings into new and pre-existing the same
+ * way. A source that snapshots the bytes at `tool_call` and reads them later
+ * would be a third member here.
+ */
+export type WriterBeforeSource = "disk" | "head";
+
+/**
+ * #5616: a credited script write's file as HEAD holds it. The call is
+ * credited only with a file that was clean before it, so these are the bytes
+ * the file held then; `absent` for a file the call created.
+ */
+function readHeadCopy(
+	filePath: string,
+	signal?: AbortSignal,
+): Promise<PreEditBytes> {
+	return readFileAtRef(filePath, "HEAD", "pre-edit-head-seed", signal).then(
+		(read) =>
+			read.kind === "file"
+				? { content: read.content }
+				: read.kind === "absent"
+					? "absent"
+					: "unreadable",
+	);
+}
+
+/**
+ * #5551: the one supplier of a seed's "before" bytes. `undefined` means the
+ * capture reads the file itself, before the write.
+ */
+function writerBefore(
+	source: WriterBeforeSource,
+):
+	| ((filePath: string, signal?: AbortSignal) => Promise<PreEditBytes>)
+	| undefined {
+	return source === "head" ? readHeadCopy : undefined;
+}
+
+/**
  * #4483, #5553: the one entry for a writer that names the files it will
  * change: the capture's bound, abort, degradation record and latency row, one
  * file after another, each under its own bound (`captureBudgetMs`).
  * `spanless` is a writer whose dispatch gets no edit span, so the edit-gated
  * lanes read the whole file and are seeded too
- * (`PRE_EDIT_SEED_SPANLESS_RUNNER_IDS`). #5616: `before` supplies each file's
- * earlier bytes when the write already happened (a credited script write's
- * HEAD copy, read at `tool_result`). Returns the files whose copy could not be
- * written beside them (`copy-unwritable`): they have no seed, so the caller
- * withholds their credit (#5616 F-B). Never rejects.
+ * (`PRE_EDIT_SEED_SPANLESS_RUNNER_IDS`). `source` picks where each file's
+ * earlier bytes come from (`writerBefore`, #5551). Returns the files whose
+ * copy could not be written beside them (`copy-unwritable`): they have no
+ * seed, so the caller withholds their credit (#5616 F-B). Never rejects.
  */
 export async function captureWriterSeeds(
 	filePaths: readonly string[],
 	deps: WriterSeedDeps,
 	spanless: boolean,
-	before?: (filePath: string, signal?: AbortSignal) => Promise<PreEditBytes>,
+	source: WriterBeforeSource,
 ): Promise<string[]> {
+	const before = writerBefore(source);
 	const unseeded: string[] = [];
 	for (const filePath of filePaths) {
 		const started = Date.now();

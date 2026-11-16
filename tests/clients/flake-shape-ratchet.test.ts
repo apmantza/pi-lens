@@ -822,6 +822,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"a real ast-grep child applies ignore rules through its own file matcher",
 	},
+	// 2026-11-15 (#5621): the cells run the real ruff and eslint on given bytes
+	// and ask the real biome and oxlint CLIs whether they lint stdin at all; a
+	// double encodes the premise the cells check.
+	"real-process-spawn:clients/dispatch/seed-content-mode-5621.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"whether given bytes reach a real linter through stdin, and whether a sibling copy of them ever exists beside the file, are facts of the tool and the tree; a double would encode the premise (#5621 found biome's stdin lint reports nothing)",
+	},
 	// #4522: the census must know which fixture inputs git hides; its
 	// collectUntrackedIgnoredIds call spawns the real `git ls-files` that
 	// decides, and no stub reproduces git's own index state.
@@ -1718,7 +1726,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"real-process-spawn:scripts/pre-push-targeted-tests.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"git's pre-push stdin and the hook script's exit/skip/lock-timeout contract are the subject; the union and lock-admission witnesses need a real git fixture and the real hook chain; the #5468 F4 concurrent-sweep witness needs a second real gate process sweeping the shared base",
+			"git's pre-push stdin and the hook script's exit/skip/lock-timeout contract are the subject; the union and lock-admission witnesses need a real git fixture and the real hook chain; the #5468 F4 concurrent-sweep witness needs a second real gate process sweeping the shared base; the #5630 PATH cases run the real `/bin/sh` hook, because the PATH the shell hands its child and that child's spawn from another cwd are the subject, which an in-process call cannot see",
 	},
 	// #5348: scripts/probe-clean-signal.mjs runs on import and exits the process, so its
 	// --write-matrix gate is observable only as a real run and the doc it leaves.

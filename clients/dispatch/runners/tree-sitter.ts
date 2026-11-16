@@ -372,6 +372,8 @@ const treeSitterRunner: RunnerDefinition = {
 	],
 	priority: PRIORITY.STRUCTURAL_ANALYSIS,
 	skipTestFiles: false, // Run on test files too (structural issues matter there)
+	// #5621: it reads the `file.content` fact, never the disk.
+	lintsGivenContent: true,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		// Use singleton client — WASM must never be re-initialized after first call

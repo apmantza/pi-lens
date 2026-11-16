@@ -592,6 +592,9 @@ export const wallClockBudgetInclude = [
 	"tests/clients/dispatch/runner-spawn-timeout-cooldown.test.ts",
 	"tests/clients/dispatch/runners/ast-grep-playground-verify.test.ts",
 	"tests/clients/dispatch/runners/ast-grep-rule-ignores.test.ts",
+	// #5621: given bytes reach the real ruff and eslint through stdin, and the
+	// real biome and oxlint CLIs are asked whether they do (flake-shape admission).
+	"tests/clients/dispatch/seed-content-mode-5621.test.ts",
 	// #4522: the git-ignored census reads git's own tracked-versus-ignored
 	// answer through a real `git ls-files` child (flake-shape admission).
 	"tests/clients/dispatch/smoke-fixture-coverage.test.ts",

@@ -472,6 +472,15 @@ export interface RunnerDefinition {
 	 * config is never reported as selected.
 	 */
 	requiresConfig?: (cwd: string) => boolean;
+	/**
+	 * #5621: the runner lints `ctx.givenContent` instead of the file's own
+	 * bytes when the context carries it (a seed run over bytes not on disk): its
+	 * tool reads them from stdin under the file's real path, or the runner reads
+	 * them from the `file.content` fact. A runner without it reads the disk
+	 * through its tool's path argument, so a run that includes one is given a
+	 * copy of the bytes beside the file instead (`prepareSeedLaneRun`).
+	 */
+	lintsGivenContent?: true;
 	/** Execute the runner */
 	run(ctx: DispatchContext): Promise<RunnerResult>;
 }
@@ -1067,6 +1076,12 @@ export interface DispatchContext {
 	 * reach the widget, and its log rows say so.
 	 */
 	readonly preEditCapture?: true;
+	/**
+	 * #5621: the bytes this run lints in place of the file's own, which are not
+	 * on disk (the seed of a credited write, a staged blob). Set only on a run
+	 * whose every runner declares `lintsGivenContent`, and read only by those.
+	 */
+	readonly givenContent?: string;
 	/**
 	 * #4509: the runners that hold a recorded blocker on this file when the
 	 * dispatch starts. A recorded blocker is judged only by a run of its own

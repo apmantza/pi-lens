@@ -26,6 +26,9 @@ import { scaledTestTimeout } from "../../support/test-timeout-scale.js";
 
 const d = it.skipIf(process.platform === "win32");
 
+/** How long the "no marker may appear" window runs, in ms (hardy writer marks at +6 s). */
+const NEGATIVE_WINDOW_MS = 8_000;
+
 let repoDir = "";
 
 beforeEach(() => {
@@ -70,11 +73,19 @@ describe("safeSpawnAsync POSIX process-group kill (#2026/#2027)", () => {
 
 			expect(result.status === null || result.signal !== undefined).toBe(true);
 
-			// Poll past the writer's scheduled mark (+6s): the group kill must
-			// have taken out the hardy grandchild too.
-			for (let waited = 0; waited < 8_000; waited += 250) {
+			// Negative window past the writer's scheduled mark (+6s): the group
+			// kill must have taken out the hardy grandchild too. `waitFor` cannot
+			// express this -- its predicate is already true at the first poll -- so
+			// the wait is a real-clock deadline loop (#4865, shape 86): the same
+			// 8 s span, asserted on every poll, and the loop ends on the clock
+			// instead of a turn count the sleeps had to survive.
+			const windowEndsAt = Date.now() + NEGATIVE_WINDOW_MS;
+			while (Date.now() < windowEndsAt) {
 				await new Promise((r) => setTimeout(r, 250));
-				expect(fs.existsSync(marker)).toBe(false);
+				expect(
+					fs.existsSync(marker),
+					`hardy grandchild wrote ${marker} after the group kill`,
+				).toBe(false);
 			}
 		},
 		20_000,

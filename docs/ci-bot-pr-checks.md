@@ -2,15 +2,19 @@
 
 A pull request that a workflow opens or updates with the repository
 `GITHUB_TOKEN` starts no `pull_request` run: GitHub does not let a token-pushed
-commit trigger other workflows. Every required check then stays absent and the
-PR is BLOCKED until a maintainer closes and reopens it. PR #4945 sat that way
-from 2026-10-28 (#5062; #4338 and #2801 before it).
+commit trigger other workflows. Every required check then stays absent from the
+PR and it is BLOCKED until a maintainer closes and reopens it. PR #4945 sat that
+way from 2026-10-28 (#5062; #4338 and #2801 before it). The dispatch described
+below does not change that: its rows land on the head commit, not in the PR's
+`statusCheckRollup` that branch protection reads (#5623, #5629), so close and
+reopen is the re-arm.
 
 ## The mechanism
 
 `workflow_dispatch` and `repository_dispatch` are the two events a
 `GITHUB_TOKEN` can start. The job that opens the PR dispatches every workflow
-that produces a required check on the branch it just pushed:
+that produces a required check on the branch it just pushed. This tests the
+branch head; it does not satisfy the PR's required checks (see below):
 
 ```
 gh workflow run ci.yml --ref <bot branch>
@@ -29,13 +33,18 @@ head, and post the required check names (`Lint & type-check`, `Unit tests`,
 `Hot-path latency (advisory)` (#4363) and always reports on the head. A manual
 run reads as `hotpath=true`, so it times the head against `HEAD^1`, the
 previous commit on the bot branch.
-Branch protection matches a required check by name and app, not by event, and
 `scripts/ci-verdict.mjs` gates a branch-protection name whatever event its run
-came from (#4090), so those rows count.
+came from (#4090), and those rows land on the commit. They are not enough for a
+PR. On #5623 (2026-11-15) the dispatch rows held every required name, green,
+while the PR's `statusCheckRollup` listed only CodeRabbit and SonarCloud and the
+merge stayed BLOCKED (#5629). A PR verdict is therefore green only when its
+rollup also carries a concluded success for every required name. A PR with
+dispatch rows alone reads pending, and the remedy is to close and reopen it so
+its `pull_request` runs start.
 
-On a bot-opened PR the dispatch runs are the PR's whole CI, so `ci-verdict`
-also gates every non-`(advisory)` check from a `workflow_dispatch` run on its
-head, such as `actionlint & markdownlint` and `Production install build`, exactly
+On a bot-opened PR the dispatch runs are the CI the PR has until its
+`pull_request` runs start, so `ci-verdict` also gates every non-`(advisory)`
+check from a `workflow_dispatch` run on its head, such as `actionlint & markdownlint` and `Production install build`, exactly
 as it gates a `pull_request` run. It reads the PR author (the `gh` `is_bot`
 flag, an `app/` or `[bot]` login; the REST user type `Bot`). #4090's advisory
 rule stays for dispatch runs on a human PR, for a bare-SHA target (no author to

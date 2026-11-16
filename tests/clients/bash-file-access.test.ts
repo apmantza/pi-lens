@@ -14,6 +14,7 @@ import {
 	type ReadSpan,
 } from "../../clients/bash-file-access.js";
 import { toPosix } from "../../clients/path-utils.js";
+import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { ReadGuard } from "../../clients/read-guard.js";
 import { registerSearchReads } from "../../clients/search-read-registration.js";
 import { pinFixtureHome, removeTempDirSync } from "./test-utils.js";
@@ -678,6 +679,7 @@ describe("extractWrittenPathsFromCommand — bash writes", () => {
 					input: { command: `echo x > ${f}` },
 				},
 				tmp,
+				new RuntimeCoordinator(),
 			),
 		).toBe(true);
 		expect(
@@ -687,6 +689,7 @@ describe("extractWrittenPathsFromCommand — bash writes", () => {
 					input: { command: `cat ${f}` },
 				},
 				tmp,
+				new RuntimeCoordinator(),
 			),
 		).toBe(false);
 	});
@@ -701,48 +704,56 @@ describe("extractWrittenPathsFromCommand — bash writes", () => {
 	 * budget and skips the analyzer-bootstrap load the edit path needs.
 	 */
 	it("classifies a recognised edit tool that carries no shell command (#2939 W4)", () => {
-		expect(isEditClassToolResult({ toolName: "edit", input: {} }, tmp)).toBe(
-			true,
-		);
-		expect(isEditClassToolResult({ toolName: "read", input: {} }, tmp)).toBe(
-			false,
-		);
+		expect(
+			isEditClassToolResult(
+				{ toolName: "edit", input: {} },
+				tmp,
+				new RuntimeCoordinator(),
+			),
+		).toBe(true);
+		expect(
+			isEditClassToolResult(
+				{ toolName: "read", input: {} },
+				tmp,
+				new RuntimeCoordinator(),
+			),
+		).toBe(false);
 	});
 
 	/**
-	 * #5248. Recurrence it prevents: `lsp_navigation` and `ast_grep_replace`
-	 * rewrote several files, were classed read-only, and got the 500 ms wall,
-	 * which abandoned the per-file dispatch after the first file, so the commit
-	 * gate ran before the other files published a verdict. A result naming the
-	 * files an admitted pi-lens tool wrote is edit-class; the same field on a
-	 * tool pi-lens does not own, and an admitted tool that wrote nothing, is not.
+	 * #5248, #5551. Recurrence it prevents: `lsp_navigation` and
+	 * `ast_grep_replace` rewrote several files, were classed read-only, and got
+	 * the 500 ms wall, which abandoned the per-file dispatch after the first
+	 * file, so the commit gate ran before the other files published a verdict.
+	 * A call the mutation bridge recorded writes for is edit-class whatever its
+	 * name; a call it recorded nothing for is not, whatever its result claims.
 	 */
-	it("classifies an admitted tool's result that names applied files as edit-class (#5248)", () => {
-		const applied = { appliedFiles: [pathIn("a.ts"), pathIn("b.ts")] };
-		for (const toolName of ["lsp_navigation", "ast_grep_replace"])
+	it("classifies a call the bridge recorded writes for as edit-class (#5248)", () => {
+		const runtime = new RuntimeCoordinator();
+		runtime.noteCallWrite("call-wrote", pathIn("a.ts"));
+		runtime.noteCallWrite("call-wrote", pathIn("b.ts"));
+		for (const toolName of ["lsp_navigation", "ast_grep_replace", "any_tool"])
 			expect(
-				isEditClassToolResult({ toolName, input: {}, details: applied }, tmp),
+				isEditClassToolResult(
+					{ toolName, toolCallId: "call-wrote", input: {} },
+					tmp,
+					runtime,
+				),
 			).toBe(true);
+		// A result that claims files the bridge never recorded (the field the
+		// by-name table used to admit) is read-only.
+		const claim = {
+			toolName: "evil_tool",
+			toolCallId: "call-claimed",
+			input: {},
+			details: { appliedFiles: [pathIn("a.ts")] },
+		};
+		expect(isEditClassToolResult(claim, tmp, runtime)).toBe(false);
 		expect(
 			isEditClassToolResult(
-				{
-					toolName: "lsp_navigation",
-					input: {},
-					details: { appliedFiles: [] },
-				},
+				{ toolName: "lsp_navigation", input: {} },
 				tmp,
-			),
-		).toBe(false);
-		expect(
-			isEditClassToolResult(
-				{ toolName: "lsp_navigation", input: {}, details: {} },
-				tmp,
-			),
-		).toBe(false);
-		expect(
-			isEditClassToolResult(
-				{ toolName: "evil_tool", input: {}, details: applied },
-				tmp,
+				runtime,
 			),
 		).toBe(false);
 	});

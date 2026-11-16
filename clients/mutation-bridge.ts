@@ -133,6 +133,12 @@ export interface MutationBridgeDeps {
 			originCwd?: string,
 			readGuardBranchEpoch?: number,
 		) => boolean;
+		/**
+		 * #5551: the per-call written set (`RuntimeCoordinator.noteCallWrite`).
+		 * A recorded entry that names its call lands here, so the call's
+		 * `tool_result` dispatches it.
+		 */
+		noteCallWrite?: (toolCallId: string, filePath: string) => void;
 	};
 	getCacheManager(): {
 		addModifiedRange?: (
@@ -386,11 +392,42 @@ function rejectedOutcome(
 	return { recorded: false, accepted: false, reason, detail, queued: [] };
 }
 
+/**
+ * Who wrote the bytes, and the answers that follow from it (#5551, the writer
+ * table in `clients/writers.ts`).
+ *
+ * - `agent` (the default): a producer's own call wrote them. The receipt and
+ *   the handled mark are facts about the bytes, so they land even after the
+ *   session was replaced; authorship advances by the entry's provenance; a
+ *   running whole-package fixer must not erase them (#3598).
+ * - `drain`: pi-lens's own agent_end drain rewrote a file the session queued.
+ *   It belongs to that session (#3528), so every record, the receipt and the
+ *   handled mark included, lands only while it lives. It carries an
+ *   authorship forward, because the drain retired a changed one immediately
+ *   before writing (`retireChangedAuthorshipBeforeDrain`, #4131). Its bytes
+ *   are pi-lens's, not the agent's, so a fix run never captures them: its own
+ *   fixer's restore is still running when the drain records what it changed.
+ */
+export type MutationWriter = "agent" | "drain";
+
+export interface MutationRecordOptions {
+	/**
+	 * v2 reports a retired lineage as `accepted:false` (see
+	 * {@link recordMutationOutcome}).
+	 */
+	rejectStaleLineage?: boolean;
+	/** The change-log row's label. Defaults to `agent-tool:<consumer>`. */
+	source?: ProjectChangeSource;
+	writer?: MutationWriter;
+}
+
 /** Everything the bookkeeping stages share once an entry is admitted. */
 interface MutationBookkeepingContext {
 	entry: MutationBridgeEntry;
 	classification: ReturnType<typeof classifyBridgeMutation>;
 	deps: MutationBridgeDeps;
+	writer: MutationWriter;
+	source: ProjectChangeSource;
 	runtime: ReturnType<MutationBridgeDeps["getRuntime"]>;
 	filePath: string;
 	projectRoot: string;
@@ -456,8 +493,12 @@ function stampReadGuardWrite(
 			// around (#4131, #4187 R2-4): only the observed replay had a
 			// pre-write check, its tool_call's retire. The rest (a co-process
 			// producer, ast_grep_replace or an LSP edit) may create a first
-			// authorship; settled-sweep drift never does (#4210).
-			advanceAuthorship: entry.provenance === "observed",
+			// authorship; settled-sweep drift never does (#4210). A drain retired
+			// a changed authorship just before it wrote: the pre-write check
+			// `recordWritten` reads from an omitted flag.
+			...(ctx.writer !== "drain" && {
+				advanceAuthorship: entry.provenance === "observed",
+			}),
 			// A first bridge credit is limited to the producer's reported range;
 			// settled-sweep drift has no producer evidence and may not create one.
 			...(authoredRanges !== undefined && { authoredRanges }),
@@ -528,12 +569,14 @@ function applyTurnAndChangeLog(
 				),
 		);
 	}
+	// A drain's receipt is its session's (#3528): a replaced one gets none.
+	if (!sessionLive && ctx.writer === "drain") return;
 	// The receipt is not a stage: when it throws the record was not taken, so
 	// the rest is skipped, the handled mark included, and the settled sweep
 	// still sees the bytes as drift to replay.
 	runtime.recordProjectMutation?.({
 		filePath,
-		source: `agent-tool:${classification.toolName}`,
+		source: ctx.source,
 		cwd: projectRoot,
 		changedRange,
 		// #4943: the writing session's change-log row (the turn-state range above
@@ -611,15 +654,20 @@ function runMutationBookkeeping(
  * the frozen shim still returns, the v2 live-state acceptance, and the kinds
  * this call newly enqueued for the deferred pass.
  *
- * `rejectStaleLineage` is the one behavioral knob. A retired lineage still
- * runs the same bookkeeping (receipt, handled mark, deferral skip) either way;
- * v2 reports it as `accepted:false, reason:"stale-lineage"` while the frozen
- * v1 shim keeps the historical `recorded:true` it has always returned.
+ * `rejectStaleLineage` changes only the answer. A retired lineage still runs
+ * the same bookkeeping (receipt, handled mark, deferral skip) either way; v2
+ * reports it as `accepted:false, reason:"stale-lineage"` while the frozen v1
+ * shim keeps the historical `recorded:true` it has always returned.
+ *
+ * #5551: the in-process recorders fold here. `source` names their change-log
+ * row, and `writer` (see {@link MutationWriter}) is the one discriminator the
+ * agent_end drain differs on. The bridges never pass either, so a producer
+ * cannot choose its own label or a drain's liveness rule.
  */
 export function recordMutationOutcome(
 	entry: unknown,
 	deps: MutationBridgeDeps,
-	opts?: { rejectStaleLineage?: boolean },
+	opts?: MutationRecordOptions,
 ): MutationRecordOutcome {
 	const problem = mutationEntryProblem(entry);
 	if (problem !== undefined) {
@@ -666,16 +714,21 @@ function publishQueued(
 function runAdmittedMutation(
 	entry: MutationBridgeEntry,
 	deps: MutationBridgeDeps,
-	opts: { rejectStaleLineage?: boolean } | undefined,
+	opts: MutationRecordOptions | undefined,
 ): MutationRecordOutcome {
+	const writer = opts?.writer ?? "agent";
 	// #3598: an observed or bridged producer's write is an agent mutation a
 	// running whole-package fixer must not erase. Read it before the bookkeeping.
-	(deps.noteAgentMutation ?? noteAgentMutation)(entry.filePath);
+	if (writer === "agent")
+		(deps.noteAgentMutation ?? noteAgentMutation)(entry.filePath);
 
+	const classification = classifyBridgeMutation(entry);
 	const ctx: MutationBookkeepingContext = {
 		entry,
-		classification: classifyBridgeMutation(entry),
+		classification,
 		deps,
+		writer,
+		source: opts?.source ?? `agent-tool:${classification.toolName}`,
 		runtime: deps.getRuntime(),
 		filePath: entry.filePath,
 		projectRoot: deps.getProjectRoot(),
@@ -696,6 +749,10 @@ function runAdmittedMutation(
 			queued,
 		};
 	}
+	// #5551: the receipt was taken, so the call that wrote this file learns of
+	// it at its `tool_result`, the one channel every producer's write reaches.
+	if (entry.toolCallId !== undefined)
+		ctx.runtime.noteCallWrite?.(entry.toolCallId, ctx.filePath);
 	const accepted = sessionLive || opts?.rejectStaleLineage !== true;
 	return accepted
 		? { recorded: true, accepted: true, queued }

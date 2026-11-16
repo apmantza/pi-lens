@@ -50,7 +50,6 @@
 	"tests/clients/dispatch/runners/exit-blind-runners.test.ts:../../../../clients/safe-spawn.js:[\"safeSpawnAsync\"]": 14,
 	"tests/clients/dispatch/runners/fish-indent.test.ts:../../../../clients/safe-spawn.js:[\"safeSpawnAsync\"]": 14,
 	"tests/clients/dispatch/runners/java-csharp-runners.test.ts:../../../../clients/safe-spawn.js:[\"safeSpawn\",\"safeSpawnAsync\"]": 13,
-	"tests/clients/dispatch/runners/javac-build-descriptor-gate.test.ts:../../../../clients/safe-spawn.js:[\"safeSpawn\",\"safeSpawnAsync\"]": 13,
 	"tests/clients/dispatch/runners/markdownlint-fixable.test.ts:../../../../clients/safe-spawn.js:[\"safeSpawn\",\"safeSpawnAsync\"]": 13,
 	"tests/clients/dispatch/runners/nonzero-exit-no-output.test.ts:../../../../clients/safe-spawn.js:[\"safeSpawnAsync\"]": 14,
 	"tests/clients/dispatch/runners/nonzero-exit-no-output.test.ts:../../../../clients/tool-policy.js:[\"getAutofixCapability\",\"getLinterPolicyForCwd\"]": 2,

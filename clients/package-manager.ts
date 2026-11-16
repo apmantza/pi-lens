@@ -385,10 +385,11 @@ const globalBinDirProbeFlights = createAvailabilityProbeFlight<string[]>();
 
 /** Directories where a given manager installs global binaries. */
 async function globalBinDirsFor(pm: NodePackageManager): Promise<string[]> {
-	// #4530: keyed by trust scope too. A trusted query reads the project's own
-	// manager configuration and an untrusted one does not, so neither answer
-	// may serve the other after `turn_start` re-adopts a different trust. The
-	// scope is captured with the key, before the await (defect shape 58).
+	// #4530: keyed by trust scope too. Since #5632 every query runs from HOME, so
+	// the answer does not depend on trust, but the scope stays in the key: no
+	// trust change may serve an answer made under another trust after
+	// `turn_start` re-adopts it. The scope is captured with the key, before the
+	// await (defect shape 58).
 	const scoped = getProjectTrustState() !== "trusted";
 	const key = `${scoped ? "scoped" : "trusted"}:${pm}`;
 	const cached = globalBinDirCache.get(key);
@@ -398,7 +399,7 @@ async function globalBinDirsFor(pm: NodePackageManager): Promise<string[]> {
 	// Concurrent callers (dispatch runs several tools per edit) must share ONE
 	// probe rather than each spawning their own `npm config get prefix` (#1602).
 	const shared = globalBinDirProbeFlights.run(key, () =>
-		probeGlobalBinDirs(pm, key, scoped, generation),
+		probeGlobalBinDirs(pm, key, generation),
 	);
 	return shared.promise;
 }
@@ -406,7 +407,6 @@ async function globalBinDirsFor(pm: NodePackageManager): Promise<string[]> {
 async function probeGlobalBinDirs(
 	pm: NodePackageManager,
 	key: string,
-	scoped: boolean,
 	generation: GenerationHandle,
 ): Promise<string[]> {
 	if (pm === "bun") {
@@ -425,12 +425,14 @@ async function probeGlobalBinDirs(
 			: pm === "pnpm"
 				? ["bin", "-g"]
 				: ["global", "bin"]; // yarn
-	// #4530: the managers read project configuration (`.npmrc`, `.yarnrc`)
-	// from their cwd, so under untrusted pi trust the query runs from HOME and
-	// a project cannot redirect where global binaries are looked up.
+	// #4530 and #5632: the managers read project configuration (`.npmrc`,
+	// `.yarnrc`) and create their bin dir relative to their cwd, so the query
+	// always runs from HOME, whatever the trust. Trust decides what else is
+	// read, not where the query runs: a trusted session got a `${HOME}` tree in
+	// the repository from a relative PNPM_HOME.
 	const res = await safeSpawnAsync(pmBinary(pm), query, {
 		timeout: 5000,
-		...(scoped && { cwd: os.homedir() }),
+		cwd: os.homedir(),
 	});
 	if (res.status !== 0 || res.error) return [];
 	const out = res.stdout.trim();
@@ -465,7 +467,9 @@ export async function allAvailableGlobalBinDirs(
 	for (const pm of PREFERENCE) {
 		if (!(await isAvailable(pm, onTransient))) continue;
 		for (const dir of await globalBinDirsFor(pm)) {
-			const normalized = path.resolve(dir);
+			// #5632 F1: a relative answer resolves against HOME, the cwd the query
+			// ran from, not against the session cwd.
+			const normalized = path.resolve(os.homedir(), dir);
 			if (seen.has(normalized)) continue;
 			seen.add(normalized);
 			dirs.push(normalized);

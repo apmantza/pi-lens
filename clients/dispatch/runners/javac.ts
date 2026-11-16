@@ -2,7 +2,7 @@ import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
-import { resolveRunnerCwd } from "../../tool-cwd.js";
+import { configCeiling, resolveRunnerCwd } from "../../tool-cwd.js";
 import { hasToolConfig } from "../../tool-config-presence.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -80,7 +80,7 @@ const javacRunner: RunnerDefinition = {
 		// Same shared descriptor walk the SpotBugs gate uses.
 		if (
 			hasToolConfig("javaBuild", path.dirname(absPath), {
-				ceiling: ctx.projectRoot ?? ctx.cwd,
+				ceiling: configCeiling(ctx.cwd, ctx.projectRoot),
 			})
 		) {
 			ctx.log?.(

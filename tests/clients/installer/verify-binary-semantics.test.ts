@@ -24,6 +24,9 @@ import { removeTempDirSync } from "../test-utils.js";
 
 let binDir = "";
 
+/** How long the "no marker may appear" window runs, in ms (writer marks at +6 s). */
+const NEGATIVE_WINDOW_MS = 7_000;
+
 beforeEach(() => {
 	binDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-verify-2015-"));
 });
@@ -100,13 +103,20 @@ describe("verifyToolBinary (#2015)", () => {
 		expect(Date.now() - started).toBeLessThan(15_000);
 		expect(transient).toHaveBeenCalledTimes(1);
 
-		// Poll past the grandchild's scheduled write (+6s): no marker = the
-		// whole TREE died with the budget. Asserted on BOTH platforms:
-		// Windows via taskkill /T, POSIX via #2026 group-kill (detached
-		// spawn + negative-pid signal).
-		for (let waited = 0; waited < 7_000; waited += 250) {
+		// Negative window past the grandchild's scheduled write (+6s): no marker
+		// = the whole TREE died with the budget. Asserted on BOTH platforms:
+		// Windows via taskkill /T, POSIX via #2026 group-kill (detached spawn +
+		// negative-pid signal). `waitFor` cannot wait for an event that must NOT
+		// happen, so this is a real-clock deadline loop (#4865, shape 86): the
+		// same 7 s span, asserted on every poll, ending on the clock instead of a
+		// turn count.
+		const windowEndsAt = Date.now() + NEGATIVE_WINDOW_MS;
+		while (Date.now() < windowEndsAt) {
 			await new Promise((r) => setTimeout(r, 250));
-			expect(fs.existsSync(marker)).toBe(false);
+			expect(
+				fs.existsSync(marker),
+				`detached grandchild wrote ${marker} after the tree kill`,
+			).toBe(false);
 		}
 	}, 25_000);
 

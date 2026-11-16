@@ -78,6 +78,29 @@ async function runEslint(filePath: string, dispatchRoot: string) {
 	return runner.run(makeRunnerCtx(filePath, dispatchRoot) as never);
 }
 
+/**
+ * Run the runner on the context production builds: `createDispatchContext`
+ * sets `ctx.cwd` to the file's own package and keeps the workspace in
+ * `ctx.projectRoot`. `makeRunnerCtx(file, root)` puts the workspace in `ctx.cwd`.
+ */
+async function runEslintOnDispatchContext(filePath: string, workspace: string) {
+	const { createDispatchContext } =
+		await import("../../../../clients/dispatch/dispatcher.js");
+	const { FactStore } =
+		await import("../../../../clients/dispatch/fact-store.js");
+	const runner = (
+		await import("../../../../clients/dispatch/runners/eslint.js")
+	).default;
+	const ctx = createDispatchContext(
+		filePath,
+		workspace,
+		{ getFlag: () => undefined } as never,
+		new FactStore(),
+	);
+	await runner.run(ctx);
+	return ctx;
+}
+
 const lintSpawns = () =>
 	spawns.filter((spawn) => spawn.args.includes("--format"));
 
@@ -111,6 +134,30 @@ describe("eslint runner cwd follows the config, lookup follows the package (#554
 			expect(lintSpawns()).toHaveLength(1);
 			expect(lintSpawns()[0]?.command).toBe(shim);
 			expect(lintSpawns()[0]?.cwd).toBe(env.tmpDir);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("spawns in the config directory on the context dispatch builds for a nested package (#5631)", async () => {
+		// Recurrence: #5543 proved the anchor on `ctx.cwd` = the workspace, but
+		// `createDispatchContext` sets `ctx.cwd` to the file's package, so the
+		// config climb stopped at the package and the anchor never fired.
+		const env = setupTestEnvironment("pi-lens-eslint-config-cwd-prod-");
+		try {
+			const filePath = rootConfigOverPackage(env.tmpDir);
+			plantEslint(path.join(env.tmpDir, "apps", "web"));
+
+			const ctx = await runEslintOnDispatchContext(filePath, env.tmpDir);
+
+			// The premise: this is the production shape, not the workspace.
+			expect(fs.realpathSync(ctx.cwd)).toBe(
+				fs.realpathSync(path.join(env.tmpDir, "apps", "web")),
+			);
+			expect(lintSpawns()).toHaveLength(1);
+			expect(fs.realpathSync(lintSpawns()[0]?.cwd ?? "")).toBe(
+				fs.realpathSync(env.tmpDir),
+			);
 		} finally {
 			env.cleanup();
 		}

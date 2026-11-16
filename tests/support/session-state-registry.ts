@@ -2724,7 +2724,9 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"runtime-config.ts": 0,
 	// #5120 r2: 31 -> 32 for _partialApplies, a WeakMap keyed by one call's own
 	// input object, so no session reads another's entry and none needs a reset.
-	"runtime-coordinator.ts": 32,
+	// #5551: 32 -> 33 for _callWrites, a per-call written set the session
+	// reset clears (session-scope-sweep pins it "reset").
+	"runtime-coordinator.ts": 33,
 	// #2060: 3 -> 5 for GIT_INTEGRATION_SUBCOMMANDS and
 	// GIT_GLOBAL_OPTIONS_WITH_VALUE — command-shape vocabulary, not state.
 	"runtime-tool-result.ts": 3,
