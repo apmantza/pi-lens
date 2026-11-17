@@ -1095,6 +1095,31 @@ describe(
 			}
 		});
 
+		it("full mode preinstalls only the startup defaults whose installer entry opts in (#5410 D9)", async () => {
+			// Recurrence: `firePreinstallDefaults` ran `ensureTool` for every
+			// `startup.defaults` entry, so rubocop was installed (a whole gem root
+			// write) for any configured Ruby project with no opt-in anywhere.
+			const { env, ensureTool } = await runSessionStart("full", (tmpDir) => {
+				fs.writeFileSync(
+					path.join(tmpDir, "Gemfile"),
+					'source "https://rubygems.org"\n',
+				);
+				fs.writeFileSync(path.join(tmpDir, "app.rb"), "puts 1\n");
+				fs.writeFileSync(path.join(tmpDir, "run.sh"), "#!/bin/sh\necho 1\n");
+			});
+
+			try {
+				const asked = (ensureTool.mock.calls as unknown as string[][]).map(
+					(call) => call[0],
+				);
+				// Control: the preinstall path ran, for a tool that opts in.
+				expect(asked).toContain("shellcheck");
+				expect(asked).not.toContain("rubocop");
+			} finally {
+				await env.cleanup();
+			}
+		});
+
 		it("quick mode skips build-cache cleanup and error-debt checks", async () => {
 			const { env, notify, scanDirectory, ensureTool } =
 				await runSessionStart("quick");

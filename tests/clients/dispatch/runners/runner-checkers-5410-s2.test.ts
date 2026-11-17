@@ -114,9 +114,9 @@ interface RunnerCell {
 	/** What the tool prints on a clean run. */
 	cleanStdout: string;
 	/**
-	 * The skip reason an absent tool reads. The four with an execution-policy
-	 * row (`autoInstall: true`) read `install-disabled` under the suite's
-	 * install kill switch; cue and typos have no row, so they read
+	 * The skip reason an absent tool reads. The four whose installer entry
+	 * opts in (`autoInstall: true`) read `install-disabled` under the suite's
+	 * install kill switch; cue and typos have no opt-in, so they read
 	 * `not-installed`: the opt-in each had before is unchanged (#5418).
 	 */
 	absentReason: "install-disabled" | "not-installed";

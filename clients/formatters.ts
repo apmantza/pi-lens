@@ -67,38 +67,18 @@ import {
 	assertInstallAllowed,
 	getProjectTrustGeneration,
 } from "./project-trust.js";
-import { tryLazyInstallForFormatter } from "./dispatch/runners/utils/lazy-installer.js";
 import { getToolPath } from "./installer/index.js";
 import { getIsolatedNpxSpawnOptions } from "./tool-probe.js";
 import {
-	getAutoInstallToolIdForFormatter,
 	getFormatterPolicyForFile,
 	getSmartDefaultFormatterName,
+	shouldAutoInstallTool,
 	hasKtfmtConfig,
 	hasKtlintConfig,
 	hasNearestPackageJsonDependency,
 	hasOxfmtSvelteConfig,
 	OXFMT_SUPPORTED_EXTENSIONS,
 } from "./tool-policy.js";
-
-/**
- * Lazy-install a formatter's tool, through the shared seam (#1537).
- *
- * This used to own a second copy of the attempt guard — `_lazyInstallAttempts`,
- * a Set keyed before the install ran and never cleared — so a `gem install
- * rubocop` that died on a network blip was never retried for the session. The
- * state, the transient/durable classification and the retry ladder now live in
- * `lazy-installer.ts`; what stays here is the one thing that is formatter
- * business: a fresh binary on PATH invalidates every "not found" verdict (#1495).
- */
-export async function tryLazyInstallFormatterTool(
-	tool: "rubocop" | "rustfmt",
-	cwd: string,
-): Promise<boolean> {
-	const ok = await tryLazyInstallForFormatter(tool, cwd);
-	if (ok) resetWhichLatches();
-	return ok;
-}
 
 // --- Types ---
 
@@ -619,8 +599,7 @@ async function resolveGoFmtBinary(): Promise<string | null> {
  * root the formatter spawns in. A parent directory's `.venv` is another
  * project's interpreter and is never walked to (#2544 r4 F2). PATH outranks
  * managed here, unlike the runners, because the formatter's version decides
- * the bytes it writes. No install: the formatter's own opt-in
- * (`AUTO_INSTALLABLE_DEFAULT_FORMATTERS`) decides that.
+ * the bytes it writes. No install: `shouldAutoInstallTool` decides that.
  */
 function resolveFormatterToolCommand(
 	toolId: string,
@@ -713,8 +692,8 @@ async function resolveManagedSmartDefaultCommand(
 	filePath: string,
 	args: string[],
 ): Promise<string[] | typeof FORMATTER_UNAVAILABLE | FormatterRejected> {
-	const toolId = getAutoInstallToolIdForFormatter(formatterName);
-	if (!toolId) return FORMATTER_UNAVAILABLE;
+	if (!shouldAutoInstallTool(formatterName)) return FORMATTER_UNAVAILABLE;
+	const toolId = formatterName;
 	const found = await resolveFormatterToolCommand(
 		toolId,
 		filePath,
@@ -997,10 +976,9 @@ export const biomeFormatter: FormatterInfo = {
 		// auto-install — catches a `pnpm add -g @biomejs/biome` PATH misses (#375).
 		const global = await findGlobalBinary("biome");
 		if (global) return [global, ...args, filePath];
-		const toolId = getAutoInstallToolIdForFormatter("biome");
-		if (!toolId) return null;
+		if (!shouldAutoInstallTool("biome")) return null;
 		const { ensureTool } = await import("./installer/index.js");
-		const installed = await ensureTool(toolId);
+		const installed = await ensureTool("biome");
 		if (installed) return [installed, ...args, filePath];
 		return null;
 	},
@@ -1159,10 +1137,9 @@ export const ruffFormatter: FormatterInfo = {
 		const args = ["format", ...styleArgs];
 		const found = await resolveFormatterToolCommand("ruff", filePath);
 		if (found.command) return [found.command, ...args, filePath];
-		const toolId = getAutoInstallToolIdForFormatter("ruff");
-		if (!toolId) return null;
+		if (!shouldAutoInstallTool("ruff")) return null;
 		const { ensureTool } = await import("./installer/index.js");
-		const installed = await ensureTool(toolId);
+		const installed = await ensureTool("ruff");
 		if (installed) return [installed, ...args, filePath];
 		// #2413: `ensureTool` already resolves PATH, global bins and the managed
 		// dir (and attempts an install) before returning falsy, so reaching here
@@ -1241,13 +1218,9 @@ export const rustfmtFormatter: FormatterInfo = {
 		if (edition === undefined) return null;
 		return ["rustfmt", "--edition", edition, filePath];
 	},
-	async detect(cwd: string) {
-		if ((await which("rustfmt")) !== null) return true;
-		// If we're in a Rust project, attempt one lazy install of rustfmt component.
-		const rustProject = (await findUp(["Cargo.toml"], cwd)).length > 0;
-		if (!rustProject) return false;
-		if ((await which("rustup")) === null) return false;
-		await tryLazyInstallFormatterTool("rustfmt", cwd);
+	async detect(_cwd: string) {
+		// Never installed unasked: `rustup component add` rewrites the user's
+		// whole toolchain (#5410 D9). An absent rustfmt is "not installed".
 		return (await which("rustfmt")) !== null;
 	},
 };
@@ -1375,8 +1348,10 @@ export const ktfmtFormatter: FormatterInfo = {
 			return styleFlag
 				? [found.command, styleFlag, filePath]
 				: [found.command, filePath];
-		const { ensureTool } = await import("./installer/index.js");
-		const installed = await ensureTool("ktfmt");
+		// Installed only when its installer entry opts in (#5410 D9).
+		const installed = shouldAutoInstallTool("ktfmt")
+			? await (await import("./installer/index.js")).ensureTool("ktfmt")
+			: undefined;
 		// #2413: the ladder and ensureTool (PATH/global/managed + install) both
 		// failed, and `detect()` gates only on hasKtfmtConfig — no binary probe —
 		// so a config-only project reaches here with ktfmt absent. The static
@@ -1410,8 +1385,8 @@ export const rubocopFormatter: FormatterInfo = {
 	},
 	async detect(cwd: string) {
 		if (!hasToolConfig("rubocop", cwd)) return false;
-		if ((await which("rubocop")) !== null) return true;
-		await tryLazyInstallFormatterTool("rubocop", cwd);
+		// Never installed unasked: `gem install` writes the user's gem root
+		// (#5410 D9). An absent rubocop is "not installed".
 		return (await which("rubocop")) !== null;
 	},
 };
@@ -2060,10 +2035,7 @@ export async function getFormattersForFile(
 				(f) => f.name === smartDefaultFormatterName,
 			);
 			if (smartDefaultFormatter) {
-				const autoInstallToolId = getAutoInstallToolIdForFormatter(
-					smartDefaultFormatter.name,
-				);
-				if (autoInstallToolId) {
+				if (shouldAutoInstallTool(smartDefaultFormatter.name)) {
 					selected = smartDefaultFormatter;
 				} else {
 					const { detected, error, outcome } = await detectCandidate(
@@ -2259,11 +2231,6 @@ export function _getFormatterResetStateForTests(): {
 
 export function clearFormatterRuntimeState(): void {
 	clearFormatterCache();
-	// NO `resetLazyInstallAttempts()` here (#1537 review F1). This function runs
-	// from `resetFormatService()`, which `handleTurnEnd` calls every turn — so
-	// clearing the lazy-install hold here made "held for the session" mean "held
-	// for a turn", and a failing install re-ran every turn. The hold's only reset
-	// is `session_start`'s block in runtime-session.ts.
 }
 
 const BOX_DRAWING_GLOBAL = /[\u2500-\u257F]/g;
@@ -2352,10 +2319,9 @@ async function resolveNpxFallback(
 	formatterName: string,
 	fallback: string[],
 ): Promise<string[]> {
-	const toolId = getAutoInstallToolIdForFormatter(formatterName);
-	if (!toolId) return fallback;
+	if (!shouldAutoInstallTool(formatterName)) return fallback;
 	const { ensureTool } = await import("./installer/index.js");
-	const installed = await ensureTool(toolId);
+	const installed = await ensureTool(formatterName);
 	if (!installed) return fallback;
 	// Drop the leading `npx <package>` pair; keep the tool's own argv.
 	return [installed, ...fallback.slice(2)];

@@ -12,7 +12,16 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	onTestFinished,
+	vi,
+} from "vitest";
+import { withEnv } from "../../../support/with-env.js";
 import { TRANSIENT_BASE_COOLDOWN_MS } from "../../../../clients/dispatch/runners/utils/availability-policy.js";
 import {
 	createCwdCachedProbe,
@@ -27,21 +36,13 @@ import {
 	setupTestEnvironment,
 } from "../../test-utils.js";
 
-const {
-	logLatencySpy,
-	safeSpawnAsync,
-	tryLazyInstall,
-	getLazyInstallAttempt,
-	findCargoPathAsync,
-} = vi.hoisted(() => ({
-	logLatencySpy: vi.fn(),
-	safeSpawnAsync: vi.fn(),
-	tryLazyInstall: vi.fn(async () => false),
-	getLazyInstallAttempt: vi.fn(
-		() => undefined as { outcome: string; reason?: string } | undefined,
-	),
-	findCargoPathAsync: vi.fn(async () => "cargo"),
-}));
+const { logLatencySpy, safeSpawnAsync, findCargoPathAsync } = vi.hoisted(
+	() => ({
+		logLatencySpy: vi.fn(),
+		safeSpawnAsync: vi.fn(),
+		findCargoPathAsync: vi.fn(async () => "cargo"),
+	}),
+);
 
 vi.mock("../../../../clients/latency-logger.js", async (importOriginal) => ({
 	...(await importOriginal()),
@@ -52,11 +53,6 @@ vi.mock("../../../../clients/latency-logger.js", async (importOriginal) => ({
 vi.mock("../../../../clients/safe-spawn.js", () => ({
 	safeSpawn: vi.fn(() => ({ stdout: "", stderr: "", status: 1 })),
 	safeSpawnAsync,
-}));
-
-vi.mock("../../../../clients/dispatch/runners/utils/lazy-installer.js", () => ({
-	tryLazyInstall,
-	getLazyInstallAttempt,
 }));
 
 // #2455 fix round 4, F2: `rust-client.ts` now owns the process's ONE
@@ -127,8 +123,6 @@ afterEach(async () => {
 beforeEach(() => {
 	logLatencySpy.mockReset();
 	safeSpawnAsync.mockReset();
-	tryLazyInstall.mockReset();
-	tryLazyInstall.mockResolvedValue(false);
 	resetDispatchAvailabilityState();
 	// Recurrence (#4561, shuffle): the negative cases below read the
 	// `availability-probe-overrun` group the overrun case books, so their own
@@ -509,9 +503,8 @@ describe("rust-clippy runner: a stalled probe does not disable the runner (#1494
 
 		expect((await runner.run(ctx)).status).toBe("skipped");
 		expect(versionProbeCalls()).toHaveLength(1);
-		// A timeout is not evidence clippy is missing, so it must not drive an
-		// install — and it must not be remembered past its cooldown.
-		expect(tryLazyInstall).not.toHaveBeenCalled();
+		// A timeout is not evidence clippy is missing, so it must not be
+		// remembered past its cooldown.
 
 		advancePastCooldown();
 		safeSpawnAsync.mockClear();
@@ -522,47 +515,13 @@ describe("rust-clippy runner: a stalled probe does not disable the runner (#1494
 		expect(versionProbeCalls()).toHaveLength(1);
 	});
 
-	it("records the failed lazy install beside the verdict it produced (#1537)", async () => {
-		// #1537 gave the lazy installers an attempt record; this is the production
-		// consumer that makes it observable. Without it, "we ran `rustup component
-		// add clippy` and the network failed" and "this machine has no rustup" both
-		// look like a silent skip in latency.log.
-		const cwd = tempDir("pi-lens-clippy-install-evidence-");
-		fs.writeFileSync(path.join(cwd, "Cargo.toml"), "[package]\nname='a'\n");
-		const filePath = path.join(cwd, "a.rs");
-		fs.writeFileSync(filePath, "fn main() {}\n");
-
-		// A GENUINE absence, so the runner is allowed to attempt the install.
-		safeSpawnAsync.mockImplementation(async (_cmd: string, args: string[]) =>
-			args.includes("--version") ? notFoundResult() : okResult(""),
-		);
-		tryLazyInstall.mockResolvedValue(false);
-		getLazyInstallAttempt.mockReturnValue({
-			outcome: "failed",
-			reason: "network is unreachable",
-		});
-
-		const runner = (
-			await import("../../../../clients/dispatch/runners/rust-clippy.js")
-		).default;
-		expect((await runner.run({ cwd, filePath } as never)).status).toBe(
-			"skipped",
-		);
-		expect(tryLazyInstall).toHaveBeenCalledWith("rust-clippy", cwd);
-
-		const decision = decisions().find(
-			(entry) => entry.metadata?.tool === "rust-clippy",
-		);
-		expect(decision?.metadata).toMatchObject({
-			verdict: "unavailable",
-			classifiedBy: "caller",
-			evidence: { install: "failed", installReason: "network is unreachable" },
-		});
-	});
-
-	it("says not-attempted when no install was tried (#1537)", async () => {
-		// The other half: an empty attempt record must read as "nothing was tried",
-		// not as a fabricated failure.
+	it("an absent clippy is a not-installed skip and spawns no installer (#5410 D9)", async () => {
+		// Recurrence: `rustup component add clippy` ran on first use, gated only by
+		// the kill switch, and rewrote the user's whole toolchain. Every spawn is
+		// recorded at the process boundary: only `cargo clippy --version` may run.
+		// The suite's install kill switch would hide the old install: turn it off.
+		const restoreInstallSwitch = withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" });
+		onTestFinished(restoreInstallSwitch);
 		const cwd = tempDir("pi-lens-clippy-no-install-");
 		fs.writeFileSync(path.join(cwd, "Cargo.toml"), "[package]\nname='a'\n");
 		const filePath = path.join(cwd, "a.rs");
@@ -571,17 +530,16 @@ describe("rust-clippy runner: a stalled probe does not disable the runner (#1494
 		safeSpawnAsync.mockImplementation(async (_cmd: string, args: string[]) =>
 			args.includes("--version") ? notFoundResult() : okResult(""),
 		);
-		tryLazyInstall.mockResolvedValue(false);
-		getLazyInstallAttempt.mockReturnValue(undefined);
 
 		const runner = (
 			await import("../../../../clients/dispatch/runners/rust-clippy.js")
 		).default;
-		await runner.run({ cwd, filePath } as never);
+		const result = await runner.run({ cwd, filePath } as never);
 
-		expect(
-			decisions().find((entry) => entry.metadata?.tool === "rust-clippy")
-				?.metadata?.evidence,
-		).toMatchObject({ install: "not-attempted" });
+		expect(result.status).toBe("skipped");
+		expect(safeSpawnAsync.mock.calls.map((call) => call[0])).toEqual(["cargo"]);
+		expect(safeSpawnAsync.mock.calls.map((call) => call[1])).toEqual([
+			["clippy", "--version"],
+		]);
 	});
 });

@@ -557,8 +557,9 @@ const FIXTURES = [
 		tools: [],
 		expectDiagnostic: true,
 	},
-	// rubocop (gem) and ktlint (github binary) are auto-installed by their own
-	// runner; listed in `tools` so --install prefetches them.
+	// rubocop (gem) is no longer auto-installed by its runner: `tools` lists it
+	// so --install prefetches it. ktlint (github binary) is still auto-installed
+	// by its own runner; listed in `tools` so --install prefetches it too.
 	{
 		lang: "ruby",
 		dir: "tests/fixtures/tool-smoke/ruby",

@@ -569,7 +569,6 @@
 		"tests/clients/latency-age-not-duration-5379.test.ts": 1.33,
 		"tests/clients/latency-logger.test.ts": 0.07,
 		"tests/clients/lazy-import.test.ts": 0.08,
-		"tests/clients/lazy-install-retry.test.ts": 0.47,
 		"tests/clients/lazy-seams-eviction.test.ts": 0.03,
 		"tests/clients/lean-root-markers.test.ts": 0.02,
 		"tests/clients/ledger-bounds.test.ts": 0.01,

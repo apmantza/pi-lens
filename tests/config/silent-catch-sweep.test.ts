@@ -531,11 +531,6 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		identities: "a044ae359f31afb8",
 		reason: PRE_RULE,
 	}, // :102
-	"clients/dispatch/runners/utils/lazy-installer.ts": {
-		silent: 1,
-		identities: "abe2d56914cef611",
-		reason: PRE_RULE,
-	}, // :239
 	"clients/dispatch/runners/utils/runner-helpers.ts": {
 		silent: 7,
 		identities: "82100b8d3097c468",

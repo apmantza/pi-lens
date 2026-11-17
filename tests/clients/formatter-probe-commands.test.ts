@@ -39,10 +39,6 @@ import { setupTestEnvironment, useTrackedTempDirs } from "./test-utils.js";
  * the pin can neither silently widen nor silently narrow.
  */
 const EXTRA_PROBED_COMMANDS: Record<string, readonly string[]> = {
-	// Install fallback: `rustup component add rustfmt`. Not harmless — a stalled
-	// `which rustup` skips the install that would have fixed a genuinely absent
-	// rustfmt, which is one of the two cases #1539 fixed.
-	rustfmt: ["rustup"],
 	// Install fallback, plus the dotnet-tool form of the same formatter.
 	csharpier: ["dotnet"],
 	// Co-equal alternatives — either interpreter can satisfy the formatter. The
@@ -62,8 +58,6 @@ beforeEach(() => {
 	safeSpawnAsync.mockResolvedValue({ stdout: "", stderr: "", status: 1 });
 	clearFormatterCache();
 	cwd = setupTestEnvironment("pi-lens-probe-commands-").tmpDir;
-	// A Cargo.toml unlocks rustfmt's install-fallback branch, so the `rustup`
-	// probe is genuinely exercised rather than merely declared below.
 	fs.writeFileSync(path.join(cwd, "Cargo.toml"), "[package]\nname='a'\n");
 });
 

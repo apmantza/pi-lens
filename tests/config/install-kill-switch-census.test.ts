@@ -4,7 +4,8 @@
  * ## The recurrence this guards
  *
  * `PI_LENS_DISABLE_TOOL_INSTALL=1` was read by the managed installer only. The
- * lazy installer (`gem install rubocop`, `rustup component add`) and
+ * lazy installer (`gem install rubocop`, `rustup component add`, deleted by
+ * #5410 D9) and
  * govulncheck's `go install` checked project trust and spawned anyway, and
  * Biome's presence probe ran `npx @biomejs/biome --version` with no spawn
  * options, so the registry saw a download with the switch set. The `#1759 F2`
@@ -643,11 +644,6 @@ interface GatedFile {
  * answers "unavailable" before any spawn-shaped token.
  */
 const GATED_FILES: Readonly<Record<string, GatedFile>> = {
-	"clients/dispatch/runners/utils/lazy-installer.ts": {
-		entries: [
-			{ symbol: "runLazyInstall", before: ["performInstall("], consults: 1 },
-		],
-	},
 	"clients/govulncheck-client.ts": {
 		entries: [
 			{
@@ -849,7 +845,6 @@ const REGISTRY_PATH =
 const ROWS: Readonly<Record<string, Row>> = {
 	// ROWS-BEGIN
 	// -- gated: the install spawns the tool switch governs (entries verified) --
-	"clients/dispatch/runners/utils/lazy-installer.ts#safeSpawnAsync": GATED(1),
 	"clients/govulncheck-client.ts#safeSpawnAsync": GATED(2),
 	"clients/installer/index.ts#probeToolAsync": GATED(3),
 	"clients/installer/index.ts#run": GATED(2),

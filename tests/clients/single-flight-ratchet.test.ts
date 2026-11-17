@@ -43,8 +43,6 @@ const EXEMPTIONS: Record<string, string> = {
 		"backlog: per-chart-root dedupe, #1753",
 	"dispatch/runners/helm-render.ts:inFlightByChartRoot":
 		"backlog: per-chart-root dedupe, #1753",
-	"dispatch/runners/utils/lazy-installer.ts:inFlight":
-		"backlog: per-tool install dedupe, #1753",
 	"dispatch/runners/utils/runner-helpers.ts:managedVerifyInFlight":
 		"backlog: #1674's generation-guarded verify map, #1753",
 	"dispatch/runners/utils/runner-helpers.ts:resolveInstallInFlightByCwd":

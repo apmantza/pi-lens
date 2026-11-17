@@ -2,10 +2,10 @@
  * Registry parity (#5418): the tool registries and the docs must name the same
  * tools.
  *
- * pi-lens answers "does this tool exist" in five places — the runner registry
- * (`RunnerRegistry`), `TOOL_EXECUTION_POLICY` (TEP), `TOOL_COMMAND_SPECS` (TCS),
- * `AUTO_INSTALLABLE_DEFAULT_FORMATTERS` (AUTO) and the installer registry
- * (`clients/installer/index.ts` TOOLS) — plus two prose surfaces
+ * pi-lens answers "does this tool exist" in four places — the runner registry
+ * (`RunnerRegistry`), `TOOL_EXECUTION_POLICY` (TEP), `TOOL_COMMAND_SPECS` (TCS)
+ * and the installer registry (`clients/installer/index.ts` TOOLS) — plus two
+ * prose surfaces
  * (`docs/language-coverage.md`'s Dispatch Runners column, the autofix tool list
  * in `docs/features.md`). Before this test nothing compared them, so an id could
  * point at nothing and a doc could name a runner that was never registered.
@@ -41,7 +41,6 @@ import { registerDefaultRunners } from "../../clients/dispatch/runners/index.js"
 import { TOOLS } from "../../clients/installer/index.js";
 import { ALL_FORMATTERS } from "../../clients/formatters.js";
 import {
-	AUTO_INSTALLABLE_DEFAULT_FORMATTERS,
 	listSafePipelineAutofixTools,
 	TOOL_COMMAND_SPECS,
 	TOOL_EXECUTION_POLICY,
@@ -90,39 +89,22 @@ describe("Tool registry parity (#5418)", () => {
 		).toEqual([]);
 	});
 
-	it("every auto-install policy row has an installer entry", () => {
-		// `shouldAutoInstallTool` is the policy's only reader, so a row that says
-		// `autoInstall: true` with no installer entry promises a repair that
-		// cannot run.
-		const rows = [...TOOL_EXECUTION_POLICY.entries()].filter(
-			([, policy]) => policy.autoInstall,
-		);
-		assertNonEmptyScan("auto-install policy rows", rows.length, 20);
-		const dangling = rows
-			.filter(([id]) => !installerIds.has(id))
-			.map(([id]) => id);
-		expect(
-			dangling,
-			`policy rows that promise auto-install with no installer entry: ${dangling.join(", ")}`,
-		).toEqual([]);
-	});
-
-	it("every auto-installable default formatter has a policy row", () => {
-		// AUTO is the formatter auto-install seam; TEP is the policy table. A
-		// formatter in one and not the other is the two tables disagreeing about
-		// the same tool.
+	it("no policy row carries an install flag; the installer entry is the one opt-in (#5410 D9)", () => {
+		// Recurrence: the opt-in was kept in three lists (a policy `autoInstall`, a
+		// formatter map and a lazy-install table), so typstyle installed while the
+		// policy said no and rubocop, rust-clippy and rustfmt installed through a
+		// table with no policy row. `shouldAutoInstallTool` is the one reader and
+		// answers from the installer entry; `install-optin-seam.test.ts` pins its
+		// answer for every id any registry names.
 		assertNonEmptyScan(
-			"AUTO_INSTALLABLE_DEFAULT_FORMATTERS entries",
-			AUTO_INSTALLABLE_DEFAULT_FORMATTERS.size,
-			5,
+			"TOOL_EXECUTION_POLICY rows",
+			TOOL_EXECUTION_POLICY.size,
+			30,
 		);
-		const dangling = [...AUTO_INSTALLABLE_DEFAULT_FORMATTERS.entries()]
-			.filter(([, toolId]) => !TOOL_EXECUTION_POLICY.has(toolId))
-			.map(([formatterName, toolId]) => `${formatterName}->${toolId}`);
-		expect(
-			dangling,
-			`auto-installable formatters with no TOOL_EXECUTION_POLICY row: ${dangling.join(", ")}`,
-		).toEqual([]);
+		const carrying = [...TOOL_EXECUTION_POLICY.entries()]
+			.filter(([, policy]) => "autoInstall" in policy)
+			.map(([id]) => id);
+		expect(carrying, `policy rows still carrying an install flag`).toEqual([]);
 	});
 
 	it("every command-spec install pointer resolves to an installer entry or a reason", () => {

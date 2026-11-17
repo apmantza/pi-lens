@@ -20,7 +20,6 @@ import { resetDeferredDispositions } from "./diagnostic-dispositions.js";
 import { getDiagnosticTracker } from "./diagnostic-tracker.js";
 import { resetPsScriptAnalyzerAvailability } from "./dispatch/runners/psscriptanalyzer.js";
 import { resetInstallRetryLatches } from "./dispatch/runners/utils/availability-policy.js";
-import { resetLazyInstallAttempts } from "./dispatch/runners/utils/lazy-installer.js";
 import { resetDispatchAvailabilityState } from "./dispatch/runners/utils/runner-helpers.js";
 import { resetObservedRunnerLatency } from "./dispatch/collect-later-tier.js";
 import { resetPendingRunnerFindings } from "./dispatch/pending-runner-findings.js";
@@ -124,6 +123,7 @@ import {
 } from "./subagent-mode.js";
 import { TrivyClient, type TrivyResult } from "./trivy-client.js";
 import { TOOL_REGISTRY } from "./tool-config.js";
+import { shouldAutoInstallTool } from "./tool-policy.js";
 import { isWarmAttached } from "./warm-attach.js";
 import { setSessionLanguages } from "./widget-state.js";
 import { logWordIndex } from "./word-index-logger.js";
@@ -1077,6 +1077,14 @@ function firePreinstallDefaults(
 	startupDefaults: string[],
 ): void {
 	for (const tool of startupDefaults) {
+		// Only a tool whose installer entry opts in is installed unasked (#5410 D9);
+		// a runner or formatter reports any other one "not installed".
+		if (!shouldAutoInstallTool(tool)) {
+			dbg(
+				`session_start preinstall ${tool}: skipped (installer entry does not opt in)`,
+			);
+			continue;
+		}
 		const startedAt = Date.now();
 		dbg(`session_start preinstall ${tool}: start`);
 		ensureTool(tool)
@@ -2319,13 +2327,6 @@ export function resetSessionScopedState(
 	// the session" is terminal for the process, and a repaired network never
 	// re-earns its `go install`.
 	resetInstallRetryLatches();
-	// #1537: the lazy-install seam's hold (`gem install rubocop`, `rustup
-	// component add`) is durable for a SESSION. Its map is module-local, so the
-	// generation counter above does not reach it — same #1490/#1497 shape. It
-	// belongs on THIS line and not on the turn_end path: the first cut cleared it
-	// from `clearFormatterRuntimeState()`, which runs every turn, so a failing
-	// install re-spawned every turn instead of once per session.
-	resetLazyInstallAttempts();
 	// #1897: direct-LSP negative availability and bare installer paths are
 	// session facts. A command or PATH entry can appear between sessions.
 	resetDirectLspCommandAvailability();

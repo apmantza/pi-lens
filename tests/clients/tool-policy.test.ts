@@ -9,7 +9,6 @@ import { oxfmtFormatter } from "../../clients/formatters.js";
 import {
 	getAutofixCapability,
 	getAutofixPolicyForFile,
-	getAutoInstallToolIdForFormatter,
 	getFormatterPolicyForFile,
 	getJstsLintPolicy,
 	getLinterPolicyForCwd,
@@ -101,18 +100,23 @@ describe("tool-policy", () => {
 		},
 	);
 
-	it("maps managed smart-default formatters to auto-installable tool ids", () => {
-		expect(getAutoInstallToolIdForFormatter("biome")).toBe("biome");
-		expect(getAutoInstallToolIdForFormatter("ruff")).toBe("ruff");
-		expect(getAutoInstallToolIdForFormatter("prettier")).toBe("prettier");
-		expect(getAutoInstallToolIdForFormatter("shfmt")).toBe("shfmt");
-		expect(getAutoInstallToolIdForFormatter("taplo")).toBe("taplo");
-		expect(getAutoInstallToolIdForFormatter("typstyle")).toBe("typstyle");
-		expect(getAutoInstallToolIdForFormatter("gofmt")).toBeUndefined();
-		expect(getAutoInstallToolIdForFormatter("rustfmt")).toBeUndefined();
-		expect(getAutoInstallToolIdForFormatter("terraform")).toBeUndefined();
-		expect(getAutoInstallToolIdForFormatter("dart")).toBeUndefined();
-		expect(getAutoInstallToolIdForFormatter("zig")).toBeUndefined();
+	it("a smart-default formatter installs unasked exactly when its installer entry opts in", () => {
+		// A formatter's name is its tool id: the formatter path asks
+		// `shouldAutoInstallTool(name)` where it asked a formatter map before.
+		for (const name of [
+			"biome",
+			"ruff",
+			"prettier",
+			"shfmt",
+			"taplo",
+			"ktlint",
+			"typstyle",
+		]) {
+			expect(shouldAutoInstallTool(name), name).toBe(true);
+		}
+		for (const name of ["gofmt", "rustfmt", "terraform", "dart", "zig"]) {
+			expect(shouldAutoInstallTool(name), name).toBe(false);
+		}
 	});
 
 	it("returns formatter policy metadata by file path", () => {
@@ -1383,31 +1387,24 @@ describe("tool-policy", () => {
 	it("exposes centralized tool execution policy for auto-install behavior", () => {
 		expect(getToolExecutionPolicy("oxlint")).toMatchObject({
 			configEligibility: "smart-default",
-			autoInstall: true,
 		});
 		expect(getToolExecutionPolicy("eslint")).toMatchObject({
 			configEligibility: "config-first",
-			autoInstall: false,
 		});
 		expect(getToolExecutionPolicy("prettier")).toMatchObject({
 			configEligibility: "smart-default",
-			autoInstall: true,
 		});
 		expect(getToolExecutionPolicy("golangci-lint")).toMatchObject({
 			configEligibility: "config-first",
-			autoInstall: true,
 		});
 		expect(getToolExecutionPolicy("phpstan")).toMatchObject({
 			configEligibility: "config-first",
-			autoInstall: false,
 		});
 		expect(getToolExecutionPolicy("ruff")).toMatchObject({
 			configEligibility: "smart-default",
-			autoInstall: true,
 		});
 		expect(getToolExecutionPolicy("biome")).toMatchObject({
 			configEligibility: "smart-default",
-			autoInstall: true,
 		});
 		expect(shouldAutoInstallTool("stylelint")).toBe(true);
 		expect(shouldAutoInstallTool("mypy")).toBe(true);

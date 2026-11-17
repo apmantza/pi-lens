@@ -7,7 +7,6 @@ import { installLspServiceDouble } from "../../../support/lsp-service-seam.js";
 
 const safeSpawnAsync = vi.fn();
 const safeSpawn = vi.fn();
-const tryLazyInstall = vi.fn(async () => true);
 const supportsLSP = vi.fn();
 const hasLSP = vi.fn();
 const openFile = vi.fn();
@@ -46,10 +45,6 @@ const warmAttach = vi.hoisted(() => ({
 vi.mock("../../../../clients/safe-spawn.js", () => ({
 	safeSpawn,
 	safeSpawnAsync,
-}));
-
-vi.mock("../../../../clients/dispatch/runners/utils/lazy-installer.js", () => ({
-	tryLazyInstall,
 }));
 
 vi.mock("../../../../clients/dispatch/runners/utils.js", () => ({
@@ -107,7 +102,6 @@ describe("runner status/semantic edge cases", () => {
 	beforeEach(() => {
 		safeSpawn.mockReset();
 		safeSpawnAsync.mockReset();
-		tryLazyInstall.mockClear();
 		supportsLSP.mockReset();
 		hasLSP.mockReset();
 		openFile.mockReset();

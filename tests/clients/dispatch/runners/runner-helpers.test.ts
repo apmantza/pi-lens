@@ -53,7 +53,13 @@ vi.mock("../../../../clients/safe-spawn.js", () => ({
 	safeSpawnAsync: vi.fn(async () => ({ stdout: "", stderr: "", status: 1 })),
 }));
 
-vi.mock("../../../../clients/installer/index.js", () => ({
+vi.mock("../../../../clients/installer/index.js", async (importOriginal) => ({
+	// #5410 D9: `shouldAutoInstallTool` reads the opt-in off the real `TOOLS`.
+	TOOLS: (
+		await importOriginal<
+			typeof import("../../../../clients/installer/index.js")
+		>()
+	).TOOLS,
 	// #2140: the probe resolver asks the installer for a release-managed
 	// binary (`~/.pi-lens/bin`) before falling back to PATH. Undefined is
 	// "no managed install", which is what these tests already assumed.
