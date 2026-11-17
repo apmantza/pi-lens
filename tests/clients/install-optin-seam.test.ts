@@ -81,7 +81,7 @@ const OPT_IN = [
 	"typescript-language-server",
 	"typstyle",
 	"yamllint",
-].sort();
+].sort((a, b) => a.localeCompare(b));
 
 /** The one intended behaviour change: these installed unasked before. */
 const NO_LONGER_INSTALLED = ["rubocop", "rust-clippy", "rustfmt"];
@@ -91,7 +91,7 @@ describe("the installer entry is the one install opt-in (#5410 D9)", () => {
 		expect(
 			TOOLS.filter((tool) => tool.autoInstall)
 				.map((tool) => tool.id)
-				.sort(),
+				.sort((a, b) => a.localeCompare(b)),
 		).toEqual(OPT_IN);
 	});
 

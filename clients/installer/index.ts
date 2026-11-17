@@ -561,8 +561,10 @@ export interface ToolDefinition {
 	installStrategy: "npm" | "pip" | "gem" | "github" | "maven" | "archive";
 	/**
 	 * The only place pi-lens records that it may install this tool without being
-	 * asked (#5410 D9). Absent means it may not: the tool is reported not
-	 * installed, with its install command, and the user runs the install.
+	 * asked (#5410 D9). Absent means it may not: pi-lens does not install the
+	 * tool, and the user runs the install. The rubocop runner then reports
+	 * `not-installed`, the rust-clippy runner reports `probe-rejected`, and the
+	 * rustfmt and rubocop formatters skip silently.
 	 * `shouldAutoInstallTool` (`clients/tool-policy.ts`) reads this field; no
 	 * policy table, formatter map or lazy-install table holds a second copy.
 	 */
