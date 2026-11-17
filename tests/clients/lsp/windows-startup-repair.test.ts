@@ -103,12 +103,23 @@ async function launchOnce(
 	candidate: string,
 	cwd: string,
 	managedToolId: string,
+	admitted = false,
 ): Promise<unknown> {
 	const { resolveAndLaunch } = await import("../../../clients/lsp/server.js");
-	return resolveAndLaunch(
-		{ candidates: [candidate], args: ["--stdio"], cwd, managedToolId },
-		true,
-	);
+	const launch = () =>
+		resolveAndLaunch(
+			{ candidates: [candidate], args: ["--stdio"], cwd, managedToolId },
+			true,
+		);
+	if (!admitted) return launch();
+	// #5674: a root admitted for project code (pi trusts the project and the
+	// root holds permission) may run a file cmd.exe finds in its cwd.
+	const { setProjectTrustState } =
+		await import("../../../clients/project-trust.js");
+	const { withLspProjectCodePermission } =
+		await import("../../../clients/lsp/launch.js");
+	setProjectTrustState("trusted");
+	return withLspProjectCodePermission(true, launch);
 }
 
 describe("Windows LSP startup repair classification (#4263)", () => {
@@ -143,14 +154,24 @@ describe("Windows LSP startup repair classification (#4263)", () => {
 		try {
 			const { resolveAndLaunch } =
 				await import("../../../clients/lsp/server.js");
-			await resolveAndLaunch(
-				{
-					candidates: ["missing-language-server"],
-					args: ["--stdio"],
-					cwd: "C:\\project",
-					managedToolId: "missing-language-server",
-				},
-				true,
+			// An admitted root: on a POSIX host `C:\project` is relative, so the
+			// runner's own `node_modules/.bin` on PATH would otherwise reach it and
+			// hold the repair to the tool store (#5674).
+			const { withLspProjectCodePermission } =
+				await import("../../../clients/lsp/launch.js");
+			const { setProjectTrustState } =
+				await import("../../../clients/project-trust.js");
+			setProjectTrustState("trusted");
+			await withLspProjectCodePermission(true, () =>
+				resolveAndLaunch(
+					{
+						candidates: ["missing-language-server"],
+						args: ["--stdio"],
+						cwd: "C:\\project",
+						managedToolId: "missing-language-server",
+					},
+					true,
+				),
 			);
 			expect(ensureTool).toHaveBeenCalledWith("missing-language-server");
 		} finally {
@@ -478,7 +499,7 @@ describe("Windows LSP startup repair classification (#4263)", () => {
 		spawnDouble.mockImplementation(() => new MockChildProcess());
 
 		try {
-			await launchOnce("server.cmd", project, "server");
+			await launchOnce("server.cmd", project, "server", true);
 			expect(spawnDouble).toHaveBeenCalledTimes(1);
 			expect(ensureTool).not.toHaveBeenCalled();
 		} finally {
@@ -500,9 +521,9 @@ describe("Windows LSP startup repair classification (#4263)", () => {
 		mockExit1Launch();
 
 		try {
-			await expect(launchOnce("server.cmd", project, "server")).rejects.toThrow(
-				/exited immediately with code 1/,
-			);
+			await expect(
+				launchOnce("server.cmd", project, "server", true),
+			).rejects.toThrow(/exited immediately with code 1/);
 			expect(ensureTool).not.toHaveBeenCalled();
 			expect(spawnDouble).toHaveBeenCalledTimes(1);
 		} finally {
@@ -510,6 +531,40 @@ describe("Windows LSP startup repair classification (#4263)", () => {
 			setPlatform(originalPlatform);
 		}
 	});
+
+	// #5674: the same cwd shim under a root NOT admitted for project code (an
+	// adopted root: pi trusts the session, the root holds no permission). cmd.exe
+	// would run the root's own file, so the lookup refuses it before any spawn.
+	// Windows only: the cwd lookup is cmd.exe's, which a POSIX host cannot
+	// simulate (its lookup does not search the cwd).
+	// lane: windows-vitest
+	it.runIf(process.platform === "win32")(
+		"refuses a bare .cmd command in the cwd of a root not admitted for project code (#5674)",
+		async () => {
+			const originalPlatform = process.platform;
+			setPlatform("win32");
+			const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-5674-cwd-"));
+			const project = path.join(root, "project");
+			fs.mkdirSync(project, { recursive: true });
+			fs.writeFileSync(path.join(project, "server.cmd"), "@echo off\r\n");
+			mockExit1Launch();
+			spawnDouble.mockImplementation(() => new MockChildProcess());
+
+			try {
+				const { setProjectTrustState } =
+					await import("../../../clients/project-trust.js");
+				setProjectTrustState("trusted");
+				await expect(
+					launchOnce("server.cmd", project, "server"),
+				).rejects.toThrow(/LSP lookup refused/);
+				expect(spawnDouble).not.toHaveBeenCalled();
+				expect(ensureTool).not.toHaveBeenCalled();
+			} finally {
+				fs.rmSync(root, { recursive: true, force: true });
+				setPlatform(originalPlatform);
+			}
+		},
+	);
 
 	// The cwd read must stay a read of the CHILD's cwd: a `server.cmd` in pi's own
 	// process.cwd() is not the shim cmd.exe runs for a child started elsewhere.

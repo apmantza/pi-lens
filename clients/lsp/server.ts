@@ -119,6 +119,7 @@ import {
 import {
 	type LSPProcess,
 	admitProjectSuppliedTsserver,
+	isLspProjectCodeAdmitted,
 	launchLSP,
 	launchViaNode,
 } from "./launch.js";
@@ -135,6 +136,7 @@ import {
 import {
 	isUntrustedProjectPath,
 	recordProjectCommandRefusal,
+	withUnadmittedRootSpawns,
 } from "../session-repository.js";
 
 // --- Types ---
@@ -1049,6 +1051,81 @@ export interface ResolveAndLaunchSpec {
 		/** After a successful install, retry these candidates (defaults to spec.candidates) */
 		retryCandidates?: string[];
 	};
+	/**
+	 * #5674: the trust refusals of a spawn that tries several stages. The spawn
+	 * passes one object to every stage; each call adds the refusals it met, so a
+	 * later managed lookup obeys a refusal an earlier stage met (#4515).
+	 */
+	refusals?: { refused: boolean; bareRefused: boolean };
+}
+
+/**
+ * #4515/#5674: whether a bare-name lookup this process starts (the installer's
+ * PATH rung, its npm and Python probes, a runtime install) can reach a root the
+ * spawn has not admitted for project code: a PATH entry reaches the root, or a
+ * stage already refused a bare candidate that resolved into it. The launcher
+ * drops those entries from its own child's PATH; these lookups read the
+ * process PATH, so their callers skip the lookup instead.
+ */
+function bareLookupReachesUnadmittedRoot(
+	cwd: string,
+	refusals?: ResolveAndLaunchSpec["refusals"],
+): boolean {
+	return (
+		!isLspProjectCodeAdmitted() &&
+		(refusals?.bareRefused === true || commandSearchReachesProject(cwd))
+	);
+}
+
+/**
+ * #4515: the managed rung of a launch. The repair must not run project code,
+ * so when a bare-name lookup can reach an unadmitted root, only pi-lens's own
+ * store is read and nothing is installed. Every LSP managed lookup goes
+ * through here: the resolver, Python's managed stage, and TypeScript's.
+ */
+async function lookupManagedTool(
+	toolId: string,
+	cwd: string,
+	refusals: ResolveAndLaunchSpec["refusals"],
+	...ensureOptions: [] | [{ allowInstall?: boolean; forceReinstall?: boolean }]
+): Promise<{ found: string | undefined; storeOnly: boolean }> {
+	const storeOnly = bareLookupReachesUnadmittedRoot(cwd, refusals);
+	if (storeOnly) {
+		// #5678 verify V3: the reason names the trigger that held.
+		const trigger =
+			refusals?.bareRefused === true
+				? "a bare candidate resolved into the project and was refused"
+				: "a PATH entry reaches a project not admitted for project code";
+		recordDegradationOnce({
+			kind: "lsp-registry-decision",
+			subject: `store-only-repair:${toolId}`,
+			reason: `LSP repair read only the pi-lens tool store: ${trigger}, so nothing was probed on PATH or installed`,
+			metadata: { field: "store-only-repair", tool: toolId },
+		});
+	}
+	logSessionStart(
+		`lsp launch ensure-tool start tool=${toolId} cwd=${cwd} storeOnly=${storeOnly}`,
+	);
+	return {
+		found: await (storeOnly
+			? getToolPath(toolId, { storeOnly: true })
+			: spawnsJudgedAgainstRoot(cwd, () =>
+					ensureTool(toolId, ...ensureOptions),
+				)),
+		storeOnly,
+	};
+}
+
+/**
+ * #5674: run `lookup` so that, for a root not admitted for project code, every
+ * bare name it spawns (the installer's PATH rung and probes, a runtime
+ * install) is refused at the spawn seam when it resolves into the root: a
+ * link in a global bin dir passes the PATH-entry test above, not this one.
+ */
+function spawnsJudgedAgainstRoot<T>(cwd: string, lookup: () => T): T {
+	return isLspProjectCodeAdmitted()
+		? lookup()
+		: withUnadmittedRootSpawns(cwd, lookup);
 }
 
 export async function resolveAndLaunch(
@@ -1204,6 +1281,12 @@ export async function resolveAndLaunch(
 		);
 		trackRuntimeFailure(failure.err);
 	}
+	const refusals = spec.refusals ?? { refused: false, bareRefused: false };
+	for (const failure of candidateFailures) {
+		if (!hasSpawnFailureKind(failure.err, "trust-refused")) continue;
+		refusals.refused = true;
+		if (isSimpleCommand(failure.command)) refusals.bareRefused = true;
+	}
 	// #4515: a project-local candidate refused by trust is repairable too: the
 	// managed install lives outside the project, so it needs no trust.
 	const hasOnlyRepairableCandidateFailures = candidateFailures.every(
@@ -1231,28 +1314,13 @@ export async function resolveAndLaunch(
 				globalInstallDisabled: isLspInstallDisabled(),
 			},
 		});
-		// A trust refusal is not tool-not-found: keep surfacing it.
-		if (lastRuntimeFailure) throw lastRuntimeFailure;
+		// #5674: repairable candidates exhausted this stage, not the caller's
+		// later stages. Refusals retain their decision and candidate records.
 		return undefined;
 	}
 
-	// #4515: after a trust refusal the repair must not run project code. The
-	// installer spawns bare names (its PATH rung, npm and Python probes, the
-	// package manager), so when a refused bare candidate or a PATH entry reaches
-	// the project, only pi-lens's own store is read and nothing is installed.
-	// Step 4 runs a runtime in the project cwd, so it is skipped after any
-	// refusal.
-	const isRefusal = (failure: (typeof candidateFailures)[number]): boolean =>
-		hasSpawnFailureKind(failure.err, "trust-refused");
-	const trustRefused = candidateFailures.some(isRefusal);
-	const storeOnly =
-		trustRefused &&
-		(candidateFailures.some(
-			(failure) => isRefusal(failure) && isSimpleCommand(failure.command),
-		) ||
-			commandSearchReachesProject(spec.cwd));
-
-	// Step 3 — managed install via installer registry
+	// Step 3 — managed install via installer registry (#4515: store only after
+	// a refusal that a bare-name lookup could reach; see lookupManagedTool)
 	if (spec.managedToolId) {
 		// Neither the managed-dir stat (#2140) nor any bare-PATH candidate
 		// resolved this tool — the negative counterpart to the fast-path
@@ -1285,22 +1353,12 @@ export async function resolveAndLaunch(
 			producer: "lsp-launch",
 			evidence: classifiedFailure.evidence,
 		});
-		if (storeOnly) {
-			recordDegradationOnce({
-				kind: "lsp-registry-decision",
-				subject: `store-only-repair:${spec.managedToolId}`,
-				reason:
-					"LSP repair read only the pi-lens tool store: after a trust refusal a bare-name lookup reaches the project, so nothing was probed on PATH or installed",
-				metadata: { field: "store-only-repair", tool: spec.managedToolId },
-			});
-		}
-		logSessionStart(
-			`lsp launch ensure-tool start tool=${spec.managedToolId} cwd=${spec.cwd} storeOnly=${storeOnly}`,
-		);
 		const installStartedAt = Date.now();
-		const installed = await (storeOnly
-			? getToolPath(spec.managedToolId, { storeOnly: true })
-			: ensureTool(spec.managedToolId));
+		const { found: installed, storeOnly } = await lookupManagedTool(
+			spec.managedToolId,
+			spec.cwd,
+			refusals,
+		);
 		const installAttempt = storeOnly
 			? undefined
 			: captureInstallAttempt(spec.managedToolId);
@@ -1481,8 +1539,14 @@ export async function resolveAndLaunch(
 		}
 	}
 
-	// Step 4 — language-native runtime install (go install, gem install, …)
-	const runtimeInstall = trustRefused ? undefined : spec.runtimeInstall;
+	// Step 4 — language-native runtime install (go install, gem install, …).
+	// #4515: it runs a runtime in the project cwd, so any refusal skips it.
+	// #5674: so does a PATH that reaches an unadmitted root (the runtime is a
+	// bare name resolved through the process PATH).
+	const runtimeInstall =
+		refusals.refused || bareLookupReachesUnadmittedRoot(spec.cwd, refusals)
+			? undefined
+			: spec.runtimeInstall;
 	const runtimeAvailable = runtimeInstall
 		? await isCommandAvailableAsync(runtimeInstall.runtimeCommand)
 		: false;
@@ -1490,7 +1554,9 @@ export async function resolveAndLaunch(
 		return undefined;
 	}
 	if (runtimeInstall && runtimeAvailable) {
-		const ok = await runtimeInstall.install();
+		const ok = await spawnsJudgedAgainstRoot(spec.cwd, () =>
+			runtimeInstall.install(),
+		);
 		if (staleLaunch(generation, `${toolLabel}:runtimeInstall`)) {
 			return undefined;
 		}
@@ -2540,8 +2606,14 @@ async function findTsserverPath(
 	// #4414: `ensureTool` answers a PATH hit with the bare command name. Resolve
 	// it to the real file once, so the tsserver layout probe and the version
 	// read below see the same absolute path a managed or npm-global hit has.
+	// #5674: through the store-only rule, so an unadmitted root's `tsc` on PATH
+	// is never version-probed; the repair below goes through it too.
 	const discoveredTsc = await absoluteCommandPath(
-		await ensureTool("typescript", { allowInstall: installAllowed }),
+		(
+			await lookupManagedTool("typescript", root, undefined, {
+				allowInstall: installAllowed,
+			})
+		).found,
 	);
 	const discoveredTsserver = await tsserverForTsc(discoveredTsc);
 	if (
@@ -2573,10 +2645,12 @@ async function findTsserverPath(
 			: `lsp typescript: managed compiler resolved to TypeScript ${discoveredVersion?.version}, which ships no tsserver.js; reinstalling pinned classic fallback`,
 	);
 	const repairedTsc = await absoluteCommandPath(
-		await ensureTool("typescript", {
-			allowInstall: true,
-			forceReinstall: true,
-		}),
+		(
+			await lookupManagedTool("typescript", root, undefined, {
+				allowInstall: true,
+				forceReinstall: true,
+			})
+		).found,
 	);
 	return tsserverForTsc(repairedTsc);
 }
@@ -3209,11 +3283,15 @@ async function launchClassicTypeScript(
 	// Fall back to a discovered or managed install. ensureTool() runs PATH /
 	// npm-global discovery even when install is disabled (only the download is
 	// gated by canInstall), so a globally-installed typescript-language-server
-	// resolves even without a per-project node_modules/.bin entry.
+	// resolves even without a per-project node_modules/.bin entry. #5674: the
+	// store-only rule applies, as for every LSP managed lookup.
 	if (!lspPath) {
-		lspPath = await ensureTool("typescript-language-server", {
-			allowInstall: canInstall(options?.allowInstall),
-		});
+		({ found: lspPath } = await lookupManagedTool(
+			"typescript-language-server",
+			root,
+			undefined,
+			{ allowInstall: canInstall(options?.allowInstall) },
+		));
 		if (lspPath) source = "managed";
 		if (!lspPath) {
 			return undefined;
@@ -3421,6 +3499,9 @@ export const PythonServer: LSPServerInfo = {
 		const toolEnvironment = await getToolEnvironment();
 		const env = augmentPythonEnvironment(toolEnvironment, pythonEnvironment);
 		let source: "direct" | "managed" | "package-manager" = "direct";
+		// #5674: the stages share one refusal record, so the managed stage below
+		// reads only the store after a refusal a bare-name lookup could reach.
+		const refusals = { refused: false, bareRefused: false };
 
 		// Project ownership outranks checker preference: exhaust explicit project
 		// candidates before a bare command can resolve to pi-lens's managed bin or
@@ -3443,6 +3524,7 @@ export const PythonServer: LSPServerInfo = {
 				args: ["--stdio"],
 				cwd: root,
 				env,
+				refusals,
 			},
 			false,
 		);
@@ -3464,6 +3546,7 @@ export const PythonServer: LSPServerInfo = {
 				args: ["server"],
 				cwd: root,
 				env,
+				refusals,
 			},
 			false,
 		);
@@ -3480,6 +3563,7 @@ export const PythonServer: LSPServerInfo = {
 				args: ["--stdio"],
 				cwd: root,
 				env,
+				refusals,
 			},
 			false,
 		);
@@ -3497,6 +3581,7 @@ export const PythonServer: LSPServerInfo = {
 				args: ["server"],
 				cwd: root,
 				env,
+				refusals,
 			},
 			false,
 		);
@@ -3505,10 +3590,14 @@ export const PythonServer: LSPServerInfo = {
 		}
 
 		// Discover a globally-installed pyright even when install is disabled;
-		// only the download is gated by canInstall.
-		const pyrightPath = await ensureTool("pyright", {
-			allowInstall: canInstall(options?.allowInstall),
-		});
+		// only the download is gated by canInstall. After a refusal that a
+		// bare-name lookup could reach, only the store is read (#5674).
+		const { found: pyrightPath } = await lookupManagedTool(
+			"pyright",
+			root,
+			refusals,
+			{ allowInstall: canInstall(options?.allowInstall) },
+		);
 		if (!pyrightPath) return undefined;
 		source = "managed";
 
@@ -3569,6 +3658,9 @@ export const PythonJediServer: LSPServerInfo = {
 		const initialization = pythonEnvironment
 			? { workspace: { environmentPath: pythonEnvironment.pythonPath } }
 			: {};
+		// #5674: both tiers share one refusal record, so the managed tier reads
+		// only the store after a project-tier refusal a bare lookup could reach.
+		const refusals = { refused: false, bareRefused: false };
 
 		if (pythonEnvironment) {
 			// A project launch can fail for a reason other than "tool not found"
@@ -3585,6 +3677,7 @@ export const PythonJediServer: LSPServerInfo = {
 						args: [],
 						cwd: root,
 						env,
+						refusals,
 					},
 					options?.allowInstall,
 				);
@@ -3611,6 +3704,7 @@ export const PythonJediServer: LSPServerInfo = {
 				cwd: root,
 				env: toolEnvironment,
 				managedToolId: "jedi-language-server",
+				refusals,
 			},
 			options?.allowInstall,
 		);

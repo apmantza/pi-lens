@@ -44,7 +44,9 @@ import {
 	NODE_MODULES_BIN_DIRS,
 	isUntrustedProjectPath,
 	projectLocalBinDirs,
+	projectSearchJudge,
 	recordProjectCommandRefusal,
+	sessionRepositoryJudge,
 } from "./session-repository.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { logExtension } from "./extension-log.js";
@@ -647,21 +649,23 @@ export function isProjectLocalBinPath(
 }
 
 /**
- * #4515: whether a bare command spawned with this process's PATH can resolve
- * into the project at `cwd`. An entry counts when it is a project-local bin dir
- * (the classifier above), lies at or under `cwd`, or is relative: a relative
- * entry follows each spawn's cwd, and on POSIX an empty entry is the cwd.
+ * #4515: whether a bare name this process spawns (its PATH, pi's cwd) can
+ * resolve into the project at `cwd`, by {@link projectSearchJudge}. #5674: an
+ * entry the spawn seam already strips from every start (#4530: an absolute
+ * entry in the session repository, under pi trust other than `trusted`) does
+ * not count. Relative and empty entries always count: they follow each
+ * spawn's cwd. Each judge is built once per scan (#5678 verify V2).
  */
 export function commandSearchReachesProject(cwd: string): boolean {
-	const posix = process.platform !== "win32";
+	const reaches = projectSearchJudge(cwd);
+	const stripped =
+		getProjectTrustState() === "trusted" ? undefined : sessionRepositoryJudge();
 	return (process.env.PATH ?? "")
 		.split(path.delimiter)
-		.some((entry) =>
-			entry === ""
-				? posix
-				: !path.isAbsolute(entry) ||
-					isUnderDir(entry, cwd) ||
-					isProjectLocalBinPath(entry, cwd),
+		.some(
+			(entry) =>
+				reaches(entry) &&
+				!(path.isAbsolute(entry) && stripped?.(entry) === true),
 		);
 }
 
