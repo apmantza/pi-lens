@@ -136,6 +136,7 @@ import {
 import {
 	isUntrustedProjectPath,
 	recordProjectCommandRefusal,
+	withUnadmittedRootSpawns,
 } from "../session-repository.js";
 
 // --- Types ---
@@ -1090,11 +1091,15 @@ async function lookupManagedTool(
 ): Promise<{ found: string | undefined; storeOnly: boolean }> {
 	const storeOnly = bareLookupReachesUnadmittedRoot(cwd, refusals);
 	if (storeOnly) {
+		// #5678 verify V3: the reason names the trigger that held.
+		const trigger =
+			refusals?.bareRefused === true
+				? "a bare candidate resolved into the project and was refused"
+				: "a PATH entry reaches a project not admitted for project code";
 		recordDegradationOnce({
 			kind: "lsp-registry-decision",
 			subject: `store-only-repair:${toolId}`,
-			reason:
-				"LSP repair read only the pi-lens tool store: after a trust refusal a bare-name lookup reaches the project, so nothing was probed on PATH or installed",
+			reason: `LSP repair read only the pi-lens tool store: ${trigger}, so nothing was probed on PATH or installed`,
 			metadata: { field: "store-only-repair", tool: toolId },
 		});
 	}
@@ -1104,9 +1109,23 @@ async function lookupManagedTool(
 	return {
 		found: await (storeOnly
 			? getToolPath(toolId, { storeOnly: true })
-			: ensureTool(toolId, ...ensureOptions)),
+			: spawnsJudgedAgainstRoot(cwd, () =>
+					ensureTool(toolId, ...ensureOptions),
+				)),
 		storeOnly,
 	};
+}
+
+/**
+ * #5674: run `lookup` so that, for a root not admitted for project code, every
+ * bare name it spawns (the installer's PATH rung and probes, a runtime
+ * install) is refused at the spawn seam when it resolves into the root: a
+ * link in a global bin dir passes the PATH-entry test above, not this one.
+ */
+function spawnsJudgedAgainstRoot<T>(cwd: string, lookup: () => T): T {
+	return isLspProjectCodeAdmitted()
+		? lookup()
+		: withUnadmittedRootSpawns(cwd, lookup);
 }
 
 export async function resolveAndLaunch(
@@ -1535,7 +1554,9 @@ export async function resolveAndLaunch(
 		return undefined;
 	}
 	if (runtimeInstall && runtimeAvailable) {
-		const ok = await runtimeInstall.install();
+		const ok = await spawnsJudgedAgainstRoot(spec.cwd, () =>
+			runtimeInstall.install(),
+		);
 		if (staleLaunch(generation, `${toolLabel}:runtimeInstall`)) {
 			return undefined;
 		}

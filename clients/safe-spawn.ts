@@ -35,8 +35,10 @@ import { getProjectTrustState } from "./project-trust.js";
 import {
 	admittedLookupAnswer,
 	isSessionRepositoryPath,
+	inUnadmittedSpawnRoot,
 	recordProjectCommandRefusal,
 	sessionRepositoryJudge,
+	unadmittedSpawnRoot,
 } from "./session-repository.js";
 import { windowsExe } from "./process-snapshot.js";
 import { startSpawnUsageSampler } from "./resource-sampler.js";
@@ -1574,7 +1576,12 @@ function admitSpawn(
 	cwd: string | undefined,
 	env: NodeJS.ProcessEnv,
 ): SpawnAdmission {
-	if (getProjectTrustState() === "trusted") return { admitted: true, env };
+	// #5674: inside an LSP launch for a root not admitted for project code, a
+	// bare name is judged by where it resolves whatever pi's trust, so a link
+	// in a global bin dir that points into the root does not run.
+	const trusted = getProjectTrustState() === "trusted";
+	if (trusted && unadmittedSpawnRoot() === undefined)
+		return { admitted: true, env };
 	const childCwd = cwd ?? process.cwd();
 	const scoped = trustScopedEnvironment(env, childCwd);
 	if (!isSpawnLookup(command)) return { admitted: true, env: scoped };
@@ -1582,7 +1589,13 @@ function admitSpawn(
 		process.platform === "win32"
 			? resolveWindowsCommandForEnvironment(command, cwd, scoped)?.resolvedPath
 			: resolveSearchPathCommand(command, scoped.PATH, childCwd);
-	if (executable === undefined || !isSessionRepositoryPath(executable))
+	if (
+		executable === undefined ||
+		!(
+			(!trusted && isSessionRepositoryPath(executable)) ||
+			inUnadmittedSpawnRoot(executable)
+		)
+	)
 		return { admitted: true, env: scoped };
 	recordProjectCommandRefusal(executable);
 	return { admitted: false, executable };

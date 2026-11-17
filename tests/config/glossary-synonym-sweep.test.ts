@@ -1421,7 +1421,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// session-repository.ts, below the spawn seam.
 		// 16 -> 17 (#5674 r3): an absolute entry the spawn seam already strips
 		// (`path.isAbsolute`) does not count as reaching the project.
-		"clients/package-manager.ts": 17,
+		// 17 -> 16 (#5674 r4): the per-entry reach check moved to
+		// session-repository.ts as `projectSearchJudge`.
+		"clients/package-manager.ts": 16,
 		"clients/package-root.ts": 4,
 		// #5371: the `paths` glob matcher and its bounded walk arrive from
 		// `clients/lens-engine.ts` with their `node:path` uses — the namespace
@@ -1585,7 +1587,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/search-read-registration.ts": 3,
 		"clients/security-scan-client.ts": 4,
 		// #4530: the bin layouts moved here from package-manager.ts.
-		"clients/session-repository.ts": 9,
+		// 9 -> 11 (#5674 r4): `projectSearchJudge` tests an entry with
+		// `path.isAbsolute` and judges an answer by its `path.dirname`.
+		"clients/session-repository.ts": 11,
 		"clients/session-state-store.ts": 3,
 		"clients/sessionstart-logger.ts": 2,
 		// 11 -> 16 (#5545): the scan anchor spells the scan argument and the

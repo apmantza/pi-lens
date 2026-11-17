@@ -29,6 +29,29 @@
   and a pinned site count. Extend the seam; never add a per-caller guard. A
   non-pi maintenance host that starts the checkout's own tools adopts trust at
   its entry, as the MCP entry points do.
+- An LSP root not admitted for project code (an adopted root without
+  permission, or pi trust other than `trusted`) never executes or
+  version-probes a file whose real path is inside it (#5674). One judge,
+  `projectSearchJudge` in `clients/session-repository.ts`, decides what reaches
+  the root:
+  - a relative or (POSIX) empty PATH entry;
+  - an entry at or under the root, or under a project-local bin dir of the root
+    or an ancestor;
+  - an answer, judged by its real directory.
+  The judge walks the bin dirs once per scan, never once per entry. It is
+  applied in three places:
+  - `launchLSP` drops such entries from its lookup and from the child's PATH,
+    and refuses an answer in the root, such as a global link or the Windows
+    cwd search.
+  - `lookupManagedTool`, the one home of every LSP managed lookup, reads only
+    the tool store when the process PATH reaches the root, and the runtime
+    install is skipped on the same predicate.
+  - Otherwise both run inside `withUnadmittedRootSpawns`, so the spawn
+    chokepoint refuses a bare name that resolves into the root, which covers a
+    link in a global bin dir.
+  An admitted root is unchanged.
+  `tests/clients/lsp/managed-fallback-after-trust-refusal-4515.test.ts` and
+  `tests/clients/project-search-judge-5674.test.ts` pin it.
 - Under pi, project trust is consumed through `isProjectTrusted`; pi-lens never
   registers the host's trust-answer handler. `compileLspRegistry` is the one admission
   seam for LSP executable fields: global config and built-ins remain allowed,

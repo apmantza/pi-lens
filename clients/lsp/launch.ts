@@ -20,14 +20,11 @@ import { isTestMode } from "../env-utils.js";
 import { getGlobalPiLensDir } from "../file-utils.js";
 import { getGlobalPiLensLogDir } from "../probe-home-state.js";
 import { isFullyQualified, realpathOrResolve } from "../path-utils.js";
-import {
-	findGlobalBinary,
-	isProjectLocalBinPath,
-	searchPathEntryReachesProject,
-} from "../package-manager.js";
+import { findGlobalBinary, isProjectLocalBinPath } from "../package-manager.js";
 import {
 	isSessionRepositoryPath,
 	isUntrustedProjectPath,
+	projectSearchJudge,
 	recordProjectCommandRefusal,
 } from "../session-repository.js";
 import {
@@ -701,15 +698,16 @@ export function isProjectLocalLspBinary(
  * search can find is the cwd's own, so an owned cwd refuses the start.
  *
  * #5674: for a root the spawn has not admitted for project code (an adopted
- * root without permission, or trust not `trusted`), an answer whose real
- * directory reaches that root refuses the same way, whatever pi's trust.
+ * root without permission, or trust not `trusted`), `reachesRoot` is that
+ * root's judge, and an answer whose real directory it places in the root
+ * refuses the same way, whatever pi's trust.
  */
 function refuseProjectLookup(
 	command: string,
 	spawnCommand: string,
 	cwd: string,
 	env: NodeJS.ProcessEnv,
-	rootAdmitted: boolean,
+	reachesRoot: ((entry: string) => boolean) | undefined,
 ): void {
 	const unresolved = spawnCommand === command;
 	if (unresolved && !isWindows) return;
@@ -721,9 +719,7 @@ function refuseProjectLookup(
 			)?.resolvedPath
 		: spawnCommand;
 	if (owned === undefined) return;
-	const inRoot =
-		!rootAdmitted &&
-		searchPathEntryReachesProject(path.dirname(realpathOrResolve(owned)), cwd);
+	const inRoot = reachesRoot?.(path.dirname(realpathOrResolve(owned))) === true;
 	if (!inRoot && !isUntrustedProjectPath(owned)) return;
 	recordProjectCommandRefusal(owned);
 	throw new SpawnFailureError(
@@ -941,7 +937,9 @@ export async function launchLSP(
 	// the session repository's own directories until pi trusts the project.
 	// #5674: for a root not admitted for project code they also lose every
 	// entry that reaches the root (relative entries resolve against it).
-	const rootAdmitted = isLspProjectCodeAdmitted();
+	const reachesRoot = isLspProjectCodeAdmitted()
+		? undefined
+		: projectSearchJudge(cwd);
 	const env: NodeJS.ProcessEnv = trustScopedEnvironment(
 		{
 			...mergedEnv,
@@ -949,9 +947,7 @@ export async function launchLSP(
 			...(isWindows ? { Path: augmentedPath } : {}),
 		},
 		cwd,
-		rootAdmitted
-			? undefined
-			: (entry) => searchPathEntryReachesProject(entry, cwd),
+		reachesRoot,
 	);
 	if (ownerTag === undefined) delete env[OWNER_TAG_ENV];
 	else env[OWNER_TAG_ENV] = ownerTag;
@@ -1028,7 +1024,7 @@ export async function launchLSP(
 	// already holds no project entry, so what is left is a global entry or
 	// global bin dir holding a link into the project: judged by the target.
 	if (isBareCommand)
-		refuseProjectLookup(command, spawnCommand, cwd, env, rootAdmitted);
+		refuseProjectLookup(command, spawnCommand, cwd, env, reachesRoot);
 
 	// Pre-validate .cmd shims only after trust has admitted the candidate: if the
 	// underlying script is missing the shim will exit with code 1 after a 500ms

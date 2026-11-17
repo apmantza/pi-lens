@@ -39,7 +39,11 @@ import {
 	resetProjectTrust,
 	setProjectTrustState,
 } from "../../../clients/project-trust.js";
-import { resolveSearchPathCommand } from "../../../clients/safe-spawn.js";
+import { truncateForLedger } from "../../../clients/ledger-bounds.js";
+import {
+	findCommandAsync,
+	resolveSearchPathCommand,
+} from "../../../clients/safe-spawn.js";
 import { readNdjsonRows } from "../../support/ndjson-rows.js";
 import { setPlatform } from "../../support/platform-stub.js";
 import { removeTempDirSync } from "../test-utils.js";
@@ -493,7 +497,112 @@ describe.skipIf(process.platform === "win32")(
 				).catch(() => undefined);
 
 				expect(fs.existsSync(marker)).toBe(false);
-				expect(decisionRows("store-only-repair:typescript")).toHaveLength(1);
+				// #5678 verify V3: no stage refused here, so the record names the
+				// PATH trigger, not a trust refusal that never happened.
+				expect(
+					decisionRows("store-only-repair:typescript").map((row) => row.reason),
+				).toEqual([
+					expect.stringContaining(
+						"a PATH entry reaches a project not admitted for project code",
+					),
+				]);
+			},
+		);
+	},
+);
+
+/**
+ * Plants recorders at `<root>/bin/<name>` and links each from `outsideBin`, a
+ * global bin dir outside the root (`npm link`, `ln -s ~/proj/bin/x
+ * ~/.local/bin`). The entry itself is outside the root; only the link's real
+ * target is inside it.
+ */
+function linkIntoRoot(names: string[]) {
+	const { spec, bin, marker } = makeProject("fixture-lsp", false, "bin");
+	for (const name of names) {
+		plantRecorder(path.join(bin, name), marker);
+		fs.symlinkSync(path.join(bin, name), path.join(outsideBin, name));
+	}
+	const whichDir = (originalPath ?? "")
+		.split(path.delimiter)
+		.find((dir) => dir && fs.existsSync(path.join(dir, "which")));
+	process.env.PATH = [outsideBin, whichDir ?? "/usr/bin"].join(path.delimiter);
+	return { root: spec.cwd, bin, marker };
+}
+
+describe.skipIf(process.platform === "win32")(
+	"links in a global PATH dir into a root not admitted for project code (#5678 verify V1)",
+	() => {
+		// Recurrence: #5678 verify V1. The PATH-entry test is lexical on the
+		// entry's directory, so the installer's PATH rung, its Python probes and
+		// the runtime install ran a link whose target sits in the root.
+		it.each([
+			["trusted", "pyright", ["pyright"]],
+			["unknown", "pyright", ["pyright"]],
+			["trusted", "jedi", ["python", "python3", "pip"]],
+			["unknown", "jedi", ["python", "python3", "pip"]],
+			["trusted", "typescript", ["tsc", "typescript-language-server"]],
+			["unknown", "typescript", ["tsc", "typescript-language-server"]],
+		] as const)(
+			"never runs a linked binary with trust=%s for the %s managed lookup",
+			async (trust, server, names) => {
+				setProjectTrustState(trust);
+				const { root, marker } = linkIntoRoot([...names]);
+				fs.writeFileSync(path.join(root, "tsconfig.json"), "{}\n");
+				const spawn = {
+					pyright: PythonServer,
+					jedi: PythonJediServer,
+					typescript: TypeScriptServer,
+				}[server].spawn;
+
+				await withLspProjectCodePermission(false, () =>
+					spawn(root, { allowInstall: true }),
+				).catch(() => undefined);
+
+				expect(fs.existsSync(marker)).toBe(false);
+			},
+		);
+
+		it.each([
+			[false, null],
+			[true, "the link"],
+		] as const)(
+			"judges the runtime install's lookups against the root (admitted=%s answers %s)",
+			async (admitted, expected) => {
+				// The runtime install resolves its bare runtime (`go`, `gem`) like the
+				// installer does; a `which` answer is a path the caller then starts.
+				// The rule binds only roots not admitted for project code.
+				setProjectTrustState("trusted");
+				const { root, bin } = linkIntoRoot(["fixture-go"]);
+				const link = path.join(outsideBin, "fixture-go");
+				let answer: string | null | undefined;
+				const install = async () => {
+					answer = await findCommandAsync("fixture-go");
+					return false;
+				};
+
+				await withLspProjectCodePermission(admitted, () =>
+					resolveAndLaunchRaw(
+						{
+							candidates: ["fixture-lsp"],
+							args: [],
+							cwd: root,
+							runtimeInstall: { runtimeCommand: "fixture-go", install },
+						},
+						true,
+					),
+				).catch(() => undefined);
+
+				expect(answer).toBe(expected === null ? null : link);
+				const refused = getDegradationSummary()
+					.filter((group) => group.kind === "trust-refusal")
+					.flatMap((group) => group.latestReasons)
+					.map((row) => row.subject);
+				const target = truncateForLedger(
+					"project-command:" + fs.realpathSync(path.join(bin, "fixture-go")),
+				);
+				if (admitted) expect(refused).not.toContain(target);
+				else expect(refused).toContain(target);
 			},
 		);
 	},

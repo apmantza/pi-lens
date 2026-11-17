@@ -34,6 +34,7 @@
  * `safe-spawn.ts`. It imports only leaves.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -41,6 +42,8 @@ import {
 	isAtOrAboveHomeDir,
 	isWithinForm,
 	normalizeEphemeralMapKey,
+	normalizeFilePath,
+	normalizePathSpelling,
 	realpathOrResolve,
 	walkUpDirs,
 } from "./path-utils.js";
@@ -207,6 +210,72 @@ function pathForm(real: string): string {
 }
 
 /**
+ * #5674: the judgment for one LSP root that is not admitted for project code,
+ * as one predicate over search-path entries. An entry reaches the root when it
+ * is relative (it follows each spawn's cwd), empty on POSIX (the cwd), or lies
+ * at or under the root or a project-local bin dir of the root or an ancestor,
+ * by spelling or, on POSIX, by identity (`isUnderDir`'s two axes). An answer
+ * is judged by its real directory. The bin dirs are walked once per judge, so
+ * a caller judging every entry of a search path pays once (#5678 verify V2);
+ * like {@link sessionRepositoryJudge}, a judge is for one decision and is
+ * never cached across calls.
+ */
+export function projectSearchJudge(root: string): (entry: string) => boolean {
+	const binDirs = [...projectLocalBinDirs(root)];
+	const spellings = [root, ...binDirs].map(normalizePathSpelling);
+	// Only an existing directory can hold an existing path's identity, and a
+	// missing one would cost a failed `realpath` per missing segment.
+	let identities: string[] | undefined;
+	return (entry) => {
+		if (entry === "") return process.platform !== "win32";
+		if (!path.isAbsolute(entry)) return true;
+		const spelled = normalizePathSpelling(entry);
+		if (spellings.some((dir) => isWithinForm(spelled, dir))) return true;
+		if (process.platform === "win32") return false;
+		identities ??= [
+			root,
+			...binDirs.flatMap((dir) => (fs.existsSync(dir) ? [dir] : [])),
+		].map(normalizeFilePath);
+		const real = normalizeFilePath(entry);
+		return identities.some((dir) => isWithinForm(real, dir));
+	};
+}
+
+/**
+ * #5674: the LSP root, not admitted for project code, whose launch runs the
+ * bare-name spawns of this async context: the installer's PATH rung and
+ * probes, a runtime install, the launcher's npm probe. The spawn seam refuses
+ * an executable whose real directory {@link projectSearchJudge} places in it,
+ * so a link in a global bin dir that points into the root never runs. Built
+ * lazily, as `extension-log.ts`'s capture window is: an active store taxes
+ * every promise in the process.
+ */
+let unadmittedRootSpawns: AsyncLocalStorage<string> | undefined;
+
+export function withUnadmittedRootSpawns<T>(root: string, run: () => T): T {
+	unadmittedRootSpawns ??= new AsyncLocalStorage<string>();
+	return unadmittedRootSpawns.run(root, run);
+}
+
+/** The root {@link withUnadmittedRootSpawns} set for this context, if any. */
+export function unadmittedSpawnRoot(): string | undefined {
+	return unadmittedRootSpawns?.getStore();
+}
+
+/**
+ * Whether `resolved`, the file a bare name resolved to, lies in the root
+ * {@link withUnadmittedRootSpawns} set for this context: the spawn seam's
+ * lookup and a `which` answer are both judged here.
+ */
+export function inUnadmittedSpawnRoot(resolved: string): boolean {
+	const root = unadmittedRootSpawns?.getStore();
+	return (
+		root !== undefined &&
+		projectSearchJudge(root)(path.dirname(realpathOrResolve(resolved)))
+	);
+}
+
+/**
  * Whether `target` (a file or a directory, any spelling) is the session
  * repository's own bytes. See the module header for the rule.
  */
@@ -253,12 +322,17 @@ export function recordProjectCommandRefusal(resolvedCommand: string): void {
 /**
  * The first line of a `which`/`where` answer, or `null` when there is none or
  * it names the session repository's bytes under untrusted pi trust (a global
- * dir can hold a link into the project). Callers start the answer by path, so
+ * dir can hold a link into the project), or a file in the unadmitted LSP root
+ * of this context (#5674). Callers start the answer by path, so
  * the spawn seam's lookup judgment never sees it: this is that judgment.
  */
 export function admittedLookupAnswer(stdout: string): string | null {
 	const answer = stdout.trim().split(/\r?\n/)[0] || null;
-	if (answer === null || !isUntrustedProjectPath(answer)) return answer;
+	if (
+		answer === null ||
+		!(isUntrustedProjectPath(answer) || inUnadmittedSpawnRoot(answer))
+	)
+		return answer;
 	recordProjectCommandRefusal(answer);
 	return null;
 }

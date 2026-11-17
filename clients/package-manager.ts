@@ -44,7 +44,9 @@ import {
 	NODE_MODULES_BIN_DIRS,
 	isUntrustedProjectPath,
 	projectLocalBinDirs,
+	projectSearchJudge,
 	recordProjectCommandRefusal,
+	sessionRepositoryJudge,
 } from "./session-repository.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { logExtension } from "./extension-log.js";
@@ -647,37 +649,23 @@ export function isProjectLocalBinPath(
 }
 
 /**
- * #4515/#5674: whether one search-path entry can resolve a bare command into
- * the project at `cwd`. An entry counts when it is a project-local bin dir
- * (the classifier above), lies at or under `cwd`, or is relative: a relative
- * entry follows each spawn's cwd, and on POSIX an empty entry is the cwd.
- */
-export function searchPathEntryReachesProject(
-	entry: string,
-	cwd: string,
-): boolean {
-	if (entry === "") return process.platform !== "win32";
-	return (
-		!path.isAbsolute(entry) ||
-		isUnderDir(entry, cwd) ||
-		isProjectLocalBinPath(entry, cwd)
-	);
-}
-
-/**
  * #4515: whether a bare name this process spawns (its PATH, pi's cwd) can
- * resolve into the project at `cwd`. #5674: an entry the spawn seam already
- * strips from every start (#4530: an absolute entry in the session repository,
- * under pi trust other than `trusted`) does not count. Relative and empty
- * entries always count: they follow each spawn's cwd.
+ * resolve into the project at `cwd`, by {@link projectSearchJudge}. #5674: an
+ * entry the spawn seam already strips from every start (#4530: an absolute
+ * entry in the session repository, under pi trust other than `trusted`) does
+ * not count. Relative and empty entries always count: they follow each
+ * spawn's cwd. Each judge is built once per scan (#5678 verify V2).
  */
 export function commandSearchReachesProject(cwd: string): boolean {
+	const reaches = projectSearchJudge(cwd);
+	const stripped =
+		getProjectTrustState() === "trusted" ? undefined : sessionRepositoryJudge();
 	return (process.env.PATH ?? "")
 		.split(path.delimiter)
 		.some(
 			(entry) =>
-				searchPathEntryReachesProject(entry, cwd) &&
-				!(path.isAbsolute(entry) && isUntrustedProjectPath(entry)),
+				reaches(entry) &&
+				!(path.isAbsolute(entry) && stripped?.(entry) === true),
 		);
 }
 
