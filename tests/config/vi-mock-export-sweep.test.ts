@@ -218,7 +218,7 @@ function compareAgainstBaseline(
 			);
 		else if (finding.missing.length < admitted)
 			warnings.push(
-				`${entry}: missing count fell from ${admitted} to ${finding.missing.length}`,
+				`${entry}: missing count fell from ${admitted} to ${finding.missing.length}; lower the baseline row with \`npm run test:regen -- vi-mock\``,
 			);
 	}
 	for (const entry of Object.keys(baseline))
