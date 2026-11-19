@@ -190,6 +190,45 @@ describe("resolveNpmCmdShim (#5694)", () => {
 		).toBeUndefined();
 	});
 
+	// The PATH search is Windows' own (PATHEXT), so these two cells need a
+	// Windows host.
+	// lane: windows-vitest
+	it.runIf(process.platform === "win32")(
+		"runs the node.exe the child's PATH answers when none sits beside the shim",
+		() => {
+			const planted = plantShim(cmdShimV6(TARGET));
+			plantFile(planted.script);
+			const nodeDir = path.join(planted.root, "node-dir");
+			plantFile(path.join(nodeDir, "node.exe"));
+			expect(
+				resolveNpmCmdShim(planted.shim, planted.root, {
+					PATH: nodeDir,
+					PATHEXT: ".COM;.EXE;.BAT;.CMD",
+				})?.program.toLowerCase(),
+			).toBe(path.join(nodeDir, "node.exe").toLowerCase());
+		},
+	);
+
+	// Recurrence guarded: a PATH `node` that is itself a `.cmd` (a version
+	// manager's shim) cannot be spawned without cmd.exe; Node refuses a `.cmd`
+	// with `shell: false`, so the server would fail to start.
+	// lane: windows-vitest
+	it.runIf(process.platform === "win32")(
+		"keeps cmd.exe when the child's PATH answers node with a script",
+		() => {
+			const planted = plantShim(cmdShimV6(TARGET));
+			plantFile(planted.script);
+			const nodeDir = path.join(planted.root, "node-dir");
+			plantFile(path.join(nodeDir, "node.cmd"));
+			expect(
+				resolveNpmCmdShim(planted.shim, planted.root, {
+					PATH: nodeDir,
+					PATHEXT: ".COM;.EXE;.BAT;.CMD",
+				}),
+			).toBeUndefined();
+		},
+	);
+
 	// Recurrence guarded: with no node.exe beside the shim and none on the
 	// child's PATH, there is no program to run directly.
 	it("keeps cmd.exe when no Node program answers", () => {

@@ -202,6 +202,7 @@ afterEach(async () => {
 	}
 });
 
+// lane: windows-vitest
 describe.runIf(process.platform === "win32")(
 	"a Windows language server ends with its pi host (#5694)",
 	() => {
