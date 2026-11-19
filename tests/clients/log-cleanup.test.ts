@@ -310,6 +310,34 @@ describe("runLogCleanup retention rows (#5702)", () => {
 		}
 	});
 
+	it("counts a failed delete once per run instead of throwing (decision 3)", async () => {
+		// A directory where the spill row expects a file: unlinkSync fails
+		// EISDIR, the sweep counts it, and the remaining entries still run.
+		const blocker = path.join(
+			home,
+			`tool-result-${Date.now() - 40 * DAY_MS}-${randomUUID()}.log`,
+		);
+		fs.mkdirSync(blocker, { recursive: true });
+		backdate(blocker, 40);
+		const removable = path.join(
+			home,
+			`tool-result-${Date.now() - 41 * DAY_MS}-${randomUUID()}.log`,
+		);
+		fs.writeFileSync(removable, "x");
+		backdate(removable, 41);
+
+		const { runLogCleanup } = await loadCleanup();
+		const dbgLines: string[] = [];
+		const result = await runLogCleanup((msg) => dbgLines.push(msg));
+
+		expect(result.report).toMatch(/1 deletions failed/);
+		expect(fs.existsSync(blocker)).toBe(true);
+		expect(fs.existsSync(removable)).toBe(false);
+		expect(dbgLines).toContainEqual(
+			expect.stringMatching(/1 deletions failed; first: tool-result-/),
+		);
+	});
+
 	it("removes stale sockets of both name shapes and keeps a live listener, a live owner pid and a non-socket file", async () => {
 		const socketDir = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-retain-sock-"),
