@@ -4196,7 +4196,7 @@ export function downloadInstallerFile(
 	maxRedirects = 5,
 	headers: Record<string, string> = {},
 	maxBytes = INSTALLER_DOWNLOAD_MAX_BYTES,
-): Promise<{ bytes: number }> {
+): Promise<{ bytes: number; sha256: string }> {
 	return new Promise((resolve, reject) => {
 		let settled = false;
 		const fail = (error: Error): void => {
@@ -4243,6 +4243,7 @@ export function downloadInstallerFile(
 					return;
 				}
 				let bytes = 0;
+				const digest = createHash("sha256");
 				const limiter = new Transform({
 					transform(chunk: Buffer, _encoding, callback) {
 						bytes += chunk.length;
@@ -4255,6 +4256,7 @@ export function downloadInstallerFile(
 							);
 							return;
 						}
+						digest.update(chunk);
 						callback(null, chunk);
 					},
 				});
@@ -4283,7 +4285,7 @@ export function downloadInstallerFile(
 					output.on("finish", () => {
 						if (!settled) {
 							settled = true;
-							resolve({ bytes });
+							resolve({ bytes, sha256: digest.digest("hex") });
 						}
 					});
 					return;
@@ -4292,7 +4294,7 @@ export function downloadInstallerFile(
 					.then(() => {
 						if (!settled) {
 							settled = true;
-							resolve({ bytes });
+							resolve({ bytes, sha256: digest.digest("hex") });
 						}
 					})
 					.catch((error: unknown) =>
@@ -4326,12 +4328,6 @@ export function downloadInstallerFile(
 			),
 		);
 	});
-}
-
-async function sha256File(filePath: string): Promise<string> {
-	const hash = createHash("sha256");
-	await pipeline(createReadStream(filePath), hash);
-	return hash.digest("hex");
 }
 
 /**
@@ -5776,11 +5772,10 @@ async function installArchiveTool(
 		`.${tool.id}.archive-${randomUUID()}`,
 	);
 	let archiveBytes = 0;
+	let archiveDigest = "";
 	try {
-		({ bytes: archiveBytes } = await downloadInstallerFile(
-			url,
-			archiveDownloadPath,
-		));
+		({ bytes: archiveBytes, sha256: archiveDigest } =
+			await downloadInstallerFile(url, archiveDownloadPath));
 	} catch (err) {
 		await fs.rm(archiveDownloadPath, { force: true });
 		logSessionStart(
@@ -5795,7 +5790,7 @@ async function installArchiveTool(
 	// extraction one): `recordDegradationOnce` keys on kind+subject, so sharing
 	// `${id}:${format}` would let an earlier extraction row swallow this one.
 	const pinned = spec.sha256?.[url];
-	const digest = await sha256File(archiveDownloadPath);
+	const digest = archiveDigest;
 	if (digest !== pinned) {
 		const reason = pinned === undefined ? "sha256-unpinned" : "sha256-mismatch";
 		recordDegradationOnce({
