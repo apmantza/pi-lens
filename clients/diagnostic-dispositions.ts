@@ -719,61 +719,87 @@ export function _resetDeferredForTests(): void {
 	resetDeferredDispositions();
 }
 
+/** One candidate's alias spellings, before the ownership test: the display
+ * form of a cut message, then the `[<rule>] `-stripped form of the message and
+ * of that display form. See {@link messageAliases}. */
+function aliasSpellings(candidate: DispositionCandidate): string[] {
+	const spellings: string[] = [];
+	if (messageIsCutWhenDisplayed(candidate.message)) {
+		spellings.push(displayedMessage(candidate.message));
+	}
+	for (const spelling of [candidate.message, ...spellings]) {
+		const bare = messageWithoutRulePrefix(spelling, candidate.rule);
+		if (bare !== undefined) spellings.push(bare);
+	}
+	return spellings;
+}
+
 /**
- * #5367: the DISPLAY-form alias each candidate may be matched through, or
- * nothing for that candidate.
+ * The alias spellings each candidate may be matched through, beyond its own
+ * message, or nothing for that candidate.
  *
- * A cascade line prints `displayedMessage(d.message)` (first line, cut at 100
- * characters), so an agent that marks what it was SHOWN spells a message no
- * finding carries: the anchor hashes `normalizeMessage(message)`, which folds
- * whitespace and case but never cuts. The mark hid nothing — on either cascade
- * lane — for every multiline or over-budget error.
+ * #5367: a cascade line prints `displayedMessage(d.message)` (first line, cut
+ * at 100 characters), so an agent that marks what it was SHOWN spells a
+ * message no finding carries: the anchor hashes `normalizeMessage(message)`,
+ * which folds whitespace and case but never cuts. #5709: a rendered line also
+ * prints a runner's `[<rule>] ` prefix inside the message, and an agent that
+ * splits it off into `rule` spells the rest. So the aliases are the display
+ * form of a cut message, and the `[<rule>] `-stripped form of the message and
+ * of its display form (`messageWithoutRulePrefix`, the finding's OWN rule
+ * only).
  *
- * The alias therefore re-anchors the SAME candidate on its displayed form. It
- * is honored only while that spelling names one live message: when two live
- * findings in this batch render to the same text, either could be the one the
- * mark quotes, and a false-positive on a STOP-tier error must not silently
- * silence a different error beside it (the #1625 F1 reason, one layer down).
- * Ambiguity is counted on the NORMALIZED message, so two candidates that are
- * the same finding under two `(tool, rule)` spellings (#3248's identity
- * widening) are one owner, not two.
+ * Every alias is honored only while that spelling names one live message:
+ * when two live findings in this batch render to the same text, either could
+ * be the one the mark quotes, and a false-positive on a STOP-tier error must
+ * not silently silence a different error beside it (the #1625 F1 reason, one
+ * layer down; #5711 review r1 for the stripped forms). Ambiguity is counted on
+ * the NORMALIZED message, so two candidates that are the same finding under
+ * two `(tool, rule)` spellings (#3248's identity widening) are one owner, not
+ * two.
  *
- * Cost is bounded and cold: a candidate whose message renders whole is skipped
- * by a length/newline test before any hashing, and the whole derivation runs
- * only after the caller's empty-store early return, so a project with no marks
- * pays nothing on the per-edit dispatch path.
+ * Cost is bounded and cold: a candidate whose message renders whole and opens
+ * with no bracket of its own rule is skipped before any hashing, and the whole
+ * derivation runs only after the caller's empty-store early return, so a
+ * project with no marks pays nothing on the per-edit dispatch path.
  */
-function displayFormAliases<T extends DispositionCandidate>(
+function messageAliases<T extends DispositionCandidate>(
 	candidates: T[],
-): Map<T, string> {
-	const cut = new Map<T, string>();
+): Map<T, string[]> {
+	const spelled = new Map<T, string[]>();
 	const owners = new Map<string, Set<string>>();
 	for (const candidate of candidates) {
-		if (!messageIsCutWhenDisplayed(candidate.message)) continue;
-		const form = displayedMessage(candidate.message);
-		cut.set(candidate, form);
-		const key = normalizeMessage(form);
-		const owner = owners.get(key);
+		const spellings = aliasSpellings(candidate);
+		if (spellings.length === 0) continue;
+		spelled.set(candidate, spellings);
 		const message = normalizeMessage(candidate.message);
-		if (owner === undefined) owners.set(key, new Set([message]));
-		else owner.add(message);
+		for (const spelling of spellings) {
+			const key = normalizeMessage(spelling);
+			const owner = owners.get(key);
+			if (owner === undefined) owners.set(key, new Set([message]));
+			else owner.add(message);
+		}
 	}
-	if (cut.size === 0) return new Map();
-	// #5367 r1 F1: every live candidate owns the display form its own folded
-	// text equals, cut or whole. An uncut finding does, and so does a cut one
-	// whose text folds to another's display form ("error\ndetail" and the form
-	// "error detail"). Without this, a mark naming that text also hid a sibling
-	// whose display form it is, which master kept. Counted after the cut pass,
-	// so the alias set itself stays limited to cut messages.
+	if (spelled.size === 0) return new Map();
+	// #5367 r1 F1: every live candidate owns the alias its own folded text
+	// equals, aliased or not. An uncut finding does, and so does a cut one whose
+	// text folds to another's display form ("error\ndetail" and the form
+	// "error detail"), and a bare finding whose text is another's stripped form
+	// (`M` and `[r] M`). Without this, a mark naming that text also hid the
+	// sibling whose alias it is. Counted after the alias pass, so the alias set
+	// itself stays limited to the spellings derived above.
 	for (const candidate of candidates) {
 		const message = normalizeMessage(candidate.message);
 		owners.get(message)?.add(message);
 	}
-	const aliases = new Map<T, string>();
-	for (const [candidate, form] of cut) {
-		if ((owners.get(normalizeMessage(form))?.size ?? 0) === 1) {
-			aliases.set(candidate, form);
+	const aliases = new Map<T, string[]>();
+	for (const [candidate, spellings] of spelled) {
+		const kept: string[] = [];
+		for (const spelling of spellings) {
+			if ((owners.get(normalizeMessage(spelling))?.size ?? 0) === 1) {
+				kept.push(spelling);
+			}
 		}
+		if (kept.length > 0) aliases.set(candidate, kept);
 	}
 	return aliases;
 }
@@ -806,29 +832,17 @@ export function applyDispositions<T extends DispositionCandidate>(
 	const dispositions = readState(cwd).dispositions;
 	if (nothingToApply(dispositions, cwd)) return diagnostics;
 	const deferred = deferredAnchorsFor(cwd);
-	// #5367: a mark spelled from the DISPLAYED cascade text — see
-	// `displayFormAliases`. Computed once for the batch, because its ambiguity
-	// test is over the batch's live findings, not over one candidate.
-	const aliases = displayFormAliases(diagnostics);
+	// #5367, #5709: a mark spelled from a RENDERED line - see `messageAliases`.
+	// Computed once for the batch, because its ambiguity test is over the
+	// batch's live findings, not over one candidate.
+	const aliases = messageAliases(diagnostics);
 	return diagnostics.filter((d) => {
 		const isBlocking = d.semantic === "blocking";
-		// #5367: the alias anchors use the same two derivations the primary pair
-		// uses, with the message replaced by another spelling of it: its displayed
-		// form, or (below) the message without the `[<rule>] ` prefix the runner
-		// folded into it. The WEAK anchors are checked only for a non-blocking
-		// candidate: #1625 F1 already guarantees a blocking finding drops on its
-		// STRICT anchor alone.
-		const messages = [d.message];
-		const displayAlias = aliases.get(d);
-		if (displayAlias !== undefined) messages.push(displayAlias);
-		// A rendered line prints `[<rule>] <message>`, so an agent marking what it
-		// was shown splits the bracket off into `rule`. Every spelling of the
-		// message gets the same treatment, so a cut display form is covered too.
-		const spelled = messages.length;
-		for (let i = 0; i < spelled; i++) {
-			const bare = messageWithoutRulePrefix(messages[i] ?? "", d.rule);
-			if (bare !== undefined) messages.push(bare);
-		}
+		// The alias anchors use the same two derivations the primary pair uses,
+		// with the message replaced by an alias spelling. The WEAK anchors are
+		// checked only for a non-blocking candidate: #1625 F1 already guarantees
+		// a blocking finding drops on its STRICT anchor alone.
+		const messages = [d.message, ...(aliases.get(d) ?? [])];
 		for (const message of messages) {
 			// The SAME shared derivation for every spelling: a second spelling of
 			// the anchor build is how a mark and a diagnostic stop converging in

@@ -97,10 +97,10 @@ function mypyDiagnostics(fileAbs: string): Diagnostic[] {
 
 async function dispatchMypy(
 	fileAbs: string,
-	reshape: (d: Diagnostic) => Diagnostic = (d) => d,
+	reshape: (ds: Diagnostic[]) => Diagnostic[] = (ds) => ds,
 ): Promise<Diagnostic[]> {
 	const registry = new RunnerRegistry();
-	const diagnostics = mypyDiagnostics(fileAbs).map(reshape);
+	const diagnostics = reshape(mypyDiagnostics(fileAbs));
 	registry.register(
 		createMockRunner({
 			id: "mypy",
@@ -219,10 +219,8 @@ describe("a mark made from the STOP block hides the finding it names", () => {
 		// ast-grep's shape: the bracket names a category, not the rule
 		// (`clients/dispatch/runners/ast-grep-napi.ts`). Stripping it would
 		// let a mark on the bare text match a finding it never quoted.
-		const categorised = (d: Diagnostic): Diagnostic => ({
-			...d,
-			message: `[slop] ${MISSING}`,
-		});
+		const categorised = (ds: Diagnostic[]): Diagnostic[] =>
+			ds.map((d) => ({ ...d, message: `[slop] ${MISSING}` }));
 		await mark({
 			path: fileAbs,
 			line: 1,
@@ -231,5 +229,69 @@ describe("a mark made from the STOP block hides the finding it names", () => {
 		});
 		const blockers = await dispatchMypy(fileAbs, categorised);
 		expect(blockers.map((b) => b.line)).toEqual([1, 4]);
+	});
+
+	// Review r1 (CodeRabbit on #5711): an alias spelling of one finding must
+	// not match a DIFFERENT live finding whose own message is that spelling, or
+	// one mark on the second silences both (the #5367 ownership rule, applied
+	// to every alias, not only the display form).
+	function withBareSibling(bareMessage: string, bracketed?: string) {
+		return (ds: Diagnostic[]): Diagnostic[] => {
+			const [first] = ds;
+			if (!first) throw new Error("fixture: mypy parsed no diagnostic");
+			const a =
+				bracketed === undefined ? first : { ...first, message: bracketed };
+			const b: Diagnostic = {
+				...first,
+				id: "sibling-bare",
+				// Another column, so the overlap dedupe (`findingKey`: file, line,
+				// column, class, rule) keeps both findings on the one line.
+				column: (first.column ?? 1) + 4,
+				message: bareMessage,
+			};
+			return [a, b];
+		};
+	}
+
+	it("keeps a bracketed finding when the mark names a different finding whose message is its stripped form", async () => {
+		const fileAbs = writeTarget();
+		const reshape = withBareSibling(MISSING);
+		// Control: both findings reach the block unmarked.
+		expect(
+			(await dispatchMypy(fileAbs, reshape)).map((b) => b.message),
+		).toEqual([`[import-not-found] ${MISSING}`, MISSING]);
+		await mark({
+			path: fileAbs,
+			line: 1,
+			tool: "mypy",
+			rule: "import-not-found",
+			message: MISSING,
+		});
+		const blockers = await dispatchMypy(fileAbs, reshape);
+		expect(blockers.map((b) => b.message)).toEqual([
+			`[import-not-found] ${MISSING}`,
+		]);
+	});
+
+	it("keeps a long bracketed finding when the mark names a different finding whose message is its stripped display form", async () => {
+		const fileAbs = writeTarget();
+		const prefix = "[import-not-found] ";
+		const long = `${prefix}${"x".repeat(1000)}A`;
+		// What a cascade-style render shows of `long` (its first 100 characters),
+		// minus the bracket: the spelling a mark on the sibling carries.
+		const bare = "x".repeat(100 - prefix.length);
+		const reshape = withBareSibling(bare, long);
+		expect(
+			(await dispatchMypy(fileAbs, reshape)).map((b) => b.message),
+		).toEqual([long, bare]);
+		await mark({
+			path: fileAbs,
+			line: 1,
+			tool: "mypy",
+			rule: "import-not-found",
+			message: bare,
+		});
+		const blockers = await dispatchMypy(fileAbs, reshape);
+		expect(blockers.map((b) => b.message)).toEqual([long]);
 	});
 });
