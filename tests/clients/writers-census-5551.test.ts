@@ -513,9 +513,9 @@ const WRITE_SITES: Record<string, SiteRow> = {
 		why: "the lens-map HTML report under the project data directory",
 	},
 	"clients/log-cleanup.ts": {
-		sites: 3,
+		sites: 6,
 		cls: "state",
-		why: "rotates and prunes pi-lens logs",
+		why: "rotates and prunes pi-lens logs; the #5702 retention sweep unlinks aged entries (spill logs, session state, stale sockets) and removes orphaned project data directories recursively",
 	},
 	"clients/lsp/edits.ts": {
 		sites: 9,

@@ -9,6 +9,15 @@
  *   - ~/.pi-lens/*.log (every global log — see getManagedLogFiles())
  *   - ~/.pi-lens/logs/*.jsonl (daily diagnostic logs)
  *   - ~/.pi-lens/<name>.<timestamp>.log (rotated backups, and legacy .log.<ts>)
+ *   - ~/.pi-lens/tool-result-<ms>-<uuid>.log (oversized tool-result spills,
+ *     written by tools/render-compact.ts through spillResultLogName())
+ *   - <project-data>/sessions/<id>.json (per-session state snapshots; the
+ *     current session's file is kept regardless of age)
+ *   - os.tmpdir()/pi-lens-mcp-*.sock (MCP endpoint sockets whose owner is
+ *     gone — see classifyIpcSocketName and probeIpcSocketListener)
+ *   - ~/.pi-lens/projects/<slug>-<hash>/ (project data directories whose
+ *     root no longer exists — see createProjectDataDirRootProbe; at least
+ *     PROJECT_DATA_ORPHAN_RETENTION_DAYS old)
  *
  * Excluded (intentionally NOT cleaned - project-scoped or persistent):
  *   - <project-data>/worklog.jsonl                - Agent fixable diagnostics
@@ -21,14 +30,21 @@
  *   - <project-data>/todo-baseline.json           - TODO baseline
  */
 
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
+import {
+	createProjectDataDirRootProbe,
+	getProjectDataDir,
+	projectDataBase,
+} from "./file-utils.js";
+import { classifyIpcSocketName, probeIpcSocketListener } from "./mcp/ipc.js";
 import { getGlobalPiLensLogDir } from "./probe-home-state.js";
 import { getRegisteredLogFiles } from "./ndjson-logger.js";
 import { pathsEqual } from "./path-utils.js";
 
-const LOG_DIR = getGlobalPiLensLogDir();
-const LOGS_SUBDIR = path.join(LOG_DIR, "logs");
+const LOGS_SUBDIR = () => path.join(getGlobalPiLensLogDir(), "logs");
 
 /**
  * Every global `.log` pi-lens writes under ~/.pi-lens, resolved dynamically so
@@ -53,7 +69,9 @@ const LOGS_SUBDIR = path.join(LOG_DIR, "logs");
  * `dir` is overridable for tests; production callers use the default
  * (real `~/.pi-lens`).
  */
-export function getManagedLogFiles(dir: string = LOG_DIR): string[] {
+export function getManagedLogFiles(
+	dir: string = getGlobalPiLensLogDir(),
+): string[] {
 	const names = new Set<string>();
 
 	for (const absPath of getRegisteredLogFiles()) {
@@ -85,6 +103,45 @@ export function getManagedLogFiles(dir: string = LOG_DIR): string[] {
  * timestamp segment and no trailing suffix after `.log`, so it never matches.
  */
 export const ROTATED_BACKUP_RE = /(\.\d{4}-\d{2}-\d{2}T.*\.log|\.log\..+)$/;
+
+/**
+ * Matches the oversized tool-result spill file `tools/render-compact.ts`
+ * writes through {@link spillResultLogName} when a tool result exceeds the
+ * result budget. The writer and this pattern share one derivation, so a
+ * naming drift cannot strand spill files the way the rotated-backup drift
+ * did (this file's original bug).
+ */
+export const SPILL_RESULT_LOG_RE =
+	/^tool-result-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.log$/;
+
+/**
+ * The name `tools/render-compact.ts` writes oversized tool results under:
+ * one derivation shared with the retention sweep's spill-log row
+ * ({@link SPILL_RESULT_LOG_RE}), so the writer's names are always reapable.
+ */
+export function spillResultLogName(
+	now: number = Date.now(),
+	id: string = randomUUID(),
+): string {
+	return `tool-result-${now}-${id}.log`;
+}
+
+/**
+ * Matches the per-session state snapshot `clients/session-state-store.ts`
+ * writes under `<project-data>/sessions/`: the session id is sanitized to
+ * `[A-Za-z0-9._-]{1,200}` before it becomes a filename, so the sweep matches
+ * that whole shape instead of re-deriving the uuid-only live shape.
+ */
+const SESSION_STATE_FILE_RE = /^[A-Za-z0-9._-]{1,200}\.json$/;
+
+/**
+ * How old a project data directory whose root is gone may get before the
+ * sweep removes it. The root-existence decode is what protects live projects
+ * (a project dir whose root exists stays regardless of age); the window
+ * guards the decode's failure mode on a temporarily unmounted or
+ * unreachable root, where a fresh directory is the one thing that survives.
+ */
+const PROJECT_DATA_ORPHAN_RETENTION_DAYS = 30;
 
 interface LogCleanupConfig {
 	retentionDays: number;
@@ -126,6 +183,152 @@ function getFileSizeMB(filePath: string): number {
 	} catch {
 		return 0;
 	}
+}
+
+type LivenessVerdict = "live" | "stale" | "indeterminate";
+
+/** What one `kill(pid, 0)` probe of a socket owner pid answered. */
+type PidProbe = "alive" | "esrch" | "refused";
+
+function realPidProbe(pid: number): PidProbe {
+	try {
+		process.kill(pid, 0);
+		return "alive";
+	} catch (err) {
+		return (err as NodeJS.ErrnoException).code === "ESRCH"
+			? "esrch"
+			: "refused";
+	}
+}
+
+/**
+ * Whether a pid-scoped socket's owner is gone. The name embeds the owner's
+ * pid, so a dead owner means nobody can ever bind that name again; a probe
+ * we cannot judge (a live pid of another user answers EPERM) keeps the
+ * socket. `signal` is the process boundary, injectable for tests.
+ */
+export function pidScopedSocketLiveness(
+	pid: number,
+	signal: (pid: number) => PidProbe = realPidProbe,
+): LivenessVerdict {
+	switch (signal(pid)) {
+		case "alive":
+			return "live";
+		case "esrch":
+			return "stale";
+		case "refused":
+			return "indeterminate";
+	}
+}
+
+/**
+ * One retention row (#5702): a directory, the entry names it may reap, and a
+ * maximum age. An entry is removed only when its age exceeds the window AND
+ * its liveness gate (when the row has one) answers `stale` — an entry the
+ * gate calls `live` or `indeterminate` stays regardless of age.
+ */
+interface RetentionRow {
+	/** Report label, one deletion count per row. */
+	label: string;
+	/** Directory the row sweeps, resolved at run time so callers can pin home. */
+	directory: () => string;
+	match: (name: string) => boolean;
+	maxAgeDays: () => number;
+	/** `file` entries are unlinked; `dir` entries are removed recursively. */
+	kind: "file" | "dir";
+	/**
+	 * Extra liveness gate for rows whose safety needs more than the age
+	 * window (socket owner, project root). Absent on plain age rows. May be
+	 * sync or async; the socket row dials, the others do not.
+	 */
+	liveness?: (
+		absPath: string,
+		name: string,
+	) => LivenessVerdict | Promise<LivenessVerdict>;
+}
+
+/**
+ * The one retention table. `runLogCleanup` walks it; a writer whose files
+ * must not pile up gets a row here, never a second sweep or timer.
+ */
+function getRetentionRows(options: RetentionOptions): RetentionRow[] {
+	const config = getConfig();
+	return [
+		{
+			label: "daily logs",
+			directory: LOGS_SUBDIR,
+			match: (name) => name.endsWith(".jsonl"),
+			maxAgeDays: () => config.retentionDays,
+			kind: "file",
+		},
+		{
+			label: "rotated logs",
+			directory: getGlobalPiLensLogDir,
+			match: (name) => ROTATED_BACKUP_RE.test(name),
+			maxAgeDays: () => config.retentionDays,
+			kind: "file",
+		},
+		{
+			label: "spill logs",
+			directory: getGlobalPiLensLogDir,
+			match: (name) => SPILL_RESULT_LOG_RE.test(name),
+			maxAgeDays: () => config.retentionDays,
+			kind: "file",
+		},
+		{
+			label: "session state files",
+			directory: () =>
+				path.join(getProjectDataDir(options.cwd ?? process.cwd()), "sessions"),
+			match: (name) => SESSION_STATE_FILE_RE.test(name),
+			maxAgeDays: () => config.retentionDays,
+			kind: "file",
+			liveness: (_absPath, name) =>
+				// A live session's own snapshot is never the sweep's to reap,
+				// however long the session idles before its next save.
+				name === `${options.currentSessionId}.json` ? "live" : "stale",
+		},
+		{
+			// The same directory `clients/mcp/ipc.ts` binds every `.sock`
+			// endpoint name into; Windows named pipes have no file to scan.
+			label: "stale sockets",
+			directory: () => os.tmpdir(),
+			match: (name) => classifyIpcSocketName(name) !== undefined,
+			maxAgeDays: () => 1,
+			kind: "file",
+			liveness: async (absPath, name) => {
+				const classified = classifyIpcSocketName(name);
+				if (!classified) return "indeterminate";
+				if (classified.kind === "pid-scoped") {
+					return pidScopedSocketLiveness(classified.pid);
+				}
+				// ipc.ts's probe answers "dead" for the same verdict this gate
+				// calls stale: a socket file no listener serves.
+				const dial = await probeIpcSocketListener(absPath);
+				return dial === "dead"
+					? "stale"
+					: dial === "live"
+						? "live"
+						: "indeterminate";
+			},
+		},
+		{
+			label: "orphaned project data dirs",
+			directory: projectDataBase,
+			// The liveness gate classifies every child; a name it cannot
+			// judge is kept, so the row admits all and judges each.
+			match: () => true,
+			maxAgeDays: () => PROJECT_DATA_ORPHAN_RETENTION_DAYS,
+			kind: "dir",
+			liveness: async (_absPath, name) => {
+				const status = createProjectDataDirRootProbe().statusFor(name);
+				return status === "exists"
+					? "live"
+					: status === "gone"
+						? "stale"
+						: "indeterminate";
+			},
+		},
+	];
 }
 
 /**
@@ -201,15 +404,99 @@ export function rotateLogIfNeeded(
 	}
 }
 
+export interface RetentionOptions {
+	/**
+	 * The project root the session runs in: scopes the session-state row to
+	 * that project's data directory. Defaults to the process cwd.
+	 */
+	cwd?: string;
+	/**
+	 * The live session's id: its own state file is kept regardless of age.
+	 * Absent (tests, embedders without a session id), no state file is exempt.
+	 */
+	currentSessionId?: string;
+}
+
+interface RetentionSweepResult {
+	label: string;
+	deleted: number;
+}
+
+/**
+ * One row over one directory. Every delete failure lands in `errors` —
+ * counted, never thrown — and the row's own deletion count feeds the report.
+ */
+async function runRetentionRow(
+	row: RetentionRow,
+): Promise<RetentionSweepResult & { errors: string[] }> {
+	const directory = row.directory();
+	const deleted: string[] = [];
+	const errors: string[] = [];
+
+	let names: string[];
+	try {
+		names = fs.existsSync(directory) ? fs.readdirSync(directory) : [];
+	} catch (err) {
+		return {
+			label: row.label,
+			deleted: 0,
+			errors: [`read ${directory}: ${err}`],
+		};
+	}
+
+	for (const name of names) {
+		if (!row.match(name)) continue;
+		const absPath = path.join(directory, name);
+		const ageDays = getFileAgeDays(absPath);
+		if (ageDays <= row.maxAgeDays()) continue;
+		if (row.liveness) {
+			const verdict = await row.liveness(absPath, name);
+			if (verdict !== "stale") continue;
+		}
+		try {
+			const socketClass = classifyIpcSocketName(name);
+			if (socketClass) {
+				// Only a real socket is reaped (the same lstat guard the bind
+				// path's unlinkStaleUnixSocket applies); anything else with a
+				// socket-shaped name stays. The unlink targets the on-disk path
+				// the sweep enumerated, not a sun_path-cut bind target: the gate
+				// cuts for the listener about to bind, while a full-shape name
+				// past the sun_path limit can only be a leftover file, which is
+				// exactly what the sweep is here to reap.
+				let isSocket = false;
+				try {
+					isSocket = fs.lstatSync(absPath).isSocket();
+				} catch {
+					isSocket = false;
+				}
+				if (!isSocket) continue;
+				fs.unlinkSync(absPath);
+			} else if (row.kind === "dir") {
+				fs.rmSync(absPath, { recursive: true, force: true });
+			} else {
+				fs.unlinkSync(absPath);
+			}
+			deleted.push(name);
+		} catch (err) {
+			errors.push(`${name}: ${err}`);
+		}
+	}
+
+	return { label: row.label, deleted: deleted.length, errors };
+}
+
 /**
  * Main cleanup function - call on session start
  * Cleans up all pi-lens log files based on retention policy
  */
-export function runLogCleanup(dbg?: (msg: string) => void): {
+export async function runLogCleanup(
+	dbg?: (msg: string) => void,
+	options: RetentionOptions = {},
+): Promise<{
 	cleaned: number;
 	rotated: number;
 	report: string;
-} {
+}> {
 	const config = getConfig();
 	const results = {
 		cleaned: 0,
@@ -217,28 +504,22 @@ export function runLogCleanup(dbg?: (msg: string) => void): {
 		report: "",
 	};
 
-	// Cleanup old daily diagnostic logs (*.jsonl)
-	const dailyLogs = cleanupOldLogs(
-		LOGS_SUBDIR,
-		/\.jsonl$/,
-		config.retentionDays,
-	);
-	results.cleaned += dailyLogs.deleted.length;
+	const sweeps: RetentionSweepResult[] = [];
+	const errors: string[] = [];
 
-	// Cleanup old rotated log backups. This sweep runs unconditionally on every
-	// session start, so correcting the pattern self-heals any pre-existing
-	// backlog on the next launch — no separate migration needed. (The prior
-	// `/\.log\./` only matched the legacy `name.log.<ts>` shape, never the
-	// current `name.<ts>.log`, so backups accumulated indefinitely.)
-	const rotatedLogs = cleanupOldLogs(
-		LOG_DIR,
-		ROTATED_BACKUP_RE,
-		config.retentionDays,
-	);
-	results.cleaned += rotatedLogs.deleted.length;
+	// One retention table; every row runs, and one failed delete is a count,
+	// never a throw (#5702 decision 3).
+	for (const row of getRetentionRows(options)) {
+		const sweep = await runRetentionRow(row);
+		sweeps.push(sweep);
+		errors.push(...sweep.errors);
+	}
+	results.cleaned = sweeps.reduce((sum, sweep) => sum + sweep.deleted, 0);
 
 	// Check main logs for rotation
-	const mainLogs = getManagedLogFiles().map((name) => path.join(LOG_DIR, name));
+	const mainLogs = getManagedLogFiles().map((name) =>
+		path.join(getGlobalPiLensLogDir(), name),
+	);
 
 	for (const logFile of mainLogs) {
 		const rotation = rotateLogIfNeeded(logFile, config.maxSizeMB);
@@ -255,26 +536,25 @@ export function runLogCleanup(dbg?: (msg: string) => void): {
 
 	// Build report
 	const parts: string[] = [];
-	if (dailyLogs.deleted.length > 0) {
-		parts.push(`${dailyLogs.deleted.length} daily logs`);
-	}
-	if (rotatedLogs.deleted.length > 0) {
-		parts.push(`${rotatedLogs.deleted.length} rotated logs`);
+	for (const sweep of sweeps) {
+		if (sweep.deleted > 0) parts.push(`${sweep.deleted} ${sweep.label}`);
 	}
 	if (results.rotated > 0) {
 		parts.push(`${results.rotated} active logs rotated`);
+	}
+	if (errors.length > 0) {
+		// One counted record per run, with the first message for identity;
+		// a failed delete never throws the sweep off the remaining entries.
+		parts.push(`${errors.length} deletions failed`);
+		dbg?.(
+			`log_cleanup: ${errors.length} deletions failed; first: ${errors[0]}`,
+		);
 	}
 
 	results.report =
 		parts.length > 0
 			? `log_cleanup: removed ${parts.join(", ")} (retention: ${config.retentionDays}d, maxSize: ${config.maxSizeMB}MB)`
 			: `log_cleanup: no cleanup needed (retention: ${config.retentionDays}d, maxSize: ${config.maxSizeMB}MB)`;
-
-	if (dailyLogs.errors.length > 0 || rotatedLogs.errors.length > 0) {
-		dbg?.(
-			`log_cleanup errors: ${[...dailyLogs.errors, ...rotatedLogs.errors].join("; ")}`,
-		);
-	}
 
 	return results;
 }

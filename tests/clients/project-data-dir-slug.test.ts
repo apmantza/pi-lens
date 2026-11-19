@@ -29,9 +29,11 @@ import { resetDegradationLedger } from "../../clients/degradation-ledger.js";
 import { getDisposition } from "../../clients/diagnostic-dispositions.js";
 import { CacheManager } from "../../clients/cache-manager.js";
 import {
+	createProjectDataDirRootProbe,
 	dataDirCanonicalRoot,
 	drainProjectDataDirMigrations,
 	getProjectDataDir,
+	type ProjectDataDirRootFs,
 	_resetProjectDataDirMemoForTests,
 } from "../../clients/file-utils.js";
 import { evaluateGitGuard } from "../../clients/git-guard.js";
@@ -946,5 +948,110 @@ describe("adopting the unhashed data dir a link spelling named before v4.2.0 (#4
 		expect(drainProjectDataDirMigrations()).toEqual([
 			{ to: dir, outcome: "adopted" },
 		]);
+	});
+});
+
+/**
+ * #5702: the retention sweep may delete a project data directory only when
+ * its slug decodes to a root that no longer exists. The decode lives beside
+ * the naming rules that produce the slug; a name it cannot judge answers
+ * "unrecognized", which the sweep keeps.
+ */
+describe("project data-dir root decode for the retention sweep (#5702)", () => {
+	interface FakeFs {
+		dirs: Map<string, string[]>;
+		existing: Set<string>;
+	}
+
+	function fakeFsOf(tree: Record<string, string[]>): FakeFs {
+		const dirs = new Map(Object.entries(tree));
+		const existing = new Set<string>([...dirs.keys()]);
+		for (const [parent, children] of dirs) {
+			for (const child of children) {
+				existing.add(
+					parent.endsWith("/") ? `${parent}${child}` : `${parent}/${child}`,
+				);
+			}
+		}
+		return { dirs, existing };
+	}
+
+	function fsLikeOf(fake: FakeFs): ProjectDataDirRootFs {
+		return {
+			listRealDirs(dir) {
+				return fake.dirs.get(dir)?.map((name) => ({ name }));
+			},
+			isRealDir(dir) {
+				return fake.existing.has(dir);
+			},
+			roots: () => ["/"],
+		};
+	}
+
+	it("answers exists for a root whose full reading is on disk, through dashes and stripped characters", () => {
+		// A root spelled /repos/my-app.v2 folds to repos-myappv2; the decode
+		// folds the on-disk names the same way, so the stripped characters
+		// never break the match, and my-app consumes both tokens.
+		const fake = fakeFsOf({ "/": ["repos"], "/repos": ["my-app.v2"] });
+		const probe = createProjectDataDirRootProbe("linux", fsLikeOf(fake));
+		// The dash inside `my-app` survives the fold as a token boundary; only
+		// the dot is stripped.
+		expect(probe.statusFor(`repos-my-appv2-01234567`)).toBe("exists");
+	});
+
+	it("answers gone when no full reading exists", () => {
+		const fake = fakeFsOf({ "/": ["repos"], "/repos": ["other"] });
+		const probe = createProjectDataDirRootProbe("linux", fsLikeOf(fake));
+		expect(probe.statusFor("repos-my-appv2-01234567")).toBe("gone");
+	});
+
+	it("answers unrecognized for names it cannot judge and keeps them out of the sweep", () => {
+		const fake = fakeFsOf({ "/": ["repos"] });
+		const probe = createProjectDataDirRootProbe("linux", fsLikeOf(fake));
+		expect(probe.statusFor(".ephemeral")).toBe("unrecognized");
+		expect(probe.statusFor("default-01234567")).toBe("unrecognized");
+		// Pre-hash legacy directories (<v4.2.0 spelled the readable half alone).
+		expect(probe.statusFor("repos-my-appv2")).toBe("unrecognized");
+		expect(probe.statusFor("repos-my-appv2-0123456")).toBe("unrecognized");
+		expect(probe.statusFor("")).toBe("unrecognized");
+	});
+
+	it("answers unrecognized when the walk exhausts its readdir budget, never gone", () => {
+		// 300 siblings all matching the first token, none completing: the walk
+		// runs out of readdir budget and must refuse to judge rather than
+		// answer gone for a root it never finished looking for.
+		const tree: Record<string, string[]> = { "/": [], "/a": ["unrelated"] };
+		for (let i = 0; i < 300; i++) tree["/"].push("a");
+		const probe = createProjectDataDirRootProbe(
+			"linux",
+			fsLikeOf(fakeFsOf(tree)),
+		);
+		expect(probe.statusFor("a-b-01234567")).toBe("unrecognized");
+	});
+
+	it("matches case-insensitively on the win32 arm, which never followed the realpath", () => {
+		const fake = fakeFsOf({ "C:/": ["Users"], "C:/Users": ["My-App.v2"] });
+		const fsLike = fsLikeOf(fake);
+		fsLike.roots = () => ["C:/"];
+		const probe = createProjectDataDirRootProbe("win32", fsLike);
+		expect(probe.statusFor("users-my-appv2-01234567")).toBe("exists");
+		expect(probe.statusFor("users-gone-01234567")).toBe("gone");
+	});
+
+	it("decodes a real on-disk root and notices its removal (linux)", () => {
+		const base = isolateDataDir();
+		const root = makeScratch("pi-lens-decode-root-");
+		const dir = path.join(
+			base,
+			`${path.basename(root).replace(/[^A-Za-z0-9-]/g, "")}-placeholder`,
+		);
+		// Derive the real slug the way the writer does, then prove the probe
+		// agrees in both directions.
+		const dirName = getProjectDataDir(root);
+		const name = path.basename(dirName);
+		expect(createProjectDataDirRootProbe().statusFor(name)).toBe("exists");
+		fs.rmSync(root, { recursive: true, force: true });
+		expect(createProjectDataDirRootProbe().statusFor(name)).toBe("gone");
+		void dir;
 	});
 });

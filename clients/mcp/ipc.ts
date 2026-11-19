@@ -227,6 +227,74 @@ export function unlinkStaleUnixSocket(
 	}
 }
 
+export type IpcSocketNameClass =
+	| { kind: "workspace"; hash: string }
+	| { kind: "pid-scoped"; pid: number; hash: string };
+
+/**
+ * Which endpoint a `.sock` name in `os.tmpdir()` — the directory {@link
+ * ipcPathForCwd} and {@link diagnosticsIpcPathForCwd} join their names into —
+ * was bound for,
+ * parsed from the same shapes {@link ipcPathForCwd} (workspace-scoped,
+ * `pi-lens-mcp-<16 hex>.sock`) and {@link diagnosticsIpcPathForCwd}
+ * (pid-scoped, `pi-lens-mcp-<pid>-diagnostics-<16 hex>.sock`) write. A
+ * `sun_path`-cut bound name keeps its identity by keeping the pid or the
+ * whole pre-`.sock` token (see {@link boundUnixSocketKeepsIdentity}); a cut
+ * that drops more breaks the shape and classifies as `undefined`, which the
+ * retention sweep keeps — a name it cannot recognize is never reaped.
+ */
+export function classifyIpcSocketName(
+	name: string,
+): IpcSocketNameClass | undefined {
+	const workspace = /^pi-lens-mcp-([0-9a-f]{16})\.sock$/.exec(name);
+	if (workspace) return { kind: "workspace", hash: workspace[1] };
+	const pidScoped = /^pi-lens-mcp-(\d+)-diagnostics-([0-9a-f]{16})\.sock$/.exec(
+		name,
+	);
+	if (pidScoped) {
+		return {
+			kind: "pid-scoped",
+			pid: Number.parseInt(pidScoped[1], 10),
+			hash: pidScoped[2],
+		};
+	}
+	return undefined;
+}
+
+export type IpcSocketListenerProbe = "live" | "dead" | "indeterminate";
+
+/**
+ * Whether a Unix socket file still has a listener behind it, answered by
+ * dialing it (the same evidence `isNoListenerError` classifies for the warm
+ * clients): `connect` is a live listener, a no-listener errno is a socket
+ * file nobody serves, and any other error or a dial that neither lands nor
+ * fails inside `timeoutMs` is indeterminate — the retention sweep keeps an
+ * entry it cannot judge. Windows named pipes have no file to scan, so the
+ * sweep never reaches this probe there.
+ */
+export function probeIpcSocketListener(
+	socketPath: string,
+	timeoutMs = 250,
+): Promise<IpcSocketListenerProbe> {
+	return new Promise((resolve) => {
+		let settled = false;
+		const finish = (value: IpcSocketListenerProbe): void => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			socket.destroy();
+			resolve(value);
+		};
+		const timer = setTimeout(() => finish("indeterminate"), timeoutMs);
+		timer.unref();
+		const socket = net.createConnection(socketPath);
+		socket.on("connect", () => finish("live"));
+		socket.on("error", (error) =>
+			finish(isNoListenerError(error) ? "dead" : "indeterminate"),
+		);
+	});
+}
+
 export interface WarmDiagnosticsRequest {
 	route: "diagnostics";
 	version: number;

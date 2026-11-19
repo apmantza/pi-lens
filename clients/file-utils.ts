@@ -293,7 +293,13 @@ function copyIfMissing(
 	}
 }
 
-function projectDataBase(): string {
+/**
+ * The base every hashed project data directory sits under. Exported for the
+ * retention sweep (#5702): the naming rules this module owns apply to the
+ * base too, so its sweep derives it here instead of re-deriving the
+ * `PILENS_DATA_DIR`/`~/.pi-lens/projects` rule beside the owner.
+ */
+export function projectDataBase(): string {
 	const configuredBase = process.env.PILENS_DATA_DIR?.trim();
 	return configuredBase || path.join(getGlobalPiLensDir(), "projects");
 }
@@ -441,6 +447,200 @@ export function dataDirCanonicalRoot(
 
 function projectDataDirRootHash(canonicalRoot: string): string {
 	return createHash("sha256").update(canonicalRoot).digest("hex").slice(0, 8);
+}
+
+/**
+ * Whether a hashed project data directory's root still exists, judged by
+ * decoding its name. The retention sweep (#5702) deletes a project data dir
+ * only on `"gone"`; every other answer keeps it, so a name this decode
+ * cannot judge never costs data.
+ *
+ * The readable half of the slug ({@link projectDataDirReadableSlug}) is the
+ * root's path with separators folded to dashes and every other character
+ * stripped, so it is not reversible in isolation. But the fold is a pure
+ * per-component transform, so the root can be reconstructed by walking the
+ * real filesystem from the top: at each level, an entry whose own fold equals
+ * a dash-joined run of the remaining tokens is a candidate component, and a
+ * walk that consumes every token and ends at a directory that exists proves
+ * a root with this slug exists. Deleted characters (`.`, `_`, …) never break
+ * the match because the comparison folds the on-disk name the same way, and
+ * on-disk casing is what {@link normalizePathSpelling} adopted when the slug
+ * was written.
+ *
+ * The win32 arm is existence-only: the win32 slug never followed the
+ * realpath (#4689), so the walk compares case-insensitively and any full
+ * reading keeps the directory — a casing the writer did not record can never
+ * be re-derived, and a kept dir is the safe direction.
+ *
+ * The walk is bounded: it reads directories at most {@link
+ * PROJECT_DATA_DIR_ROOT_PROBE_MAX_READDIRS} times and descends at most
+ * {@link PROJECT_DATA_DIR_ROOT_PROBE_MAX_DEPTH} levels, and a walk that
+ * exhausts either bound answers `"unrecognized"` (keep), never `"gone"`.
+ */
+
+export type ProjectDataDirRootStatus =
+	/** A full reading exists on disk: the root (or a fold-twin of it) is there. */
+	| "exists"
+	/** The name decodes but no full reading exists: the root is gone. */
+	| "gone"
+	/** `.ephemeral`, `default-…`, a pre-hash legacy name, or a walk that hit a bound. */
+	| "unrecognized";
+
+/** Shared readdir budget across one sweep run (#5702), mirroring ADOPT_MAX_ENTRIES. */
+const PROJECT_DATA_DIR_ROOT_PROBE_MAX_READDIRS = 256;
+const PROJECT_DATA_DIR_ROOT_PROBE_MAX_DEPTH = 64;
+
+/** Injectable filesystem seam so every platform arm runs on every lane. */
+export interface ProjectDataDirRootFs {
+	/** Real directories only (`lstat`-style: a symlink to a dir is excluded),
+	 * memoized by the probe; `undefined` names an unreadable directory. */
+	listRealDirs(dir: string): { name: string }[] | undefined;
+	isRealDir(dir: string): boolean;
+	/** Existing filesystem roots: `/` on POSIX, existing drives on win32. */
+	roots(): string[];
+}
+
+function realProjectDataDirRootFs(
+	platform: NodeJS.Platform,
+): ProjectDataDirRootFs {
+	const memo = new Map<string, { name: string }[] | undefined>();
+	return {
+		listRealDirs(dir) {
+			if (memo.has(dir)) return memo.get(dir);
+			let entries: { name: string }[] | undefined;
+			try {
+				entries = fs
+					.readdirSync(dir, { withFileTypes: true })
+					.filter((e) => e.isDirectory() && !e.isSymbolicLink())
+					.map((e) => ({ name: e.name }));
+			} catch {
+				entries = undefined;
+			}
+			memo.set(dir, entries);
+			return entries;
+		},
+		isRealDir(dir) {
+			try {
+				return fs.lstatSync(dir).isDirectory();
+			} catch {
+				return false;
+			}
+		},
+		roots() {
+			if (platform !== "win32") return ["/"];
+			return Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i))
+				.map((drive) => `${drive}:\\`)
+				.filter((drive) => fs.existsSync(drive));
+		},
+	};
+}
+
+const SLUG_NAME_RE = /^(.+)-([0-9a-f]{8})$/;
+
+/**
+ * The per-component half of {@link projectDataDirReadableSlug}'s transform:
+ * everything outside `[A-Za-z0-9-]` is dropped. Dashes survive inside a
+ * component, which is why the decode tries dash-joined token runs.
+ */
+function foldProjectDataDirName(name: string): string {
+	return name.replace(/[^A-Za-z0-9-]/g, "");
+}
+
+interface RootProbeBudget {
+	/** Remaining readdir calls across this probe run. */
+	left: number;
+	/** Set when a call was refused for want of budget: "could not judge". */
+	exhausted: boolean;
+}
+
+function decodeProjectDataDirTokens(
+	tokens: string[],
+	fromDir: string,
+	depth: number,
+	budget: RootProbeBudget,
+	fsLike: ProjectDataDirRootFs,
+	fold: (name: string) => string,
+): string | undefined {
+	if (depth > PROJECT_DATA_DIR_ROOT_PROBE_MAX_DEPTH) {
+		budget.exhausted = true;
+		return undefined;
+	}
+	if (tokens.length === 0) {
+		return fsLike.isRealDir(fromDir) ? fromDir : undefined;
+	}
+	if (budget.left <= 0) {
+		budget.exhausted = true;
+		return undefined;
+	}
+	budget.left--;
+	const entries = fsLike.listRealDirs(fromDir);
+	if (!entries) return undefined;
+	for (const entry of entries) {
+		const folded = fold(foldProjectDataDirName(entry.name));
+		for (let take = 1; take <= tokens.length; take++) {
+			if (fold(tokens.slice(0, take).join("-")) !== folded) continue;
+			const rest = decodeProjectDataDirTokens(
+				tokens.slice(take),
+				path.join(fromDir, entry.name),
+				depth + 1,
+				budget,
+				fsLike,
+				fold,
+			);
+			if (rest !== undefined) return rest;
+		}
+	}
+	return undefined;
+}
+
+/**
+ * One decode pass with its readdir memo and budget: create once per retention
+ * sweep and call {@link ProjectDataDirRootProbe.statusFor} for every child of
+ * the projects base. A fresh probe per run bounds the memo's lifetime to the
+ * run, so no module-level state accumulates.
+ */
+export interface ProjectDataDirRootProbe {
+	statusFor(dirName: string): ProjectDataDirRootStatus;
+}
+
+export function createProjectDataDirRootProbe(
+	platform: NodeJS.Platform = process.platform,
+	fsLike: ProjectDataDirRootFs = realProjectDataDirRootFs(platform),
+): ProjectDataDirRootProbe {
+	// win32 slugs came from a resolved spelling, not the realpath, and the
+	// writer never recorded the casing; matching must be case-insensitive.
+	const fold =
+		platform === "win32"
+			? (name: string) => name.toLowerCase()
+			: (name: string) => name;
+	return {
+		statusFor(dirName: string): ProjectDataDirRootStatus {
+			if (dirName === EPHEMERAL_DATA_DIR_NAME) return "unrecognized";
+			const match = SLUG_NAME_RE.exec(dirName);
+			if (!match) return "unrecognized";
+			const readable = match[1];
+			if (readable === "" || readable === "default") return "unrecognized";
+			const tokens = readable.split("-");
+			const budget: RootProbeBudget = {
+				left: PROJECT_DATA_DIR_ROOT_PROBE_MAX_READDIRS,
+				exhausted: false,
+			};
+			for (const root of fsLike.roots()) {
+				const found = decodeProjectDataDirTokens(
+					tokens,
+					root,
+					0,
+					budget,
+					fsLike,
+					fold,
+				);
+				if (found !== undefined) return "exists";
+			}
+			// A readdir budget the walk exhausted is "could not judge", not
+			// "gone": the deletion side treats unrecognized as keep.
+			return budget.exhausted ? "unrecognized" : "gone";
+		},
+	};
 }
 
 export interface ProjectDataDirMigration {
