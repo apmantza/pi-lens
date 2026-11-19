@@ -19,7 +19,8 @@
  *
  * Every case drives the real producers: mypy output through the real
  * `parseMypyOutput`, the mark through the real `lens_diagnostic_mark` tool,
- * and the filter through `dispatchForFile`.
+ * and the filter through `dispatchForFile`. One case calls the turn-end
+ * filter, `filterFindingsByDisposition`, directly.
  */
 
 import * as fs from "node:fs";
@@ -36,6 +37,7 @@ import {
 	RunnerRegistry,
 } from "../../../clients/dispatch/dispatcher.js";
 import { FactStore } from "../../../clients/dispatch/fact-store.js";
+import { filterFindingsByDisposition } from "../../../clients/dispatch/finding-policy.js";
 import { parseMypyOutput } from "../../../clients/dispatch/runners/mypy.js";
 import type {
 	Diagnostic,
@@ -517,5 +519,33 @@ describe("a bare-spelled mark that two live findings share hides neither", () =>
 			message: MISSING,
 		});
 		expect(await dispatchRunners(fileAbs, oneTool)).toEqual([]);
+	});
+
+	// The turn-end lanes and cascade filter findings through
+	// `filterFindingsByDisposition`, not the dispatcher's `filterDisposed`,
+	// which the cases above reach. Each candidate's `finding` field is its
+	// owner identity. Without it, both blockers share one owner and a
+	// tool-less mark hides both. No other case in this file reds when that
+	// field is deleted.
+	it("keeps both blockers from two tools on one line under a tool-less mark, at the turn-end filter", async () => {
+		const fileAbs = writeTarget();
+		const twoTools = ["toola", "toolb"].map((tool, index) =>
+			finding(fileAbs, {
+				tool,
+				rule: "r",
+				line: 1,
+				column: 1 + index * 4,
+				message: "[r] some message",
+				semantic: "blocking",
+			}),
+		);
+		await mark({ path: fileAbs, line: 1, rule: "r", message: "some message" });
+		const result = filterFindingsByDisposition(
+			twoTools,
+			projectRoot,
+			(diagnostic) => diagnostic,
+		);
+		expect(result.kept.map((d) => d.tool)).toEqual(["toola", "toolb"]);
+		expect(result.suppressed).toBe(0);
 	});
 });
