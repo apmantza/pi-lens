@@ -1882,13 +1882,19 @@ export async function dispatchForFile(
 		// rule folded into the message), so a mark made from it carries no tool
 		// and may carry no rule: accept the same spellings the turn-end re-serve
 		// of that block accepts (#3246), or the live block re-reports a finding
-		// the agent already marked.
+		// the agent already marked. The block shows blockers only, so only a
+		// blocker takes those spellings; any other finding keeps its own
+		// identity, or a tool-less weak mark would hide it at any line (#5711
+		// review r1 F1).
 		const { disposed: disposition } = applyFindingPolicyByOwner(overlap, {
 			cwd: rulePolicyRoot,
 			filePath: ctx.filePath,
 			content: fileContent,
 			policyMap: undefined,
-			identities: inlineBlockerIdentities,
+			identities: (d) =>
+				d.semantic === "blocking"
+					? inlineBlockerIdentities(d)
+					: [{ tool: d.tool, ...(d.rule !== undefined && { rule: d.rule }) }],
 		});
 		return applyRulePolicy(disposition, rulePolicy, {
 			root: rulePolicyRoot,

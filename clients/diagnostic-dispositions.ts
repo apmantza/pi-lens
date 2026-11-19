@@ -100,6 +100,14 @@ export interface DispositionCandidate {
 	 * `ProjectDiagnosticSemantic`) without a cast at every call site.
 	 */
 	semantic?: string;
+	/**
+	 * The finding this candidate spells, when it is one of several `(tool,
+	 * rule)` spellings expanded from one finding (#3246's identity widening in
+	 * `filterDisposed`). The alias ownership test counts findings, not
+	 * spellings, so it reads the finding's own `tool` and `rule` from here.
+	 * Absent: the candidate is its own finding.
+	 */
+	finding?: { tool?: string; rule?: string };
 }
 
 export type Disposition = "false-positive" | "suppress" | "defer" | "flagged";
@@ -720,13 +728,17 @@ export function _resetDeferredForTests(): void {
 }
 
 /** One candidate's alias spellings, before the ownership test: the display
- * form of a cut message, then the `[<rule>] `-stripped form of the message and
- * of that display form. See {@link messageAliases}. */
+ * form of a cut message, then, for a blocking candidate only, the `[<rule>] `
+ * -stripped form of the message and of that display form. The stripped form
+ * is a spelling of the STOP block, which renders only blockers; a non-blocking
+ * finding keeps the #5367 matching (#5711 review r1 F1). See
+ * {@link messageAliases}. */
 function aliasSpellings(candidate: DispositionCandidate): string[] {
 	const spellings: string[] = [];
 	if (messageIsCutWhenDisplayed(candidate.message)) {
 		spellings.push(displayedMessage(candidate.message));
 	}
+	if (candidate.semantic !== "blocking") return spellings;
 	for (const spelling of [candidate.message, ...spellings]) {
 		const bare = messageWithoutRulePrefix(spelling, candidate.rule);
 		if (bare !== undefined) spellings.push(bare);
@@ -748,14 +760,19 @@ function aliasSpellings(candidate: DispositionCandidate): string[] {
  * of its display form (`messageWithoutRulePrefix`, the finding's OWN rule
  * only).
  *
- * Every alias is honored only while that spelling names one live message:
+ * Every alias is honored only while that spelling names one live finding:
  * when two live findings in this batch render to the same text, either could
  * be the one the mark quotes, and a false-positive on a STOP-tier error must
  * not silently silence a different error beside it (the #1625 F1 reason, one
- * layer down; #5711 review r1 for the stripped forms). Ambiguity is counted on
- * the NORMALIZED message, so two candidates that are the same finding under
- * two `(tool, rule)` spellings (#3248's identity widening) are one owner, not
- * two.
+ * layer down; #5711 review r1 for the stripped forms). Ownership counts
+ * FINDINGS, each its own `(tool, rule)` and NORMALIZED message: two candidates
+ * that are one finding under two `(tool, rule)` spellings (#3248's identity
+ * widening, which names the finding in `candidate.finding`) are one owner,
+ * while two tools, or two rules, reporting the same text are two (#5711, the
+ * same-line collision). A spelling is keyed with the `(tool, rule)` the
+ * candidate carries, the other two inputs of its anchor, so two findings
+ * collide only where one mark could reach both: through a spelling that omits
+ * what tells them apart.
  *
  * Cost is bounded and cold: a candidate whose message renders whole and opens
  * with no bracket of its own rule is skipped before any hashing, and the whole
@@ -767,16 +784,25 @@ function messageAliases<T extends DispositionCandidate>(
 ): Map<T, string[]> {
 	const spelled = new Map<T, string[]>();
 	const owners = new Map<string, Set<string>>();
+	const keyOf = (
+		identity: { tool?: string; rule?: string },
+		message: string,
+	): string =>
+		[identity.tool ?? "", identity.rule ?? "", normalizeMessage(message)].join(
+			"\u0000",
+		);
+	const ownerOf = (candidate: T): string =>
+		keyOf(candidate.finding ?? candidate, candidate.message);
 	for (const candidate of candidates) {
 		const spellings = aliasSpellings(candidate);
 		if (spellings.length === 0) continue;
 		spelled.set(candidate, spellings);
-		const message = normalizeMessage(candidate.message);
+		const owner = ownerOf(candidate);
 		for (const spelling of spellings) {
-			const key = normalizeMessage(spelling);
-			const owner = owners.get(key);
-			if (owner === undefined) owners.set(key, new Set([message]));
-			else owner.add(message);
+			const key = keyOf(candidate, spelling);
+			const known = owners.get(key);
+			if (known === undefined) owners.set(key, new Set([owner]));
+			else known.add(owner);
 		}
 	}
 	if (spelled.size === 0) return new Map();
@@ -788,14 +814,13 @@ function messageAliases<T extends DispositionCandidate>(
 	// sibling whose alias it is. Counted after the alias pass, so the alias set
 	// itself stays limited to the spellings derived above.
 	for (const candidate of candidates) {
-		const message = normalizeMessage(candidate.message);
-		owners.get(message)?.add(message);
+		owners.get(keyOf(candidate, candidate.message))?.add(ownerOf(candidate));
 	}
 	const aliases = new Map<T, string[]>();
 	for (const [candidate, spellings] of spelled) {
 		const kept: string[] = [];
 		for (const spelling of spellings) {
-			if ((owners.get(normalizeMessage(spelling))?.size ?? 0) === 1) {
+			if ((owners.get(keyOf(candidate, spelling))?.size ?? 0) === 1) {
 				kept.push(spelling);
 			}
 		}

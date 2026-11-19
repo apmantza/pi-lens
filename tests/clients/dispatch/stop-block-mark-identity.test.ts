@@ -52,6 +52,8 @@ let previousDataDir: string | undefined;
 
 const MISSING =
 	'Cannot find implementation or library stub for module named "pkg"';
+// How mypy folds its code into the message (see the premise case below).
+const BRACKETED = `[import-not-found] ${MISSING}`;
 const FILE_CONTENT = [
 	"from pkg import (",
 	"    thing,",
@@ -119,6 +121,54 @@ async function dispatchMypy(
 	const groups: RunnerGroup[] = [{ mode: "all", runnerIds: ["mypy"] }];
 	const result = await dispatchForFile(ctx, groups, registry);
 	return result.blockers;
+}
+
+/** Dispatch one edit with several runners, each returning its own findings. */
+async function dispatchRunners(
+	fileAbs: string,
+	runners: Array<{ id: string; diagnostics: Diagnostic[] }>,
+): Promise<Diagnostic[]> {
+	const registry = new RunnerRegistry();
+	for (const { id, diagnostics } of runners) {
+		registry.register(
+			createMockRunner({
+				id,
+				appliesTo: ["python"],
+				runResult: {
+					status: "failed",
+					diagnostics,
+					semantic: diagnostics[0]?.semantic ?? "warning",
+				},
+			}),
+		);
+	}
+	const facts = new FactStore();
+	const ctx = createDispatchContext(
+		fileAbs,
+		projectRoot,
+		{ getFlag: () => false },
+		facts,
+	);
+	facts.setFileFact(ctx.filePath, "file.content", FILE_CONTENT);
+	const groups: RunnerGroup[] = [
+		{ mode: "all", runnerIds: runners.map((r) => r.id) },
+	];
+	const result = await dispatchForFile(ctx, groups, registry);
+	return result.diagnostics;
+}
+
+function finding(
+	fileAbs: string,
+	fields: Pick<Diagnostic, "tool" | "line" | "message" | "semantic"> &
+		Partial<Diagnostic>,
+): Diagnostic {
+	return {
+		id: `${fields.tool}-${fields.line}-${fields.column ?? 1}`,
+		filePath: fileAbs,
+		column: 1,
+		severity: fields.semantic === "blocking" ? "error" : "warning",
+		...fields,
+	};
 }
 
 async function mark(params: Record<string, unknown>): Promise<void> {
@@ -293,5 +343,179 @@ describe("a mark made from the STOP block hides the finding it names", () => {
 		});
 		const blockers = await dispatchMypy(fileAbs, reshape);
 		expect(blockers.map((b) => b.message)).toEqual([long]);
+	});
+
+	it("honors a mark spelled from the cut display form minus the bracket", async () => {
+		const fileAbs = writeTarget();
+		const prefix = "[import-not-found] ";
+		const long = `${prefix}${"y".repeat(1000)}`;
+		// The 100-character display form a render shows, with the bracket split
+		// off into `rule`: a spelling only the stripped DISPLAY form carries.
+		const shown = "y".repeat(100 - prefix.length);
+		const lengthen = (ds: Diagnostic[]): Diagnostic[] =>
+			ds.map((d) => (d.line === 1 ? { ...d, message: long } : d));
+		await mark({
+			path: fileAbs,
+			line: 1,
+			rule: "import-not-found",
+			message: shown,
+		});
+		const blockers = await dispatchMypy(fileAbs, lengthen);
+		expect(blockers.map((b) => b.line)).toEqual([4]);
+	});
+});
+
+// Review r1 F1 on #5711: the bare spellings (no tool, no rule, or the
+// `[rule] ` bracket split off) exist for the STOP block, which renders only
+// blockers. A non-blocking finding keeps master's matching, or one tool-less
+// weak mark hides warnings from any tool at any line.
+describe("the bare spellings reach blocking findings only", () => {
+	it("keeps two warnings from different tools when a tool-less, rule-less defer names their message", async () => {
+		const fileAbs = writeTarget();
+		const runners = [
+			{
+				id: "toola",
+				diagnostics: [
+					finding(fileAbs, {
+						tool: "toola",
+						rule: "w1",
+						line: 1,
+						message: "shared warning text",
+						semantic: "warning",
+					}),
+				],
+			},
+			{
+				id: "toolb",
+				diagnostics: [
+					finding(fileAbs, {
+						tool: "toolb",
+						rule: "w2",
+						line: 4,
+						message: "shared warning text",
+						semantic: "warning",
+					}),
+				],
+			},
+		];
+		// Control: both warnings reach the result unmarked.
+		expect(
+			(await dispatchRunners(fileAbs, runners)).map((d) => d.line),
+		).toEqual([1, 4]);
+		await mark({
+			path: fileAbs,
+			line: 1,
+			disposition: "defer",
+			message: "shared warning text",
+		});
+		const kept = await dispatchRunners(fileAbs, runners);
+		expect(kept.map((d) => d.line)).toEqual([1, 4]);
+	});
+
+	it("keeps a warning whose own [rule] bracket the defer split off", async () => {
+		const fileAbs = writeTarget();
+		const runners = [
+			{
+				id: "toola",
+				diagnostics: [
+					finding(fileAbs, {
+						tool: "toola",
+						rule: "w1",
+						line: 1,
+						message: "[w1] bracketed warning",
+						semantic: "warning",
+					}),
+				],
+			},
+		];
+		await mark({
+			path: fileAbs,
+			line: 1,
+			disposition: "defer",
+			tool: "toola",
+			rule: "w1",
+			message: "bracketed warning",
+		});
+		const kept = await dispatchRunners(fileAbs, runners);
+		expect(kept.map((d) => d.line)).toEqual([1]);
+	});
+});
+
+// The #5367 ownership rule counts live FINDINGS: the (tool, rule) spellings
+// #3246 expands from one finding are one owner, two findings are two. Two
+// tools reporting the same `[rule] message` on one line are two findings, so
+// a mark spelled with the bracket split off and no tool could be either one,
+// and it hides neither (CodeRabbit on #5711, same-line collision).
+describe("a bare-spelled mark that two live findings share hides neither", () => {
+	function twoToolsOnOneLine(fileAbs: string) {
+		return ["mypy", "toolb"].map((tool, index) => ({
+			id: tool,
+			diagnostics: [
+				finding(fileAbs, {
+					tool,
+					rule: "import-not-found",
+					line: 1,
+					// Another column, so the overlap dedupe keeps both findings.
+					column: 1 + index * 4,
+					message: BRACKETED,
+					semantic: "blocking",
+				}),
+			],
+		}));
+	}
+
+	it("keeps both blockers from different tools on one line with the same stripped message", async () => {
+		const fileAbs = writeTarget();
+		const twoTools = twoToolsOnOneLine(fileAbs);
+		expect(
+			(await dispatchRunners(fileAbs, twoTools)).map((d) => d.tool),
+		).toEqual(["mypy", "toolb"]);
+		await mark({
+			path: fileAbs,
+			line: 1,
+			rule: "import-not-found",
+			message: MISSING,
+		});
+		const kept = await dispatchRunners(fileAbs, twoTools);
+		expect(kept.map((d) => d.tool)).toEqual(["mypy", "toolb"]);
+	});
+
+	it("still hides the one finding whose tool the bare-message mark names", async () => {
+		const fileAbs = writeTarget();
+		// The tool tells the two findings apart, so this spelling has one owner.
+		await mark({
+			path: fileAbs,
+			line: 1,
+			tool: "mypy",
+			rule: "import-not-found",
+			message: MISSING,
+		});
+		const kept = await dispatchRunners(fileAbs, twoToolsOnOneLine(fileAbs));
+		expect(kept.map((d) => d.tool)).toEqual(["toolb"]);
+	});
+
+	it("still honors the bare spelling when one tool reports it", async () => {
+		const fileAbs = writeTarget();
+		const oneTool = [
+			{
+				id: "toolb",
+				diagnostics: [
+					finding(fileAbs, {
+						tool: "toolb",
+						rule: "import-not-found",
+						line: 1,
+						message: BRACKETED,
+						semantic: "blocking",
+					}),
+				],
+			},
+		];
+		await mark({
+			path: fileAbs,
+			line: 1,
+			rule: "import-not-found",
+			message: MISSING,
+		});
+		expect(await dispatchRunners(fileAbs, oneTool)).toEqual([]);
 	});
 });
