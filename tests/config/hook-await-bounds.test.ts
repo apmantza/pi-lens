@@ -1174,6 +1174,19 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 				"budget many times over.",
 			owner: "#2523 slice 2",
 		},
+	"clients/runtime-tool-call.ts#captureOpaqueBaseline:1b678fc6~4b38a38a": {
+		family: "hook-await",
+		site: "unbudgeted-hook",
+		reason:
+			"On the `tool_call` path. #2523's contract table declares no wall budget " +
+			"for tool_call, so this await has no number to be measured against. It is " +
+			"the pre-command opaque baseline: the command has not run yet, so the read " +
+			"cannot be taken later, and each leaf bounds itself (`isGitWorktree` 3s, " +
+			"`captureGitDirtyPaths` 5s, the stat walk's own budget). An admitted " +
+			"sibling worktree (#2050) takes the dirty set too (#5718), so a discard " +
+			"run in it has its evidence.",
+		owner: "#2050",
+	},
 	"clients/runtime-tool-call.ts#captureOpaqueBaseline:39656d5c~6f0651b7": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
@@ -1187,19 +1200,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"home root is refused, and an over-cap root answers from a memo after " +
 			"its first walk. A root over the entry budget is not memoized and " +
 			"still walks on every call.",
-		owner: "#2050",
-	},
-	"clients/runtime-tool-call.ts#captureOpaqueBaseline:9374cc10~79d8413a": {
-		family: "hook-await",
-		site: "unbudgeted-hook",
-		reason:
-			"On the `tool_call` path. #2523's contract table declares no wall budget " +
-			"for tool_call, so this await has no number to be measured against. It is " +
-			"the pre-command opaque baseline: the command has not run yet, so the read " +
-			"cannot be taken later, and each leaf bounds itself (`isGitWorktree` 3s, " +
-			"`captureGitDirtyPaths` 5s, the stat walk's own budget). An admitted " +
-			"sibling worktree (#2050) skips the probe and takes the dirty set too " +
-			"(#5718), so a discard run in it has its evidence.",
 		owner: "#2050",
 	},
 	"clients/runtime-tool-call.ts#captureOpaqueBaseline:98e63c47~d6d00a8b": {
@@ -1301,7 +1301,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#handleToolCallImpl:6845dabe~79a8d019": {
+	"clients/runtime-tool-call.ts#handleToolCallImpl:6845dabe~f3f89244": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
 		reason:
@@ -1341,6 +1341,18 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"measured against yet; recorded as the gap rather than assigned " +
 			"an invented one.",
 		owner: "#2523 slice 2",
+	},
+	"clients/runtime-tool-call.ts#handleToolCallImpl:f0b9e5ad~cb45bd22": {
+		family: "hook-await",
+		site: "unbudgeted-hook",
+		reason:
+			"On the `tool_call` path. #2523's contract table declares no wall budget " +
+			"for tool_call, so this await has no number to be measured against. It is " +
+			"the HEAD baseline of each sibling worktree a bash command names (#5718 " +
+			"review r1): it must land before the host runs the command, which the " +
+			"bounded look after it cannot promise, and each leaf bounds itself " +
+			"(`readGitHead` reads files, or spawns `git rev-parse` with a 3s timeout).",
+		owner: "#5718",
 	},
 	"clients/runtime-tool-result.ts#dispatchPipelineAnalysis:52da0ba3~78ccd40a": {
 		family: "hook-await",
@@ -2758,7 +2770,10 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// tool_call and `readSameHeadDiscards` at tool_result. Each is one
 	// safeSpawnAsync with its own 5s timeout, and the look the second one feeds
 	// is bounded one frame up.
-	"clients/opaque-mutation-scan.ts": 15,
+	// #5718 review r1: 15 -> 16. `seedGitHeadAt` awaits `readGitHead` (file
+	// reads, or one `git rev-parse` with its own 3s timeout) to record a sibling
+	// worktree's HEAD before tool_call releases the command.
+	"clients/opaque-mutation-scan.ts": 16,
 	// #4476: new to the one-hop set. The out-of-band look: the root listing
 	// and the stat of each install stamp it holds, the declaration walk's
 	// directory reads and stats, the per-root chain, and the restart of a

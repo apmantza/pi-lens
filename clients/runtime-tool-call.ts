@@ -22,6 +22,7 @@ import {
 	recordOpaqueCaptureRefused,
 	recordOpaqueRootRefusals,
 	resolveOpaqueRecoveryRoots,
+	seedGitHeadAt,
 	shouldRunOpaqueRecovery,
 	type PendingOpaqueBaseline,
 } from "./opaque-mutation-scan.js";
@@ -436,15 +437,14 @@ export type ToolCallResult = { block: true; reason?: string } | void;
  */
 async function captureOpaqueBaseline(
 	root: string,
-	sessionRoot: boolean,
 	startedAt: number,
 	projectSeq: number,
 	toolName: string,
 ): Promise<{ state: PendingOpaqueBaseline; note: string }> {
-	// An admitted sibling worktree is a checkout by admission (#2050), so it
-	// takes the git baseline without the probe; it needs the dirty set too, or a
-	// discard run in it (`cd ../wt && git restore`) leaves no evidence (#4502).
-	if (!sessionRoot || (await isGitWorktree(root))) {
+	// An admitted sibling worktree (#2050) answers the probe as a checkout and
+	// takes the dirty set too, or a discard run in it (`cd ../wt && git
+	// restore`) leaves no evidence (#4502).
+	if (await isGitWorktree(root)) {
 		// Git-first: the timestamp IS the baseline; git answers what changed, at
 		// any repo size, with no file-universe cap.
 		//
@@ -759,13 +759,12 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			};
 			let resultNote = "";
 			for (const [index, root] of scopes.roots.entries()) {
-				// The session root keeps the strategy it chose before: git when it
-				// is a worktree, the bounded stat snapshot otherwise. An admitted
-				// worktree IS a checkout by admission, so its baseline is the
-				// timestamp and its recovery is `git status` in that root.
+				// Each root takes git when it is a worktree (with its dirty set,
+				// #4502), the bounded stat snapshot otherwise. An admitted worktree
+				// IS a checkout by admission, so its recovery is `git status` in
+				// that root.
 				const baseline = await captureOpaqueBaseline(
 					root,
-					index === 0,
 					started,
 					seqAtStart,
 					toolName,
@@ -802,6 +801,21 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			// HEAD read before the command ran. The session root's look ran above.
 			const siblings = scopes.roots.slice(1);
 			const siblingLookSignal = ctx.signal;
+			// The baseline first, outside the bound: the look below may be cut
+			// before it reads HEAD, and the host runs the command the moment this
+			// hook returns (#5718 review r1). A sibling that already has a record
+			// keeps it, so a move made outside pi is still the look's to publish.
+			await Promise.all(
+				siblings.map((root) =>
+					seedGitHeadAt(
+						root,
+						headRecordKey(
+							opaqueBaselineSlot(root, runtime.sessionGeneration),
+							deps.sessionId,
+						),
+					),
+				),
+			);
 			if (siblings.length > 0)
 				await bounded(
 					resyncHeadMovesAt({

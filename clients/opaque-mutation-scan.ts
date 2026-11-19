@@ -852,6 +852,24 @@ export function observeGitHead(key: string, head: string): string | undefined {
 }
 
 /**
+ * Record `root`'s HEAD for `key` only when `key` holds no record yet: the
+ * baseline a later look compares against, never a move. A `tool_call` seeds
+ * each sibling worktree a bash command names before it releases the command
+ * (#5718 review r1): its bounded look may be cut before that look reads HEAD,
+ * and a look that first reads HEAD after the command ran records the moved
+ * HEAD as a first sight, so the result's look then sees no move. A key that
+ * already holds a record keeps it, so a move made outside pi since that
+ * record is still the next look's to publish.
+ */
+export async function seedGitHeadAt(root: string, key: string): Promise<void> {
+	if (headRecords.get(key) !== undefined) return;
+	const head = await readGitHead(root);
+	// A look of the same key may have recorded while the read ran.
+	if (head !== undefined && headRecords.get(key) === undefined)
+		headRecords.set(key, head);
+}
+
+/**
  * #4493: one HEAD look per record key at a time. A session's parallel tool
  * calls look concurrently. A look that arrives mid-flight joins it: it returns
  * only once the flight has sent the move's bytes to the primary servers, so a

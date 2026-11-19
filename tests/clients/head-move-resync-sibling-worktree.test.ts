@@ -145,4 +145,96 @@ describe("HEAD moves in a sibling linked worktree", () => {
 			sibling.git("rev-parse", "HEAD").slice(0, 12),
 		]);
 	}, 30_000);
+
+	// Review r1 on #5719 (CodeRabbit): the tool_call look is bounded at 500 ms,
+	// and it reads HEAD only after its out-of-band look. When the bound fires
+	// first, the hook releases the command before the sibling's HEAD is
+	// recorded, the command moves HEAD, the look then records the moved HEAD as
+	// a first sight, and the tool_result sees no move. A reftable ref store makes
+	// `readGitHead` spawn `git rev-parse --verify`, which a PATH shim stalls.
+	const reftable = (() => {
+		try {
+			const probe = path.join(env.tmpDir, "reftable-probe-sibling");
+			fs.mkdirSync(probe, { recursive: true });
+			runGit(probe, ["init", "-q", "--ref-format=reftable"]);
+			return true;
+		} catch {
+			return false;
+		}
+	})();
+
+	it("records the sibling's HEAD before the tool_call returns, however slow its look", async (ctx) => {
+		ctx.skip(
+			process.platform === "win32",
+			"the git shim that stalls the look is a POSIX shell script",
+		);
+		ctx.skip(!reftable, "this git cannot create a reftable repository");
+		const repo = await makeRepo(
+			{ "lib/types.ts": TYPES_A, "main.ts": MAIN },
+			{ "lib/types.ts": TYPES_B },
+			["--ref-format=reftable"],
+		);
+		const sibling = await siblingWorktree(repo);
+		await hold(sibling, ["lib/types.ts", "main.ts"]);
+		const s = session(repo, "s-sibling-slow-look");
+		const service = await lspService();
+		// Host boundary: a `git` on PATH that stalls `rev-parse --verify` past the
+		// tool_call bound while a marker exists, then runs the real git.
+		const realGit = (process.env.PATH ?? "")
+			.split(path.delimiter)
+			.map((dir) => path.join(dir, "git"))
+			.find((candidate) => fs.existsSync(candidate));
+		if (!realGit) throw new Error("git is not on PATH");
+		const shimDir = path.join(env.tmpDir, `git-shim-sibling-${worktreeCount}`);
+		const slow = path.join(shimDir, "slow");
+		fs.mkdirSync(shimDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(shimDir, "git"),
+			[
+				"#!/bin/sh",
+				`if [ "$1" = "rev-parse" ] && [ "$2" = "--verify" ] && [ -e ${JSON.stringify(slow)} ]; then sleep 0.7; fi`,
+				`exec ${JSON.stringify(realGit)} "$@"`,
+				"",
+			].join("\n"),
+			{ mode: 0o755 },
+		);
+		const previousPath = process.env.PATH;
+		process.env.PATH = `${shimDir}${path.delimiter}${previousPath ?? ""}`;
+		try {
+			fs.writeFileSync(slow, "");
+			const command = `cd ${sibling.dir} && git checkout -q --detach B`;
+			const result = await s.bashCall(command);
+			// The host runs the command as soon as the hook returns.
+			sibling.git("checkout", "-q", "--detach", "B");
+			fs.rmSync(slow);
+			await result();
+
+			expect(sentDiskBytes(service, sibling, "lib/types.ts")).toBe(true);
+		} finally {
+			process.env.PATH = previousPath;
+		}
+	}, 30_000);
+
+	it("resyncs a move made outside pi between two calls that name the sibling", async () => {
+		const repo = await makeRepo(
+			{ "lib/types.ts": TYPES_A, "main.ts": MAIN },
+			{ "lib/types.ts": TYPES_B },
+		);
+		const sibling = await siblingWorktree(repo);
+		await hold(sibling, ["lib/types.ts", "main.ts"]);
+		const s = session(repo, "s-sibling-outside");
+		const service = await lspService();
+		// The first call records the sibling's HEAD.
+		await s.bash(`cd ${sibling.dir} && git status --short`, () => {
+			sibling.git("status", "--short");
+		});
+		// A move made outside pi: no call is running.
+		sibling.git("checkout", "-q", "--detach", "B");
+
+		await s.bash(`cd ${sibling.dir} && git status --short`, () => {
+			sibling.git("status", "--short");
+		});
+
+		expect(sentDiskBytes(service, sibling, "lib/types.ts")).toBe(true);
+	}, 30_000);
 });
