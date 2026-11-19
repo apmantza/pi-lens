@@ -1010,16 +1010,14 @@ export async function launchLSP(
 	// registry. Once PATH resolution selects a project-local installed binary,
 	// trusted session ownership is required (#4248 R2-1, #4299 R2-F1). Global and managed
 	// fallbacks remain compatible because they resolve outside the project root.
-	// A path-shaped project candidate that is absent is a resolution miss, not a
-	// trust decision. Keep the trust boundary for every candidate that exists,
-	// while allowing the normal tool-not-found classification to reach fallback.
-	const projectCandidatePath =
-		scannedCommandPath ?? (isRelativePath ? explicitCommand : spawnCommand);
+	// #5674: a candidate spelled as a path that is absent is a resolution miss,
+	// not a trust decision, so it falls through to tool-not-found and the
+	// fallbacks. The stat reads the exact string the classifier judges and the
+	// spawn runs. A bare name keeps the classifier unconditionally: its lookups
+	// answer only with files that exist, and an unresolved name is not a path
+	// (a stat would read pi's own cwd).
 	if (
-		(scannedCommandPath !== undefined ||
-			isRelativePath ||
-			isFullyQualified(spawnCommand)) &&
-		fs.existsSync(projectCandidatePath) &&
+		(isBareCommand || fs.existsSync(spawnCommand)) &&
 		isProjectLocalLspBinary(spawnCommand, cwd)
 	) {
 		refuseUntrustedLspExecution({
