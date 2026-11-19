@@ -142,14 +142,13 @@ import {
 // --- Types ---
 
 /** A root policy can refuse a file instead of asking the caller to fallback. */
-export const LSP_ROOT_DECLINED = Symbol("lsp-root-declined");
-type RootResult = string | undefined | typeof LSP_ROOT_DECLINED;
+export const LSP_ROOT_DECLINED = "\u0000pi-lens-lsp-root-declined";
 
-function rootOrUndefined(root: RootResult): string | undefined {
+function rootOrUndefined(root: string | undefined): string | undefined {
 	return root === LSP_ROOT_DECLINED ? undefined : root;
 }
 
-export type RootFunction = ((file: string) => Promise<RootResult>) & {
+export type RootFunction = ((file: string) => Promise<string | undefined>) & {
 	/** Marker table projected into the shared tool-cwd resolver. */
 	rootMarkers?: readonly string[];
 };
@@ -240,7 +239,7 @@ export async function resolveLspServerCwd(
 		return undefined;
 	}
 	const rootMarkers = server.rootMarkers ?? server.root.rootMarkers;
-	let serverRoot: RootResult;
+	let serverRoot: string | undefined;
 	let rootFailed = false;
 	try {
 		serverRoot = await server.root(filePath);
@@ -3055,7 +3054,7 @@ export async function tryGemInstall(gem: string): Promise<boolean> {
  */
 export function DenoExcludeRoot(primary: RootFunction): RootFunction {
 	const denoDetector = createRootDetector(["deno.json", "deno.jsonc"]);
-	return async (file: string): Promise<RootResult> => {
+	return async (file: string): Promise<string | undefined> => {
 		const denoRoot = await denoDetector(file);
 		if (denoRoot) return LSP_ROOT_DECLINED;
 		return primary(file);
