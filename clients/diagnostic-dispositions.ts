@@ -64,6 +64,7 @@ import { freshnessFromMtime } from "./freshness.js";
 import {
 	displayedMessage,
 	messageIsCutWhenDisplayed,
+	messageWithoutRulePrefix,
 	normalizeMessage as sharedNormalizeMessage,
 	relativeFile as sharedRelativeFile,
 	stableFindingId,
@@ -810,57 +811,47 @@ export function applyDispositions<T extends DispositionCandidate>(
 	// test is over the batch's live findings, not over one candidate.
 	const aliases = displayFormAliases(diagnostics);
 	return diagnostics.filter((d) => {
-		const { strict, weak } = anchorsForDiagnostic(cwd, filePath, d, content);
 		const isBlocking = d.semantic === "blocking";
 		// #5367: the alias anchors use the same two derivations the primary pair
-		// uses, with the message replaced by its displayed form. The WEAK alias is
-		// computed only for a non-blocking candidate: #1625 F1 already guarantees a
-		// blocking finding drops on its STRICT anchor alone, so hashing the weak one
-		// there is dead work on a population where it is always taken (a cascade
-		// renders ERRORs only).
-		const alias = aliases.get(d);
-		let aliasStrict: string | undefined;
-		let aliasWeak: string | undefined;
-		if (alias !== undefined) {
-			// The SAME shared derivation as the primary pair, with the message
-			// replaced by its displayed form: a second spelling of the anchor build
-			// is how a mark and a diagnostic stop converging in the first place.
-			const aliasAnchors = anchorsForDiagnostic(
+		// uses, with the message replaced by another spelling of it: its displayed
+		// form, or (below) the message without the `[<rule>] ` prefix the runner
+		// folded into it. The WEAK anchors are checked only for a non-blocking
+		// candidate: #1625 F1 already guarantees a blocking finding drops on its
+		// STRICT anchor alone.
+		const messages = [d.message];
+		const displayAlias = aliases.get(d);
+		if (displayAlias !== undefined) messages.push(displayAlias);
+		// A rendered line prints `[<rule>] <message>`, so an agent marking what it
+		// was shown splits the bracket off into `rule`. Every spelling of the
+		// message gets the same treatment, so a cut display form is covered too.
+		const spelled = messages.length;
+		for (let i = 0; i < spelled; i++) {
+			const bare = messageWithoutRulePrefix(messages[i] ?? "", d.rule);
+			if (bare !== undefined) messages.push(bare);
+		}
+		for (const message of messages) {
+			// The SAME shared derivation for every spelling: a second spelling of
+			// the anchor build is how a mark and a diagnostic stop converging in
+			// the first place.
+			const { strict, weak } = anchorsForDiagnostic(
 				cwd,
 				filePath,
-				{ ...d, message: alias },
+				message === d.message ? d : { ...d, message },
 				content,
 			);
-			aliasStrict = aliasAnchors.strict;
-			if (!isBlocking) aliasWeak = aliasAnchors.weak;
-		}
-		if (
-			!isBlocking &&
-			(deferred?.has(weak) ||
-				(aliasWeak !== undefined && deferred?.has(aliasWeak)))
-		) {
-			return false;
-		}
-		if (
-			dispositions?.[strict]?.disposition === "false-positive" ||
-			(aliasStrict !== undefined &&
-				dispositions?.[aliasStrict]?.disposition === "false-positive")
-		) {
-			return false;
-		}
-		// Belt-and-braces: the inline `pi-lens-ignore` comment is the real
-		// suppress enforcement (see suppress-writer.ts) and normally already
-		// dropped this finding upstream via applyInlineSuppressions. This is a
-		// harmless second cover for the store-only audit trail case — gated
-		// off blocking findings per F1 above (the inline comment, unaffected
-		// by this gate, remains the real suppress mechanism for those too).
-		if (
-			!isBlocking &&
-			(dispositions?.[weak]?.disposition === "suppress" ||
-				(aliasWeak !== undefined &&
-					dispositions?.[aliasWeak]?.disposition === "suppress"))
-		) {
-			return false;
+			if (!isBlocking && deferred?.has(weak)) return false;
+			if (dispositions?.[strict]?.disposition === "false-positive") {
+				return false;
+			}
+			// Belt-and-braces: the inline `pi-lens-ignore` comment is the real
+			// suppress enforcement (see suppress-writer.ts) and normally already
+			// dropped this finding upstream via applyInlineSuppressions. This is a
+			// harmless second cover for the store-only audit trail case — gated
+			// off blocking findings per F1 above (the inline comment, unaffected
+			// by this gate, remains the real suppress mechanism for those too).
+			if (!isBlocking && dispositions?.[weak]?.disposition === "suppress") {
+				return false;
+			}
 		}
 		return true;
 	});
