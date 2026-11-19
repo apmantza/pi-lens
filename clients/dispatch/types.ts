@@ -14,7 +14,10 @@
 import type { GenerationHandle } from "../generation-guard.js";
 import type { AnalysisRootMode } from "../analysis-root.js";
 import type { ExtensionLogLevel } from "../extension-log.js";
-import type { PrimaryUnavailableCause } from "../lsp/diagnostic-binding.js";
+import type {
+	PrimaryUnavailableCause,
+	TouchInconclusiveReason,
+} from "../lsp/diagnostic-binding.js";
 import type { FileKind } from "../file-kinds.js";
 import type { FileRole } from "../file-role.js";
 import type { GeneratedArtifactEvidence } from "../generated-artifacts.js";
@@ -743,6 +746,8 @@ export interface RunnerResult {
 	 * report is not evidence of a clean file.
 	 */
 	inconclusive?: boolean;
+	/** Why the LSP touch could not confirm its answer, carried from the touch. */
+	inconclusiveReason?: TouchInconclusiveReason;
 }
 
 /**

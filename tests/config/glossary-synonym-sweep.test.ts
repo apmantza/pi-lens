@@ -1883,7 +1883,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `RunnerResult`, the same member sense as every row here.
 		"clients/dispatch/collect-later-tier.ts": 1,
 		// 34 -> 35 (#5413): the spawn-timeout cooldown skip in `runRunner`.
-		"clients/dispatch/dispatcher.ts": 36,
+		"clients/dispatch/dispatcher.ts": 37,
 		// 1 -> 3 (#5553): the staged read leaves out a lane row whose `status`
 		// is skipped for a stated cause, and names the others' `status`.
 		// 3 -> 4 (#5621): `ensureSeedCopyExcluded` reads the exit `status` of its

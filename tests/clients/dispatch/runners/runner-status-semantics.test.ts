@@ -518,11 +518,22 @@ describe("runner status/semantic edge cases", () => {
 			// #1179: empty `.diags` but `inconclusive: true` — an unconfirmed touch
 			// (notify/diagnostics wait lapsed). The flag is now an explicit enumerable
 			// wrapper field, so it survives any copy of `.diags` by construction.
-			touchFile.mockResolvedValue(diagsResult([], { inconclusive: true }));
+			touchFile.mockResolvedValue(
+				diagsResult([], {
+					inconclusive: true,
+					inconclusiveServerIds: ["marksman"],
+					inconclusiveReason: "diagnostics-wait",
+				}),
+			);
 
 			const result = await runner.run(ctx(filePath, env.tmpDir) as never);
 			expect(result.status).toBe("skipped");
 			expect(result.diagnostics).toEqual([]);
+			// The touch cause is LSP-domain evidence, not a dispatch skip-taxonomy
+			// member; promoting it would reroute established primary notices.
+			expect(result.skipReason).toBeUndefined();
+			expect(result.inconclusiveReason).toBe("diagnostics-wait");
+			expect(result.unconfirmedServerIds).toEqual(["marksman"]);
 		} finally {
 			env.cleanup();
 		}
@@ -686,11 +697,19 @@ describe("runner status/semantic edge cases", () => {
 				verdict: result.verdict.checked,
 				row: result.latencyReport?.runners.find((r) => r.runnerId === "lsp")
 					?.status,
+				reason: result.latencyReport?.runners.find((r) => r.runnerId === "lsp")
+					?.inconclusiveReason,
 				delivered: result.warnings.map((w) => w.rule ?? w.message),
 			}).toEqual({
 				verdict: false,
 				row: "succeeded",
-				delivered: expect.arrayContaining([expect.stringContaining("6133")]),
+				reason: "diagnostics-wait",
+				delivered: expect.arrayContaining([
+					expect.stringContaining("6133"),
+					expect.stringContaining(
+						"no document diagnostics arrived within the wait budget",
+					),
+				]),
 			});
 		} finally {
 			env.cleanup();

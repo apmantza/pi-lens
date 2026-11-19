@@ -125,6 +125,7 @@ import { registerRunnerId } from "./known-runner-ids.js";
 import {
 	combinePrimaryUnavailableCauses,
 	PRIMARY_UNAVAILABLE_CAUSE,
+	TOUCH_INCONCLUSIVE_REASON_PHRASE,
 	type PrimaryUnavailableCause,
 } from "../lsp/diagnostic-binding.js";
 
@@ -635,6 +636,7 @@ export interface RunnerLatency {
 	/** #5285 r3: the run read part of the file (`RunnerResult.inconclusive`). */
 	inconclusive?: true;
 	skipReason?: RunnerSkipReason;
+	inconclusiveReason?: import("../lsp/diagnostic-binding.js").TouchInconclusiveReason;
 	/** WHO supplied the `covered-by-primary` claim (#3968 F2). */
 	claimSource?: RunnerClaimSource;
 	unconfirmedServerIds?: readonly string[];
@@ -710,6 +712,21 @@ function buildCoverageNotice(
 	const unconfirmedServerIds = [
 		...new Set(relevant.flatMap((r) => r.unconfirmedServerIds ?? [])),
 	];
+	const inconclusiveDetails = [
+		...new Set(
+			relevant.flatMap((r) => {
+				if (
+					r.inconclusiveReason === undefined ||
+					r.inconclusiveReason === "primary-unavailable"
+				)
+					return [];
+				const ids = r.unconfirmedServerIds ?? [];
+				const subject = ids.length > 0 ? `${ids.join(", ")}: ` : "";
+				const cause = TOUCH_INCONCLUSIVE_REASON_PHRASE[r.inconclusiveReason];
+				return [`${subject}${cause}`];
+			}),
+		),
+	];
 	if (unconfirmedServerIds.length > 0) {
 		const deferredIds = new Set(
 			relevant.flatMap((r) => r.deferredServerIds ?? []),
@@ -780,6 +797,9 @@ function buildCoverageNotice(
 			coverageParts.push(
 				`coverage: ${markerFor(silentServerIds)} silent — diagnostics are incomplete (not a clean result).`,
 			);
+		}
+		if (inconclusiveDetails.length > 0) {
+			coverageParts.push(`cause: ${inconclusiveDetails.join("; ")}.`);
 		}
 		return {
 			notice: {
@@ -934,6 +954,8 @@ function buildCoverageNotice(
 	const unexplainedCauses = causesOf(
 		statedRows.filter((r) => !isNotApplicableSkipReason(r.skipReason)),
 	);
+	const carriedInconclusiveReason =
+		inconclusiveDetails.length > 0 ? `; ${inconclusiveDetails.join("; ")}` : "";
 	const unavailableReason = cause
 		? `no primary language server answered (${PRIMARY_UNAVAILABLE_CAUSE[cause]})${deniedRunnerIds.length > 0 ? `; ${deniedNote}` : ""}`
 		: deniedRunnerIds.length > 0
@@ -942,7 +964,7 @@ function buildCoverageNotice(
 				: `not fully checked (a language tool is missing, timed out, or failed to run; ${deniedNote})`
 			: everyRowStated
 				? `not checked (${statedCauses.join("; ")})`
-				: `not fully checked (a language tool is missing, timed out, or failed to run${unexplainedCauses.length > 0 ? `; ${unexplainedCauses.join("; ")}` : ""})`;
+				: `not fully checked (a language tool is missing, timed out, or failed to run${unexplainedCauses.length > 0 ? `; ${unexplainedCauses.join("; ")}` : ""}${carriedInconclusiveReason})`;
 
 	const verdict = unchecked(unavailableReason);
 	// #5469: no checker answered this adopted edit; keep its unanswered status
@@ -1006,7 +1028,7 @@ function buildCoverageNotice(
 			message:
 				everyRowStated && deniedRunnerIds.length === 0
 					? `Pi-lens ${ctx.kind} analysis unavailable — ${statedCauses.join("; ")}, so this file was not checked (not a clean result).`
-					: `Pi-lens ${ctx.kind} analysis unavailable — a language tool is missing, timed out, or failed to run, or the LSP server isn't ready yet, so this file was not fully checked (not a clean result).${unexplainedCauses.length > 0 ? ` Stated: ${unexplainedCauses.join("; ")}.` : ""}${deniedRunnerIds.length > 0 ? ` Runner (${deniedRunnerIds.join(", ")}) is also disabled in config by dispatch.disabledRunners.` : ""}`,
+					: `Pi-lens ${ctx.kind} analysis unavailable — a language tool is missing, timed out, or failed to run, or the LSP server isn't ready yet, so this file was not fully checked (not a clean result).${unexplainedCauses.length > 0 ? ` Stated: ${unexplainedCauses.join("; ")}.` : ""}${inconclusiveDetails.length > 0 ? ` Stated: ${inconclusiveDetails.join("; ")}.` : ""}${deniedRunnerIds.length > 0 ? ` Runner (${deniedRunnerIds.join(", ")}) is also disabled in config by dispatch.disabledRunners.` : ""}`,
 			filePath: ctx.filePath,
 			severity: "warning",
 			semantic: "warning",
@@ -1471,6 +1493,9 @@ async function runGroup(
 				failureKind: result.failureKind,
 			}),
 			...(result.inconclusive === true && { inconclusive: true as const }),
+			...(result.inconclusiveReason !== undefined && {
+				inconclusiveReason: result.inconclusiveReason,
+			}),
 			...(skipReason !== undefined && {
 				skipReason,
 			}),
@@ -1513,8 +1538,14 @@ async function runGroup(
 					: undefined,
 			metadata:
 				failureRowMetadata(result) ??
-				(skipReason
-					? { skipReason, ...(claimSource !== undefined && { claimSource }) }
+				(skipReason !== undefined || result.inconclusiveReason !== undefined
+					? {
+							...(skipReason !== undefined && { skipReason }),
+							...(result.inconclusiveReason !== undefined && {
+								inconclusiveReason: result.inconclusiveReason,
+							}),
+							...(claimSource !== undefined && { claimSource }),
+						}
 					: undefined),
 		});
 		// #4483: a pre-edit capture reads bytes the host is about to replace,
@@ -2106,6 +2137,25 @@ export async function dispatchForFile(
 	// Log summary to latency log only (not console - avoid noise)
 	const sumMs = runnerLatencies.reduce((s, r) => s + r.durationMs, 0);
 	const wallClockMs = latencyReport.totalDurationMs;
+	const runnerMetadata = runnerLatencies.map((r) => {
+		const row: {
+			id: string;
+			startedAt: string;
+			duration: number;
+			status: RunnerLatency["status"];
+			skipReason?: RunnerSkipReason;
+			inconclusiveReason?: RunnerLatency["inconclusiveReason"];
+		} = {
+			id: r.runnerId,
+			startedAt: new Date(r.startTime).toISOString(),
+			duration: r.durationMs,
+			status: r.status,
+		};
+		if (r.skipReason !== undefined) row.skipReason = r.skipReason;
+		if (r.inconclusiveReason !== undefined)
+			row.inconclusiveReason = r.inconclusiveReason;
+		return row;
+	});
 	logLatency({
 		type: "tool_result",
 		filePath: ctx.filePath,
@@ -2115,12 +2165,7 @@ export async function dispatchForFile(
 		parallelGainMs: Math.max(0, sumMs - wallClockMs),
 		result: "dispatch_complete",
 		metadata: {
-			runners: runnerLatencies.map((r) => ({
-				id: r.runnerId,
-				startedAt: new Date(r.startTime).toISOString(),
-				duration: r.durationMs,
-				status: r.status,
-			})),
+			runners: runnerMetadata,
 			totalDiagnostics: visibleDiagnostics.length,
 			blockers: blockers.length,
 			// #2489 round 2: distinguishes a delta baseline HIT (a prior snapshot
