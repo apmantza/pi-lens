@@ -31,7 +31,7 @@ import {
 } from "../../clients/log-cleanup.js";
 import { getProjectDataDir } from "../../clients/file-utils.js";
 import { createNdjsonLogger } from "../../clients/ndjson-logger.js";
-import { removeTempDirSync } from "./test-utils.js";
+import { minTmpRootLength, removeTempDirSync } from "./test-utils.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -338,79 +338,96 @@ describe("runLogCleanup retention rows (#5702)", () => {
 		);
 	});
 
-	it("removes stale sockets of both name shapes and keeps a live listener, a live owner pid and a non-socket file", async () => {
-		const socketDir = fs.mkdtempSync(
-			path.join(os.tmpdir(), "pi-lens-retain-sock-"),
-		);
-		const savedTmp = process.env.TMPDIR;
-		let liveServer: net.Server | undefined;
-		try {
-			process.env.TMPDIR = socketDir;
-			// The row's window is 1 day, so the seeds are aged past it: a socket
-			// whose owner just died lingers until the next sweep, which is the
-			// same grace every row gives a fresh file.
-			const ageStale = (name: string): void =>
-				backdate(path.join(socketDir, name), 2);
-			await seedStaleSocket(socketDir, "pi-lens-mcp-0123456789abcdef.sock");
-			ageStale("pi-lens-mcp-0123456789abcdef.sock");
-			await seedStaleSocket(
-				socketDir,
-				"pi-lens-mcp-999999-diagnostics-fedcba9876543210.sock",
-			);
-			ageStale("pi-lens-mcp-999999-diagnostics-fedcba9876543210.sock");
-			liveServer = await seedLiveSocket(
-				socketDir,
-				"pi-lens-mcp-9876543210fedcba.sock",
-			);
-			const livePid = path.join(
-				socketDir,
-				`pi-lens-mcp-${process.pid}-diagnostics-0123456789abcdef.sock`,
-			);
-			await seedStaleSocket(socketDir, path.basename(livePid));
-			ageStale(path.basename(livePid));
-			const notASocket = path.join(
-				socketDir,
-				"pi-lens-mcp-ffffffffffffffff.sock",
-			);
-			fs.writeFileSync(notASocket, "x");
-			backdate(notASocket, 2);
-			// A socket whose owner just died is inside the row's 1-day window:
-			// the next sweep reaps it, this one leaves it.
-			const freshStale = path.join(
-				socketDir,
-				"pi-lens-mcp-1111111122222222.sock",
-			);
-			await seedStaleSocket(socketDir, path.basename(freshStale));
-			const unrelated = path.join(socketDir, "unrelated.sock");
-			fs.writeFileSync(unrelated, "x");
+	// lane: Unit tests (a short CI TMPDIR always has room); a dev box whose
+	// probe home is too deep for the seeded socket names skips, the same
+	// guard tests/clients/mcp/ipc.test.ts applies to its own socket seeds.
+	const SUN_PATH_LIMIT = 104;
+	const socketSeedNeeds =
+		minTmpRootLength() +
+		1 +
+		"pi-lens-retain-sock-XXXXXX".length +
+		1 +
+		"pi-lens-mcp-999999-diagnostics-fedcba9876543210.sock".length;
+	const socketTestLacksRoom = socketSeedNeeds > SUN_PATH_LIMIT;
 
-			const { runLogCleanup } = await loadCleanup();
-			const result = await runLogCleanup();
+	it.skipIf(socketTestLacksRoom)(
+		"removes stale sockets of both name shapes and keeps a live listener, a live owner pid and a non-socket file",
+		async () => {
+			const socketDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-retain-sock-"),
+			);
+			const savedTmp = process.env.TMPDIR;
+			let liveServer: net.Server | undefined;
+			try {
+				process.env.TMPDIR = socketDir;
+				// The row's window is 1 day, so the seeds are aged past it: a socket
+				// whose owner just died lingers until the next sweep, which is the
+				// same grace every row gives a fresh file.
+				const ageStale = (name: string): void =>
+					backdate(path.join(socketDir, name), 2);
+				await seedStaleSocket(socketDir, "pi-lens-mcp-0123456789abcdef.sock");
+				ageStale("pi-lens-mcp-0123456789abcdef.sock");
+				await seedStaleSocket(
+					socketDir,
+					"pi-lens-mcp-999999-diagnostics-fedcba9876543210.sock",
+				);
+				ageStale("pi-lens-mcp-999999-diagnostics-fedcba9876543210.sock");
+				liveServer = await seedLiveSocket(
+					socketDir,
+					"pi-lens-mcp-9876543210fedcba.sock",
+				);
+				const livePid = path.join(
+					socketDir,
+					`pi-lens-mcp-${process.pid}-diagnostics-0123456789abcdef.sock`,
+				);
+				await seedStaleSocket(socketDir, path.basename(livePid));
+				ageStale(path.basename(livePid));
+				const notASocket = path.join(
+					socketDir,
+					"pi-lens-mcp-ffffffffffffffff.sock",
+				);
+				fs.writeFileSync(notASocket, "x");
+				backdate(notASocket, 2);
+				// A socket whose owner just died is inside the row's 1-day window:
+				// the next sweep reaps it, this one leaves it.
+				const freshStale = path.join(
+					socketDir,
+					"pi-lens-mcp-1111111122222222.sock",
+				);
+				await seedStaleSocket(socketDir, path.basename(freshStale));
+				const unrelated = path.join(socketDir, "unrelated.sock");
+				fs.writeFileSync(unrelated, "x");
 
-			expect(
-				fs.existsSync(
-					path.join(socketDir, "pi-lens-mcp-0123456789abcdef.sock"),
-				),
-			).toBe(false);
-			expect(
-				fs.existsSync(
-					path.join(
-						socketDir,
-						"pi-lens-mcp-999999-diagnostics-fedcba9876543210.sock",
+				const { runLogCleanup } = await loadCleanup();
+				const result = await runLogCleanup();
+
+				expect(
+					fs.existsSync(
+						path.join(socketDir, "pi-lens-mcp-0123456789abcdef.sock"),
 					),
-				),
-			).toBe(false);
-			expect(fs.existsSync(livePid)).toBe(true);
-			expect(fs.existsSync(freshStale)).toBe(true);
-			expect(fs.existsSync(notASocket)).toBe(true);
-			expect(fs.existsSync(unrelated)).toBe(true);
-			expect(result.report).toMatch(/stale socket/);
-		} finally {
-			process.env.TMPDIR = savedTmp;
-			await new Promise<void>((resolve) => liveServer?.close(() => resolve()));
-			removeTempDirSync(socketDir);
-		}
-	});
+				).toBe(false);
+				expect(
+					fs.existsSync(
+						path.join(
+							socketDir,
+							"pi-lens-mcp-999999-diagnostics-fedcba9876543210.sock",
+						),
+					),
+				).toBe(false);
+				expect(fs.existsSync(livePid)).toBe(true);
+				expect(fs.existsSync(freshStale)).toBe(true);
+				expect(fs.existsSync(notASocket)).toBe(true);
+				expect(fs.existsSync(unrelated)).toBe(true);
+				expect(result.report).toMatch(/stale socket/);
+			} finally {
+				process.env.TMPDIR = savedTmp;
+				await new Promise<void>((resolve) =>
+					liveServer?.close(() => resolve()),
+				);
+				removeTempDirSync(socketDir);
+			}
+		},
+	);
 });
 
 describe("pidScopedSocketLiveness (#5702)", () => {
