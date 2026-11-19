@@ -283,9 +283,7 @@ function getRetentionRows(options: RetentionOptions): RetentionRow[] {
 			maxAgeDays: () => config.retentionDays,
 			kind: "file",
 			liveness: (_absPath, name) =>
-				// A live session's own snapshot is never the sweep's to reap,
-				// however long the session idles before its next save.
-				name === `${options.currentSessionId}.json` ? "live" : "stale",
+				sessionStateLiveness(name, options.currentSessionId),
 		},
 		{
 			// The same directory `clients/mcp/ipc.ts` binds every `.sock`
@@ -295,21 +293,7 @@ function getRetentionRows(options: RetentionOptions): RetentionRow[] {
 			match: (name) => classifyIpcSocketName(name) !== undefined,
 			maxAgeDays: () => 1,
 			kind: "file",
-			liveness: async (absPath, name) => {
-				const classified = classifyIpcSocketName(name);
-				if (!classified) return "indeterminate";
-				if (classified.kind === "pid-scoped") {
-					return pidScopedSocketLiveness(classified.pid);
-				}
-				// ipc.ts's probe answers "dead" for the same verdict this gate
-				// calls stale: a socket file no listener serves.
-				const dial = await probeIpcSocketListener(absPath);
-				return dial === "dead"
-					? "stale"
-					: dial === "live"
-						? "live"
-						: "indeterminate";
-			},
+			liveness: socketLiveness,
 		},
 		{
 			label: "orphaned project data dirs",
@@ -319,14 +303,7 @@ function getRetentionRows(options: RetentionOptions): RetentionRow[] {
 			match: () => true,
 			maxAgeDays: () => PROJECT_DATA_ORPHAN_RETENTION_DAYS,
 			kind: "dir",
-			liveness: async (_absPath, name) => {
-				const status = createProjectDataDirRootProbe().statusFor(name);
-				return status === "exists"
-					? "live"
-					: status === "gone"
-						? "stale"
-						: "indeterminate";
-			},
+			liveness: (_absPath, name) => projectDataDirLiveness(name),
 		},
 	];
 }
@@ -415,6 +392,49 @@ export interface RetentionOptions {
 	 * Absent (tests, embedders without a session id), no state file is exempt.
 	 */
 	currentSessionId?: string;
+}
+
+/**
+ * The session-state row's gate: the live session's own snapshot is never the
+ * sweep's to reap, however long the session idles before its next save.
+ */
+function sessionStateLiveness(
+	name: string,
+	currentSessionId: string | undefined,
+): LivenessVerdict {
+	return name === `${currentSessionId}.json` ? "live" : "stale";
+}
+
+/**
+ * The project-data row's gate, answered by the decode beside the naming
+ * rules (`clients/file-utils.ts`): a root that exists is live, a root that
+ * is gone is stale, and a name the decode cannot judge keeps the directory.
+ */
+function projectDataDirLiveness(name: string): LivenessVerdict {
+	const status = createProjectDataDirRootProbe().statusFor(name);
+	if (status === "exists") return "live";
+	if (status === "gone") return "stale";
+	return "indeterminate";
+}
+
+/**
+ * The socket row's gate: a pid-scoped name carries its owner's pid (a dead
+ * owner means nobody can ever bind that name again), a workspace name is
+ * judged by dialing it, and a name the classifier refuses is kept.
+ */
+async function socketLiveness(
+	absPath: string,
+	name: string,
+): Promise<LivenessVerdict> {
+	const classified = classifyIpcSocketName(name);
+	if (!classified) return "indeterminate";
+	if (classified.kind === "pid-scoped") {
+		return pidScopedSocketLiveness(classified.pid);
+	}
+	// ipc.ts's probe answers "dead" for the same verdict this gate calls
+	// stale: a socket file no listener serves.
+	const dial = await probeIpcSocketListener(absPath);
+	return dial === "dead" ? "stale" : dial === "live" ? "live" : "indeterminate";
 }
 
 interface RetentionSweepResult {
