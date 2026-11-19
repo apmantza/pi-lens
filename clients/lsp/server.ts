@@ -142,6 +142,8 @@ import {
 // --- Types ---
 
 /** A root policy can refuse a file instead of asking the caller to fallback. */
+// NUL cannot occur in a filesystem path, so this remains source-compatible with
+// RootFunction's path result while carrying a distinct policy verdict.
 export const LSP_ROOT_DECLINED = "\u0000pi-lens-lsp-root-declined";
 
 function rootOrUndefined(root: string | undefined): string | undefined {
@@ -3048,7 +3050,7 @@ export async function tryGemInstall(gem: string): Promise<boolean> {
 }
 
 /**
- * Wraps a root function so it returns undefined for files inside a Deno project.
+ * Wraps a root function so it explicitly declines files inside a Deno project.
  * Prevents TypeScript LSP from being spawned alongside Deno LSP for the same file,
  * which would produce false diagnostics for Deno-specific APIs.
  */
