@@ -631,25 +631,46 @@ describe("Python adopted-root fallback (#5674)", () => {
 				expect.anything(),
 			);
 			expect(fs.existsSync(marker)).toBe(false);
-			expect(decisionRows("project-local-binary").length).toBeGreaterThan(0);
+			if (planted) {
+				expect(decisionRows("project-local-binary").length).toBeGreaterThan(0);
+			} else {
+				expect(decisionRows("project-local-binary")).toHaveLength(0);
+			}
 			await flushLatencyLog();
 			const { rows, skipped } = readNdjsonRows(getLatencyLogPath());
 			expect(skipped).toBe(0);
 			expect(rows).toEqual(
 				expect.arrayContaining([
 					expect.objectContaining({
-						phase: "lsp_launch_candidate_failed",
-						filePath: spec.cwd,
-						metadata: expect.objectContaining({
-							error: expect.stringContaining("project-local binary refused"),
-						}),
-					}),
-					expect.objectContaining({
 						phase: "lsp_launch_install_blocked",
 						filePath: spec.cwd,
 					}),
 				]),
 			);
+			if (planted) {
+				expect(rows).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({
+							phase: "lsp_launch_candidate_failed",
+							filePath: spec.cwd,
+							metadata: expect.objectContaining({
+								error: expect.stringContaining("project-local binary refused"),
+							}),
+						}),
+					]),
+				);
+			} else {
+				expect(rows).not.toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({
+							phase: "lsp_launch_candidate_failed",
+							metadata: expect.objectContaining({
+								error: expect.stringContaining("project-local binary refused"),
+							}),
+						}),
+					]),
+				);
+			}
 		},
 	);
 });
@@ -660,7 +681,9 @@ describe("resolveAndLaunch after a trust refusal, PATH clear of the project (#45
 		const managed = seedStoreIntelephense();
 		const { spec } = makeProject("intelephense", false);
 
-		const result = await resolveAndLaunch(spec, true);
+		const result = await withLspProjectCodePermission(false, () =>
+			resolveAndLaunchRaw(spec, true),
+		);
 
 		expect(managedLaunch).toHaveBeenCalledWith(
 			managed,
@@ -668,6 +691,7 @@ describe("resolveAndLaunch after a trust refusal, PATH clear of the project (#45
 			expect.anything(),
 		);
 		expect(result?.source).toBe("managed");
+		expect(decisionRows("project-local-binary")).toHaveLength(0);
 	});
 
 	it("keeps an existing project-local binary refused and still reaches the managed binary", async () => {
@@ -681,15 +705,14 @@ describe("resolveAndLaunch after a trust refusal, PATH clear of the project (#45
 		expect(result?.source).toBe("managed");
 	});
 
-	it("reaches the install step when the store is empty and rethrows the refusal when it yields nothing", async () => {
+	it("reaches the install step when the store is empty and the candidate is absent", async () => {
 		// The test setup sets PI_LENS_DISABLE_TOOL_INSTALL=1, so the install
 		// step is reached and declines without a download.
 		setProjectTrustState("unknown");
 		const { spec } = makeProject("tinymist", false);
 
-		await expect(resolveAndLaunch(spec, true)).rejects.toThrow(
-			/project-local binary refused: project trust is unknown/,
-		);
+		expect(await resolveAndLaunch(spec, true)).toBeUndefined();
+		expect(decisionRows("project-local-binary")).toHaveLength(0);
 
 		expect(getInstallAttempt("tinymist")).toMatchObject({
 			outcome: "declined",
@@ -787,9 +810,7 @@ describe("resolveAndLaunch after a trust refusal, project bin dir on PATH (#4515
 		process.env.PATH = [bin, outsideBin].join(path.delimiter);
 
 		for (let attempt = 0; attempt < 2; attempt += 1) {
-			await expect(resolveAndLaunch(spec, true)).rejects.toThrow(
-				/project-local binary refused/,
-			);
+			expect(await resolveAndLaunch(spec, true)).toBeUndefined();
 		}
 
 		expect(decisionRows("store-only-repair:yaml-language-server")).toHaveLength(
@@ -800,8 +821,9 @@ describe("resolveAndLaunch after a trust refusal, project bin dir on PATH (#4515
 	it("reports the refused candidate as missing by policy, not as a rejected probe", async () => {
 		// Review r1 F4: the availability row read "non-installable /
 		// probe-rejected" for a refusal, a cause nothing else produces here.
+		// #5698 r3: the candidate exists, so the trust gate refuses it.
 		setProjectTrustState("unknown");
-		const { spec, bin } = makeProject("yaml-language-server", false);
+		const { spec, bin } = makeProject("yaml-language-server", true);
 		process.env.PATH = [bin, outsideBin].join(path.delimiter);
 
 		await expect(resolveAndLaunch(spec, true)).rejects.toThrow(
@@ -815,6 +837,29 @@ describe("resolveAndLaunch after a trust refusal, project bin dir on PATH (#4515
 				verdict: "unavailable",
 				outcome: "missing",
 				cause: "policy-denied",
+			}),
+		]);
+	});
+
+	it("reports an absent candidate as not found, not as refused by policy", async () => {
+		// #5674: a candidate path that does not exist never reaches the trust
+		// gate, so its row names the miss rather than a refusal.
+		setProjectTrustState("unknown");
+		const { spec, bin } = makeProject("yaml-language-server", false);
+		process.env.PATH = [bin, outsideBin].join(path.delimiter);
+
+		expect(await resolveAndLaunch(spec, true)).toBeUndefined();
+
+		const rows = await availabilityRows("yaml-language-server");
+		expect(rows.map((row) => row.metadata)).toEqual([
+			expect.objectContaining({
+				producer: "lsp-launch",
+				verdict: "unavailable",
+				outcome: "missing",
+				cause: "not-found",
+				evidence: expect.objectContaining({
+					spawnFailureKind: "tool-not-found",
+				}),
 			}),
 		]);
 	});
@@ -850,7 +895,7 @@ describe("resolveAndLaunch trust-refusal surface (#4515)", () => {
 	});
 
 	it.skipIf(process.platform === "win32")(
-		"skips the runtime install after a refusal",
+		"rethrows the existing project-local refusal before runtime install",
 		async () => {
 			// Step 4 runs a language runtime (go, gem, dotnet) in the project cwd,
 			// where a go.mod toolchain line or a nuget.config feed is project
@@ -862,7 +907,7 @@ describe("resolveAndLaunch trust-refusal surface (#4515)", () => {
 			expect(whichDir).toBeDefined();
 			process.env.PATH = [outsideBin, whichDir].join(path.delimiter);
 			const install = vi.fn(async () => true);
-			const { spec } = makeProject("fixture-lsp", false);
+			const { spec } = makeProject("fixture-lsp", true);
 
 			await expect(
 				resolveAndLaunch(
@@ -882,7 +927,7 @@ describe("resolveAndLaunch trust-refusal surface (#4515)", () => {
 	it("records the refusal once per session per tool across repeated attempts", async () => {
 		setProjectTrustState("unknown");
 		seedStoreIntelephense();
-		const { spec } = makeProject("intelephense", false);
+		const { spec } = makeProject("intelephense", true);
 
 		await resolveAndLaunch(spec, true);
 		await resolveAndLaunch(spec, true);
