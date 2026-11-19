@@ -309,6 +309,28 @@ describe("startup overhead — interactive path regression guard", () => {
 		},
 	);
 
+	it("emits the deferred retention sweep's phase record off the awaited chain (#5702)", async () => {
+		// #1019 defers the sweep to a setImmediate; #5702 keeps the record.
+		// The record lands only after that tick, so this case ticks first —
+		// which is exactly why the sync-phase case above leaves it out.
+		const env = setupTestEnvironment("pi-lens-overhead-log-cleanup-");
+		const restoreMode = setStartupMode("quick");
+		try {
+			await handleSessionStart({ ...makeDeps(env.tmpDir) });
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			await vi.waitFor(() => {
+				expect(
+					latencyEntries.some(
+						(entry) => entry.phase === "session_start_log_cleanup",
+					),
+				).toBe(true);
+			});
+		} finally {
+			env.cleanup();
+			restoreMode();
+		}
+	});
+
 	it(`full mode self-reports within ${FULL_MODE_BUDGET_MS}ms`, async () => {
 		const env = setupTestEnvironment("pi-lens-overhead-full-");
 		const restoreMode = setStartupMode("full");

@@ -101,6 +101,9 @@ const mockTouchFile = vi.fn(async () => undefined);
 const HEAVY_IO_TIMEOUT_MS = 30_000;
 const TEST_BUDGET_MS = 45_000;
 
+/** The session id the runtime stub reports; the wiring pin below seeds it. */
+const RETENTION_WIRING_SESSION_ID = "retention-wiring-current-session";
+
 const EMPTY_KNIP_RESULT = {
 	success: true,
 	issues: [],
@@ -209,6 +212,9 @@ async function runSessionStart(
 			log: () => {},
 			runtime: {
 				sessionGeneration: 1,
+				// #5702: the deferred retention sweep exempts the file the
+				// turn-end arm persists under this id.
+				telemetrySessionId: RETENTION_WIRING_SESSION_ID,
 				isCurrentSession: () => true,
 				markStartupScanInFlight: (name: string) => {
 					inFlightScans.add(name);
@@ -408,6 +414,60 @@ it(
 				() =>
 					expect(dbg).toHaveBeenCalledWith(
 						expect.stringContaining("exports scan: 2 functions found"),
+					),
+				{ timeout: HEAVY_IO_TIMEOUT_MS },
+			);
+		} finally {
+			await env.cleanup();
+		}
+	},
+	TEST_BUDGET_MS,
+);
+
+it(
+	"exempts the current session's state file from the deferred retention sweep (#5702)",
+	async () => {
+		// The production wiring passes the coordinator's telemetry session id
+		// into runLogCleanup; this pin drives the real handleSessionStart and
+		// asserts the sweep reaped another session's aged state file but kept
+		// the current session's, however old it is.
+		const { env, notify } = await runSessionStart("quick", (tmpDir) => {
+			const sessions = path.join(getProjectDataDir(tmpDir), "sessions");
+			fs.mkdirSync(sessions, { recursive: true });
+			const aged = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+			const current = path.join(
+				sessions,
+				`${RETENTION_WIRING_SESSION_ID}.json`,
+			);
+			fs.writeFileSync(current, "{}");
+			fs.utimesSync(current, aged, aged);
+			const other = path.join(
+				sessions,
+				"11112222-3333-4444-8555-666677778888.json",
+			);
+			fs.writeFileSync(other, "{}");
+			fs.utimesSync(other, aged, aged);
+		});
+		try {
+			const other = path.join(
+				getProjectDataDir(env.tmpDir),
+				"sessions",
+				"11112222-3333-4444-8555-666677778888.json",
+			);
+			const current = path.join(
+				getProjectDataDir(env.tmpDir),
+				"sessions",
+				`${RETENTION_WIRING_SESSION_ID}.json`,
+			);
+			await vi.waitFor(() => expect(fs.existsSync(other)).toBe(false), {
+				timeout: HEAVY_IO_TIMEOUT_MS,
+			});
+			expect(fs.existsSync(current)).toBe(true);
+			await vi.waitFor(
+				() =>
+					expect(notify).toHaveBeenCalledWith(
+						expect.stringContaining("session state file"),
+						"info",
 					),
 				{ timeout: HEAVY_IO_TIMEOUT_MS },
 			);
