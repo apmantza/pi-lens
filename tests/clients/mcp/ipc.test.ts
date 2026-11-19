@@ -1687,7 +1687,17 @@ describe("classifyIpcSocketName (#5702)", () => {
 	});
 });
 
-describe("probeIpcSocketListener (#5702)", () => {
+// The seeded names need a short sun_path; a dev box whose probe home is too
+// deep skips, the same guard the file's long-socket cases apply.
+const probeLacksRoom =
+	minTmpRootLength() +
+		1 +
+		"pi-lens-probe-live-XXXXXX".length +
+		1 +
+		"pi-lens-mcp-0123456789abcdef.sock".length >
+	104;
+
+describe.skipIf(probeLacksRoom)("probeIpcSocketListener (#5702)", () => {
 	// lane: Unit tests (a live listener on the ambient temp root, no child
 	// process: the server runs in this worker).
 	// The names below avoid every binding the file's earlier describes use:
