@@ -107,6 +107,45 @@ describe("lens_diagnostic_mark tool (#690)", () => {
 		expect(getDisposition(tmpDir, anchor)?.disposition).toBe("suppress");
 	});
 
+	it("disposition=suppress keeps CRLF line endings (#5686)", async () => {
+		writeFile("crlf.ts", "const a = 1;\r\nconst target = bad();\r\n");
+		const result = await run({
+			filePath: "crlf.ts",
+			line: 2,
+			message: "bad call",
+			rule: "no-bad",
+			tool: "eslint",
+			disposition: "suppress",
+		});
+
+		expect(result.isError).toBeFalsy();
+		const updated = fs.readFileSync(path.join(tmpDir, "crlf.ts"), "utf-8");
+		expect(updated).toBe(
+			"const a = 1;\r\n// pi-lens-ignore: no-bad\r\nconst target = bad();\r\n",
+		);
+	});
+
+	it("disposition=suppress keeps mixed endings; the new line takes the flagged line's (#5686)", async () => {
+		writeFile(
+			"mixed.ts",
+			"const a = 1;\nconst b = 2;\r\nconst target = bad();\r\n",
+		);
+		const result = await run({
+			filePath: "mixed.ts",
+			line: 4,
+			message: "bad call",
+			rule: "no-bad",
+			tool: "eslint",
+			disposition: "suppress",
+		});
+
+		expect(result.isError).toBeFalsy();
+		const updated = fs.readFileSync(path.join(tmpDir, "mixed.ts"), "utf-8");
+		expect(updated).toBe(
+			"const a = 1;\nconst b = 2;\r\n// pi-lens-ignore: no-bad\r\nconst target = bad();\r\n",
+		);
+	});
+
 	it("disposition=suppress without a rule errors", async () => {
 		writeFile("a.ts", "const target = bad();\n");
 		const result = await run({

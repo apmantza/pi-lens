@@ -74,6 +74,43 @@ describe("insertSuppressComment (#690)", () => {
 		expect(applyInlineSuppressions(diags, updated)).toEqual([]);
 	});
 
+	it("keeps CRLF line endings; the new line takes the flagged line's ending (#5686)", () => {
+		const updated = insertSuppressComment(
+			"a\r\nb\r\nc\r\n",
+			"/proj/a.ts",
+			2,
+			"no-bad",
+		);
+		expect(updated).toBe("a\r\n// pi-lens-ignore: no-bad\r\nb\r\nc\r\n");
+	});
+
+	it("keeps mixed endings; the new line takes the flagged line's ending (#5686)", () => {
+		const updated = insertSuppressComment(
+			"a\nb\r\nc\r\n",
+			"/proj/a.ts",
+			3,
+			"no-bad",
+		);
+		expect(updated).toBe("a\nb\r\n// pi-lens-ignore: no-bad\r\nc\r\n");
+	});
+
+	it("appends to an existing CRLF comment above without rewriting endings (#5686)", () => {
+		const updated = insertSuppressComment(
+			"// pi-lens-ignore: other\r\nconst target = bad();\r\n",
+			"/proj/a.ts",
+			2,
+			"no-bad",
+		);
+		expect(updated).toBe(
+			"// pi-lens-ignore: other, no-bad\r\nconst target = bad();\r\n",
+		);
+	});
+
+	it("keeps an unterminated last line unterminated when inserting above it (#5686)", () => {
+		const updated = insertSuppressComment("a\r\nb", "/proj/a.ts", 2, "no-bad");
+		expect(updated).toBe("a\r\n// pi-lens-ignore: no-bad\r\nb");
+	});
+
 	it("throws on an out-of-range line", () => {
 		const content = "const a = 1;\n";
 		expect(() =>
