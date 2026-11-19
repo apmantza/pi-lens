@@ -458,8 +458,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// starts that moved onto the spawn seam read the spawn result's `error`
 		// field (SpawnResult.error), not a delivery tier.
 		// 28 -> 30 (#5561 r3): candidateFailure's tail reads the pip failure text, not a delivery tier.
-		"clients/installer/index.ts": 29,
-		"clients/installer/download.ts": 2,
+		"clients/installer/index.ts": 28,
 		"clients/installer/managed-tool-refresh.ts": 2,
 		"clients/instance-reaper.ts": 4,
 		"clients/instance-registry-lock.ts": 3,

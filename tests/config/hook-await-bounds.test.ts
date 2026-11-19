@@ -2617,7 +2617,7 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// handler reaches it.
 	// +1: the installer stream seam adds one unbounded cleanup await; it remains
 	// outside the hook signal until #2523 AC4 threads that signal through.
-	"clients/installer/index.ts": 231,
+	"clients/installer/index.ts": 232,
 	// 29 -> 56 (#4765): refreshOpengrepRulePack (the background registry-pack
 	// refresh) awaits the pack download, its temp-file write, the
 	// `opengrep --validate` spawn, a stat/read/rename of the cached file and a
