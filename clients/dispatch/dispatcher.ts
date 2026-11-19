@@ -51,7 +51,10 @@ import { classifyDiagnostic } from "./diagnostic-taxonomy.js";
 import { createAvailabilityChecker } from "./runners/utils/runner-helpers.js";
 import type { FactStore } from "./fact-store.js";
 import { linesOfRanges, rangesOfLines } from "../line-alignment.js";
-import { applyFindingPolicyByOwner } from "./finding-policy.js";
+import {
+	applyFindingPolicyByOwner,
+	inlineBlockerIdentities,
+} from "./finding-policy.js";
 import { getToolPlan } from "./plan.js";
 import { resolveRunnerPath } from "./runner-context.js";
 import {
@@ -1906,11 +1909,23 @@ export async function dispatchForFile(
 		const overlap = suppressLintOverlapsWithLsp(dockerOverlap);
 		// #5044: inline comments and dispositions belong to the file a finding
 		// NAMES, not the edited one (see `applyFindingPolicyByOwner`).
+		// The STOP block renders `L<n>: <message>` with no tool (and often the
+		// rule folded into the message), so a mark made from it carries no tool
+		// and may carry no rule: accept the same spellings the turn-end re-serve
+		// of that block accepts (#3246), or the live block re-reports a finding
+		// the agent already marked. The block shows blockers only, so only a
+		// blocker takes those spellings; any other finding keeps its own
+		// identity, or a tool-less weak mark would hide it at any line (#5711
+		// review r1 F1).
 		const { disposed: disposition } = applyFindingPolicyByOwner(overlap, {
 			cwd: rulePolicyRoot,
 			filePath: ctx.filePath,
 			content: fileContent,
 			policyMap: undefined,
+			identities: (d) =>
+				d.semantic === "blocking"
+					? inlineBlockerIdentities(d)
+					: [{ tool: d.tool, ...(d.rule !== undefined && { rule: d.rule }) }],
 		});
 		return applyRulePolicy(disposition, rulePolicy, {
 			root: rulePolicyRoot,
