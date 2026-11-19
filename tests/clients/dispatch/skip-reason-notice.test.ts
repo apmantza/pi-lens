@@ -34,8 +34,14 @@ import {
 	type RunnerGroup,
 	type RunnerResult,
 } from "../../../clients/dispatch/types.js";
+import {
+	clearLatencyLog,
+	flushLatencyLog,
+	getLatencyLogPath,
+} from "../../../clients/latency-logger.js";
 import { removeTempDirSync } from "../test-utils.js";
 import { uncheckedReason } from "../../support/dispatch-verdict.js";
+import { readNdjsonRows } from "../../support/ndjson-rows.js";
 
 const GROUP: RunnerGroup[] = [
 	{
@@ -81,7 +87,6 @@ async function dispatchMarkdown(
 	vale: RunnerResult,
 	name = "a.md",
 	groups: RunnerGroup[] = GROUP,
-	noLsp = true,
 ) {
 	const registry = new RunnerRegistry();
 	for (const [id, result] of [
@@ -103,7 +108,7 @@ async function dispatchMarkdown(
 	const ctx = createDispatchContext(
 		file,
 		tmpDir,
-		{ getFlag: (flag: string) => noLsp && flag === "no-lsp" },
+		{ getFlag: (flag: string) => flag === "no-lsp" },
 		new FactStore(),
 		false,
 	);
@@ -217,7 +222,6 @@ describe("a file every applicable check skipped is named not checked (#5258)", (
 			BARE,
 			"silent-primary.md",
 			GROUP,
-			true,
 		);
 
 		expect(result.output).toContain("marksman silent");
@@ -238,12 +242,83 @@ describe("a file every applicable check skipped is named not checked (#5258)", (
 			skipped("disabled-by-config"),
 			"silent-primary-with-denial.md",
 			GROUP,
-			true,
 		);
 
 		expect(result.output).toContain("marksman silent");
 		expect(result.output).toContain(
 			"marksman: no document diagnostics arrived within the wait budget",
+		);
+	});
+});
+
+// #5692 (verify r3 V1): the touch cause rides two latency records and the
+// verdict. Neutering any one of those arms left every test green, so each is
+// read back here. The sink is read through the real `logLatency` with test
+// mode off; the setup pins `PI_LENS_HOME` to this worker's temp home, so the
+// file never reaches the real home.
+describe("the touch cause reaches the latency records and the verdict (#5692)", () => {
+	const SILENT_PRIMARY: RunnerResult = {
+		status: "skipped",
+		diagnostics: [],
+		semantic: "none",
+		inconclusiveReason: "diagnostics-wait",
+		unconfirmedServerIds: ["marksman"],
+	};
+
+	it("writes the reason on the runner row and on the dispatch_complete runners", async () => {
+		const priorTestMode = process.env.PI_LENS_TEST_MODE;
+		process.env.PI_LENS_TEST_MODE = "0";
+		try {
+			clearLatencyLog();
+			await flushLatencyLog();
+			await dispatchMarkdown(SILENT_PRIMARY, BARE, "sink-record.md");
+			await flushLatencyLog();
+
+			const read = readNdjsonRows(getLatencyLogPath());
+			expect(read.skipped).toBe(0);
+			const rows = read.rows.filter(
+				(row) => path.basename(String(row.filePath)) === "sink-record.md",
+			);
+			const runnerRow = rows.find(
+				(row) => row.type === "runner" && row.runnerId === "spellcheck",
+			);
+			expect(runnerRow?.metadata).toEqual(
+				expect.objectContaining({ inconclusiveReason: "diagnostics-wait" }),
+			);
+			const complete = rows.find(
+				(row) =>
+					row.type === "tool_result" && row.result === "dispatch_complete",
+			);
+			expect(complete?.metadata).toEqual(
+				expect.objectContaining({
+					runners: expect.arrayContaining([
+						expect.objectContaining({
+							id: "spellcheck",
+							inconclusiveReason: "diagnostics-wait",
+						}),
+					]),
+				}),
+			);
+		} finally {
+			if (priorTestMode === undefined) delete process.env.PI_LENS_TEST_MODE;
+			else process.env.PI_LENS_TEST_MODE = priorTestMode;
+		}
+	});
+
+	it("carries the reason into the verdict when the touch named no server", async () => {
+		const result = await dispatchMarkdown(
+			{
+				status: "skipped",
+				diagnostics: [],
+				semantic: "none",
+				inconclusiveReason: "diagnostics-wait",
+			},
+			BARE,
+			"no-server-id.md",
+		);
+
+		expect(uncheckedReason(result)).toBe(
+			`not fully checked (${GENERIC}; no document diagnostics arrived within the wait budget)`,
 		);
 	});
 });
