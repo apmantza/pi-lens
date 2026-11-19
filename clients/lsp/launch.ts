@@ -1016,6 +1016,9 @@ export async function launchLSP(
 	const projectCandidatePath =
 		scannedCommandPath ?? (isRelativePath ? explicitCommand : spawnCommand);
 	if (
+		(scannedCommandPath !== undefined ||
+			isRelativePath ||
+			isFullyQualified(spawnCommand)) &&
 		fs.existsSync(projectCandidatePath) &&
 		isProjectLocalLspBinary(spawnCommand, cwd)
 	) {

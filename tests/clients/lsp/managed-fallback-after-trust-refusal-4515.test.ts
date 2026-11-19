@@ -705,7 +705,7 @@ describe("resolveAndLaunch after a trust refusal, PATH clear of the project (#45
 		expect(result?.source).toBe("managed");
 	});
 
-	it("reaches the install step when the store is empty and rethrows the refusal when it yields nothing", async () => {
+	it("reaches the install step when the store is empty and the candidate is absent", async () => {
 		// The test setup sets PI_LENS_DISABLE_TOOL_INSTALL=1, so the install
 		// step is reached and declines without a download.
 		setProjectTrustState("unknown");
@@ -872,7 +872,7 @@ describe("resolveAndLaunch trust-refusal surface (#4515)", () => {
 	});
 
 	it.skipIf(process.platform === "win32")(
-		"skips the runtime install after a refusal",
+		"rethrows the existing project-local refusal before runtime install",
 		async () => {
 			// Step 4 runs a language runtime (go, gem, dotnet) in the project cwd,
 			// where a go.mod toolchain line or a nuget.config feed is project
