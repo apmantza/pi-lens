@@ -26,20 +26,31 @@ const EMOJI: Record<string, string> = {
 export function crossFileRowLabel(
 	d: Diagnostic,
 	editedFile: string | undefined,
+	root?: string,
 ): string {
-	return editedFile !== undefined && isCrossFileBlocker(d, editedFile)
+	return editedFile !== undefined && isCrossFileBlocker(d, editedFile, root)
 		? `${d.filePath} `
 		: "";
+}
+
+/** The file a block is rendered for, and the project root its rows' relative
+ *  paths resolve against (the inline-blocker policy's root). */
+export interface RenderedFor {
+	editedFile: string;
+	root?: string | undefined;
 }
 
 /**
  * Format a single diagnostic for display
  */
-function formatDiagnostic(d: Diagnostic, editedFile?: string): string {
+function formatDiagnostic(d: Diagnostic, renderedFor?: RenderedFor): string {
 	const line = d.line ? `L${d.line}: ` : "";
 	const indented = d.message.split("\n").join("\n  ");
 	const fix = d.fixSuggestion ? `\n    💡 Fix: ${d.fixSuggestion}` : "";
-	return `  ${crossFileRowLabel(d, editedFile)}${line}${indented}${fix}`;
+	const label = renderedFor
+		? crossFileRowLabel(d, renderedFor.editedFile, renderedFor.root)
+		: "";
+	return `  ${label}${line}${indented}${fix}`;
 }
 
 /**
@@ -80,7 +91,7 @@ export function formatDiagnostics(
 	semantic: OutputSemantic | string,
 	maxDisplay = 10,
 	/** The file the block is rendered for; rows citing another file name it. */
-	editedFile?: string,
+	renderedFor?: RenderedFor,
 ): string {
 	if (diagnostics.length === 0) return "";
 
@@ -96,7 +107,7 @@ export function formatDiagnostics(
 	}
 
 	for (const d of diagnostics.slice(0, maxDisplay)) {
-		output += `${formatDiagnostic(d, editedFile)}\n`;
+		output += `${formatDiagnostic(d, renderedFor)}\n`;
 	}
 
 	if (diagnostics.length > maxDisplay) {

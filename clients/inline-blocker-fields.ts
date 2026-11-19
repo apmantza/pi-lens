@@ -11,6 +11,7 @@
  * call these two functions instead.
  */
 
+import { isAbsolute, resolve } from "node:path";
 import type { Diagnostic } from "./dispatch/types.js";
 import { normalizeEphemeralMapKey } from "./path-utils.js";
 
@@ -84,15 +85,25 @@ export function inlineBlockerLines(
  * The widget store (`clients/widget-state.ts`) stamps the same answer on its
  * rows (`WidgetDiagnostic.citedFile`), so it asks this function too, with the
  * raw row it is handed: hence the structural parameter.
+ *
+ * `root`: the project root a relative cited path is resolved against first.
+ * ruff, pyright and spotbugs report the edited file by a project-relative
+ * path (`edited.py`), and the inline-blocker policy judges a row after that
+ * same resolution (`applyInlineBlockerPolicy`), so a caller that renders or
+ * judges a raw row with the policy passes its root (#5714 review r1). Absent,
+ * the spelling is compared as given.
  */
 export function isCrossFileBlocker(
 	d: { filePath?: string | undefined },
 	filePath: string,
+	root?: string,
 ): boolean {
-	return (
-		!!d.filePath &&
-		normalizeEphemeralMapKey(d.filePath) !== normalizeEphemeralMapKey(filePath)
-	);
+	if (!d.filePath) return false;
+	const cited =
+		root !== undefined && !isAbsolute(d.filePath)
+			? resolve(root, d.filePath)
+			: d.filePath;
+	return normalizeEphemeralMapKey(cited) !== normalizeEphemeralMapKey(filePath);
 }
 
 /** One place a blocker is cited in `filePath`: the line, and the rule that

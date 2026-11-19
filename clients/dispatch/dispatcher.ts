@@ -2046,7 +2046,7 @@ export async function dispatchForFile(
 		inlineBlockers,
 		"blocking",
 		undefined,
-		ctx.filePath,
+		{ editedFile: ctx.filePath, root: ctx.projectRoot ?? ctx.cwd },
 	);
 	let output = blockerOutput;
 	output += formatDiagnostics(inlineFixed, "fixed");

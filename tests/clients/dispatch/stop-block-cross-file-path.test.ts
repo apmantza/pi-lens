@@ -22,6 +22,7 @@ import {
 } from "../../../clients/dispatch/dispatcher.js";
 import { FactStore } from "../../../clients/dispatch/fact-store.js";
 import { parseMypyOutput } from "../../../clients/dispatch/runners/mypy.js";
+import { parseRuffJson } from "../../../clients/dispatch/runners/ruff.js";
 import type {
 	Diagnostic,
 	RunnerGroup,
@@ -165,5 +166,131 @@ describe("the coordinator's stored blocker summary names a cross-file blocker's 
 		const [record] = runtime.getInlineBlockersSnapshot();
 		expect(record?.summary).toContain(`  ${otherPath} L737: [syntax]`);
 		expect(record?.summary).not.toContain("L2:");
+	});
+});
+
+// Review r1 on #5714 (CodeRabbit and the maintainer's probe): ruff, pyright and
+// spotbugs report the edited file by a project-relative path (`edited.py`),
+// and the policy judges a row after resolving it against the project root. A
+// label check on the raw spelling gave every such own-file row a label once
+// the process cwd differed from the project root.
+describe("a project-relative cited path is judged against the project root", () => {
+	function ruffBlockers(filename: string): Diagnostic[] {
+		return parseRuffJson(
+			JSON.stringify([
+				{
+					code: "F821",
+					message: "Undefined name `undefined_name`",
+					filename,
+					location: { row: 2, column: 1 },
+					severity: "error",
+				},
+			]),
+			path.join(projectRoot, "edited.py"),
+		);
+	}
+
+	async function dispatchRuff(filename: string) {
+		const fileAbs = path.join(projectRoot, "edited.py");
+		fs.writeFileSync(fileAbs, EDITED);
+		const registry = new RunnerRegistry();
+		registry.register(
+			createMockRunner({
+				id: "ruff-lint",
+				appliesTo: ["python"],
+				runResult: {
+					status: "failed",
+					diagnostics: ruffBlockers(filename),
+					semantic: "blocking",
+				},
+			}),
+		);
+		const facts = new FactStore();
+		const ctx = createDispatchContext(
+			fileAbs,
+			projectRoot,
+			{ getFlag: () => false },
+			facts,
+		);
+		facts.setFileFact(ctx.filePath, "file.content", EDITED);
+		const result = await dispatchForFile(
+			ctx,
+			[{ mode: "all", runnerIds: ["ruff-lint"] }],
+			registry,
+		);
+		return { fileAbs, result };
+	}
+
+	it("premise: the real ruff parser keeps the relative spelling, and the process cwd is not the project root", () => {
+		expect(ruffBlockers("edited.py")[0]?.filePath).toBe("edited.py");
+		expect(path.resolve("edited.py")).not.toBe(
+			path.join(projectRoot, "edited.py"),
+		);
+	});
+
+	it("renders a project-relative own-file row with no label", async () => {
+		const { result } = await dispatchRuff("edited.py");
+		expect(result.blockerOutput).toContain("  L2: Undefined name");
+		expect(result.blockerOutput).not.toContain("edited.py L2");
+	});
+
+	it("re-serves that record at turn end byte for byte, still unlabelled", async () => {
+		const { fileAbs, result } = await dispatchRuff("edited.py");
+		const summary = result.blockerOutput.trim();
+		const { body } = applyInlineBlockerPolicy(
+			{ filePath: fileAbs, summary, diagnostics: result.blockers },
+			projectRoot,
+		);
+		expect(body).toBe(summary);
+		expect(body).not.toContain("edited.py L2");
+	});
+
+	// The live block resolves cited paths before it renders (the cases above);
+	// a late runner's record (`recordDeferredInlineBlockers`) keeps the raw
+	// spelling, and the turn end re-renders those same objects.
+	it("writes the coordinator's deferred record summary with no label", () => {
+		const fileAbs = path.join(projectRoot, "edited.py");
+		fs.writeFileSync(fileAbs, EDITED);
+		const runtime = new RuntimeCoordinator();
+		runtime.projectRoot = projectRoot;
+		runtime.recordDeferredInlineBlockers(fileAbs, ruffBlockers("edited.py"), {
+			recordedAtMs: 1,
+		});
+		const [record] = runtime.getInlineBlockersSnapshot();
+		expect(record?.summary).toContain("  L2: Undefined name");
+		expect(record?.summary).not.toContain("edited.py L2");
+	});
+
+	it("re-serves a deferred record with a relative own-file row byte for byte, unlabelled", () => {
+		const fileAbs = path.join(projectRoot, "edited.py");
+		fs.writeFileSync(fileAbs, EDITED);
+		const runtime = new RuntimeCoordinator();
+		runtime.projectRoot = projectRoot;
+		runtime.recordDeferredInlineBlockers(fileAbs, ruffBlockers("edited.py"), {
+			recordedAtMs: 1,
+		});
+		const [record] = runtime.getInlineBlockersSnapshot();
+		const { body } = applyInlineBlockerPolicy(
+			{
+				filePath: fileAbs,
+				summary: record?.summary ?? "",
+				diagnostics: record?.diagnostics ?? [],
+			},
+			projectRoot,
+		);
+		expect(body).toBe(record?.summary);
+		expect(body).toContain("  L2: Undefined name");
+	});
+
+	it("keeps the label on a relative row that names another file", () => {
+		const fileAbs = path.join(projectRoot, "edited.py");
+		fs.writeFileSync(fileAbs, EDITED);
+		const runtime = new RuntimeCoordinator();
+		runtime.projectRoot = projectRoot;
+		runtime.recordDeferredInlineBlockers(fileAbs, ruffBlockers("other.py"), {
+			recordedAtMs: 1,
+		});
+		const [record] = runtime.getInlineBlockersSnapshot();
+		expect(record?.summary).toContain("  other.py L2: Undefined name");
 	});
 });

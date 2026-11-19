@@ -166,7 +166,10 @@ export function applyInlineBlockerPolicy(
 		body:
 			kept.length === 0
 				? undefined
-				: formatDiagnostics(kept, "blocking", undefined, filePath).trim(),
+				: formatDiagnostics(kept, "blocking", undefined, {
+						editedFile: filePath,
+						root: cwd,
+					}).trim(),
 		candidates: diagnostics.length,
 		kept: kept.length,
 		suppressed: dropped,

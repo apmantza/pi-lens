@@ -87,6 +87,7 @@ import {
 	crossFileRowLabel,
 	formatDiagnostics,
 	formatPromotionNotes,
+	type RenderedFor,
 } from "./dispatch/utils/format-utils.js";
 import { detectFileKind, getFileKindLabel } from "./file-kinds.js";
 import {
@@ -1980,7 +1981,7 @@ export async function runFormatPhase(
 function buildEnrichedBlockerOutput(
 	blockers: Diagnostic[],
 	fileContent = "",
-	editedFile?: string,
+	renderedFor?: RenderedFor,
 ): string {
 	// #3188: no blockers, no banner. The delivery gate above can retract every
 	// blocker (all cited files deleted), and the header interpolates the count,
@@ -2003,7 +2004,11 @@ function buildEnrichedBlockerOutput(
 		const nodeCtx = d.astNodeType ? ` (${d.astNodeType})` : "";
 		// A row citing another file names it (`crossFileRowLabel`), and its
 		// line is that file's, so the edited file's line N is not its snippet.
-		const label = crossFileRowLabel(d, editedFile);
+		const label = crossFileRowLabel(
+			d,
+			renderedFor?.editedFile,
+			renderedFor?.root,
+		);
 		out += `  ${label}L${lineNo}: ${d.message}${nodeCtx}\n`;
 		// Prefer the exact matched node text (tree-sitter); fall back to the
 		// full source line (LSP / other runners).
@@ -2786,11 +2791,10 @@ async function analysePipeline(
 		// Enrich blocker output with a code snippet so the agent can see the
 		// exact line it wrote that caused each violation — no re-read needed.
 		if (deliverableBlockers.length > 0) {
-			output += buildEnrichedBlockerOutput(
-				deliverableBlockers,
-				fileContent,
-				filePath,
-			);
+			output += buildEnrichedBlockerOutput(deliverableBlockers, fileContent, {
+				editedFile: filePath,
+				root: ctx.projectRoot ?? cwd,
+			});
 		}
 		// Append fixed/coverage parts from the original output (slice off the
 		// blocker section we're replacing).
@@ -2806,11 +2810,10 @@ async function analysePipeline(
 			rendersStop &&
 			deliverableBlockers.length !== dispatchResult.blockers.length
 		) {
-			let gatedOut = buildEnrichedBlockerOutput(
-				deliverableBlockers,
-				"",
-				filePath,
-			);
+			let gatedOut = buildEnrichedBlockerOutput(deliverableBlockers, "", {
+				editedFile: filePath,
+				root: ctx.projectRoot ?? cwd,
+			});
 			const rest = dispatchResult.output.slice(
 				dispatchResult.blockerOutput.length,
 			);
@@ -3008,12 +3011,10 @@ async function analysePipeline(
 		// write that adds nothing new refreshes the record instead of clearing it.
 		inlineBlockerSummary:
 			recordBlockers.length > 0
-				? formatDiagnostics(
-						recordBlockers,
-						"blocking",
-						undefined,
-						filePath,
-					).trim() || undefined
+				? formatDiagnostics(recordBlockers, "blocking", undefined, {
+						editedFile: filePath,
+						root: ctx.projectRoot ?? cwd,
+					}).trim() || undefined
 				: undefined,
 		// #1561 F1: taken from the very diagnostics `blockerOutput` was rendered
 		// from, so the provenance can never disagree with the text it guards. An
