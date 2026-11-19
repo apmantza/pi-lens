@@ -1,3 +1,4 @@
+// flake-shape: ungoverned-wait-for — the deferred sweep's phase record lands on a setImmediate the hook does not await, so the read-back joins it with a real tick and vi.waitFor.
 /**
  * Guards the pi-lens **session_start hook** budget by asserting the self-reported
  * "session_start total: Xms" value that handleSessionStart() emits via dbg.

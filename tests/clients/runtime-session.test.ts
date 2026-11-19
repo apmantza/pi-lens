@@ -1,3 +1,4 @@
+// flake-shape: ungoverned-wait-for — the deferred retention sweep (#5702) joins no awaitable from the hook (a setImmediate plus an async sweep), so the wiring pin joins it with real-time vi.waitFor.
 import fs from "node:fs";
 import { withResidentBootstrap } from "../support/bootstrap-access.js";
 import * as path from "node:path";

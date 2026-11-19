@@ -2058,6 +2058,9 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// 2026-10-16 (#4528 r1 F3): the spawn-gate window of a dependency restart
 	// exists only between real server processes, and the tool_call hook bounds
 	// its look, so the restart finishes after the hook returns.
+	// 2026-11-19 (#5702): the deferred retention sweep joins no awaitable from
+	// the hook (a setImmediate plus an async sweep), so the wiring pin and the
+	// phase-record read-back join it with real-time waits.
 	"ungoverned-wait-for:clients/head-move-resync-4476.test.ts": {
 		detector: "ungoverned-wait-for",
 		reason:
@@ -2072,10 +2075,20 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"#5097: the abort must land after the request is on the wire (and the server's own refresh must reach a re-pull, and a loading server must be reported loading, and the workspace pull and the read-only command must be on the wire before the Esc), and only the server's own trace shows that; the poll is bounded by its own timeout",
 	},
+	"ungoverned-wait-for:clients/runtime-session.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"the deferred sweep runs on a setImmediate the hook does not await; the wiring pin joins its effect with vi.waitFor and the phase-record case ticks the real queue",
+	},
 	"ungoverned-wait-for:clients/session-repository-trust-4530.test.ts": {
 		detector: "ungoverned-wait-for",
 		reason:
 			"the late-write cell holds a real formatter detection open in a child `go` until trust changes; the child's start exposes no awaitable, only the file it writes",
+	},
+	"ungoverned-wait-for:clients/startup-overhead.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"the deferred sweep's phase record lands on a setImmediate the hook does not await; the read-back ticks the real queue and joins with vi.waitFor",
 	},
 	"ungoverned-wait-for:clients/word-index-lifecycle.test.ts": {
 		detector: "ungoverned-wait-for",
