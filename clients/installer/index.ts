@@ -4487,6 +4487,11 @@ async function installGitHubTool(
 		);
 	} catch (err) {
 		await fs.rm(downloadPath, { force: true });
+		recordDegradationOnce({
+			kind: "managed-tool-download",
+			subject: tool.id,
+			reason: (err as Error).message,
+		});
 		logSessionStart(
 			`github-install ${tool.id}: streamed download failed: ${(err as Error).message}`,
 		);
@@ -4685,6 +4690,11 @@ async function installGitHubTool(
 			);
 		} catch (err) {
 			await fs.rm(extraPath, { force: true });
+			recordDegradationOnce({
+				kind: "managed-tool-download",
+				subject: `${tool.id}:${extraName}`,
+				reason: (err as Error).message,
+			});
 			logSessionStart(
 				`github-install ${tool.id}: extra asset ${extraName} download failed: ${(err as Error).message}`,
 			);
@@ -5523,6 +5533,11 @@ async function installMavenTool(
 		await downloadInstallerFile(url, jarDownloadPath);
 	} catch (err) {
 		await fs.rm(jarDownloadPath, { force: true });
+		recordDegradationOnce({
+			kind: "managed-tool-download",
+			subject: tool.id,
+			reason: (err as Error).message,
+		});
 		logSessionStart(
 			`maven-install ${tool.id}: download failed: ${(err as Error).message}`,
 		);
@@ -5778,6 +5793,11 @@ async function installArchiveTool(
 			await downloadInstallerFile(url, archiveDownloadPath));
 	} catch (err) {
 		await fs.rm(archiveDownloadPath, { force: true });
+		recordDegradationOnce({
+			kind: "managed-tool-download",
+			subject: tool.id,
+			reason: (err as Error).message,
+		});
 		logSessionStart(
 			`archive-install ${tool.id}: download failed: ${(err as Error).message}`,
 		);
