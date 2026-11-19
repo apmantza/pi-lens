@@ -19,6 +19,10 @@ import {
 	type WorkspaceMemberGlobDialect,
 } from "./path-utils.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
+import {
+	AMBIENT_ENVIRONMENT_VARIABLES,
+	pythonEnvironmentBinDir,
+} from "./python-ambient-environment.js";
 import { logExtension } from "./extension-log.js";
 import { getProjectTrustState } from "./project-trust.js";
 
@@ -207,21 +211,6 @@ const PROJECT_VENV_DIRS: ReadonlyArray<{
 export const PROJECT_VENV_DIR_NAMES: ReadonlyArray<string> =
 	PROJECT_VENV_DIRS.map((venv) => venv.dir);
 
-const AMBIENT_ENVIRONMENT_VARIABLES = {
-	"uv-project-environment": "UV_PROJECT_ENVIRONMENT",
-	"virtual-env": "VIRTUAL_ENV",
-	conda: "CONDA_PREFIX",
-} as const;
-
-/** True when any ambient Python environment channel is set in `env`. */
-export function hasAmbientPythonEnvironment(
-	env: NodeJS.ProcessEnv = process.env,
-): boolean {
-	return Object.values(AMBIENT_ENVIRONMENT_VARIABLES).some((name) =>
-		Boolean(env[name]),
-	);
-}
-
 /**
  * Resolve the interpreter and executable directory for the project's Python
  * environment without activating it or invoking a package manager.
@@ -335,10 +324,7 @@ export async function detectPythonEnvironment(
 			}
 			continue;
 		}
-		const binDir = path.join(
-			candidate.root,
-			process.platform === "win32" ? "Scripts" : "bin",
-		);
+		const binDir = pythonEnvironmentBinDir(candidate.root);
 		const pythonPath = path.join(
 			binDir,
 			process.platform === "win32" ? "python.exe" : "python",
