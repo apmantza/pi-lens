@@ -714,9 +714,8 @@ describe("Windows LSP startup repair classification (#4263)", () => {
 				await withLspProjectCodePermission(false, () =>
 					PythonServer.spawn(root, { allowInstall: false }),
 				).catch(() => undefined);
-				// An absent spelling may reach the spawn (it fails and runs
-				// nothing); no spawn may name the planted file or the extensionless
-				// spelling cmd.exe completes to it. A shell spawn quotes the program.
+				// No spawn may name the planted file or the extensionless spelling
+				// cmd.exe completes to it. A shell spawn quotes the program.
 				const base = path.join(scripts, "pyright-langserver");
 				const programs = spawnDouble.mock.calls.map(([command]) => {
 					const line = String(command);
@@ -729,6 +728,12 @@ describe("Windows LSP startup repair classification (#4263)", () => {
 						(program) => program === base || program === base + ext,
 					),
 				).toEqual([]);
+				// An extensionless spelling with no file in any PATHEXT form is a
+				// miss, not a refusal: it reaches the spawn, which fails and runs
+				// nothing, so the launch reports it not found (#5674).
+				expect(programs).toContain(
+					path.join(scripts, "basedpyright-langserver"),
+				);
 				expect(logExtension).toHaveBeenCalledWith(
 					expect.objectContaining({
 						message:
