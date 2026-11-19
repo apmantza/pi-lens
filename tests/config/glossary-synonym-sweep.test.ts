@@ -1491,7 +1491,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `path.isAbsolute` leg that rejects another Windows drive (V1).
 		// 19 -> 18 (#5009): the two root-level venv candidates became one
 		// `path.join` inside the list the resolver and the install stamp share.
-		"clients/python-environment.ts": 13,
+		"clients/python-environment.ts": 12,
 		"clients/read-guard-logger.ts": 3,
 		// 5 -> 6 (#5377): the locked commit's `path:` member names the record file
 		// to `commitDurableStoreAsync`; the helper it replaces took `cwd` and

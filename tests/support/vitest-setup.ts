@@ -43,6 +43,10 @@ import {
 // the mock registers (#3703 round 1: 56 files red).
 import { _settleRegistryMutationsForTests } from "../../clients/instance-registry-tail.js";
 import {
+	AMBIENT_PYTHON_ENVIRONMENT_VARIABLES,
+	pythonEnvironmentBinDir,
+} from "../../clients/python-ambient-environment.js";
+import {
 	claimScratchDir,
 	SCRATCH_DIR_ROOT,
 	SWEEP_ANY_AGE,
@@ -863,6 +867,34 @@ process.env.PI_LENS_INSTALL_LOG = path.join(
 process.env.PI_CODING_AGENT_DIR = path.join(tmpHygieneHome, "agent");
 fs.mkdirSync(path.join(tmpHygieneHome, "agent"), { recursive: true });
 installGitFixtureEnv(tmpHygieneHome);
+
+// Same class (AGENTS.md shape 82): `detectPythonEnvironment` resolves the
+// interpreter and tool directory from an exported VIRTUAL_ENV, CONDA_PREFIX or
+// UV_PROJECT_ENVIRONMENT, so a developer shell with a global venv active handed
+// every test that venv's pyright: a case whose premise is "no language server
+// checks this file" (`adopted-root-runners.test.ts`) read a pyright finding
+// instead. The owner's own list is scrubbed, so a channel it learns is scrubbed
+// too. Its module is a leaf with no imports, so loading it here fixes no
+// logger's sink path ahead of a case's home pin. Tests that exercise a channel
+// set it themselves.
+// Activation also put each environment's own bin directory on PATH, where a
+// lookup by name (`pytest`) finds that environment's tools; drop exactly those
+// directories, read from the channels before they are deleted.
+{
+	const activeBinDirs = new Set(
+		AMBIENT_PYTHON_ENVIRONMENT_VARIABLES.flatMap((channel) => {
+			const root = process.env[channel];
+			return root ? [path.resolve(pythonEnvironmentBinDir(root))] : [];
+		}),
+	);
+	if (activeBinDirs.size > 0)
+		process.env.PATH = (process.env.PATH ?? "")
+			.split(path.delimiter)
+			.filter((dir) => dir === "" || !activeBinDirs.has(path.resolve(dir)))
+			.join(path.delimiter);
+}
+for (const ambientPythonChannel of AMBIENT_PYTHON_ENVIRONMENT_VARIABLES)
+	delete process.env[ambientPythonChannel];
 
 // #3083: session_start reaches the backstop transitively through index.js.
 // Pin the filesystem location once for every file, without a caller registry
