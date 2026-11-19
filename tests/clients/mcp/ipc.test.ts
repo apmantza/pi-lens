@@ -1665,7 +1665,7 @@ describe("classifyIpcSocketName (#5702)", () => {
 		});
 	});
 
-	it("refuses everything else, cuts and look-alikes included", () => {
+	it("refuses everything else, cuts and cut-shape names included", () => {
 		// A sun_path cut that drops the .sock tail or truncates the hash is
 		// not a name the sweep can recognize.
 		expect(
