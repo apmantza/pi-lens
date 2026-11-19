@@ -89,6 +89,7 @@ const _installerRequire = createRequire(import.meta.url);
 import { createGunzip } from "node:zlib";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { downloadInstallerFile as streamDownloadInstallerFile } from "./download.js";
 import { TRANSIENT_MAX_COOLDOWN_MS } from "../dispatch/runners/utils/availability-policy.js";
 import {
 	getDegradationLedgerGeneration,
@@ -4190,7 +4191,7 @@ function httpsGetWithMeta(
  * Stream an installer payload to a scratch file. The file is caller-owned and
  * must be removed on every failed transition; it is never the live target.
  */
-export function downloadInstallerFile(
+function downloadInstallerFile(
 	url: string,
 	destination: string,
 	maxRedirects = 5,
@@ -4329,6 +4330,10 @@ export function downloadInstallerFile(
 		);
 	});
 }
+
+// Compatibility-local implementation; installer payload callers use the
+// stream seam in clients/installer/download.ts.
+void downloadInstallerFile;
 
 /**
  * Fetch a URL and return the raw Buffer of the response body. Rejects on any
@@ -4478,7 +4483,7 @@ async function installGitHubTool(
 	const downloadStart = Date.now();
 	let downloadedBytes = 0;
 	try {
-		({ bytes: downloadedBytes } = await downloadInstallerFile(
+		({ bytes: downloadedBytes } = await streamDownloadInstallerFile(
 			asset.browser_download_url,
 			downloadPath,
 		));
@@ -4680,7 +4685,7 @@ async function installGitHubTool(
 			`.${tool.id}.${extraName}.download-${randomUUID()}`,
 		);
 		try {
-			const { bytes } = await downloadInstallerFile(
+			const { bytes } = await streamDownloadInstallerFile(
 				extraAsset.browser_download_url,
 				extraPath,
 			);
@@ -5530,7 +5535,7 @@ async function installMavenTool(
 		`.${tool.id}.jar-${randomUUID()}`,
 	);
 	try {
-		await downloadInstallerFile(url, jarDownloadPath);
+		await streamDownloadInstallerFile(url, jarDownloadPath);
 	} catch (err) {
 		await fs.rm(jarDownloadPath, { force: true });
 		recordDegradationOnce({
@@ -5790,7 +5795,7 @@ async function installArchiveTool(
 	let archiveDigest = "";
 	try {
 		({ bytes: archiveBytes, sha256: archiveDigest } =
-			await downloadInstallerFile(url, archiveDownloadPath));
+			await streamDownloadInstallerFile(url, archiveDownloadPath));
 	} catch (err) {
 		await fs.rm(archiveDownloadPath, { force: true });
 		recordDegradationOnce({

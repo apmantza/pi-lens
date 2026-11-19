@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { downloadInstallerFile } from "../../../clients/installer/index.js";
+import { downloadInstallerFile } from "../../../clients/installer/download.js";
 
 describe("installer download stream", () => {
 	const servers: Array<ReturnType<typeof createServer>> = [];
