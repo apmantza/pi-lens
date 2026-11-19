@@ -4488,7 +4488,7 @@ async function installGitHubTool(
 	} catch (err) {
 		await fs.rm(downloadPath, { force: true });
 		logSessionStart(
-			`github-install ${tool.id}: download failed: ${(err as Error).message}`,
+			`github-install ${tool.id}: streamed download failed: ${(err as Error).message}`,
 		);
 		return undefined;
 	}
