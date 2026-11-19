@@ -81,6 +81,7 @@ async function dispatchMarkdown(
 	vale: RunnerResult,
 	name = "a.md",
 	groups: RunnerGroup[] = GROUP,
+	noLsp = true,
 ) {
 	const registry = new RunnerRegistry();
 	for (const [id, result] of [
@@ -102,7 +103,7 @@ async function dispatchMarkdown(
 	const ctx = createDispatchContext(
 		file,
 		tmpDir,
-		{ getFlag: (flag: string) => flag === "no-lsp" },
+		{ getFlag: (flag: string) => noLsp && flag === "no-lsp" },
 		new FactStore(),
 		false,
 	);
@@ -202,6 +203,48 @@ describe("a file every applicable check skipped is named not checked (#5258)", (
 			tier: "primary",
 			runnerIds: ["spellcheck"],
 		});
+	});
+
+	it("names the silent primary server and timeout cause (review probe 1A)", async () => {
+		const result = await dispatchMarkdown(
+			{
+				status: "skipped",
+				diagnostics: [],
+				semantic: "none",
+				inconclusiveReason: "diagnostics-wait",
+				unconfirmedServerIds: ["marksman"],
+			},
+			BARE,
+			"silent-primary.md",
+			GROUP,
+			true,
+		);
+
+		expect(result.output).toContain("marksman silent");
+		expect(result.output).toContain(
+			"marksman: no document diagnostics arrived within the wait budget",
+		);
+	});
+
+	it("keeps the silent primary cause beside a denied sibling (review probe 2)", async () => {
+		const result = await dispatchMarkdown(
+			{
+				status: "skipped",
+				diagnostics: [],
+				semantic: "none",
+				inconclusiveReason: "diagnostics-wait",
+				unconfirmedServerIds: ["marksman"],
+			},
+			skipped("disabled-by-config"),
+			"silent-primary-with-denial.md",
+			GROUP,
+			true,
+		);
+
+		expect(result.output).toContain("marksman silent");
+		expect(result.output).toContain(
+			"marksman: no document diagnostics arrived within the wait budget",
+		);
 	});
 });
 

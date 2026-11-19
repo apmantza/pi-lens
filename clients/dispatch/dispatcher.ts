@@ -125,6 +125,7 @@ import { registerRunnerId } from "./known-runner-ids.js";
 import {
 	combinePrimaryUnavailableCauses,
 	PRIMARY_UNAVAILABLE_CAUSE,
+	TOUCH_INCONCLUSIVE_REASON_PHRASE,
 	type PrimaryUnavailableCause,
 } from "../lsp/diagnostic-binding.js";
 
@@ -714,13 +715,14 @@ function buildCoverageNotice(
 	const inconclusiveDetails = [
 		...new Set(
 			relevant.flatMap((r) => {
-				if (r.inconclusiveReason === undefined) return [];
+				if (
+					r.inconclusiveReason === undefined ||
+					r.inconclusiveReason === "primary-unavailable"
+				)
+					return [];
 				const ids = r.unconfirmedServerIds ?? [];
 				const subject = ids.length > 0 ? `${ids.join(", ")}: ` : "";
-				const cause =
-					r.inconclusiveReason === "diagnostics-wait"
-						? "no document diagnostics arrived within the wait budget"
-						: SKIP_REASON_PHRASE[r.inconclusiveReason];
+				const cause = TOUCH_INCONCLUSIVE_REASON_PHRASE[r.inconclusiveReason];
 				return [`${subject}${cause}`];
 			}),
 		),
@@ -1026,7 +1028,7 @@ function buildCoverageNotice(
 			message:
 				everyRowStated && deniedRunnerIds.length === 0
 					? `Pi-lens ${ctx.kind} analysis unavailable — ${statedCauses.join("; ")}, so this file was not checked (not a clean result).`
-					: `Pi-lens ${ctx.kind} analysis unavailable — ${unavailableReason}; this file was not fully checked (not a clean result).${deniedRunnerIds.length > 0 ? ` Runner (${deniedRunnerIds.join(", ")}) is also disabled in config by dispatch.disabledRunners.` : ""}`,
+					: `Pi-lens ${ctx.kind} analysis unavailable — a language tool is missing, timed out, or failed to run, or the LSP server isn't ready yet, so this file was not fully checked (not a clean result).${unexplainedCauses.length > 0 ? ` Stated: ${unexplainedCauses.join("; ")}.` : ""}${inconclusiveDetails.length > 0 ? ` Stated: ${inconclusiveDetails.join("; ")}.` : ""}${deniedRunnerIds.length > 0 ? ` Runner (${deniedRunnerIds.join(", ")}) is also disabled in config by dispatch.disabledRunners.` : ""}`,
 			filePath: ctx.filePath,
 			severity: "warning",
 			semantic: "warning",
@@ -2135,6 +2137,25 @@ export async function dispatchForFile(
 	// Log summary to latency log only (not console - avoid noise)
 	const sumMs = runnerLatencies.reduce((s, r) => s + r.durationMs, 0);
 	const wallClockMs = latencyReport.totalDurationMs;
+	const runnerMetadata = runnerLatencies.map((r) => {
+		const row: {
+			id: string;
+			startedAt: string;
+			duration: number;
+			status: RunnerLatency["status"];
+			skipReason?: RunnerSkipReason;
+			inconclusiveReason?: RunnerLatency["inconclusiveReason"];
+		} = {
+			id: r.runnerId,
+			startedAt: new Date(r.startTime).toISOString(),
+			duration: r.durationMs,
+			status: r.status,
+		};
+		if (r.skipReason !== undefined) row.skipReason = r.skipReason;
+		if (r.inconclusiveReason !== undefined)
+			row.inconclusiveReason = r.inconclusiveReason;
+		return row;
+	});
 	logLatency({
 		type: "tool_result",
 		filePath: ctx.filePath,
@@ -2144,16 +2165,7 @@ export async function dispatchForFile(
 		parallelGainMs: Math.max(0, sumMs - wallClockMs),
 		result: "dispatch_complete",
 		metadata: {
-			runners: runnerLatencies.map((r) => ({
-				id: r.runnerId,
-				startedAt: new Date(r.startTime).toISOString(),
-				duration: r.durationMs,
-				status: r.status,
-				...(r.skipReason !== undefined && { skipReason: r.skipReason }),
-				...(r.inconclusiveReason !== undefined && {
-					inconclusiveReason: r.inconclusiveReason,
-				}),
-			})),
+			runners: runnerMetadata,
 			totalDiagnostics: visibleDiagnostics.length,
 			blockers: blockers.length,
 			// #2489 round 2: distinguishes a delta baseline HIT (a prior snapshot

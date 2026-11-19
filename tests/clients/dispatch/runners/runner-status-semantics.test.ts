@@ -529,8 +529,11 @@ describe("runner status/semantic edge cases", () => {
 			const result = await runner.run(ctx(filePath, env.tmpDir) as never);
 			expect(result.status).toBe("skipped");
 			expect(result.diagnostics).toEqual([]);
-			expect(result.skipReason).toBe("diagnostics-wait");
+			// The touch cause is LSP-domain evidence, not a dispatch skip-taxonomy
+			// member; promoting it would reroute established primary notices.
+			expect(result.skipReason).toBeUndefined();
 			expect(result.inconclusiveReason).toBe("diagnostics-wait");
+			expect(result.unconfirmedServerIds).toEqual(["marksman"]);
 		} finally {
 			env.cleanup();
 		}

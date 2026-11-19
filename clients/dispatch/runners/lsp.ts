@@ -476,9 +476,12 @@ const lspRunner: RunnerDefinition = {
 				diagnostics: [],
 				semantic: "none",
 				...(inconclusiveReason !== undefined && {
-					skipReason: inconclusiveReason,
 					inconclusiveReason,
 				}),
+				...(inconclusiveServerIds.length > 0 &&
+					inconclusiveReason !== "primary-unavailable" && {
+						unconfirmedServerIds: [...inconclusiveServerIds],
+					}),
 				...primaryUnavailable,
 			};
 		}
