@@ -2088,7 +2088,12 @@ export async function dispatchForFile(
 
 	// Format output — only blocking issues shown inline
 	// Warnings tracked but not shown (noise) — surfaced via lens_diagnostics
-	const blockerOutput = formatDiagnostics(inlineBlockers, "blocking");
+	const blockerOutput = formatDiagnostics(
+		inlineBlockers,
+		"blocking",
+		undefined,
+		{ editedFile: ctx.filePath, root: ctx.projectRoot ?? ctx.cwd },
+	);
 	let output = blockerOutput;
 	output += formatDiagnostics(inlineFixed, "fixed");
 	// #4638 r3 (N2): findings a runner withheld on purpose are named on the same

@@ -20,6 +20,7 @@ import {
 	noPrimaryCheckerReason,
 	type Diagnostic,
 } from "../../clients/dispatch/types.js";
+import { parseMypyOutput } from "../../clients/dispatch/runners/mypy.js";
 import { formatDiagnostics } from "../../clients/dispatch/utils/format-utils.js";
 import { getFormatService } from "../../clients/format-service.js";
 import { resolvePiLensFlag } from "../../clients/lens-config.js";
@@ -491,6 +492,52 @@ describe("Pipeline", () => {
 		expect(result.output).toContain(
 			"new in this edit → blocks in delta mode; pre-existing unused declarations only advise.",
 		);
+	});
+
+	it("names the file a cross-file blocker cites in the enriched STOP block, and borrows no snippet from the edited file", async () => {
+		// mypy follows imports and attributes each error to the module it names
+		// (`parseMypyOutput`), so a blocker can cite another file. Rendered as a
+		// bare `L2: ...` under the edited file, an agent read it as this file's
+		// line 2 (or a line past its end) and marked it against the wrong file.
+		const filePath = createTempFile(
+			tmpDir,
+			"edited.py",
+			"import other\nEDITED_FILE_LINE_TWO = 1\n",
+		);
+		// The cited file exists: the deleted-path gate (#2028) drops a blocker
+		// whose file is gone, which is not the case under test.
+		const otherPath = createTempFile(
+			tmpDir,
+			"other.py",
+			"def f() -> int: ...\ntype Alias = int\n",
+		);
+		const [blocker] = parseMypyOutput(
+			"other.py:2: error: Type statement is only supported in Python 3.12 and greater  [syntax]",
+			filePath,
+			tmpDir,
+		);
+		expect(blocker?.filePath).toBe(otherPath);
+		vi.mocked(dispatchLintWithResult).mockResolvedValue({
+			diagnostics: [blocker as Diagnostic],
+			blockers: [blocker as Diagnostic],
+			warnings: [],
+			baselineWarningCount: 0,
+			fixed: [],
+			resolvedCount: 0,
+			output: "",
+			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
+			hasBlockers: true,
+		});
+
+		const result = await runPipeline(
+			createMockContext(filePath),
+			createMockDeps(),
+		);
+
+		expect(result.output).toContain("🔴 STOP — 1 issue(s) must be fixed");
+		expect(result.output).toContain(`${otherPath} L2: [syntax] Type statement`);
+		expect(result.output).not.toContain("EDITED_FILE_LINE_TWO");
 	});
 
 	it("hands the cascade the PROJECT root alongside the language cwd (#3157)", async () => {

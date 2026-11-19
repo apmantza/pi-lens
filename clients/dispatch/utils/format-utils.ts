@@ -2,6 +2,7 @@
  * Shared formatting utilities for the dispatch system.
  */
 
+import { isCrossFileBlocker } from "../../inline-blocker-fields.js";
 import type { Diagnostic, OutputSemantic } from "../types.js";
 
 const EMOJI: Record<string, string> = {
@@ -14,13 +15,42 @@ const EMOJI: Record<string, string> = {
 };
 
 /**
+ * The file a rendered row names before its line: the diagnostic's own file
+ * when it cites another file than the one the block is rendered for, else
+ * nothing. A runner that follows imports (mypy) attributes an error to the
+ * module it names, and a bare `L<n>` under the edited file reads as that
+ * file's line, so the agent marks it against the wrong file. A row that opens
+ * with its path also stays out of `demoted-finding-render.ts`' `L<n>` matcher,
+ * which treats every `L<n>` row as a line of the record's own file.
+ */
+export function crossFileRowLabel(
+	d: Diagnostic,
+	editedFile: string | undefined,
+	root?: string,
+): string {
+	return editedFile !== undefined && isCrossFileBlocker(d, editedFile, root)
+		? `${d.filePath} `
+		: "";
+}
+
+/** The file a block is rendered for, and the project root its rows' relative
+ *  paths resolve against (the inline-blocker policy's root). */
+export interface RenderedFor {
+	editedFile: string;
+	root?: string | undefined;
+}
+
+/**
  * Format a single diagnostic for display
  */
-function formatDiagnostic(d: Diagnostic): string {
+function formatDiagnostic(d: Diagnostic, renderedFor?: RenderedFor): string {
 	const line = d.line ? `L${d.line}: ` : "";
 	const indented = d.message.split("\n").join("\n  ");
 	const fix = d.fixSuggestion ? `\n    💡 Fix: ${d.fixSuggestion}` : "";
-	return `  ${line}${indented}${fix}`;
+	const label = renderedFor
+		? crossFileRowLabel(d, renderedFor.editedFile, renderedFor.root)
+		: "";
+	return `  ${label}${line}${indented}${fix}`;
 }
 
 /**
@@ -60,6 +90,8 @@ export function formatDiagnostics(
 	diagnostics: Diagnostic[],
 	semantic: OutputSemantic | string,
 	maxDisplay = 10,
+	/** The file the block is rendered for; rows citing another file name it. */
+	renderedFor?: RenderedFor,
 ): string {
 	if (diagnostics.length === 0) return "";
 
@@ -75,7 +107,7 @@ export function formatDiagnostics(
 	}
 
 	for (const d of diagnostics.slice(0, maxDisplay)) {
-		output += `${formatDiagnostic(d)}\n`;
+		output += `${formatDiagnostic(d, renderedFor)}\n`;
 	}
 
 	if (diagnostics.length > maxDisplay) {
