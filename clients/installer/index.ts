@@ -56,8 +56,7 @@ import {
 } from "node:fs";
 import { createReadStream, createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
-import { createHash, randomUUID } from "node:crypto";
-import http from "node:http";
+import { randomUUID } from "node:crypto";
 import https from "node:https";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -87,7 +86,6 @@ import {
 const _installerRequire = createRequire(import.meta.url);
 
 import { createGunzip } from "node:zlib";
-import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { downloadInstallerFile as streamDownloadInstallerFile } from "./download.js";
 import { TRANSIENT_MAX_COOLDOWN_MS } from "../dispatch/runners/utils/availability-policy.js";
@@ -4071,19 +4069,6 @@ class GitHubHttpError extends HttpStatusError {
 	}
 }
 
-const INSTALLER_DOWNLOAD_MAX_BYTES = 512 * 1024 * 1024;
-const INSTALLER_DOWNLOAD_TIMEOUT_MS = 120_000;
-
-class InstallerDownloadError extends Error {
-	readonly code: "cap" | "timeout" | "network" | "stream";
-
-	constructor(code: "cap" | "timeout" | "network" | "stream", message: string) {
-		super(message);
-		this.name = "InstallerDownloadError";
-		this.code = code;
-	}
-}
-
 function readHeader(
 	headers: Record<string, string | string[] | undefined>,
 	name: string,
@@ -4186,154 +4171,6 @@ function httpsGetWithMeta(
 			.on("error", reject);
 	});
 }
-
-/**
- * Stream an installer payload to a scratch file. The file is caller-owned and
- * must be removed on every failed transition; it is never the live target.
- */
-function downloadInstallerFile(
-	url: string,
-	destination: string,
-	maxRedirects = 5,
-	headers: Record<string, string> = {},
-	maxBytes = INSTALLER_DOWNLOAD_MAX_BYTES,
-): Promise<{ bytes: number; sha256: string }> {
-	return new Promise((resolve, reject) => {
-		let settled = false;
-		const fail = (error: Error): void => {
-			if (settled) return;
-			settled = true;
-			void fs.rm(destination, { force: true }).finally(() => reject(error));
-		};
-		const request = (url.startsWith("http:") ? http : https).get(
-			url,
-			{ headers: { "User-Agent": "pi-lens/1.0", ...headers } },
-			(res) => {
-				if (
-					res.statusCode &&
-					res.statusCode >= 300 &&
-					res.statusCode < 400 &&
-					res.headers.location
-				) {
-					res.resume();
-					if (maxRedirects === 0) {
-						fail(new Error("Too many redirects"));
-						return;
-					}
-					const nextHeaders = sameHost(url, res.headers.location)
-						? headers
-						: (() => {
-								const { Authorization: _drop, ...rest } = headers;
-								return rest;
-							})();
-					downloadInstallerFile(
-						res.headers.location,
-						destination,
-						maxRedirects - 1,
-						nextHeaders,
-					).then(resolve, fail);
-					return;
-				}
-				if (res.statusCode !== 200) {
-					res.resume();
-					fail(
-						isGitHubApiUrl(url)
-							? new GitHubHttpError(res.statusCode ?? 0, headers, res.headers)
-							: new HttpStatusError(res.statusCode ?? 0, url),
-					);
-					return;
-				}
-				let bytes = 0;
-				const digest = createHash("sha256");
-				const limiter = new Transform({
-					transform(chunk: Buffer, _encoding, callback) {
-						bytes += chunk.length;
-						if (bytes > maxBytes) {
-							callback(
-								new InstallerDownloadError(
-									"cap",
-									`download exceeds ${maxBytes} bytes`,
-								),
-							);
-							return;
-						}
-						digest.update(chunk);
-						callback(null, chunk);
-					},
-				});
-				// Production responses are IncomingMessage streams. The small fallback
-				// keeps host-bound test doubles honest without changing the production
-				// pipeline or its cap semantics.
-				const responseWithPipe = res as { pipe?: unknown };
-				if (typeof responseWithPipe.pipe !== "function") {
-					const output = createWriteStream(destination);
-					res.on("data", (chunk: Buffer) => {
-						try {
-							limiter.write(chunk);
-						} catch (error) {
-							fail(error as Error);
-						}
-					});
-					res.on("error", fail);
-					res.on("end", () => limiter.end());
-					limiter.on("data", (chunk: Buffer) => output.write(chunk));
-					limiter.on("end", () => output.end());
-					limiter.on("error", (error) => {
-						output.destroy();
-						fail(error);
-					});
-					output.on("error", (error) => fail(error));
-					output.on("finish", () => {
-						if (!settled) {
-							settled = true;
-							resolve({ bytes, sha256: digest.digest("hex") });
-						}
-					});
-					return;
-				}
-				pipeline(res, limiter, createWriteStream(destination))
-					.then(() => {
-						if (!settled) {
-							settled = true;
-							resolve({ bytes, sha256: digest.digest("hex") });
-						}
-					})
-					.catch((error: unknown) =>
-						fail(
-							error instanceof InstallerDownloadError
-								? error
-								: new InstallerDownloadError(
-										"stream",
-										`download stream failed: ${(error as Error).message}`,
-									),
-						),
-					);
-			},
-		);
-		request.setTimeout?.(INSTALLER_DOWNLOAD_TIMEOUT_MS, () => {
-			request.destroy(
-				new InstallerDownloadError(
-					"timeout",
-					`download timed out after ${INSTALLER_DOWNLOAD_TIMEOUT_MS}ms`,
-				),
-			);
-		});
-		request.on("error", (error: Error) =>
-			fail(
-				error instanceof InstallerDownloadError
-					? error
-					: new InstallerDownloadError(
-							"network",
-							`download failed: ${error.message}`,
-						),
-			),
-		);
-	});
-}
-
-// Compatibility-local implementation; installer payload callers use the
-// stream seam in clients/installer/download.ts.
-void downloadInstallerFile;
 
 /**
  * Fetch a URL and return the raw Buffer of the response body. Rejects on any
