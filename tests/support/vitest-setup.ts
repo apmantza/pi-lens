@@ -42,10 +42,8 @@ import {
 // before every test file's `vi.mock`, so whatever it imports is cached before
 // the mock registers (#3703 round 1: 56 files red).
 import { _settleRegistryMutationsForTests } from "../../clients/instance-registry-tail.js";
-import {
-	AMBIENT_PYTHON_ENVIRONMENT_VARIABLES,
-	pythonEnvironmentBinDir,
-} from "../../clients/python-ambient-environment.js";
+import { AMBIENT_PYTHON_ENVIRONMENT_VARIABLES } from "../../clients/python-ambient-environment.js";
+import { pathWithoutActivePythonEnvironments } from "./ambient-python-scrub.js";
 import {
 	claimScratchDir,
 	SCRATCH_DIR_ROOT,
@@ -877,21 +875,12 @@ installGitFixtureEnv(tmpHygieneHome);
 // too. Its module is a leaf with no imports, so loading it here fixes no
 // logger's sink path ahead of a case's home pin. Tests that exercise a channel
 // set it themselves.
-// Activation also put each environment's own bin directory on PATH, where a
-// lookup by name (`pytest`) finds that environment's tools; drop exactly those
+// Activation also put each environment's directories on PATH, where a lookup
+// by name (`pytest`) finds that environment's tools; drop exactly those
 // directories, read from the channels before they are deleted.
 {
-	const activeBinDirs = new Set(
-		AMBIENT_PYTHON_ENVIRONMENT_VARIABLES.flatMap((channel) => {
-			const root = process.env[channel];
-			return root ? [path.resolve(pythonEnvironmentBinDir(root))] : [];
-		}),
-	);
-	if (activeBinDirs.size > 0)
-		process.env.PATH = (process.env.PATH ?? "")
-			.split(path.delimiter)
-			.filter((dir) => dir === "" || !activeBinDirs.has(path.resolve(dir)))
-			.join(path.delimiter);
+	const scrubbedPath = pathWithoutActivePythonEnvironments(process.env);
+	if (scrubbedPath !== undefined) process.env.PATH = scrubbedPath;
 }
 for (const ambientPythonChannel of AMBIENT_PYTHON_ENVIRONMENT_VARIABLES)
 	delete process.env[ambientPythonChannel];

@@ -11,7 +11,7 @@
  * worker has at that moment, before a case's own home pin.
  */
 
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 
 /** Each ambient source and the variable that carries it. */
 export const AMBIENT_ENVIRONMENT_VARIABLES = {
@@ -43,4 +43,41 @@ export function pythonEnvironmentBinDir(
 	platform: NodeJS.Platform = process.platform,
 ): string {
 	return join(root, platform === "win32" ? "Scripts" : "bin");
+}
+
+/** An ambient source: the key of {@link AMBIENT_ENVIRONMENT_VARIABLES}. */
+export type AmbientPythonSource = keyof typeof AMBIENT_ENVIRONMENT_VARIABLES;
+
+/** The MSYS2 toolchain variants conda's Windows activation probes for. */
+const CONDA_MSYS2_VARIANTS = ["ucrt64", "clang64", "mingw64", "clangarm64"];
+
+/**
+ * Every directory activating the environment rooted at `root` puts on PATH:
+ * what a shell that has it active carries beyond its own PATH. A venv or uv
+ * environment adds its {@link pythonEnvironmentBinDir}. conda on Windows adds
+ * the prefix itself and its `Library` tool directories too, as conda's own
+ * activator does (`_Activator._get_path_dirs`, conda/activate.py): it adds
+ * the one MSYS2 variant directory that exists, so every variant is listed
+ * here and an absent one matches nothing.
+ */
+export function pythonEnvironmentActivationDirs(
+	root: string,
+	source: AmbientPythonSource,
+	platform: NodeJS.Platform = process.platform,
+): string[] {
+	if (platform !== "win32") return [pythonEnvironmentBinDir(root, platform)];
+	// A Windows root is joined with Windows separators whatever the host, so
+	// the activation set matches a Windows PATH entry on a POSIX test host;
+	// `pythonEnvironmentBinDir` keeps its host join, the detector's contract.
+	if (source !== "conda") return [win32.join(root, "Scripts")];
+	const library = (...parts: string[]) => win32.join(root, "Library", ...parts);
+	return [
+		root,
+		...CONDA_MSYS2_VARIANTS.map((variant) => library(variant, "bin")),
+		library("mingw-w64", "bin"),
+		library("usr", "bin"),
+		library("bin"),
+		win32.join(root, "Scripts"),
+		win32.join(root, "bin"),
+	];
 }

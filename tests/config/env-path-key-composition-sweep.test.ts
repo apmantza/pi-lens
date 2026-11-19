@@ -1700,10 +1700,10 @@ const SEEDED_OFFENDERS: Readonly<Record<string, PathKeyReason>> = {
 		"spread-override",
 	"tests/support/lane-check-kit.ts#runLane:f2fe9f48#PATH": "spread-override",
 	// A deliberate FENCE, not debt (#5712): the worker-wide pin drops the shell's
-	// active Python environment's own bin directory from the ONE existing PATH
+	// active Python environments' activation directories from the ONE existing PATH
 	// variable once per worker, as the setup pins HOME and XDG. It composes no
 	// child env and writes no second spelling.
-	"tests/support/vitest-setup.ts#workerPinnedHome:f39e7ed1#PATH":
+	"tests/support/vitest-setup.ts#workerPinnedHome:16e5dd65#PATH":
 		"live-process-env",
 };
 
