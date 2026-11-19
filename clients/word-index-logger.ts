@@ -22,7 +22,7 @@
 import * as path from "node:path";
 import { isTestMode } from "./env-utils.js";
 import { getGlobalPiLensLogDir } from "./probe-home-state.js";
-import { getMaxLogSizeMB } from "./log-cleanup.js";
+import { getMaxLogSizeMB } from "./log-rotation-limits.js";
 import { createNdjsonLogger } from "./ndjson-logger.js";
 import { normalizeFilePath } from "./path-utils.js";
 

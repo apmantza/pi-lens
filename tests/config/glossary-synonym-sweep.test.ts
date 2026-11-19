@@ -1223,7 +1223,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// DIRECTORY's identity (`path.dirname` + `path.basename` of the caller's
 		// own spelling), so the kernel — not `path.resolve` — folds the `..`.
 		// 68 -> 67 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
-		"clients/file-utils.ts": 67,
+		// 67 -> 68 (#5702): the retention decode's walk joins the parent it
+		// decoded to each real child it visits (`path.join(fromDir, name)`).
+		"clients/file-utils.ts": 68,
 		"clients/finding-identity.ts": 2,
 		"clients/fix-worklog.ts": 3,
 		// 3 -> 2, 16 -> 15 (#4689): the formatter is handed `realpathOrResolve`,
@@ -1285,7 +1287,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lens-engine.ts": 7,
 		"clients/lens-flag-registry.ts": 13,
 		"clients/lens-map.ts": 14,
-		"clients/log-cleanup.ts": 9,
+		// 9 -> 10 (#5702): the retention sweep's runRetentionRow joins the
+		// directory to each enumerated name (`path.join(directory, name)`);
+		// the session-state row routes through sessionsDir, its owner.
+		"clients/log-cleanup.ts": 10,
 		"clients/lsp-mutation.ts": 3,
 		"clients/lsp/client-registry.ts": 2,
 		// 0 -> 1 (#4615): the `[lsp-pub]` debug row's `path` member carries the

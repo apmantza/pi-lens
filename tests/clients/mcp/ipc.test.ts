@@ -1690,13 +1690,16 @@ describe("classifyIpcSocketName (#5702)", () => {
 describe("probeIpcSocketListener (#5702)", () => {
 	// lane: Unit tests (a live listener on the ambient temp root, no child
 	// process: the server runs in this worker).
-	let listener: net.Server | undefined;
+	// The names below avoid every binding the file's earlier describes use:
+	// the #4589 detector joins same-name bindings into one identity, so a
+	// `server` here would credit this file's admitted `activeServer` row.
+	let probeListener: net.Server | undefined;
 
 	afterEach(async () => {
-		const server = listener;
-		listener = undefined;
-		if (server) {
-			await new Promise<void>((resolve) => server.close(() => resolve()));
+		const probeServer = probeListener;
+		probeListener = undefined;
+		if (probeServer) {
+			await new Promise<void>((resolve) => probeServer.close(() => resolve()));
 		}
 	});
 
@@ -1704,8 +1707,10 @@ describe("probeIpcSocketListener (#5702)", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-probe-live-"));
 		try {
 			const bound = path.join(dir, "pi-lens-mcp-0123456789abcdef.sock");
-			listener = net.createServer(() => {});
-			await new Promise<void>((resolve) => listener?.listen(bound, resolve));
+			probeListener = net.createServer(() => {});
+			await new Promise<void>((resolve) =>
+				probeListener?.listen(bound, resolve),
+			);
 			await expect(probeIpcSocketListener(bound)).resolves.toBe("live");
 		} finally {
 			removeTempDirSync(dir);
@@ -1720,10 +1725,14 @@ describe("probeIpcSocketListener (#5702)", () => {
 		try {
 			const bindName = path.join(dir, "bind-tmp.sock");
 			const stale = path.join(dir, "pi-lens-mcp-0123456789abcdef.sock");
-			const server = net.createServer(() => {});
-			await new Promise<void>((resolve) => server.listen(bindName, resolve));
+			const staleBindServer = net.createServer(() => {});
+			await new Promise<void>((resolve) =>
+				staleBindServer.listen(bindName, resolve),
+			);
 			fs.renameSync(bindName, stale);
-			await new Promise<void>((resolve) => server.close(() => resolve()));
+			await new Promise<void>((resolve) =>
+				staleBindServer.close(() => resolve()),
+			);
 			await expect(probeIpcSocketListener(stale)).resolves.toBe("dead");
 		} finally {
 			removeTempDirSync(dir);

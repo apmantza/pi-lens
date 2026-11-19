@@ -66,7 +66,12 @@ function fromDisk(parsed: unknown): PersistedSessionState | undefined {
 	};
 }
 
-function sessionsDir(cwd: string): string {
+/**
+ * The project data directory's per-session state directory. Exported for the
+ * retention sweep (#5702): the store owns the location, so the sweep derives
+ * it here instead of re-deriving the `sessions/` join beside the owner.
+ */
+export function sessionsDir(cwd: string): string {
 	return path.join(getProjectDataDir(cwd), "sessions");
 }
 

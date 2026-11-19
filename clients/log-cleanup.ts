@@ -36,13 +36,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	createProjectDataDirRootProbe,
-	getProjectDataDir,
 	projectDataBase,
 } from "./file-utils.js";
+import { getMaxLogSizeMB } from "./log-rotation-limits.js";
 import { classifyIpcSocketName, probeIpcSocketListener } from "./mcp/ipc.js";
-import { getGlobalPiLensLogDir } from "./probe-home-state.js";
 import { getRegisteredLogFiles } from "./ndjson-logger.js";
+import { getGlobalPiLensLogDir } from "./probe-home-state.js";
 import { pathsEqual } from "./path-utils.js";
+import { sessionsDir } from "./session-state-store.js";
 
 const LOGS_SUBDIR = () => path.join(getGlobalPiLensLogDir(), "logs");
 
@@ -148,14 +149,6 @@ interface LogCleanupConfig {
 	maxSizeMB: number;
 }
 
-/** Rotation threshold for every active `~/.pi-lens/*.log`, in MB. */
-export function getMaxLogSizeMB(): number {
-	return Math.max(
-		1,
-		Number.parseInt(process.env.PI_LENS_MAX_LOG_SIZE_MB ?? "10", 10) || 10,
-	);
-}
-
 function getConfig(): LogCleanupConfig {
 	return {
 		retentionDays: Math.max(
@@ -195,6 +188,8 @@ function realPidProbe(pid: number): PidProbe {
 		process.kill(pid, 0);
 		return "alive";
 	} catch (err) {
+		// none: the verdict the gate needs (a refused probe keeps the socket)
+		// is this catch's return value.
 		return (err as NodeJS.ErrnoException).code === "ESRCH"
 			? "esrch"
 			: "refused";
@@ -230,12 +225,17 @@ export function pidScopedSocketLiveness(
 interface RetentionRow {
 	/** Report label, one deletion count per row. */
 	label: string;
-	/** Directory the row sweeps, resolved at run time so callers can pin home. */
+	/**
+	 * Directory the row sweeps, resolved at run time so callers can pin home.
+	 * Async for rows whose directory comes from an owner seam this module can
+	 * only reach through a dynamic import (the #4314 cycle break above).
+	 */
 	directory: () => string;
 	match: (name: string) => boolean;
 	maxAgeDays: () => number;
-	/** `file` entries are unlinked; `dir` entries are removed recursively. */
-	kind: "file" | "dir";
+	/** `file` entries are unlinked; `dir` entries are removed recursively;
+	 * `socket` entries go through the lstat-guarded socket unlink. */
+	deletion: "file" | "dir" | "socket";
 	/**
 	 * Extra liveness gate for rows whose safety needs more than the age
 	 * window (socket owner, project root). Absent on plain age rows. May be
@@ -259,29 +259,29 @@ function getRetentionRows(options: RetentionOptions): RetentionRow[] {
 			directory: LOGS_SUBDIR,
 			match: (name) => name.endsWith(".jsonl"),
 			maxAgeDays: () => config.retentionDays,
-			kind: "file",
+			deletion: "file",
 		},
 		{
 			label: "rotated logs",
 			directory: getGlobalPiLensLogDir,
 			match: (name) => ROTATED_BACKUP_RE.test(name),
 			maxAgeDays: () => config.retentionDays,
-			kind: "file",
+			deletion: "file",
 		},
 		{
 			label: "spill logs",
 			directory: getGlobalPiLensLogDir,
 			match: (name) => SPILL_RESULT_LOG_RE.test(name),
 			maxAgeDays: () => config.retentionDays,
-			kind: "file",
+			deletion: "file",
 		},
 		{
 			label: "session state files",
-			directory: () =>
-				path.join(getProjectDataDir(options.cwd ?? process.cwd()), "sessions"),
+			// The store owns the location (clients/session-state-store.ts).
+			directory: () => sessionsDir(options.cwd ?? process.cwd()),
 			match: (name) => SESSION_STATE_FILE_RE.test(name),
 			maxAgeDays: () => config.retentionDays,
-			kind: "file",
+			deletion: "file",
 			liveness: (_absPath, name) =>
 				sessionStateLiveness(name, options.currentSessionId),
 		},
@@ -290,9 +290,9 @@ function getRetentionRows(options: RetentionOptions): RetentionRow[] {
 			// endpoint name into; Windows named pipes have no file to scan.
 			label: "stale sockets",
 			directory: () => os.tmpdir(),
-			match: (name) => classifyIpcSocketName(name) !== undefined,
+			match: (name) => name.endsWith(".sock"),
 			maxAgeDays: () => 1,
-			kind: "file",
+			deletion: "socket",
 			liveness: socketLiveness,
 		},
 		{
@@ -302,7 +302,7 @@ function getRetentionRows(options: RetentionOptions): RetentionRow[] {
 			// judge is kept, so the row admits all and judges each.
 			match: () => true,
 			maxAgeDays: () => PROJECT_DATA_ORPHAN_RETENTION_DAYS,
-			kind: "dir",
+			deletion: "dir",
 			liveness: (_absPath, name) => projectDataDirLiveness(name),
 		},
 	];
@@ -411,9 +411,9 @@ function sessionStateLiveness(
  * is gone is stale, and a name the decode cannot judge keeps the directory.
  */
 function projectDataDirLiveness(name: string): LivenessVerdict {
-	const status = createProjectDataDirRootProbe().statusFor(name);
-	if (status === "exists") return "live";
-	if (status === "gone") return "stale";
+	const decoded = createProjectDataDirRootProbe().statusFor(name);
+	if (decoded === "exists") return "live";
+	if (decoded === "gone") return "stale";
 	return "indeterminate";
 }
 
@@ -457,6 +457,8 @@ async function runRetentionRow(
 	try {
 		names = fs.existsSync(directory) ? fs.readdirSync(directory) : [];
 	} catch (err) {
+		// none: the failure is returned to the caller, which counts it once
+		// per run in the sweep's report and its dbg record.
 		return {
 			label: row.label,
 			deleted: 0,
@@ -474,7 +476,8 @@ async function runRetentionRow(
 			if (verdict !== "stale") continue;
 		}
 		try {
-			const socketClass = classifyIpcSocketName(name);
+			const socketClass =
+				row.deletion === "socket" ? classifyIpcSocketName(name) : undefined;
 			if (socketClass) {
 				// Only a real socket is reaped (the same lstat guard the bind
 				// path's unlinkStaleUnixSocket applies); anything else with a
@@ -487,17 +490,21 @@ async function runRetentionRow(
 				try {
 					isSocket = fs.lstatSync(absPath).isSocket();
 				} catch {
+					// none: an unreadable entry cannot be judged a socket; the
+					// sweep keeps whatever it cannot judge.
 					isSocket = false;
 				}
 				if (!isSocket) continue;
 				fs.unlinkSync(absPath);
-			} else if (row.kind === "dir") {
+			} else if (row.deletion === "dir") {
 				fs.rmSync(absPath, { recursive: true, force: true });
 			} else {
 				fs.unlinkSync(absPath);
 			}
 			deleted.push(name);
 		} catch (err) {
+			// none: the failure is pushed to the row's error list, which the
+			// sweep counts once per run in its report and its dbg record.
 			errors.push(`${name}: ${err}`);
 		}
 	}

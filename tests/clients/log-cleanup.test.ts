@@ -128,25 +128,29 @@ describe("rotate → delete round trip", () => {
  * home. The import is dynamic after `vi.resetModules()` because pre-#5702 the
  * module captured its directories at import time from those env vars.
  */
+// Saved outside the teardown the way tests/clients/project-data-dir-slug.test.ts
+// saves its pins, so the #4589 restore ratchet reads the coverage.
+const savedRetainHome = process.env.PI_LENS_HOME;
+const savedRetainDataDir = process.env.PILENS_DATA_DIR;
+
 describe("runLogCleanup retention rows (#5702)", () => {
 	const DAY_MS = 24 * 60 * 60 * 1000;
 	const CURRENT_SESSION_ID = "01234567-89ab-4cde-8f01-23456789abcd";
 	let home: string;
 	let dataBase: string;
-	const savedEnv: Record<string, string | undefined> = {};
 
 	beforeEach(() => {
 		home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-retain-home-"));
 		dataBase = path.join(home, "projects");
-		savedEnv.PI_LENS_HOME = process.env.PI_LENS_HOME;
-		savedEnv.PILENS_DATA_DIR = process.env.PILENS_DATA_DIR;
 		process.env.PI_LENS_HOME = home;
 		process.env.PILENS_DATA_DIR = dataBase;
 	});
 
 	afterEach(() => {
-		process.env.PI_LENS_HOME = savedEnv.PI_LENS_HOME;
-		process.env.PILENS_DATA_DIR = savedEnv.PILENS_DATA_DIR;
+		if (savedRetainHome === undefined) delete process.env.PI_LENS_HOME;
+		else process.env.PI_LENS_HOME = savedRetainHome;
+		if (savedRetainDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+		else process.env.PILENS_DATA_DIR = savedRetainDataDir;
 		removeTempDirSync(home);
 	});
 

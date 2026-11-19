@@ -247,15 +247,20 @@ export function classifyIpcSocketName(
 	name: string,
 ): IpcSocketNameClass | undefined {
 	const workspace = /^pi-lens-mcp-([0-9a-f]{16})\.sock$/.exec(name);
-	if (workspace) return { kind: "workspace", hash: workspace[1] };
+	const workspaceHash = workspace?.[1];
+	if (workspace && workspaceHash !== undefined) {
+		return { kind: "workspace", hash: workspaceHash };
+	}
 	const pidScoped = /^pi-lens-mcp-(\d+)-diagnostics-([0-9a-f]{16})\.sock$/.exec(
 		name,
 	);
-	if (pidScoped) {
+	const pidScopedPid = pidScoped?.[1];
+	const pidScopedHash = pidScoped?.[2];
+	if (pidScoped && pidScopedPid !== undefined && pidScopedHash !== undefined) {
 		return {
 			kind: "pid-scoped",
-			pid: Number.parseInt(pidScoped[1], 10),
-			hash: pidScoped[2],
+			pid: Number.parseInt(pidScopedPid, 10),
+			hash: pidScopedHash,
 		};
 	}
 	return undefined;
@@ -289,8 +294,8 @@ export function probeIpcSocketListener(
 		timer.unref();
 		const socket = net.createConnection(socketPath);
 		socket.on("connect", () => finish("live"));
-		socket.on("error", (error) =>
-			finish(isNoListenerError(error) ? "dead" : "indeterminate"),
+		socket.on("error", (cause) =>
+			finish(isNoListenerError(cause) ? "dead" : "indeterminate"),
 		);
 	});
 }

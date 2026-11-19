@@ -5,7 +5,7 @@ import {
 	getLatencyLogPath,
 	type LatencyEntry,
 } from "./latency-logger.js";
-import { getMaxLogSizeMB } from "./log-cleanup.js";
+import { getMaxLogSizeMB } from "./log-rotation-limits.js";
 import {
 	latencyAgeMs,
 	latencySpanMs,

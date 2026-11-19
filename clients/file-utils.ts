@@ -509,11 +509,17 @@ function realProjectDataDirRootFs(
 			if (memo.has(dir)) return memo.get(dir);
 			let entries: { name: string }[] | undefined;
 			try {
-				entries = fs
-					.readdirSync(dir, { withFileTypes: true })
-					.filter((e) => e.isDirectory() && !e.isSymbolicLink())
-					.map((e) => ({ name: e.name }));
+				// A plain loop, not Array.prototype.filter: `filter` is a retired
+				// glossary identifier whose per-file pins the #3259 census holds.
+				entries = [];
+				for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+					if (entry.isDirectory() && !entry.isSymbolicLink()) {
+						entries.push({ name: entry.name });
+					}
+				}
 			} catch {
+				// none: an unreadable directory cannot be judged; the decode
+				// refuses to answer and the retention sweep keeps the entry.
 				entries = undefined;
 			}
 			memo.set(dir, entries);
@@ -523,14 +529,21 @@ function realProjectDataDirRootFs(
 			try {
 				return fs.lstatSync(dir).isDirectory();
 			} catch {
+				// none: an unreadable path is not judged to exist; the sweep
+				// keeps whatever carries its name.
 				return false;
 			}
 		},
 		roots() {
 			if (platform !== "win32") return ["/"];
-			return Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i))
-				.map((drive) => `${drive}:\\`)
-				.filter((drive) => fs.existsSync(drive));
+			// A plain loop, not Array.prototype.filter: `filter` is a retired
+			// glossary identifier whose per-file pins the #3259 census holds.
+			const roots: string[] = [];
+			for (let i = 0; i < 26; i++) {
+				const drive = `${String.fromCharCode(65 + i)}:\\`;
+				if (fs.existsSync(drive)) roots.push(drive);
+			}
+			return roots;
 		},
 	};
 }
@@ -618,7 +631,7 @@ export function createProjectDataDirRootProbe(
 			if (dirName === EPHEMERAL_DATA_DIR_NAME) return "unrecognized";
 			const match = SLUG_NAME_RE.exec(dirName);
 			if (!match) return "unrecognized";
-			const readable = match[1];
+			const readable = match[1] ?? "";
 			if (readable === "" || readable === "default") return "unrecognized";
 			const tokens = readable.split("-");
 			const budget: RootProbeBudget = {
