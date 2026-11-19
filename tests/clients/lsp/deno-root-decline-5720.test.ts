@@ -1,34 +1,51 @@
+/**
+ * #5720: a Deno project (`deno.json`, no tsconfig or package.json) got the
+ * typescript server, never deno. `DenoExcludeRoot` declined the file, but
+ * `resolveLspServerCwd` read the decline as "no root" and handed typescript
+ * the file's own directory, so deno (`fallbackFor: "typescript"`) was never
+ * acquired.
+ *
+ * The real `LSPService.getClientsForFile`, `ClientRegistry` root resolution and
+ * the production server rows run; only each row's `spawn` is replaced, with a
+ * launch that yields nothing, so no client or process exists to double. The
+ * observable is which server's `spawn` the acquisition ladder reached.
+ */
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const getServersForFileWithConfig = vi.fn();
-const createLSPClient = vi.fn();
-
-vi.mock("../../../clients/lsp/client.js", () => ({
-	createLSPClient,
-}));
 
 const dirs: string[] = [];
 
 afterEach(() => {
 	for (const dir of dirs.splice(0))
 		fs.rmSync(dir, { recursive: true, force: true });
-	vi.restoreAllMocks();
 });
 
-function availableServer<T extends { spawn: unknown }>(server: T): T {
-	return {
-		...server,
-		spawn: vi.fn(async () => ({
-			process: { killed: false },
-			stdin: {},
-			stdout: {},
-			stderr: {},
-			pid: 5720,
-			source: "test",
-		})),
-	};
+function unavailableServer<T extends { spawn: unknown }>(server: T): T {
+	return { ...server, spawn: vi.fn(async () => undefined) };
+}
+
+async function acquire(project: string, file: string) {
+	const { DenoServer, TypeScriptServer } =
+		await import("../../../clients/lsp/server.js");
+	const { LSPService } = await import("../../../clients/lsp/index.js");
+	const typescript = unavailableServer(TypeScriptServer);
+	const deno = unavailableServer(DenoServer);
+	getServersForFileWithConfig.mockReturnValue([typescript, deno]);
+	await new LSPService(undefined, project).getClientsForFile(file);
+	return { typescript, deno };
+}
+
+function fixture(prefix: string, marker: string, source: string) {
+	const project = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+	dirs.push(project);
+	fs.writeFileSync(path.join(project, marker), "{}\n");
+	const file = path.join(project, "main.ts");
+	fs.writeFileSync(file, source);
+	return { project, file };
 }
 
 describe("Deno root decline (#5720)", () => {
@@ -38,62 +55,32 @@ describe("Deno root decline (#5720)", () => {
 			getServersForFileWithConfig,
 		);
 		getServersForFileWithConfig.mockReset();
-		createLSPClient.mockReset();
-		createLSPClient.mockResolvedValue({
-			isAlive: () => true,
-			shutdown: async () => {},
-		});
 	});
 
-	it("lets Deno acquire a file inside deno.json instead of TypeScript", async () => {
-		const { DenoServer, TypeScriptServer } =
-			await import("../../../clients/lsp/server.js");
-		const { LSPService } = await import("../../../clients/lsp/index.js");
-		const project = fs.mkdtempSync(
-			path.join(process.cwd(), "fixture-5720-deno-"),
-		);
-		dirs.push(project);
-		fs.writeFileSync(path.join(project, "deno.json"), "{}\n");
-		const file = path.join(project, "main.ts");
-		fs.writeFileSync(file, 'Deno.writeTextFileSync("out", "ok");\n');
-
-		const typescript = availableServer(TypeScriptServer);
-		const deno = availableServer(DenoServer);
-		getServersForFileWithConfig.mockReturnValue([typescript, deno]);
-
-		const result = await new LSPService(undefined, project).getClientsForFile(
-			file,
+	it("never launches TypeScript for a file inside deno.json, and reaches Deno", async () => {
+		const { project, file } = fixture(
+			"fixture-5720-deno-",
+			"deno.json",
+			'Deno.writeTextFileSync("out", "ok");\n',
 		);
 
-		expect(result.clients.map((entry) => entry.info.id)).toEqual(["deno"]);
+		const { typescript, deno } = await acquire(project, file);
+
 		expect(typescript.spawn).not.toHaveBeenCalled();
 		expect(deno.spawn).toHaveBeenCalledOnce();
 	});
 
 	it("keeps TypeScript for a normal project without deno.json", async () => {
-		const { DenoServer, TypeScriptServer } =
-			await import("../../../clients/lsp/server.js");
-		const { LSPService } = await import("../../../clients/lsp/index.js");
-		const project = fs.mkdtempSync(
-			path.join(process.cwd(), "fixture-5720-typescript-"),
-		);
-		dirs.push(project);
-		fs.writeFileSync(path.join(project, "package.json"), "{}\n");
-		const file = path.join(project, "main.ts");
-		fs.writeFileSync(file, "export const answer = 42;\n");
-
-		const typescript = availableServer(TypeScriptServer);
-		const deno = availableServer(DenoServer);
-		getServersForFileWithConfig.mockReturnValue([typescript, deno]);
-
-		const result = await new LSPService(undefined, project).getClientsForFile(
-			file,
+		const { project, file } = fixture(
+			"fixture-5720-typescript-",
+			"package.json",
+			"export const answer = 42;\n",
 		);
 
-		expect(result.clients.map((entry) => entry.info.id)).toEqual([
-			"typescript",
-		]);
+		const { typescript } = await acquire(project, file);
+
+		// Deno is not asserted: with a launch that yields nothing, the
+		// `fallbackFor` alternate is acquired by design.
 		expect(typescript.spawn).toHaveBeenCalledOnce();
-		expect(deno.spawn).not.toHaveBeenCalled();
 	});
 });

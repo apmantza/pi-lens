@@ -907,7 +907,7 @@ describe("lsp server policy", () => {
 				const second = await server.root(file);
 				if (first !== ws || second !== nested) {
 					stale.push(
-						`${server.id} [${pattern}] first=${first} second=${second} dirMtime=${before}->${fs.statSync(nested).mtimeMs}`,
+						`${server.id} [${pattern}] first=${String(first)} second=${String(second)} dirMtime=${before}->${fs.statSync(nested).mtimeMs}`,
 					);
 				}
 			} finally {
@@ -2093,7 +2093,8 @@ describe("lsp server policy", () => {
 	// --- Deno / TypeScript disambiguation ---
 
 	it("TypeScript server yields to Deno when deno.json is present", async () => {
-		const { TypeScriptServer } = await import("../../../clients/lsp/server.js");
+		const { TypeScriptServer, LSP_ROOT_DECLINED } =
+			await import("../../../clients/lsp/server.js");
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-deno-ts-"));
 		dirs.push(tmp);
 
@@ -2103,11 +2104,12 @@ describe("lsp server policy", () => {
 		fs.writeFileSync(path.join(src, "main.ts"), "const x: number = 1;\n");
 
 		const root = await TypeScriptServer.root(path.join(src, "main.ts"));
-		expect(root).toBeUndefined();
+		expect(root).toBe(LSP_ROOT_DECLINED);
 	});
 
 	it("TypeScript server yields to Deno when deno.jsonc is present", async () => {
-		const { TypeScriptServer } = await import("../../../clients/lsp/server.js");
+		const { TypeScriptServer, LSP_ROOT_DECLINED } =
+			await import("../../../clients/lsp/server.js");
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-deno-jsonc-"));
 		dirs.push(tmp);
 
@@ -2115,7 +2117,7 @@ describe("lsp server policy", () => {
 		fs.writeFileSync(path.join(tmp, "mod.ts"), "export default {};\n");
 
 		const root = await TypeScriptServer.root(path.join(tmp, "mod.ts"));
-		expect(root).toBeUndefined();
+		expect(root).toBe(LSP_ROOT_DECLINED);
 	});
 
 	it("TypeScript server skips loose pi agent extension files without project markers", async () => {

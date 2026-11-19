@@ -157,7 +157,6 @@ import type { LSPServerInfo } from "./server.js";
 import {
 	declinesLooseFileRoot,
 	getServerById,
-	LSP_ROOT_DECLINED,
 	resetClassicTsRepairGuard,
 	resetLspLaunchAvailabilityGeneration,
 } from "./server.js";
@@ -7374,9 +7373,10 @@ export class LSPService {
 				server.root(filePath),
 			),
 		);
+		// #5720: a declined root is a symbol, never a path, so `typeof` drops it.
 		return candidates.find(
 			(candidate): candidate is string =>
-				candidate !== undefined && candidate !== LSP_ROOT_DECLINED,
+				typeof candidate === "string" && candidate !== "",
 		);
 	}
 

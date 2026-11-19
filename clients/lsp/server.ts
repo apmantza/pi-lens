@@ -141,24 +141,33 @@ import {
 
 // --- Types ---
 
-/** A root policy can refuse a file instead of asking the caller to fallback. */
-// NUL cannot occur in a filesystem path, so this remains source-compatible with
-// RootFunction's path result while carrying a distinct policy verdict.
-export const LSP_ROOT_DECLINED = "\u0000pi-lens-lsp-root-declined";
-
-function rootOrUndefined(root: string | undefined): string | undefined {
-	return root === LSP_ROOT_DECLINED ? undefined : root;
-}
-
 export type RootFunction = ((file: string) => Promise<string | undefined>) & {
 	/** Marker table projected into the shared tool-cwd resolver. */
 	rootMarkers?: readonly string[];
 };
 
-function withRootMarkers(
-	root: RootFunction,
+/**
+ * #5720: a root policy can refuse a file outright (a Deno project is not the
+ * TypeScript server's), which is a verdict and not a missing root. A unique
+ * symbol cannot be mistaken for a path: a consumer that joins, resolves or
+ * logs the result fails to compile, and `RootFunction` (the path-only wrapper
+ * input) cannot accept a declining root.
+ */
+export const LSP_ROOT_DECLINED: unique symbol = Symbol(
+	"pi-lens.lsp-root-declined",
+);
+
+/** A server's root answer: a path, no root found, or an explicit decline. */
+export type LspRootVerdict = string | undefined | typeof LSP_ROOT_DECLINED;
+
+export type ServerRootFunction = ((file: string) => Promise<LspRootVerdict>) & {
+	rootMarkers?: readonly string[];
+};
+
+function withRootMarkers<R extends ServerRootFunction>(
+	root: R,
 	markers: readonly string[],
-): RootFunction {
+): R {
 	root.rootMarkers = markers;
 	return root;
 }
@@ -244,13 +253,16 @@ export async function resolveLspServerCwd(
 	let serverRoot: string | undefined;
 	let rootFailed = false;
 	try {
-		serverRoot = await server.root(filePath);
+		const verdict = await server.root(filePath);
+		// #5720: a declined file gets no cwd at all, not the file-dir fallback
+		// below, so the server stays unrooted and its `fallbackFor` alternate runs.
+		if (verdict === LSP_ROOT_DECLINED) return undefined;
+		serverRoot = verdict;
 	} catch (error) {
 		const reason = error instanceof Error ? error.message : String(error);
 		rootFailed = true;
 		onRootFailure?.(reason);
 	}
-	if (serverRoot === LSP_ROOT_DECLINED) return undefined;
 	const isFileDirFallback =
 		serverRoot !== undefined &&
 		rootMarkers?.length &&
@@ -694,7 +706,7 @@ export interface LSPServerInfo {
 	 * so a covers entry cannot be invented per row without review.
 	 */
 	covers?: readonly string[];
-	root: RootFunction;
+	root: ServerRootFunction;
 	/** Marker table used by the shared LSP cwd/root seam. */
 	rootMarkers?: readonly string[];
 	/**
@@ -1786,7 +1798,7 @@ function IgnoreHomeRoot(primary: RootFunction): RootFunction {
 	// home spelled through a link (`/home -> var/home`) is still refused.
 	const homeKey = normalizeEphemeralMapKey(realpathOrResolve(os.homedir()));
 	return withRootMarkers(async (file: string): Promise<string | undefined> => {
-		const root = rootOrUndefined(await primary(file));
+		const root = await primary(file);
 		if (!root) return undefined;
 		return normalizeEphemeralMapKey(path.resolve(root)) === homeKey
 			? undefined
@@ -2013,9 +2025,9 @@ export function RootWithFallback(
 	fallback: RootFunction = FileDirRoot,
 ): RootFunction {
 	return withRootMarkers(async (file: string): Promise<string | undefined> => {
-		const primaryRoot = rootOrUndefined(await primary(file));
+		const primaryRoot = await primary(file);
 		if (primaryRoot) return primaryRoot;
-		return rootOrUndefined(await fallback(file));
+		return fallback(file);
 	}, primary.rootMarkers ?? []);
 }
 
@@ -3050,13 +3062,15 @@ export async function tryGemInstall(gem: string): Promise<boolean> {
 }
 
 /**
- * Wraps a root function so it explicitly declines files inside a Deno project.
+ * Wraps a root function so it declines files inside a Deno project
+ * (`LSP_ROOT_DECLINED`, not `undefined`: `resolveLspServerCwd` turns a missing
+ * root into the file-dir fallback, which let TypeScript claim Deno files, #5720).
  * Prevents TypeScript LSP from being spawned alongside Deno LSP for the same file,
  * which would produce false diagnostics for Deno-specific APIs.
  */
-export function DenoExcludeRoot(primary: RootFunction): RootFunction {
+export function DenoExcludeRoot(primary: RootFunction): ServerRootFunction {
 	const denoDetector = createRootDetector(["deno.json", "deno.jsonc"]);
-	return async (file: string): Promise<string | undefined> => {
+	return async (file: string): Promise<LspRootVerdict> => {
 		const denoRoot = await denoDetector(file);
 		if (denoRoot) return LSP_ROOT_DECLINED;
 		return primary(file);
@@ -3123,10 +3137,7 @@ async function findTypeScriptProjectRoot(
 	const [configRoot, toolingRoot] = await Promise.all([
 		configDetector(file),
 		TypeScriptToolingRoot(file),
-	]).then(
-		([config, tooling]) =>
-			[rootOrUndefined(config), rootOrUndefined(tooling)] as const,
-	);
+	]);
 	if (!configRoot) return toolingRoot;
 	if (!toolingRoot) return configRoot;
 	// A config inside (or beside) the nearest package governs its files. A
@@ -3223,7 +3234,7 @@ async function classifyAgentLevelMarker(
 	return undefined;
 }
 
-const TypeScriptRoot: RootFunction = withRootMarkers(
+const TypeScriptRoot: ServerRootFunction = withRootMarkers(
 	DenoExcludeRoot(async (file) => {
 		// #4689: a file spelled outside the boundary whose identity is inside it
 		// (`checkout/packages/myext -> ~/.pi/agent/extensions/myext`) takes the
@@ -3831,7 +3842,7 @@ function sessionHoistCeiling(
 function RustWorkspaceRoot(): RootFunction {
 	const crateRoot = createRootDetector(["Cargo.toml", "Cargo.lock"]);
 	return withRootMarkers(async (file: string): Promise<string | undefined> => {
-		const root = rootOrUndefined(await crateRoot(file));
+		const root = await crateRoot(file);
 		if (!root) return undefined;
 
 		const sessionCwd = process.cwd();
@@ -3931,7 +3942,7 @@ function JavaWorkspaceRoot(): RootFunction {
 		".classpath",
 	]);
 	return withRootMarkers(async (file: string): Promise<string | undefined> => {
-		const root = rootOrUndefined(await moduleRoot(file));
+		const root = await moduleRoot(file);
 		if (!root) return undefined;
 		// Only a Maven (pom.xml) module chain-hoists here — Gradle/.classpath module
 		// roots are returned as found; multi-module Gradle wiring (settings.gradle)
