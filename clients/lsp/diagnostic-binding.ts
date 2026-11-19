@@ -238,7 +238,7 @@ export interface TouchFileResult {
  * `"server-load-failed"` is the same for a workspace that failed to load
  * (`health: "error"`), which no wait fixes.
  */
-type TouchInconclusiveReason =
+export type TouchInconclusiveReason =
 	| "notify-write"
 	| "diagnostics-wait"
 	| "server-loading"

@@ -14,7 +14,10 @@
 import type { GenerationHandle } from "../generation-guard.js";
 import type { AnalysisRootMode } from "../analysis-root.js";
 import type { ExtensionLogLevel } from "../extension-log.js";
-import type { PrimaryUnavailableCause } from "../lsp/diagnostic-binding.js";
+import type {
+	PrimaryUnavailableCause,
+	TouchInconclusiveReason,
+} from "../lsp/diagnostic-binding.js";
 import type { FileKind } from "../file-kinds.js";
 import type { FileRole } from "../file-role.js";
 import type { GeneratedArtifactEvidence } from "../generated-artifacts.js";
@@ -521,6 +524,12 @@ export const RUNNER_SKIP_REASONS = [
 	"probe-rejected",
 	"trust-refused",
 	"runtime-missing",
+	"notify-write",
+	"diagnostics-wait",
+	"server-loading",
+	"server-load-failed",
+	"mixed",
+	"primary-unavailable",
 ] as const;
 export type RunnerSkipReason = (typeof RUNNER_SKIP_REASONS)[number];
 
@@ -579,6 +588,12 @@ export const SKIP_REASON_PHRASE: Record<RunnerSkipReason, string> = {
 	"trust-refused":
 		"the project's own binary was refused (pi project trust is not granted)",
 	"runtime-missing": "a runtime it needs is not installed",
+	"notify-write": "the document write did not finish within its budget",
+	"diagnostics-wait": "no document diagnostics arrived within the wait budget",
+	"server-loading": "the language server is still loading",
+	"server-load-failed": "the language server failed to load",
+	mixed: "the document write and diagnostics wait did not both finish",
+	"primary-unavailable": "no primary language server answered",
 };
 
 /**
@@ -743,6 +758,8 @@ export interface RunnerResult {
 	 * report is not evidence of a clean file.
 	 */
 	inconclusive?: boolean;
+	/** Why the LSP touch could not confirm its answer, carried from the touch. */
+	inconclusiveReason?: TouchInconclusiveReason;
 }
 
 /**
