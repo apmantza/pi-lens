@@ -97,8 +97,10 @@ export function insertSuppressComment(
 		}
 	}
 	// Match the indentation of the flagged line so the inserted comment lines
-	// up rather than sitting at column 0.
-	const targetLine = lines[line - 1] ?? "";
+	// up rather than sitting at column 0. Strip the line's trailing "\r"
+	// first: a whitespace-only CRLF line would otherwise lend that bare "\r"
+	// to the inserted comment (\s matches \r), breaking parsers (#5686).
+	const targetLine = (lines[line - 1] ?? "").replace(/\r$/, "");
 	const indent = /^\s*/.exec(targetLine)?.[0] ?? "";
 	// The new line takes the ending of the line it is inserted above (the
 	// flagged line), per the host's per-range rule (#5686): on an unterminated
