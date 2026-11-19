@@ -94,7 +94,7 @@ import {
 	tryCorrectIndentationMismatchFromContent,
 } from "./read-guard-tool-lines.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
-import { resyncHeadMove } from "./runtime-tool-result.js";
+import { resyncHeadMove, resyncHeadMovesAt } from "./runtime-tool-result.js";
 import {
 	resolveReadEvidenceCorrelationId,
 	resolveToolCallCorrelationId,
@@ -441,9 +441,10 @@ async function captureOpaqueBaseline(
 	projectSeq: number,
 	toolName: string,
 ): Promise<{ state: PendingOpaqueBaseline; note: string }> {
-	if (!sessionRoot)
-		return { state: { startedAt, projectSeq, strategy: "git" }, note: "git" };
-	if (await isGitWorktree(root)) {
+	// An admitted sibling worktree is a checkout by admission (#2050), so it
+	// takes the git baseline without the probe; it needs the dirty set too, or a
+	// discard run in it (`cd ../wt && git restore`) leaves no evidence (#4502).
+	if (!sessionRoot || (await isGitWorktree(root))) {
 		// Git-first: the timestamp IS the baseline; git answers what changed, at
 		// any repo size, with no file-universe cap.
 		//
@@ -795,6 +796,29 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 					roots: scopes.roots.join(",").slice(0, 300),
 				},
 			});
+			// The HEAD each named sibling worktree starts from: a command that moves
+			// HEAD there (`cd ../wt && git rebase`) rewrites files `git status`
+			// never names, and its tool_result can only see the move against a
+			// HEAD read before the command ran. The session root's look ran above.
+			const siblings = scopes.roots.slice(1);
+			const siblingLookSignal = ctx.signal;
+			if (siblings.length > 0)
+				await bounded(
+					resyncHeadMovesAt({
+						roots: siblings,
+						sessionGeneration: runtime.sessionGeneration,
+						sessionId: deps.sessionId,
+						trigger: "tool_call",
+						label: toolName,
+						runtime,
+					}),
+					{
+						ms: HOOK_WALL_BUDGET_MS.tool_result_read_only,
+						signal: siblingLookSignal,
+						hook: "tool_call",
+						label: "sibling-head-move-resync",
+					},
+				);
 		}
 	}
 	// #2430: the observational net. A call the seam could NOT classify, whose

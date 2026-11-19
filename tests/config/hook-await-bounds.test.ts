@@ -1174,17 +1174,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 				"budget many times over.",
 			owner: "#2523 slice 2",
 		},
-	"clients/runtime-tool-call.ts#captureOpaqueBaseline:1b678fc6~ea7b1937": {
-		family: "hook-await",
-		site: "unbudgeted-hook",
-		reason:
-			"On the `tool_call` path. #2523's contract table declares no wall budget " +
-			"for tool_call, so this await has no number to be measured against. It is " +
-			"the pre-command opaque baseline: the command has not run yet, so the read " +
-			"cannot be taken later, and each leaf bounds itself (`isGitWorktree` 3s, " +
-			"`captureGitDirtyPaths` 5s, the stat walk's own budget).",
-		owner: "#2050",
-	},
 	"clients/runtime-tool-call.ts#captureOpaqueBaseline:39656d5c~6f0651b7": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
@@ -1198,6 +1187,19 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"home root is refused, and an over-cap root answers from a memo after " +
 			"its first walk. A root over the entry budget is not memoized and " +
 			"still walks on every call.",
+		owner: "#2050",
+	},
+	"clients/runtime-tool-call.ts#captureOpaqueBaseline:9374cc10~79d8413a": {
+		family: "hook-await",
+		site: "unbudgeted-hook",
+		reason:
+			"On the `tool_call` path. #2523's contract table declares no wall budget " +
+			"for tool_call, so this await has no number to be measured against. It is " +
+			"the pre-command opaque baseline: the command has not run yet, so the read " +
+			"cannot be taken later, and each leaf bounds itself (`isGitWorktree` 3s, " +
+			"`captureGitDirtyPaths` 5s, the stat walk's own budget). An admitted " +
+			"sibling worktree (#2050) skips the probe and takes the dirty set too " +
+			"(#5718), so a discard run in it has its evidence.",
 		owner: "#2050",
 	},
 	"clients/runtime-tool-call.ts#captureOpaqueBaseline:98e63c47~d6d00a8b": {
@@ -1360,19 +1362,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 				"well, so its cost lands in three budgets.",
 			owner: "#2523 slice 2",
 		},
-	"clients/runtime-tool-result.ts#handleToolResult:023b0a2a~aacaac3b": {
-		family: "hook-await",
-		site: "tool_result_edit",
-		reason:
-			"Inside `handleToolResult`, the same-HEAD discard comparison " +
-			"(#4502): one `git status --porcelain` with its own 5s timeout, " +
-			"compared against the baseline `tool_call` recorded. The publish it " +
-			"feeds is awaited under `bounded(resyncHeadMove(...))` with the " +
-			"edit budget and `deps.signal` one statement below; this read is the " +
-			"population that publish carries, so it cannot move inside the " +
-			"bound without reading the tree after the look's own bound began.",
-		owner: "#4502",
-	},
 	"clients/runtime-tool-result.ts#handleToolResult:3558e68d~2dc0b6be": {
 		family: "hook-await",
 		site: "tool_result_edit",
@@ -1382,6 +1371,15 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"dispatch consumes, and each leaf bounds itself (`git status` 5s, the stat " +
 			"walk's own budget), so the aggregate is the dispatch's work, not a wait.",
 		owner: "#2050",
+	},
+	"clients/runtime-tool-result.ts#handleToolResult:37a505ef~056d755d": {
+		family: "hook-await",
+		site: "tool_result_edit",
+		reason:
+			"One root's same-HEAD discard read (#4502, per root since #5718): a " +
+			"`git status --porcelain` with its own 5s timeout, joined by the " +
+			"Promise.all above it, which the same entry's reason covers.",
+		owner: "#4502",
 	},
 	"clients/runtime-tool-result.ts#handleToolResult:39fdd082~e70743cd": {
 		family: "hook-await",
@@ -1451,6 +1449,20 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"edit `tool_result` body under the same 10000ms edit budget; the " +
 			"re-entry carries `_partialApply`, so it cannot recurse again.",
 		owner: "#5120",
+	},
+	"clients/runtime-tool-result.ts#handleToolResult:f0b9e5ad~c68e401e": {
+		family: "hook-await",
+		site: "tool_result_edit",
+		reason:
+			"Inside `handleToolResult`, the same-HEAD discard comparison (#4502) " +
+			"for every recovery root (#5718): one read per root, run together, " +
+			"each a `git status --porcelain` with its own 5s timeout, compared " +
+			"against the baseline `tool_call` recorded for that root. The publish " +
+			"it feeds is awaited under `bounded(resyncHeadMovesAt(...))` with the " +
+			"edit budget and `deps.signal` one statement below; this read is the " +
+			"population that publish carries, so it stays outside the bound, " +
+			"which then measures the look alone.",
+		owner: "#4502",
 	},
 	"clients/runtime-tool-result.ts#lookAtHead:6c9224dd~45cd3f56": {
 		family: "hook-await",
@@ -1547,6 +1559,26 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"this await is bounded one frame up; the line-granular scan cannot " +
 			"see a caller's bound.",
 		owner: "#4476",
+	},
+	"clients/runtime-tool-result.ts#resyncHeadMovesAt:2562a181~bbd514af": {
+		family: "hook-await",
+		site: "tool_result_read_only",
+		reason:
+			"One root's `resyncHeadMove` inside `resyncHeadMovesAt` (#5718), " +
+			"joined by the Promise.all the entry above covers; both callers bound " +
+			"the whole set one frame up.",
+		owner: "#5718",
+	},
+	"clients/runtime-tool-result.ts#resyncHeadMovesAt:f0b9e5ad~fcdfb8ca": {
+		family: "hook-await",
+		site: "tool_result_read_only",
+		reason:
+			"The body of `resyncHeadMovesAt` (#5718): both callers (the bash " +
+			"tool_result, and the tool_call look at a command's sibling " +
+			"worktrees) await it under bounded() with their hook budget and the " +
+			"hook's signal, so this join of the per-root looks is bounded one " +
+			"frame up; the line-granular scan cannot see a caller's bound.",
+		owner: "#5718",
 	},
 	"clients/runtime-turn.ts#handleTurnEnd:156451e5~bf99fb9e": {
 		family: "hook-await",
@@ -3257,6 +3289,15 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, BoundedSite>> = {
 			"The document-symbol enrichment uses the tool_call's ctx.signal, absent " +
 			"only in a harness. Its inner LSP budget and the outer EXPANSION_BUDGET_MS " +
 			"wall bound are both live; the outer bound also releases the hook on Escape.",
+	},
+	"call:clients/runtime-tool-call.ts#handleToolCallImpl:6adbc98e~a6535d16": {
+		work: "outlives:resyncHeadMove head record (the record update lives inside the work)",
+		signal:
+			"The HEAD record of each sibling worktree a bash command names, taken " +
+			"before it runs (#5718, the #4493 look per #2050 recovery root): the " +
+			"tool_call's ctx.signal, absent only in a harness, under the same " +
+			"read-only tool_result budget (500 ms) the session root's look borrows; " +
+			"that wall bound is always live.",
 	},
 	"call:clients/runtime-tool-call.ts#handleToolCallImpl:c06d5cf4~a6535d16": {
 		work: "outlives:resyncHeadMove head record (the record update lives inside the work)",
