@@ -1013,11 +1013,16 @@ export async function launchLSP(
 	// #5674: a candidate spelled as a path that is absent is a resolution miss,
 	// not a trust decision, so it falls through to tool-not-found and the
 	// fallbacks. The stat reads the exact string the classifier judges and the
-	// spawn runs. A bare name keeps the classifier unconditionally: its lookups
-	// answer only with files that exist, and an unresolved name is not a path
-	// (a stat would read pi's own cwd).
+	// spawn runs. On Windows `commandPresence` also reads the file cmd.exe runs
+	// for that string under PATHEXT: an absent `Scripts\x` whose `x.exe` exists
+	// is that `.exe`, in the same directory (#5674 verify r4 V1). A bare name
+	// keeps the classifier unconditionally: its lookups answer only with files
+	// that exist, and an unresolved name is not a path (a stat would read pi's
+	// own cwd).
 	if (
-		(isBareCommand || fs.existsSync(spawnCommand)) &&
+		(isBareCommand ||
+			fs.existsSync(spawnCommand) ||
+			commandPresence === "present") &&
 		isProjectLocalLspBinary(spawnCommand, cwd)
 	) {
 		refuseUntrustedLspExecution({

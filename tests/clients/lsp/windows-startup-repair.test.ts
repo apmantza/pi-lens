@@ -648,4 +648,100 @@ describe("Windows LSP startup repair classification (#4263)", () => {
 			setPlatform(originalPlatform);
 		}
 	});
+
+	// #5674 verify r4 V1: on Windows a Python venv yields `x.exe`, `x.cmd` and
+	// `x` (`pythonEnvironmentToolCandidates`), and pip writes only `x.exe`. The
+	// extensionless spelling is no file on disk, yet cmd.exe runs the `.exe`
+	// (or a `.cmd`) under PATHEXT, so a gate that read the literal spelling let
+	// the third candidate start the refused project binary. The classifier is
+	// real here.
+	// Two production entries: an adopted root (pi trusts the project, the root
+	// has no permission) and an exported VIRTUAL_ENV under unknown trust.
+	// On a POSIX host the Windows resolver stats the rooted Windows spelling
+	// (`\tmp\...`), which Linux reads as a relative name; the `statSync` double
+	// hands the stat back with `/` separators, as the Windows file system reads
+	// both. The Windows lane runs the cell without the double.
+	it.each([
+		{ trust: "trusted", entry: "adopted root", ext: ".exe" },
+		{ trust: "unknown", entry: "VIRTUAL_ENV", ext: ".cmd" },
+	] as const)(
+		"keeps a project venv $ext refused under its extensionless spelling ($entry)",
+		async ({ trust, entry, ext }) => {
+			const originalPlatform = process.platform;
+			const originalVirtualEnv = process.env.VIRTUAL_ENV;
+			if (originalPlatform !== "win32") {
+				vi.doMock("node:fs", async (importActual) => {
+					const actual = await importActual<typeof import("node:fs")>();
+					const statSync = ((target: fs.PathLike, ...rest: never[]) =>
+						actual.statSync(
+							typeof target === "string"
+								? target.replaceAll("\\", "/")
+								: target,
+							...rest,
+						)) as typeof actual.statSync;
+					return { ...actual, statSync, default: { ...actual, statSync } };
+				});
+			}
+			setPlatform("win32");
+			const root = fs.realpathSync.native(
+				fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-5674-venv-")),
+			);
+			const scripts = path.join(root, ".venv", "Scripts");
+			fs.mkdirSync(scripts, { recursive: true });
+			for (const name of ["python.exe", `pyright-langserver${ext}`]) {
+				fs.writeFileSync(path.join(scripts, name), "MZ\n");
+			}
+			if (entry === "VIRTUAL_ENV") {
+				process.env.VIRTUAL_ENV = path.join(root, ".venv");
+			}
+			mockExit1Launch();
+			vi.doMock(
+				"../../../clients/package-manager.js",
+				async (importActual) => ({
+					...(await importActual<
+						typeof import("../../../clients/package-manager.js")
+					>()),
+					findGlobalBinary,
+				}),
+			);
+			try {
+				const { PythonServer } = await import("../../../clients/lsp/server.js");
+				const { withLspProjectCodePermission } =
+					await import("../../../clients/lsp/launch.js");
+				const { setProjectTrustState } =
+					await import("../../../clients/project-trust.js");
+				setProjectTrustState(trust);
+				await withLspProjectCodePermission(false, () =>
+					PythonServer.spawn(root, { allowInstall: false }),
+				).catch(() => undefined);
+				// An absent spelling may reach the spawn (it fails and runs
+				// nothing); no spawn may name the planted file or the extensionless
+				// spelling cmd.exe completes to it. A shell spawn quotes the program.
+				const base = path.join(scripts, "pyright-langserver");
+				const programs = spawnDouble.mock.calls.map(([command]) => {
+					const line = String(command);
+					return line.startsWith('"')
+						? line.slice(1, line.indexOf('"', 1))
+						: line;
+				});
+				expect(
+					programs.filter(
+						(program) => program === base || program === base + ext,
+					),
+				).toEqual([]);
+				expect(logExtension).toHaveBeenCalledWith(
+					expect.objectContaining({
+						message:
+							"project-local LSP binary refused: mark the project trusted in pi or upgrade pi",
+					}),
+				);
+			} finally {
+				vi.doUnmock("node:fs");
+				if (originalVirtualEnv === undefined) delete process.env.VIRTUAL_ENV;
+				else process.env.VIRTUAL_ENV = originalVirtualEnv;
+				fs.rmSync(root, { recursive: true, force: true });
+				setPlatform(originalPlatform);
+			}
+		},
+	);
 });
