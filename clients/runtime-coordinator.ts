@@ -593,7 +593,12 @@ function narrowedRecord(
 ): InlineBlockerRecord {
 	return {
 		...existing,
-		summary: formatDiagnostics(kept, "blocking").trim(),
+		summary: formatDiagnostics(
+			kept,
+			"blocking",
+			undefined,
+			existing.filePath,
+		).trim(),
 		diagnostics: kept,
 		sources: inlineBlockerSources(kept),
 		lines: inlineBlockerLines(kept, existing.filePath),
@@ -2069,7 +2074,12 @@ export class RuntimeCoordinator {
 					: {}),
 				...this.recordSession(sessionId),
 			}),
-			summary: formatDiagnostics(diagnostics, "blocking").trim(),
+			summary: formatDiagnostics(
+				diagnostics,
+				"blocking",
+				undefined,
+				filePath,
+			).trim(),
 			diagnostics,
 			// The same two derivations the pipeline's writer uses: `lines` keeps only
 			// this file's own rows, `sources` pins an untagged finding as "unknown".
