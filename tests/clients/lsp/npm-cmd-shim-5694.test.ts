@@ -262,7 +262,7 @@ describe("resolveNpmCmdShim (#5694)", () => {
 				recorded: uncontained(planted.shim),
 			}).toEqual({
 				resolved: undefined,
-				recorded: [expect.stringContaining("not an .exe")],
+				recorded: [expect.stringContaining("node is not an .exe")],
 			});
 		},
 	);

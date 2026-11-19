@@ -230,7 +230,7 @@ export function resolveNpmCmdShim(
 	if (program === undefined)
 		return recordUncontained("no node.exe beside it or on the child's PATH");
 	if (!/\.exe$/i.test(program))
-		return recordUncontained(`node resolves to ${program}, not an .exe`);
+		return recordUncontained(`node is not an .exe: ${program}`);
 	return { program, script };
 }
 
