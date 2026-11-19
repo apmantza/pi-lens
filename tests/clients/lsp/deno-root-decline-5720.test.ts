@@ -83,4 +83,39 @@ describe("Deno root decline (#5720)", () => {
 		// `fallbackFor` alternate is acquired by design.
 		expect(typescript.spawn).toHaveBeenCalledOnce();
 	});
+
+	// Recurrence: the decline travelled the path-typed root channel, so the
+	// outside-session-root gate (`findOutsideProjectRoot`) read it as a project
+	// root and handed it to path normalisation. The gate must skip a declined
+	// server and still name the Deno root that really is outside the session.
+	it("skips a Deno file outside the session roots on the Deno root, not the decline", async () => {
+		const { file } = fixture(
+			"fixture-5720-outside-",
+			"deno.json",
+			"export const x = 1;\n",
+		);
+		const session = fs.mkdtempSync(path.join(os.tmpdir(), "session-5720-"));
+		dirs.push(session);
+		const { registerSessionRoot, resetSessionRootsForTests } =
+			await import("../../../clients/lsp/session-roots.js");
+		registerSessionRoot(session);
+		try {
+			const { DenoServer, TypeScriptServer } =
+				await import("../../../clients/lsp/server.js");
+			const { LSPService } = await import("../../../clients/lsp/index.js");
+			const typescript = unavailableServer(TypeScriptServer);
+			const deno = unavailableServer(DenoServer);
+			getServersForFileWithConfig.mockReturnValue([typescript, deno]);
+
+			const result = await new LSPService(undefined, session).touchFile(
+				file,
+				"export const x = 1;\n",
+				{ diagnostics: "none" },
+			);
+
+			expect(result?.skipReason).toBe("outside-project-root");
+		} finally {
+			resetSessionRootsForTests();
+		}
+	});
 });
