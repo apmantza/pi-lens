@@ -186,6 +186,11 @@ function scanSocketSites(source: string, relPath = "<source>"): SocketScan {
  * silently re-admit a deleted listener (#3279's stale-pin shape).
  */
 const PINNED_SITES: Readonly<Record<string, string>> = {
+	"clients/mcp/ipc.ts#probeIpcSocketListener createConnection":
+		// #5702: the retention sweep's liveness dial. The error listener IS
+		// the probe's answer: a no-listener errno resolves "dead", anything
+		// else "indeterminate" (kept), so no net error can be unhandled.
+		"connecting dial; socket.on(error, cause => finish(isNoListenerError(cause) ? dead : indeterminate)) — the verdict is the sweep's keep/delete gate",
 	"clients/mcp/ipc.ts#requestOverWarmIpc createConnection":
 		'connected socket; `socket.on("error", …)` finishes the request as unavailable (clients/mcp/ipc.ts:312) — correct before #3389',
 	"clients/mcp/ipc.ts#requestWarmAnalyze createConnection":

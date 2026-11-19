@@ -63,6 +63,10 @@ const ADMITTED_UNCLASSIFIED: Record<string, string> = {
 		"the U+FEFF byte-order mark, this file's HOST_BOM_CODE_POINT",
 	"lsp/index.ts: const decoded = String.fromCharCode(Number.parseInt(match[1], 16));":
 		"decodes a two-hex-digit %XX URI escape, so at most U+00FF",
+	"file-utils.ts: const drive = `${String.fromCharCode(65 + i)}:\\\\`;":
+		// #5702: the retention decode enumerates the win32 drive roots
+		// (A:\ .. Z:\) it walks; ASCII letters and backslashes, never a marker.
+		"win32 drive roots the slug decode walks; ASCII letters and backslashes",
 };
 
 interface MarkerScan {
