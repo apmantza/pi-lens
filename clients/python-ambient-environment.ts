@@ -11,7 +11,7 @@
  * worker has at that moment, before a case's own home pin.
  */
 
-import { join, win32 } from "node:path";
+import { join, posix, win32 } from "node:path";
 
 /** Each ambient source and the variable that carries it. */
 export const AMBIENT_ENVIRONMENT_VARIABLES = {
@@ -65,10 +65,12 @@ export function pythonEnvironmentActivationDirs(
 	source: AmbientPythonSource,
 	platform: NodeJS.Platform = process.platform,
 ): string[] {
-	if (platform !== "win32") return [pythonEnvironmentBinDir(root, platform)];
-	// A Windows root is joined with Windows separators whatever the host, so
-	// the activation set matches a Windows PATH entry on a POSIX test host;
-	// `pythonEnvironmentBinDir` keeps its host join, the detector's contract.
+	// Every root is joined with the separators of the platform asked about,
+	// whatever the host, so the activation set matches that platform's PATH
+	// entries on any test host (#5713 review r3: a POSIX root joined on a
+	// Windows runner gave `\home\u\.venv\bin`). `pythonEnvironmentBinDir`
+	// keeps its host join, the detector's contract.
+	if (platform !== "win32") return [posix.join(root, "bin")];
 	if (source !== "conda") return [win32.join(root, "Scripts")];
 	const library = (...parts: string[]) => win32.join(root, "Library", ...parts);
 	return [
