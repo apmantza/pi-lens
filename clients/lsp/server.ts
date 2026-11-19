@@ -141,7 +141,15 @@ import {
 
 // --- Types ---
 
-export type RootFunction = ((file: string) => Promise<string | undefined>) & {
+/** A root policy can refuse a file instead of asking the caller to fallback. */
+export const LSP_ROOT_DECLINED = Symbol("lsp-root-declined");
+type RootResult = string | undefined | typeof LSP_ROOT_DECLINED;
+
+function rootOrUndefined(root: RootResult): string | undefined {
+	return root === LSP_ROOT_DECLINED ? undefined : root;
+}
+
+export type RootFunction = ((file: string) => Promise<RootResult>) & {
 	/** Marker table projected into the shared tool-cwd resolver. */
 	rootMarkers?: readonly string[];
 };
@@ -232,7 +240,7 @@ export async function resolveLspServerCwd(
 		return undefined;
 	}
 	const rootMarkers = server.rootMarkers ?? server.root.rootMarkers;
-	let serverRoot: string | undefined;
+	let serverRoot: RootResult;
 	let rootFailed = false;
 	try {
 		serverRoot = await server.root(filePath);
@@ -241,6 +249,7 @@ export async function resolveLspServerCwd(
 		rootFailed = true;
 		onRootFailure?.(reason);
 	}
+	if (serverRoot === LSP_ROOT_DECLINED) return undefined;
 	const isFileDirFallback =
 		serverRoot !== undefined &&
 		rootMarkers?.length &&
@@ -1776,7 +1785,7 @@ function IgnoreHomeRoot(primary: RootFunction): RootFunction {
 	// home spelled through a link (`/home -> var/home`) is still refused.
 	const homeKey = normalizeEphemeralMapKey(realpathOrResolve(os.homedir()));
 	return withRootMarkers(async (file: string): Promise<string | undefined> => {
-		const root = await primary(file);
+		const root = rootOrUndefined(await primary(file));
 		if (!root) return undefined;
 		return normalizeEphemeralMapKey(path.resolve(root)) === homeKey
 			? undefined
@@ -2003,9 +2012,9 @@ export function RootWithFallback(
 	fallback: RootFunction = FileDirRoot,
 ): RootFunction {
 	return withRootMarkers(async (file: string): Promise<string | undefined> => {
-		const primaryRoot = await primary(file);
+		const primaryRoot = rootOrUndefined(await primary(file));
 		if (primaryRoot) return primaryRoot;
-		return fallback(file);
+		return rootOrUndefined(await fallback(file));
 	}, primary.rootMarkers ?? []);
 }
 
@@ -3046,9 +3055,9 @@ export async function tryGemInstall(gem: string): Promise<boolean> {
  */
 export function DenoExcludeRoot(primary: RootFunction): RootFunction {
 	const denoDetector = createRootDetector(["deno.json", "deno.jsonc"]);
-	return async (file: string): Promise<string | undefined> => {
+	return async (file: string): Promise<RootResult> => {
 		const denoRoot = await denoDetector(file);
-		if (denoRoot) return undefined;
+		if (denoRoot) return LSP_ROOT_DECLINED;
 		return primary(file);
 	};
 }
@@ -3113,7 +3122,10 @@ async function findTypeScriptProjectRoot(
 	const [configRoot, toolingRoot] = await Promise.all([
 		configDetector(file),
 		TypeScriptToolingRoot(file),
-	]);
+	]).then(
+		([config, tooling]) =>
+			[rootOrUndefined(config), rootOrUndefined(tooling)] as const,
+	);
 	if (!configRoot) return toolingRoot;
 	if (!toolingRoot) return configRoot;
 	// A config inside (or beside) the nearest package governs its files. A
@@ -3818,7 +3830,7 @@ function sessionHoistCeiling(
 function RustWorkspaceRoot(): RootFunction {
 	const crateRoot = createRootDetector(["Cargo.toml", "Cargo.lock"]);
 	return withRootMarkers(async (file: string): Promise<string | undefined> => {
-		const root = await crateRoot(file);
+		const root = rootOrUndefined(await crateRoot(file));
 		if (!root) return undefined;
 
 		const sessionCwd = process.cwd();
@@ -3918,7 +3930,7 @@ function JavaWorkspaceRoot(): RootFunction {
 		".classpath",
 	]);
 	return withRootMarkers(async (file: string): Promise<string | undefined> => {
-		const root = await moduleRoot(file);
+		const root = rootOrUndefined(await moduleRoot(file));
 		if (!root) return undefined;
 		// Only a Maven (pom.xml) module chain-hoists here — Gradle/.classpath module
 		// roots are returned as found; multi-module Gradle wiring (settings.gradle)

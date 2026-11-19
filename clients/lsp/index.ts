@@ -157,6 +157,7 @@ import type { LSPServerInfo } from "./server.js";
 import {
 	declinesLooseFileRoot,
 	getServerById,
+	LSP_ROOT_DECLINED,
 	resetClassicTsRepairGuard,
 	resetLspLaunchAvailabilityGeneration,
 } from "./server.js";
@@ -7373,8 +7374,9 @@ export class LSPService {
 				server.root(filePath),
 			),
 		);
-		return candidates.find((candidate): candidate is string =>
-			Boolean(candidate),
+		return candidates.find(
+			(candidate): candidate is string =>
+				candidate !== undefined && candidate !== LSP_ROOT_DECLINED,
 		);
 	}
 
