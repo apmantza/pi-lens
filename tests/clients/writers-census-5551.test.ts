@@ -477,8 +477,9 @@ const WRITE_SITES: Record<string, SiteRow> = {
 		exports: ["writeGzipStageFile", "reapStageFile"],
 	},
 	"clients/installer/index.ts": {
-		// 83: streamed installer payloads add temp-file and rename cleanup sites.
-		sites: 83,
+		// 80: the duplicate compatibility downloader was removed; payload writes
+		// are owned by clients/installer/download.ts.
+		sites: 80,
 		cls: "install",
 		why: "tool installs, their stamps and their locks",
 	},
