@@ -74,6 +74,59 @@ describe("insertSuppressComment (#690)", () => {
 		expect(applyInlineSuppressions(diags, updated)).toEqual([]);
 	});
 
+	it("keeps CRLF line endings; the new line takes the flagged line's ending (#5686)", () => {
+		const updated = insertSuppressComment(
+			"a\r\nb\r\nc\r\n",
+			"/proj/a.ts",
+			2,
+			"no-bad",
+		);
+		expect(updated).toBe("a\r\n// pi-lens-ignore: no-bad\r\nb\r\nc\r\n");
+	});
+
+	it("keeps mixed endings; the new line takes the flagged line's ending (#5686)", () => {
+		const updated = insertSuppressComment(
+			"a\nb\r\nc\r\n",
+			"/proj/a.ts",
+			3,
+			"no-bad",
+		);
+		expect(updated).toBe("a\nb\r\n// pi-lens-ignore: no-bad\r\nc\r\n");
+	});
+
+	it("strips the target line's trailing CR before taking its indentation (#5686)", () => {
+		// A whitespace-only CRLF line must not lend its bare "\r" to the
+		// inserted comment's indentation: that lone CR breaks parsers (tomllib
+		// answers `Invalid statement`), so the mark damages the file it
+		// suppresses.
+		const updated = insertSuppressComment(
+			"a = 1\r\n   \r\nb = 2\r\n",
+			"/proj/a.toml",
+			2,
+			"trailing-spaces",
+		);
+		expect(updated).toBe(
+			"a = 1\r\n   # pi-lens-ignore: trailing-spaces\r\n   \r\nb = 2\r\n",
+		);
+	});
+
+	it("appends to an existing CRLF comment above without rewriting endings (#5686)", () => {
+		const updated = insertSuppressComment(
+			"// pi-lens-ignore: other\r\nconst target = bad();\r\n",
+			"/proj/a.ts",
+			2,
+			"no-bad",
+		);
+		expect(updated).toBe(
+			"// pi-lens-ignore: other, no-bad\r\nconst target = bad();\r\n",
+		);
+	});
+
+	it("keeps an unterminated last line unterminated when inserting above it (#5686)", () => {
+		const updated = insertSuppressComment("a\r\nb", "/proj/a.ts", 2, "no-bad");
+		expect(updated).toBe("a\r\n// pi-lens-ignore: no-bad\r\nb");
+	});
+
 	it("throws on an out-of-range line", () => {
 		const content = "const a = 1;\n";
 		expect(() =>
