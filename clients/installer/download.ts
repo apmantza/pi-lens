@@ -9,7 +9,7 @@ import { pipeline } from "node:stream/promises";
 const MAX_BYTES = 512 * 1024 * 1024;
 const TIMEOUT_MS = 120_000;
 
-export class InstallerDownloadError extends Error {
+export class InstallerDownloadError extends globalThis.Error {
 	readonly code: "cap" | "timeout" | "network" | "stream";
 	constructor(code: InstallerDownloadError["code"], message: string) {
 		super(message);
@@ -43,7 +43,10 @@ export function downloadInstallerFile(
 					res.headers.location
 				) {
 					res.resume();
-					if (maxRedirects === 0) return fail(new Error("Too many redirects"));
+					if (maxRedirects === 0)
+						return fail(
+							new InstallerDownloadError("stream", "Too many redirects"),
+						);
 					const nextHeaders = res.headers.location.startsWith(url)
 						? headers
 						: (() => {
@@ -61,7 +64,12 @@ export function downloadInstallerFile(
 				}
 				if (res.statusCode !== 200) {
 					res.resume();
-					return fail(new Error(`HTTP ${res.statusCode ?? 0} for ${url}`));
+					return fail(
+						new InstallerDownloadError(
+							"stream",
+							`HTTP ${res.statusCode ?? 0} for ${url}`,
+						),
+					);
 				}
 				let bytes = 0;
 				const digest = createHash("sha256");

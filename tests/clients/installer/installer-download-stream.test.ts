@@ -25,7 +25,8 @@ describe("installer download stream", () => {
 		const server = createServer((_request, response) => {
 			response.writeHead(200, { "content-length": payload.length });
 			response.end(payload);
-		}).listen(0, "127.0.0.1");
+		});
+		server.listen(0, "127.0.0.1");
 		servers.push(server);
 		await new Promise<void>((resolve) =>
 			server.once("listening", () => resolve()),

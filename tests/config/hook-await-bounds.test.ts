@@ -2615,7 +2615,9 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// `updateProbeCache` calls (one `Promise.allSettled` of local stat/read work,
 	// each swallowing its own error) before its flush. Test-registry only; no hook
 	// handler reaches it.
-	"clients/installer/index.ts": 230,
+	// +1: the installer stream seam adds one unbounded cleanup await; it remains
+	// outside the hook signal until #2523 AC4 threads that signal through.
+	"clients/installer/index.ts": 231,
 	// 29 -> 56 (#4765): refreshOpengrepRulePack (the background registry-pack
 	// refresh) awaits the pack download, its temp-file write, the
 	// `opengrep --validate` spawn, a stat/read/rename of the cached file and a
