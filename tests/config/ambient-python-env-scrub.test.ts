@@ -15,6 +15,7 @@
  * the owner actually reads.
  */
 
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	AMBIENT_PYTHON_ENVIRONMENT_VARIABLES,
@@ -92,5 +93,29 @@ describe("PATH without the active Python environments (#5713 review r1)", () => 
 				"win32",
 			),
 		).toBe(kept.join(";"));
+	});
+});
+
+describe("what the worker setup loads for the scrub (#5713 CI)", () => {
+	// The worker setup runs in each test file's module registry before that
+	// file's vi.mock calls apply, so any module it loads is cached with the REAL
+	// dependencies: loading clients/path-utils.js through the scrub pinned the
+	// real node:fs, and the suites that mock node:fs to count path probes read
+	// zero. A test in the same worker cannot observe its own setup's load order,
+	// so this pins the two modules' import specifiers instead.
+	it("imports only Node built-ins and the leaf channel module", () => {
+		const specifiers = (file: string): string[] =>
+			[
+				...readFileSync(file, "utf8").matchAll(
+					/^import\s+(?:[^;]*?\s+from\s+)?"([^"]+)";/gms,
+				),
+			].map((match) => match[1] ?? "");
+		expect(specifiers("tests/support/ambient-python-scrub.ts")).toEqual([
+			"node:path",
+			"../../clients/python-ambient-environment.js",
+		]);
+		expect(specifiers("clients/python-ambient-environment.ts")).toEqual([
+			"node:path",
+		]);
 	});
 });
