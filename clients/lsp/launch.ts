@@ -199,23 +199,38 @@ export function resolveNpmCmdShim(
 	cwd: string,
 	env: NodeJS.ProcessEnv,
 ): { program: string; script: string } | undefined {
+	// Each refusal leaves the server behind cmd.exe, outside the containment
+	// #5694 gives the admitted shims: one record per shim per session says so.
+	const recordUncontained = (why: string): undefined => {
+		recordDegradationOnce({
+			kind: "lsp-server-uncontained",
+			subject: shimFile,
+			reason: `${path.basename(shimFile)} runs behind cmd.exe, so its server outlives a pi that is killed: ${why}`,
+		});
+		return undefined;
+	};
 	let content: string;
 	try {
 		content = fs.readFileSync(shimFile, "utf-8");
-	} catch {
-		// none: an unreadable shim keeps cmd.exe, which reports its own failure.
+	} catch (cause) {
+		recordUncontained(`the shim could not be read (${String(cause)})`);
 		return undefined;
 	}
 	const target = parseNpmCmdShim(content);
-	if (target === undefined) return undefined;
+	if (target === undefined)
+		return recordUncontained("not an npm cmd-shim template");
 	const dir = path.dirname(shimFile);
 	const script = path.resolve(dir, target.replace(/[/\\]/g, path.sep));
-	if (!statIsFile(script)) return undefined;
+	if (!statIsFile(script))
+		return recordUncontained(`its script is not a file: ${script}`);
 	const besideShim = path.join(dir, "node.exe");
 	const program = statIsFile(besideShim)
 		? besideShim
 		: resolveWindowsCommandForEnvironment("node", cwd, env)?.resolvedPath;
-	if (program === undefined || !/\.exe$/i.test(program)) return undefined;
+	if (program === undefined)
+		return recordUncontained("no node.exe beside it or on the child's PATH");
+	if (!/\.exe$/i.test(program))
+		return recordUncontained(`node resolves to ${program}, not an .exe`);
 	return { program, script };
 }
 

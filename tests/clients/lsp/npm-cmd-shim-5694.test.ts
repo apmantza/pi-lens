@@ -11,7 +11,11 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../../clients/degradation-ledger.js";
 import {
 	parseNpmCmdShim,
 	resolveNpmCmdShim,
@@ -144,6 +148,17 @@ describe("parseNpmCmdShim (#5694)", () => {
 });
 
 describe("resolveNpmCmdShim (#5694)", () => {
+	beforeEach(() => resetDegradationLedger());
+
+	/** The `lsp-server-uncontained` reasons recorded for one shim. */
+	function uncontained(shim: string): string[] {
+		return getDegradationSummary()
+			.filter((group) => group.kind === "lsp-server-uncontained")
+			.flatMap((group) => group.latestReasons)
+			.filter((entry) => entry.subject === shim)
+			.map((entry) => entry.reason);
+	}
+
 	/** `<root>/node_modules/.bin/typescript-language-server.cmd`, and the path
 	 *  of the script it names (relative to its own directory), not created. */
 	function plantShim(content: string) {
@@ -185,9 +200,28 @@ describe("resolveNpmCmdShim (#5694)", () => {
 	it("keeps cmd.exe when the script the shim names is missing", () => {
 		const planted = plantShim(cmdShimV6(TARGET));
 		plantFile(path.join(planted.bin, "node.exe"));
-		expect(
-			resolveNpmCmdShim(planted.shim, planted.root, { PATH: "" }),
-		).toBeUndefined();
+		expect({
+			resolved: resolveNpmCmdShim(planted.shim, planted.root, { PATH: "" }),
+			recorded: uncontained(planted.shim),
+		}).toEqual({
+			resolved: undefined,
+			recorded: [expect.stringContaining("its script is not a file")],
+		});
+	});
+
+	// Recurrence guarded: a shim the reader refuses runs behind cmd.exe and
+	// outlives a killed pi; without a record nothing says which server leaks.
+	it("records a shim that is not an npm template as uncontained", () => {
+		const planted = plantShim("@ECHO off\r\nnode server.js %*\r\n");
+		expect({
+			resolved: resolveNpmCmdShim(planted.shim, planted.root, { PATH: "" }),
+			recorded: uncontained(planted.shim),
+		}).toEqual({
+			resolved: undefined,
+			recorded: [
+				"typescript-language-server.cmd runs behind cmd.exe, so its server outlives a pi that is killed: not an npm cmd-shim template",
+			],
+		});
 	});
 
 	// The PATH search is Windows' own (PATHEXT), so these two cells need a
@@ -220,12 +254,16 @@ describe("resolveNpmCmdShim (#5694)", () => {
 			plantFile(planted.script);
 			const nodeDir = path.join(planted.root, "node-dir");
 			plantFile(path.join(nodeDir, "node.cmd"));
-			expect(
-				resolveNpmCmdShim(planted.shim, planted.root, {
+			expect({
+				resolved: resolveNpmCmdShim(planted.shim, planted.root, {
 					PATH: nodeDir,
 					PATHEXT: ".COM;.EXE;.BAT;.CMD",
 				}),
-			).toBeUndefined();
+				recorded: uncontained(planted.shim),
+			}).toEqual({
+				resolved: undefined,
+				recorded: [expect.stringContaining("not an .exe")],
+			});
 		},
 	);
 
@@ -234,8 +272,12 @@ describe("resolveNpmCmdShim (#5694)", () => {
 	it("keeps cmd.exe when no Node program answers", () => {
 		const planted = plantShim(cmdShimV6(TARGET));
 		plantFile(planted.script);
-		expect(
-			resolveNpmCmdShim(planted.shim, planted.root, { PATH: "" }),
-		).toBeUndefined();
+		expect({
+			resolved: resolveNpmCmdShim(planted.shim, planted.root, { PATH: "" }),
+			recorded: uncontained(planted.shim),
+		}).toEqual({
+			resolved: undefined,
+			recorded: [expect.stringContaining("no node.exe beside it")],
+		});
 	});
 });

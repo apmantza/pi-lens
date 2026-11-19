@@ -1336,10 +1336,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `path` domain term.
 		// 30 -> 31 (#5674 r3): a lookup answer is judged by its directory
 		// (`path.dirname`) against an LSP root not admitted for project code.
-		// 31 -> 35 (#5694): `resolveNpmCmdShim` locates the shim's script and the
+		// 31 -> 36 (#5694): `resolveNpmCmdShim` locates the shim's script and the
 		// node.exe beside it (`path.dirname`, `path.resolve`, `path.sep`,
-		// `path.join`); filesystem paths, not the retired `path` domain term.
-		"clients/lsp/launch.ts": 35,
+		// `path.join`) and names the shim in its record (`path.basename`);
+		// filesystem paths, not the retired `path` domain term.
+		"clients/lsp/launch.ts": 36,
 		"clients/lsp/lombok.ts": 14,
 		// #4299: 121 -> 124; OS path namespace calls for canonical compiler
 		// validation replace the wrapper-relative guess. No path-key owner changes.
