@@ -180,7 +180,7 @@ export function parseNpmCmdShim(content: string): string | undefined {
 		const head = [...NPM_CMD_SHIM_HEAD, ...template.tail];
 		if (lines.length !== head.length + 1) continue;
 		if (!head.every((line, index) => lines[index] === line)) continue;
-		const target = template.run.exec(lines[head.length])?.[1];
+		const target = template.run.exec(lines[head.length] ?? "")?.[1];
 		if (target !== undefined) return target;
 	}
 	return undefined;
@@ -1046,7 +1046,8 @@ function _attachErrorHandler(
  *
  * Key fixes for Windows:
  * - Uses absolute paths (relative paths fail in shell mode)
- * - Uses shell: true for .cmd files
+ * - Runs an admitted npm .cmd shim's script under node directly, and only
+ *   other .cmd files behind cmd.exe (`planServerLaunch`, #5694)
  * - Uses windowsHide to prevent console window popup
  * - Detects immediate spawn failures (ENOENT) before returning
  *

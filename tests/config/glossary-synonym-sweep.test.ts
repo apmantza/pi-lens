@@ -756,7 +756,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lsp/language.ts": 1,
 		// 2 -> 1 (#4532 round 3): the in-process PATH scan replaced the
 		// `which` output chain whose `.filter(Boolean)` was the second use.
-		"clients/lsp/launch.ts": 1,
+		// 1 -> 2 (#5694): `parseNpmCmdShim` drops a shim's blank lines, an
+		// `Array.prototype.filter` call, not a delivery filter.
+		"clients/lsp/launch.ts": 2,
 		"clients/lsp/ruby-drive-dirs.ts": 1,
 		"clients/lsp/server.ts": 5,
 		// 1 (#4403): `disabledPrimaryServerIds` is an `Array.prototype.filter`
@@ -1334,7 +1336,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `path` domain term.
 		// 30 -> 31 (#5674 r3): a lookup answer is judged by its directory
 		// (`path.dirname`) against an LSP root not admitted for project code.
-		"clients/lsp/launch.ts": 31,
+		// 31 -> 35 (#5694): `resolveNpmCmdShim` locates the shim's script and the
+		// node.exe beside it (`path.dirname`, `path.resolve`, `path.sep`,
+		// `path.join`); filesystem paths, not the retired `path` domain term.
+		"clients/lsp/launch.ts": 35,
 		"clients/lsp/lombok.ts": 14,
 		// #4299: 121 -> 124; OS path namespace calls for canonical compiler
 		// validation replace the wrapper-relative guess. No path-key owner changes.
