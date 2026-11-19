@@ -821,6 +821,29 @@ describe("resolveAndLaunch after a trust refusal, project bin dir on PATH (#4515
 	it("reports the refused candidate as missing by policy, not as a rejected probe", async () => {
 		// Review r1 F4: the availability row read "non-installable /
 		// probe-rejected" for a refusal, a cause nothing else produces here.
+		// #5698 r3: the candidate exists, so the trust gate refuses it.
+		setProjectTrustState("unknown");
+		const { spec, bin } = makeProject("yaml-language-server", true);
+		process.env.PATH = [bin, outsideBin].join(path.delimiter);
+
+		await expect(resolveAndLaunch(spec, true)).rejects.toThrow(
+			/project-local binary refused/,
+		);
+
+		const rows = await availabilityRows("yaml-language-server");
+		expect(rows.map((row) => row.metadata)).toEqual([
+			expect.objectContaining({
+				producer: "lsp-launch",
+				verdict: "unavailable",
+				outcome: "missing",
+				cause: "policy-denied",
+			}),
+		]);
+	});
+
+	it("reports an absent candidate as not found, not as refused by policy", async () => {
+		// #5674: a candidate path that does not exist never reaches the trust
+		// gate, so its row names the miss rather than a refusal.
 		setProjectTrustState("unknown");
 		const { spec, bin } = makeProject("yaml-language-server", false);
 		process.env.PATH = [bin, outsideBin].join(path.delimiter);
