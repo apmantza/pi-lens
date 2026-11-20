@@ -477,10 +477,16 @@ const WRITE_SITES: Record<string, SiteRow> = {
 		exports: ["writeGzipStageFile", "reapStageFile"],
 	},
 	"clients/installer/index.ts": {
-		// 64 since #5624: the zip branch moves an opted-in tool's bundled DLLs (bundleArchiveDlls) beside its exe.
-		sites: 64,
+		// 80: the duplicate compatibility downloader was removed; payload writes
+		// are owned by clients/installer/download.ts.
+		sites: 80,
 		cls: "install",
 		why: "tool installs, their stamps and their locks",
+	},
+	"clients/installer/download.ts": {
+		sites: 3,
+		cls: "install",
+		why: "bounded installer download temporary files",
 	},
 	"clients/installer/managed-tool-refresh.ts": {
 		sites: 7,

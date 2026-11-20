@@ -459,6 +459,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// field (SpawnResult.error), not a delivery tier.
 		// 28 -> 30 (#5561 r3): candidateFailure's tail reads the pip failure text, not a delivery tier.
 		"clients/installer/index.ts": 30,
+		"clients/installer/download.ts": 12,
 		"clients/installer/managed-tool-refresh.ts": 2,
 		"clients/instance-reaper.ts": 4,
 		"clients/instance-registry-lock.ts": 3,
@@ -1254,7 +1255,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/install-diagnostics.ts": 11,
 		// 104 -> 107 (#5624): the opengrep zip's DLL move computes the extraction
 		// directory with `path.dirname` and each destination with `path.join`.
-		"clients/installer/index.ts": 107,
+		"clients/installer/index.ts": 111,
 		// 4 -> 9 (#4765): refreshOpengrepRulePack computes the candidate's
 		// scratch directory, cwd and sweep with `path.dirname`/`path.join`.
 		"clients/installer/managed-tool-refresh.ts": 9,

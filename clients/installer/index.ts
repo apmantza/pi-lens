@@ -54,6 +54,7 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import https from "node:https";
@@ -63,7 +64,6 @@ import path from "node:path";
 import { writeFileAtomicAsync } from "../atomic-write.js";
 import { registerBackgroundWriteDrain } from "../background-write-drains.js";
 import { BoundedLruCache } from "../bounded-cache.js";
-import { hashContentBytes } from "../content-stamp.js";
 import { findCommandOnPath } from "../command-path.js";
 import { logExtension } from "../extension-log.js";
 import { isToolInstallDisabled } from "../env-utils.js";
@@ -86,6 +86,8 @@ import {
 const _installerRequire = createRequire(import.meta.url);
 
 import { createGunzip } from "node:zlib";
+import { pipeline } from "node:stream/promises";
+import { downloadInstallerFile as streamDownloadInstallerFile } from "./download.js";
 import { TRANSIENT_MAX_COOLDOWN_MS } from "../dispatch/runners/utils/availability-policy.js";
 import {
 	getDegradationLedgerGeneration,
@@ -4301,21 +4303,6 @@ async function installGitHubTool(
 		`[github] downloading ${asset.name} from ${asset.browser_download_url}`,
 	);
 
-	// Download the asset
-	const downloadStart = Date.now();
-	let assetBuffer: Buffer;
-	try {
-		assetBuffer = await httpsGet(asset.browser_download_url);
-		logSessionStart(
-			`github-install ${tool.id}: downloaded ${asset.name} (${assetBuffer.length} bytes, ${Date.now() - downloadStart}ms)`,
-		);
-	} catch (err) {
-		logSessionStart(
-			`github-install ${tool.id}: download failed: ${(err as Error).message}`,
-		);
-		return undefined;
-	}
-
 	await fs.mkdir(GITHUB_BIN_DIR, { recursive: true });
 
 	const binaryName = tool.binaryName ?? tool.id;
@@ -4326,6 +4313,32 @@ async function installGitHubTool(
 		asset.name,
 	);
 	let destPath = path.join(GITHUB_BIN_DIR, finalBinaryName);
+	const downloadPath = path.join(
+		GITHUB_BIN_DIR,
+		`.${tool.id}.download-${randomUUID()}`,
+	);
+	const downloadStart = Date.now();
+	let downloadedBytes = 0;
+	try {
+		({ bytes: downloadedBytes } = await streamDownloadInstallerFile(
+			asset.browser_download_url,
+			downloadPath,
+		));
+		logSessionStart(
+			`github-install ${tool.id}: downloaded ${asset.name} (${downloadedBytes} bytes, ${Date.now() - downloadStart}ms)`,
+		);
+	} catch (err) {
+		await fs.rm(downloadPath, { force: true });
+		recordDegradationOnce({
+			kind: "managed-tool-download",
+			subject: tool.id,
+			reason: (err as Error).message,
+		});
+		logSessionStart(
+			`github-install ${tool.id}: streamed download failed: ${(err as Error).message}`,
+		);
+		return undefined;
+	}
 
 	const assetName = asset.name;
 	const launcherRuntime = launcherForGitHubAsset(spec, assetName);
@@ -4346,10 +4359,8 @@ async function installGitHubTool(
 				GITHUB_BIN_DIR,
 				`${tool.id}${assetName.endsWith(".phar") ? ".phar" : ".jar"}`,
 			);
-			await writeFileAtomicAsync(assetPath, assetBuffer, {
-				bestEffort: false,
-				mode: 0o750,
-			});
+			await fs.rename(downloadPath, assetPath);
+			if (!isWindows) await fs.chmod(assetPath, 0o750);
 			const launcherName = isWindows ? `${binaryName}.bat` : binaryName;
 			destPath = path.join(GITHUB_BIN_DIR, launcherName);
 			const runtimeTarget = assetName.endsWith(".phar")
@@ -4364,22 +4375,18 @@ async function installGitHubTool(
 			});
 		} else if (assetName.endsWith(".gz") && !assetName.endsWith(".tar.gz")) {
 			// Bare gzip (e.g. rust-analyzer-x86_64-unknown-linux-gnu.gz) — decompress directly
-			const decompressed = await new Promise<Buffer>((resolve, reject) => {
-				const gunzip = createGunzip();
-				const chunks: Buffer[] = [];
-				gunzip.on("data", (chunk: Buffer) => chunks.push(chunk));
-				gunzip.on("end", () => resolve(Buffer.concat(chunks)));
-				gunzip.on("error", reject);
-				gunzip.end(assetBuffer);
-			});
-			await writeFileAtomicAsync(destPath, decompressed, {
-				bestEffort: false,
-				mode: 0o750,
-			});
+			const decompressedPath = `${downloadPath}.decompressed`;
+			await pipeline(
+				createReadStream(downloadPath),
+				createGunzip(),
+				createWriteStream(decompressedPath),
+			);
+			await fs.rename(decompressedPath, destPath);
+			if (!isWindows) await fs.chmod(destPath, 0o750);
 		} else if (assetName.endsWith(".tar.gz") || assetName.endsWith(".tar.xz")) {
 			// Write archive to temp file, extract with system tar
 			const tmpArchive = path.join(GITHUB_BIN_DIR, `_tmp_${assetName}`);
-			await fs.writeFile(tmpArchive, assetBuffer);
+			await fs.rename(downloadPath, tmpArchive);
 			const tmpDir = path.join(GITHUB_BIN_DIR, `_tmp_extract_${tool.id}`);
 			await fs.mkdir(tmpDir, { recursive: true });
 
@@ -4424,7 +4431,7 @@ async function installGitHubTool(
 		} else if (assetName.endsWith(".zip")) {
 			// Write zip to temp, extract with unzip (Linux/macOS) or Expand-Archive (Windows)
 			const tmpArchive = path.join(GITHUB_BIN_DIR, `_tmp_${assetName}`);
-			await fs.writeFile(tmpArchive, assetBuffer);
+			await fs.rename(downloadPath, tmpArchive);
 			const tmpDir = path.join(GITHUB_BIN_DIR, `_tmp_extract_${tool.id}`);
 			await fs.mkdir(tmpDir, { recursive: true });
 
@@ -4485,16 +4492,18 @@ async function installGitHubTool(
 			if (!isWindows) await fs.chmod(destPath, 0o750);
 		} else {
 			// Bare binary (e.g. shfmt_*_linux_amd64)
-			await writeFileAtomicAsync(destPath, assetBuffer, {
-				bestEffort: false,
-				mode: 0o750,
-			});
+			await fs.rename(downloadPath, destPath);
+			if (!isWindows) await fs.chmod(destPath, 0o750);
 		}
 	} catch (err) {
+		await fs.rm(downloadPath, { force: true });
 		logSessionStart(
 			`github-install ${tool.id}: install failed: ${(err as Error).message}`,
 		);
 		return undefined;
+	} finally {
+		await fs.rm(downloadPath, { force: true });
+		await fs.rm(`${downloadPath}.decompressed`, { force: true });
 	}
 
 	// Download any sibling assets the primary wrapper depends on (e.g. ktlint's
@@ -4508,17 +4517,26 @@ async function installGitHubTool(
 			);
 			return undefined;
 		}
+		const extraPath = path.join(
+			GITHUB_BIN_DIR,
+			`.${tool.id}.${extraName}.download-${randomUUID()}`,
+		);
 		try {
-			const extraBuffer = await httpsGet(extraAsset.browser_download_url);
-			await writeFileAtomicAsync(
-				path.join(GITHUB_BIN_DIR, extraName),
-				extraBuffer,
-				{ bestEffort: false, mode: 0o750 },
+			const { bytes } = await streamDownloadInstallerFile(
+				extraAsset.browser_download_url,
+				extraPath,
 			);
+			await fs.rename(extraPath, path.join(GITHUB_BIN_DIR, extraName));
 			logSessionStart(
-				`github-install ${tool.id}: installed extra asset ${extraName} (${extraBuffer.length} bytes)`,
+				`github-install ${tool.id}: installed extra asset ${extraName} (${bytes} bytes)`,
 			);
 		} catch (err) {
+			await fs.rm(extraPath, { force: true });
+			recordDegradationOnce({
+				kind: "managed-tool-download",
+				subject: `${tool.id}:${extraName}`,
+				reason: (err as Error).message,
+			});
 			logSessionStart(
 				`github-install ${tool.id}: extra asset ${extraName} download failed: ${(err as Error).message}`,
 			);
@@ -5348,10 +5366,20 @@ async function installMavenTool(
 	lastInstallResolutionId.set(tool.id, mavenCoordinate(spec));
 
 	logSessionStart(`maven-install ${tool.id}: downloading ${url}`);
-	let jarBuffer: Buffer;
+	await fs.mkdir(GITHUB_BIN_DIR, { recursive: true });
+	const jarDownloadPath = path.join(
+		GITHUB_BIN_DIR,
+		`.${tool.id}.jar-${randomUUID()}`,
+	);
 	try {
-		jarBuffer = await httpsGet(url);
+		await streamDownloadInstallerFile(url, jarDownloadPath);
 	} catch (err) {
+		await fs.rm(jarDownloadPath, { force: true });
+		recordDegradationOnce({
+			kind: "managed-tool-download",
+			subject: tool.id,
+			reason: (err as Error).message,
+		});
 		logSessionStart(
 			`maven-install ${tool.id}: download failed: ${(err as Error).message}`,
 		);
@@ -5359,10 +5387,9 @@ async function installMavenTool(
 	}
 
 	try {
-		await fs.mkdir(GITHUB_BIN_DIR, { recursive: true });
 		assertManagedBinDirInsidePinnedHome(tool.id);
 		const jarPath = path.join(GITHUB_BIN_DIR, `${tool.id}.jar`);
-		await writeFileAtomicAsync(jarPath, jarBuffer, { bestEffort: false });
+		await fs.rename(jarDownloadPath, jarPath);
 
 		// Launcher so the tool resolves as a normal command in the managed bin.
 		const launcherName = isWindows ? `${binaryName}.bat` : binaryName;
@@ -5380,12 +5407,11 @@ async function installMavenTool(
 				{ bestEffort: false, mode: 0o750 },
 			);
 		}
-		logSessionStart(
-			`maven-install ${tool.id}: installed → ${launcherPath} (${jarBuffer.length} bytes)`,
-		);
+		logSessionStart(`maven-install ${tool.id}: installed → ${launcherPath}`);
 		debugLog(`[maven] installed ${tool.name} → ${launcherPath}`);
 		return launcherPath;
 	} catch (err) {
+		await fs.rm(jarDownloadPath, { force: true });
 		logSessionStart(
 			`maven-install ${tool.id}: install failed: ${(err as Error).message}`,
 		);
@@ -5597,10 +5623,23 @@ async function installArchiveTool(
 	lastInstallResolutionId.set(tool.id, url);
 
 	logSessionStart(`archive-install ${tool.id}: downloading ${url}`);
-	let archiveBuffer: Buffer;
+	await fs.mkdir(TOOLS_DIR, { recursive: true });
+	const archiveDownloadPath = path.join(
+		TOOLS_DIR,
+		`.${tool.id}.archive-${randomUUID()}`,
+	);
+	let archiveBytes = 0;
+	let archiveDigest = "";
 	try {
-		archiveBuffer = await httpsGet(url);
+		({ bytes: archiveBytes, sha256: archiveDigest } =
+			await streamDownloadInstallerFile(url, archiveDownloadPath));
 	} catch (err) {
+		await fs.rm(archiveDownloadPath, { force: true });
+		recordDegradationOnce({
+			kind: "managed-tool-download",
+			subject: tool.id,
+			reason: (err as Error).message,
+		});
 		logSessionStart(
 			`archive-install ${tool.id}: download failed: ${(err as Error).message}`,
 		);
@@ -5613,7 +5652,7 @@ async function installArchiveTool(
 	// extraction one): `recordDegradationOnce` keys on kind+subject, so sharing
 	// `${id}:${format}` would let an earlier extraction row swallow this one.
 	const pinned = spec.sha256?.[url];
-	const digest = hashContentBytes(archiveBuffer);
+	const digest = archiveDigest;
 	if (digest !== pinned) {
 		const reason = pinned === undefined ? "sha256-unpinned" : "sha256-mismatch";
 		recordDegradationOnce({
@@ -5623,11 +5662,12 @@ async function installArchiveTool(
 		});
 		installFailureReasons.set(
 			tool.id,
-			`archive integrity ${reason} (${archiveBuffer.length} bytes from ${url})`,
+			`archive integrity ${reason} (${archiveBytes} bytes from ${url})`,
 		);
 		logSessionStart(
 			`archive-install ${tool.id}: refused ${reason} (got ${digest}, pinned ${pinned ?? "none"}) — keeping installed version`,
 		);
+		await fs.rm(archiveDownloadPath, { force: true });
 		return undefined;
 	}
 
@@ -5657,7 +5697,7 @@ async function installArchiveTool(
 		// working copy.
 		await fs.rm(tmpExtractDir, { recursive: true, force: true });
 		await fs.mkdir(tmpExtractDir, { recursive: true });
-		await fs.writeFile(tmpArchive, archiveBuffer);
+		await fs.rename(archiveDownloadPath, tmpArchive);
 
 		// `--strip-components=N` drops N leading path components. Default 1 drops a
 		// versioned top-level dir so a launcher path stays stable (bin/… not
@@ -5771,7 +5811,7 @@ async function installArchiveTool(
 			}
 			await swapExtractedDir(tool.id, tmpExtractDir, extractDir);
 			logSessionStart(
-				`archive-install ${tool.id}: installed tree bundle → ${extractDir} (extracted ${archiveBuffer.length} bytes, sha256 verified ${digest})`,
+				`archive-install ${tool.id}: installed tree bundle → ${extractDir} (extracted ${archiveBytes} bytes, sha256 verified ${digest})`,
 			);
 			debugLog(`[archive] installed ${tool.name} bundle → ${extractDir}`);
 			return extractDir;
@@ -5860,11 +5900,12 @@ async function installArchiveTool(
 			);
 		}
 		logSessionStart(
-			`archive-install ${tool.id}: installed → ${shimPath} (extracted ${archiveBuffer.length} bytes, sha256 verified ${digest})`,
+			`archive-install ${tool.id}: installed → ${shimPath} (extracted ${archiveBytes} bytes, sha256 verified ${digest})`,
 		);
 		debugLog(`[archive] installed ${tool.name} → ${shimPath}`);
 		return shimPath;
 	} catch (err) {
+		await fs.rm(archiveDownloadPath, { force: true }).catch(() => {});
 		await fs.rm(tmpArchive, { force: true }).catch(() => {});
 		await fs
 			.rm(tmpExtractDir, { recursive: true, force: true })
