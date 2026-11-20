@@ -452,11 +452,11 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"LSP launch helper receives its own cwd parameter from the server launch boundary",
 	],
 	[
-		"clients/lsp/launch.ts#launchLSP:34d73dd1~2a84127e",
+		"clients/lsp/launch.ts#launchLSP:372ff96e~b7f9fcd3",
 		"launchLSP forwards its caller-provided cwd through trySpawn",
 	],
 	[
-		"clients/lsp/launch.ts#launchLSP:e7df4bb9~3f60133c",
+		"clients/lsp/launch.ts#launchLSP:b49474df~7dbc7b20",
 		"launchLSP forwards its caller-provided cwd through trySpawn",
 	],
 	[
