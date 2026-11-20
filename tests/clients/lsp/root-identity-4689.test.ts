@@ -256,9 +256,10 @@ describe("#4689 item 6: the refused directories are compared on the identity axi
 				path.join(home, "proj", "src", "x.ts"),
 			]) {
 				const found = await server.TypeScriptServer.root(file);
-				expect(found && realpathOrResolve(found), file).toBe(
-					realpathOrResolve(base),
-				);
+				expect(
+					typeof found === "string" && realpathOrResolve(found),
+					file,
+				).toBe(realpathOrResolve(base));
 			}
 		} finally {
 			// The stubs recorded the pinned home as their original, so they are
@@ -351,7 +352,9 @@ describe("#4689 item 6: the extensions-bounded walk", () => {
 		const file = path.join(extensions, "myext", "src", "x.ts");
 
 		const found = await TypeScriptServer.root(file);
-		expect(found && realpathOrResolve(found)).not.toBe(path.join(base, "code"));
+		expect(typeof found === "string" && realpathOrResolve(found)).not.toBe(
+			path.join(base, "code"),
+		);
 	});
 
 	// RECURRENCE GUARDED: `~/.pi` kept in a dotfiles checkout and linked into
@@ -386,7 +389,9 @@ describe("#4689 item 6: the extensions-bounded walk", () => {
 		);
 
 		const found = await TypeScriptServer.root(file);
-		expect(found && realpathOrResolve(found)).not.toBe(agentReal);
+		expect(typeof found === "string" && realpathOrResolve(found)).not.toBe(
+			agentReal,
+		);
 	});
 
 	// RECURRENCE GUARDED: review r1 F1 on #4844. A checkout links an extension
@@ -414,7 +419,9 @@ describe("#4689 item 6: the extensions-bounded walk", () => {
 		const file = path.join(checkout, "packages", "myext", "src", "x.ts");
 
 		const found = await TypeScriptServer.root(file);
-		expect(found && realpathOrResolve(found)).toBe(realpathOrResolve(checkout));
+		expect(typeof found === "string" && realpathOrResolve(found)).toBe(
+			realpathOrResolve(checkout),
+		);
 		const cwd = await resolveLspServerCwd(TypeScriptServer, file, work);
 		expect(cwd && realpathOrResolve(cwd)).toBe(realpathOrResolve(checkout));
 	});

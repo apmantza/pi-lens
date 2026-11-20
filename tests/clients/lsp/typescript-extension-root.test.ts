@@ -75,7 +75,9 @@ describe("TypeScriptRoot — extension files (#123)", () => {
 		});
 		const root = await getTypeScriptServer().root(extFile);
 		// Resolve both paths for case-insensitive Windows comparison.
-		expect(root && path.resolve(root)).toBe(path.resolve(extDir));
+		expect(typeof root === "string" && path.resolve(root)).toBe(
+			path.resolve(extDir),
+		);
 	});
 
 	it("never returns undefined for extension files, even when the only package.json is above the extensions boundary", async () => {
@@ -116,7 +118,7 @@ function writeAgentTsconfig(agentDir: string, name = "tsconfig.json"): void {
 describe("TypeScriptRoot — explicit agent-level tsconfig (#5335)", () => {
 	const rootOf = async (file: string): Promise<string | undefined> => {
 		const root = await getTypeScriptServer().root(file);
-		return root && realpathOrResolve(root);
+		return typeof root === "string" ? realpathOrResolve(root) : undefined;
 	};
 
 	it("roots an extension with no project of its own at the agent tsconfig", async () => {
