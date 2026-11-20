@@ -59,7 +59,7 @@ describe("Deno root decline (#5720)", () => {
 
 	it("never launches TypeScript for a file inside deno.json, and reaches Deno", async () => {
 		const { project, file } = fixture(
-			"fixture-5720-deno-",
+			"pi-lens-5720-deno-",
 			"deno.json",
 			'Deno.writeTextFileSync("out", "ok");\n',
 		);
@@ -72,7 +72,7 @@ describe("Deno root decline (#5720)", () => {
 
 	it("keeps TypeScript for a normal project without deno.json", async () => {
 		const { project, file } = fixture(
-			"fixture-5720-typescript-",
+			"pi-lens-5720-typescript-",
 			"package.json",
 			"export const answer = 42;\n",
 		);
@@ -90,11 +90,13 @@ describe("Deno root decline (#5720)", () => {
 	// server and still name the Deno root that really is outside the session.
 	it("skips a Deno file outside the session roots on the Deno root, not the decline", async () => {
 		const { file } = fixture(
-			"fixture-5720-outside-",
+			"pi-lens-5720-outside-",
 			"deno.json",
 			"export const x = 1;\n",
 		);
-		const session = fs.mkdtempSync(path.join(os.tmpdir(), "session-5720-"));
+		const session = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-5720-session-"),
+		);
 		dirs.push(session);
 		const { registerSessionRoot, resetSessionRootsForTests } =
 			await import("../../../clients/lsp/session-roots.js");
