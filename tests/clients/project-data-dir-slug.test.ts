@@ -978,6 +978,12 @@ describe("project data-dir root decode for the retention sweep (#5702)", () => {
 			fsLikeOf({ "/": ["repos"], "/repos": ["my-app.v2"] }),
 		);
 		expect(probe.statusFor("repos-my-appv2-01234567")).toBe("exists");
+		// A first component the fold strips to nothing: `/é/proj` names `proj`.
+		const stripped = createProjectDataDirRootProbe(
+			"linux",
+			fsLikeOf({ "/": ["é"], "/é": ["proj"] }),
+		);
+		expect(stripped.statusFor("proj-01234567")).toBe("exists");
 	});
 
 	it("answers gone when no full reading exists", () => {
@@ -1138,6 +1144,35 @@ describe("project data-dir root decode for the retention sweep (#5702)", () => {
 				);
 			} finally {
 				fs.chmodSync(path.join(parent, "noread"), 0o755);
+			}
+		},
+	);
+
+	// lane: Unit tests. Root skips: root stats through a mode-0600 directory.
+	it.skipIf(process.getuid?.() === 0)(
+		"answers unrecognized when a link on the walk points where it cannot be checked (linux)",
+		() => {
+			// Recurrence: a link whose target stat refuses (EACCES) was read as
+			// "not a directory", so a live root behind it would read as gone.
+			const base = isolateDataDir();
+			const parent = makeScratch("pi-lens-decode-linkacl-");
+			fs.mkdirSync(path.join(parent, "locked", "real", "proj"), {
+				recursive: true,
+			});
+			fs.symlinkSync(
+				path.join(parent, "locked", "real"),
+				path.join(parent, "link"),
+			);
+			const name = path.basename(
+				dataDir444(base, path.join(parent, "link", "proj")),
+			);
+			fs.chmodSync(path.join(parent, "locked"), 0o600);
+			try {
+				expect(createProjectDataDirRootProbe().statusFor(name)).toBe(
+					"unrecognized",
+				);
+			} finally {
+				fs.chmodSync(path.join(parent, "locked"), 0o755);
 			}
 		},
 	);
