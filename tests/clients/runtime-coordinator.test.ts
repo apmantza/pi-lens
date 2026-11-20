@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -290,7 +290,13 @@ describe("RuntimeCoordinator", () => {
 		// session id; deleting the guard object left one bucket per retired
 		// secondary session. The coordinator's own bucket and a live
 		// secondary's must survive.
-		const dir = mkdtempSync(path.join(tmpdir(), "pi-lens-f8-"));
+		// The read guard stamps FileTime under the file's path identity (its
+		// `key`, a realpath), so the fixture root is resolved first: on macOS
+		// `tmpdir()` sits under a /var or /tmp link, and a lookup by the linked
+		// spelling misses a bucket the release kept (#5217's fixture rule).
+		const dir = realpathSync.native(
+			mkdtempSync(path.join(tmpdir(), "pi-lens-f8-")),
+		);
 		try {
 			const file = path.join(dir, "a.ts");
 			writeFileSync(file, "export const a = 1;\n");

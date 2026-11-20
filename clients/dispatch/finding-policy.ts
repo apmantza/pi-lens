@@ -251,6 +251,7 @@ function filterDisposed<T extends DispositionCandidate>(
 				...(diagnostic.semantic !== undefined && {
 					semantic: diagnostic.semantic,
 				}),
+				finding: diagnostic,
 			} satisfies DispositionCandidate,
 		})),
 	);
@@ -605,6 +606,7 @@ export function filterFindingsByDisposition<F>(
 				}),
 				...(identity.tool !== undefined && { tool: identity.tool }),
 				...(identity.rule !== undefined && { rule: identity.rule }),
+				finding: diagnostic,
 			} satisfies DispositionCandidate & { filePath: string },
 		}));
 	});

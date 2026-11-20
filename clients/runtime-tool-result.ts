@@ -362,6 +362,44 @@ export function resyncHeadMove(args: HeadLook): Promise<void> {
 	});
 }
 
+/**
+ * The HEAD look at every checkout a bash command names (#2050's recovery
+ * roots), each under its own record key, concurrently. A command that moves
+ * HEAD in a sibling linked worktree (`cd ../wt && git checkout`, a rebase, a
+ * reset) rewrites files that were never dirty, so `git status` names none of
+ * them: only that worktree's own HEAD look finds them. The roots are
+ * independent (one HEAD file each, one key each), so their looks overlap;
+ * the bound the caller puts around the whole set is the one the single look
+ * had. `discarded` hands each root the same-HEAD discards its own baseline
+ * saw (#4502), read before the bound starts.
+ */
+export async function resyncHeadMovesAt(args: {
+	roots: readonly string[];
+	sessionGeneration: number;
+	sessionId: string | undefined;
+	trigger: HeadLook["trigger"];
+	label: string;
+	runtime?: DiskChangeRuntime;
+	discarded?: ReadonlyMap<string, readonly string[]>;
+}): Promise<void> {
+	await Promise.all(
+		args.roots.map(async (root) => {
+			const discarded = args.discarded?.get(root);
+			await resyncHeadMove({
+				root,
+				key: headRecordKey(
+					opaqueBaselineSlot(root, args.sessionGeneration),
+					args.sessionId,
+				),
+				trigger: args.trigger,
+				label: args.label,
+				...(discarded ? { discarded } : {}),
+				...(args.runtime ? { runtime: args.runtime } : {}),
+			});
+		}),
+	);
+}
+
 interface HeadLook {
 	root: string;
 	key: string;
@@ -484,6 +522,9 @@ async function lookAtHead(args: HeadLook): Promise<void> {
 						? `changed:${population.length}`
 						: `discarded:${population.length}`,
 			metadata: {
+				// A bash command can move HEAD in any checkout it names (a sibling
+				// linked worktree, #2050), so the row says which one moved.
+				root: args.root,
 				trigger: args.trigger,
 				from: from?.slice(0, 12) ?? "",
 				to: head.slice(0, 12),
@@ -2815,7 +2856,7 @@ export async function handleToolResult(
 		// #4502: the pre-command dirty set, taken from this call's own baseline
 		// and compared with the post-command status below. Held here (not inside
 		// the recovery block) because the head look after it is what publishes it.
-		let dirtyBefore: readonly string[] | undefined;
+		const dirtyBeforeByRoot = new Map<string, readonly string[]>();
 		// Recovery runs for EVERY bash command with a pending baseline - not
 		// only recognized-empty ones. A mixed command (`python x.py > out.ts`
 		// plus script-internal writes) previously skipped observation entirely
@@ -2860,8 +2901,9 @@ export async function handleToolResult(
 			}));
 			// #4502: `undefined` means git could not answer before the command, an
 			// empty array that the tree was clean. Only the second says "no discard".
-			dirtyBefore = baselines.find((entry) => entry.root === scanRoot)?.pending
-				?.dirtyPaths;
+			for (const { root, pending } of baselines)
+				if (pending?.dirtyPaths !== undefined)
+					dirtyBeforeByRoot.set(root, pending.dirtyPaths);
 			// #5616: only the agent's own successful bash call is credited with a
 			// file it changed without naming it. Another tool's writes (#4732) and
 			// a failed command's stay uncredited.
@@ -3168,21 +3210,28 @@ export async function handleToolResult(
 		const headScanRoot = opaquePrescanRoot(deps.cwd, workspaceRoot);
 		if (headScanRoot) {
 			const headMoveSignal = deps.signal ?? undefined;
-			const discarded =
-				dirtyBefore === undefined
-					? undefined
-					: await readSameHeadDiscards(headScanRoot, dirtyBefore);
+			// #4502: each root's discards, read before the look's bound starts so
+			// the read never spends the resync's budget; each read bounds itself.
+			const discarded = new Map<string, readonly string[]>();
+			await Promise.all(
+				recoveryScopes.roots.map(async (root) => {
+					const dirtyBefore = dirtyBeforeByRoot.get(root);
+					if (dirtyBefore === undefined) return;
+					const paths = await readSameHeadDiscards(root, dirtyBefore);
+					if (paths) discarded.set(root, paths);
+				}),
+			);
+			// Every recovery root, the session's first: a command can move HEAD in
+			// a sibling worktree it named, and only that root's look sees it.
 			await bounded(
-				resyncHeadMove({
-					root: headScanRoot,
-					key: headRecordKey(
-						opaqueBaselineSlot(headScanRoot, runtime.sessionGeneration),
-						deps.sessionId,
-					),
+				resyncHeadMovesAt({
+					roots: recoveryScopes.roots,
+					sessionGeneration: runtime.sessionGeneration,
+					sessionId: deps.sessionId,
 					trigger: "tool_result",
 					label: opaqueLabel,
-					...(discarded ? { discarded } : {}),
 					runtime,
+					discarded,
 				}),
 				{
 					ms: HOOK_WALL_BUDGET_MS.tool_result_edit,

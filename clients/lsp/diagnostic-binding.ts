@@ -238,13 +238,26 @@ export interface TouchFileResult {
  * `"server-load-failed"` is the same for a workspace that failed to load
  * (`health: "error"`), which no wait fixes.
  */
-type TouchInconclusiveReason =
+export type TouchInconclusiveReason =
 	| "notify-write"
 	| "diagnostics-wait"
 	| "server-loading"
 	| "server-load-failed"
 	| "mixed"
 	| "primary-unavailable";
+
+/** Human-facing cause for an inconclusive touch, owned with its touch taxonomy. */
+export const TOUCH_INCONCLUSIVE_REASON_PHRASE: Record<
+	TouchInconclusiveReason,
+	string
+> = {
+	"notify-write": "the document write did not finish within its budget",
+	"diagnostics-wait": "no document diagnostics arrived within the wait budget",
+	"server-loading": "the language server is still loading",
+	"server-load-failed": "the language server failed to load",
+	mixed: "the document write and diagnostics wait did not both finish",
+	"primary-unavailable": "no primary language server answered",
+};
 
 /** The inputs {@link resolveTouchVerdict} decides a touch's honesty verdict from. */
 export interface TouchVerdictInput {

@@ -218,7 +218,7 @@ function compareAgainstBaseline(
 			);
 		else if (finding.missing.length < admitted)
 			warnings.push(
-				`${entry}: missing count fell from ${admitted} to ${finding.missing.length}`,
+				`${entry}: missing count fell from ${admitted} to ${finding.missing.length}; lower the baseline row with \`npm run test:regen -- vi-mock\``,
 			);
 	}
 	for (const entry of Object.keys(baseline))
@@ -1543,6 +1543,11 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 				`vi-mock-export-sweep: ${result.warnings.length} warning row(s)\n`,
 			);
 			expect(result.problems, result.problems.join("\n")).toEqual([]);
+			// Recurrence: a count row above the live count only warned, so a stale
+			// ceiling re-admitted regrowth to its old height (oracle plant 2026-11-18:
+			// one row +1 stayed green). The comparison keeps warning; the tree must
+			// hold none, as flake-shape and lsp-double do for their falls.
+			expect(result.warnings, result.warnings.join("\n")).toEqual([]);
 		},
 		TREE_WALK_TIMEOUT_MS,
 	);

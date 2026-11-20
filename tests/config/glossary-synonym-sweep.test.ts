@@ -1497,7 +1497,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `path.isAbsolute` leg that rejects another Windows drive (V1).
 		// 19 -> 18 (#5009): the two root-level venv candidates became one
 		// `path.join` inside the list the resolver and the install stamp share.
-		"clients/python-environment.ts": 13,
+		"clients/python-environment.ts": 12,
 		"clients/read-guard-logger.ts": 3,
 		// 5 -> 6 (#5377): the locked commit's `path:` member names the record file
 		// to `commitDurableStoreAsync`; the helper it replaces took `cwd` and
@@ -1889,7 +1889,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `RunnerResult`, the same member sense as every row here.
 		"clients/dispatch/collect-later-tier.ts": 1,
 		// 34 -> 35 (#5413): the spawn-timeout cooldown skip in `runRunner`.
-		"clients/dispatch/dispatcher.ts": 36,
+		"clients/dispatch/dispatcher.ts": 37,
 		// 1 -> 3 (#5553): the staged read leaves out a lane row whose `status`
 		// is skipped for a stated cause, and names the others' `status`.
 		// 3 -> 4 (#5621): `ensureSeedCopyExcluded` reads the exit `status` of its
