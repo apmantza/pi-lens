@@ -734,6 +734,10 @@ export const wallClockBudgetInclude = [
 	// #2344: npm test leaves this real-child integration suite in the default
 	// project unless it is explicitly phased here. `test:integration` still
 	// selects the same file positionally, while `test:unit` excludes it below.
+	// #5694: a real host process dies (killed, or the processExiting teardown)
+	// and the case watches whether its language server outlives it on Windows;
+	// real host, real cmd.exe and libuv job, so it runs serialized.
+	"tests/clients/lsp/windows-server-containment-5694.test.ts",
 	"tests/clients/lsp/workspace-diagnostics-sweep-attribution.integration.test.ts",
 	// #5119: the no-fix wrapper child is killed, crashed and re-imported for real (flake-shape admission).
 	"tests/clients/markdownlint-api.test.ts",

@@ -1115,6 +1115,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
 	},
+	"real-process-spawn:clients/lsp/windows-server-containment-5694.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"#5694: which process the Windows kernel ends when a pi host dies is the subject; only a real host, a real cmd.exe and libuv's kill-on-close job show whether the server outlives it, and no child_process double has a process tree",
+	},
 	"real-process-spawn:clients/lsp/workspace-diagnostics-sweep-attribution.integration.test.ts":
 		{
 			detector: "real-process-spawn",
@@ -2077,6 +2082,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "ungoverned-wait-for",
 		reason:
 			"#5097: the abort must land after the request is on the wire (and the server's own refresh must reach a re-pull, and a loading server must be reported loading, and the workspace pull and the read-only command must be on the wire before the Esc), and only the server's own trace shows that; the poll is bounded by its own timeout",
+	},
+	"ungoverned-wait-for:clients/lsp/windows-server-containment-5694.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"#5694: the server's start shows only as the pid file it writes and its death only as its pid going away; neither exposes an awaitable, and each poll is bounded by its own timeout",
 	},
 	"ungoverned-wait-for:clients/session-repository-trust-4530.test.ts": {
 		detector: "ungoverned-wait-for",

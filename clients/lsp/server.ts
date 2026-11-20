@@ -4132,11 +4132,11 @@ function buildPsesArgs(bundleDir: string): string[] {
 	const logPath = path.join(sessionDir, "pses.log");
 	const sessionDetailsPath = path.join(sessionDir, "session.json");
 	// Use -File with each PSES parameter as a SEPARATE argv element (the canonical
-	// editor launch form). This deliberately avoids `-Command "& '...'"`: pwsh.exe
-	// commonly lives under "C:\Program Files\…" (a space), which forces launchLSP's
-	// Windows shell path, and an embedded `&`/quotes in a single -Command string
-	// gets mangled by cmd.exe. Plain argv tokens survive shell escaping (our paths
-	// are under ~/.pi-lens, no spaces). -Stdio makes PSES speak LSP over this
+	// editor launch form). This deliberately avoids `-Command "& '...'"`: an
+	// embedded `&`/quotes in a single -Command string is mangled by any cmd.exe
+	// layer, and plain argv tokens need no escaping. pwsh.exe commonly lives under
+	// "C:\Program Files\…" (a space); launchLSP spawns an .exe there directly,
+	// never through cmd.exe, so the server ends with pi (#5694). -Stdio makes PSES speak LSP over this
 	// process's stdin/stdout; -LanguageServiceOnly skips the debug adapter.
 	return [
 		"-NoLogo",

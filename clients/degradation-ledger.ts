@@ -1353,6 +1353,14 @@ export type DegradationKind =
 	 */
 	| "lsp-server-message"
 	/**
+	 * `lsp-server-uncontained`: #5694: a Windows `.cmd` language-server shim
+	 * that `resolveNpmCmdShim` (clients/lsp/launch.ts) could not run directly
+	 * (not an npm cmd-shim template, a missing script, no Node `.exe`), so the
+	 * server runs behind cmd.exe and outlives a pi that is killed. Once per
+	 * shim path (the subject) per session; the reason names why.
+	 */
+	| "lsp-server-uncontained"
+	/**
 	 * `lsp-server-unexpected-close`: A language-server child process CLOSED without pi-lens having asked it to
 	 * (#1969). `clientShutdown()` sets `state.shutdownRequested`, so evictions
 	 * and ordinary teardown never reach this kind — only a mid-session death.

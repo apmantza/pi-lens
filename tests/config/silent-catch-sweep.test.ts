@@ -807,11 +807,14 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		identities: "53f0ed4e5a760b9e",
 		reason: PRE_RULE,
 	}, // :65
+	// #5694 re-pins the identity, count unchanged: the try bodies of the ps1
+	// bypass catch (:564) and the spawn fallback catch (:1199) no longer carry
+	// the deleted `needsShell` value; no handler was added or removed.
 	"clients/lsp/launch.ts": {
 		silent: 8,
-		identities: "28c8d9743bb92359",
+		identities: "455b1d236759b4c2",
 		reason: PRE_RULE,
-	}, // :110, :418, :772, :778, :1031, :1256, :1267, :1278
+	}, // :244, :564, :942, :948, :1199, :1424, :1435, :1446
 	"clients/lsp/lombok.ts": {
 		silent: 6,
 		identities: "a076d98b1826881f",
