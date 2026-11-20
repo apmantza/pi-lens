@@ -898,6 +898,12 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"a clean-tree HEAD move only exists in a real repository that git checks out, rebases or resets; a stubbed git cannot rewrite the files the server holds",
 	},
+	// The #4493 HEAD look in a sibling linked worktree; its spawns run through the kit.
+	"real-process-spawn:clients/head-move-resync-sibling-worktree.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"a HEAD move in a linked worktree only exists in a real repository whose worktree git checks out; a stubbed git cannot rewrite the files the server holds there",
+	},
 	"real-process-spawn:clients/installer/pip-pep668.test.ts": {
 		detector: "real-process-spawn",
 		reason:

@@ -234,6 +234,7 @@ const EXPECTED_WRAPPER_SITES = [
 	"clients/lsp/launch.ts:trySpawn",
 	"clients/lsp/launch.ts:trySpawn",
 	"clients/metrics/complexity-baseline.ts:resolveDefaultBranch",
+	"clients/opaque-mutation-scan.ts:readGitHead",
 	"clients/opaque-mutation-scan.ts:readGitStatusEntries",
 	"clients/opaque-mutation-scan.ts:readGitStatusEntries",
 	"clients/opaque-mutation-scan.ts:readGitStatusEntries",
@@ -303,6 +304,10 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/metrics/complexity-baseline.ts#readAtDefaultBranch:166fb4b8~7330fe93",
 		"resolveDefaultBranch runs `git for-each-ref` with cwd = existingDir(path.dirname(realpathOrResolve(filePath))), the nearest existing directory of the file's own identity, so a file link answers its target's repository (#4966); it reads ref names only and resolves no project configuration from the dispatch cwd (#5087)",
+	],
+	[
+		"clients/opaque-mutation-scan.ts#seedGitHeadAt:5ae73b47~5ae73b47",
+		"readGitHead runs `git rev-parse --verify HEAD` (only when the HEAD files cannot answer) with cwd = seedGitHeadAt's own `root`, the sibling worktree a bash command named, whose HEAD tool_call records before the command runs; it reads a commit id and resolves no project configuration from the dispatch cwd (#5718)",
 	],
 	[
 		"clients/metrics-history.ts#getCurrentCommit:b46d4221~df24802d",
