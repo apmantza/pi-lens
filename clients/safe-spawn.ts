@@ -44,6 +44,7 @@ import { windowsExe } from "./process-snapshot.js";
 import { startSpawnUsageSampler } from "./resource-sampler.js";
 import { isToolInstallDisabled } from "./env-utils.js";
 import { DEFAULT_MAX_OUTPUT_BYTES } from "./spawn-output-cap.js";
+import { getProcessSingleton } from "./process-singletons.js";
 import { compareOrdinal } from "./string-utils.js";
 import {
 	type SpawnCooldownIdentity,
@@ -425,16 +426,13 @@ interface LifetimeCleanupState {
 
 // Vitest reloads modules inside a reused worker. Keep this registry on the
 // process so those module instances share one signal/exit listener set.
-const lifetimeStateKey = Symbol.for("pi-lens.safe-spawn.lifetime-state");
-const processWithLifetimeState = process as typeof process & {
-	[lifetimeStateKey]?: LifetimeCleanupState;
-};
-const lifetimeState =
-	processWithLifetimeState[lifetimeStateKey] ??
-	(processWithLifetimeState[lifetimeStateKey] = {
-		pids: new Set<number>(),
-		installed: false,
-	});
+function lifetimeState(): LifetimeCleanupState {
+	return getProcessSingleton<LifetimeCleanupState>(
+		"safe-spawn-lifetime",
+		1,
+		() => ({ pids: new Set<number>(), installed: false }),
+	);
+}
 
 /**
  * THE ownership predicate for every kill-by-raw-pid in this repo (#2042).
@@ -705,14 +703,14 @@ function killPidTreeSync(pid: number): void {
 }
 
 function installLifetimeCleanup(): void {
-	if (lifetimeState.installed) return;
-	lifetimeState.installed = true;
+	if (lifetimeState().installed) return;
+	lifetimeState().installed = true;
 	process.once("exit", () => {
-		for (const pid of lifetimeState.pids) killPidTreeSync(pid);
+		for (const pid of lifetimeState().pids) killPidTreeSync(pid);
 	});
 	for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as NodeJS.Signals[]) {
 		process.once(signal, () => {
-			for (const pid of lifetimeState.pids) killPidTreeSync(pid);
+			for (const pid of lifetimeState().pids) killPidTreeSync(pid);
 			if (process.platform === "win32" && signal === "SIGHUP") {
 				// Windows emits SIGHUP when its console closes, but libuv cannot
 				// self-send it (process.kill(..., "SIGHUP") throws ENOSYS). The
@@ -2212,7 +2210,7 @@ export async function safeSpawnAsync(
 			// longer receive terminal signals directly, so the lifetime
 			// cleanup's signal forwarding IS their die-with-host path.
 			installLifetimeCleanup();
-			lifetimeState.pids.add(child.pid as number);
+			lifetimeState().pids.add(child.pid as number);
 		}
 
 		// #620: bracket this spawn's lifetime with a short-interval CPU/RSS poll
@@ -2659,7 +2657,7 @@ export async function safeSpawnAsync(
 			closed = true;
 			clearTimeout(timeoutId);
 			abortSignal?.removeEventListener("abort", onAbort);
-			if (child.pid) lifetimeState.pids.delete(child.pid);
+			if (child.pid) lifetimeState().pids.delete(child.pid);
 			void finalize(code, signal);
 		};
 
@@ -2823,7 +2821,7 @@ export async function safeSpawnAsync(
 			if (escalationTimer && !posixProcessGroup) {
 				clearTimeout(escalationTimer);
 			}
-			if (child.pid) lifetimeState.pids.delete(child.pid);
+			if (child.pid) lifetimeState().pids.delete(child.pid);
 			const resourceUsage = finishResourceUsage();
 			let failure: SpawnFailureKind = "spawn";
 			if (aborted) failure = "aborted";

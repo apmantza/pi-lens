@@ -55,15 +55,24 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { isWithinIdentity, normalizeFilePath } from "./path-utils.js";
+import { getProcessSingleton } from "./process-singletons.js";
 
 /**
- * The memo lives in a process-wide `globalThis` slot rather than a plain
- * module-scope `let` so that a bundled `dist/index.js` and the loose
+ * The memo lives in a process singleton (`getProcessSingleton`, a leaf with no
+ * imports, so the cycle rule in this file's header still holds) rather than a
+ * plain module-scope `let`, so that a bundled `dist/index.js` and the loose
  * `clients/*.js` loaded into the same process — the shape #335 ships — share
- * ONE decision instead of memoizing two. A `Symbol.for` key is interned by
- * string, so both copies of this module resolve to the same slot.
+ * ONE decision instead of memoizing two.
  */
-const RESOLUTION_SLOT = Symbol.for("pi-lens.probe-home-state.resolution");
+interface ProbeHomeCell {
+	resolution: ProbeHomeResolution | undefined;
+}
+
+function cell(): ProbeHomeCell {
+	return getProcessSingleton<ProbeHomeCell>("probe-home-resolution", 1, () => ({
+		resolution: undefined,
+	}));
+}
 
 export interface ProbeHomeRedirectEvent {
 	probeHome: string;
@@ -81,13 +90,9 @@ export interface ProbeHomeResolution {
 	event: ProbeHomeRedirectEvent | undefined;
 }
 
-type GlobalWithProbeHomeState = typeof globalThis & {
-	[key: symbol]: ProbeHomeResolution | undefined;
-};
-
 /** The memoized resolution for this process, or `undefined` before first use. */
 export function getProbeHomeResolution(): ProbeHomeResolution | undefined {
-	return (globalThis as GlobalWithProbeHomeState)[RESOLUTION_SLOT];
+	return cell().resolution;
 }
 
 /**
@@ -208,12 +213,11 @@ export function isTestProcessTargetingRealHome(file: string): boolean {
  * changed.
  */
 function resolveProbeHomeDir(): string | undefined {
-	const slot = globalThis as GlobalWithProbeHomeState;
-	const cached = slot[RESOLUTION_SLOT];
-	if (cached) return cached.probeHome;
+	const memo = cell();
+	if (memo.resolution) return memo.resolution.probeHome;
 	const cwd = process.cwd();
 	const probeHome = computeProbeHomeDir(cwd);
-	slot[RESOLUTION_SLOT] = {
+	memo.resolution = {
 		probeHome,
 		event: probeHome ? { probeHome } : undefined,
 	};
@@ -228,7 +232,7 @@ function resolveProbeHomeDir(): string | undefined {
  * in a worker would pin the answer for every later case in the same file.
  */
 export function _resetProbeHomeRedirectStateForTests(): void {
-	(globalThis as GlobalWithProbeHomeState)[RESOLUTION_SLOT] = undefined;
+	cell().resolution = undefined;
 }
 
 /** The redirect decision itself. */
