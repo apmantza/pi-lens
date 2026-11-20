@@ -590,10 +590,15 @@ export const BLOCKER_FULL_DELIVERY_CAP = 3;
 function narrowedRecord(
 	existing: InlineBlockerRecord,
 	kept: Diagnostic[],
+	/** The project root a row's relative path resolves against (#5714 r1). */
+	root: string | undefined,
 ): InlineBlockerRecord {
 	return {
 		...existing,
-		summary: formatDiagnostics(kept, "blocking").trim(),
+		summary: formatDiagnostics(kept, "blocking", undefined, {
+			editedFile: existing.filePath,
+			root,
+		}).trim(),
 		diagnostics: kept,
 		sources: inlineBlockerSources(kept),
 		lines: inlineBlockerLines(kept, existing.filePath),
@@ -2069,7 +2074,10 @@ export class RuntimeCoordinator {
 					: {}),
 				...this.recordSession(sessionId),
 			}),
-			summary: formatDiagnostics(diagnostics, "blocking").trim(),
+			summary: formatDiagnostics(diagnostics, "blocking", undefined, {
+				editedFile: filePath,
+				root: this.projectRoot || undefined,
+			}).trim(),
 			diagnostics,
 			// The same two derivations the pipeline's writer uses: `lines` keeps only
 			// this file's own rows, `sources` pins an untagged finding as "unknown".
@@ -2205,7 +2213,10 @@ export class RuntimeCoordinator {
 			this._pendingInlineBlockers.delete(key);
 			return retired.length;
 		}
-		this._pendingInlineBlockers.set(key, narrowedRecord(existing, kept));
+		this._pendingInlineBlockers.set(
+			key,
+			narrowedRecord(existing, kept, this.projectRoot || undefined),
+		);
 		return retired.length;
 	}
 
@@ -2706,7 +2717,10 @@ export class RuntimeCoordinator {
 		}
 		// The derived fields come from the surviving rows, never from the old
 		// record (`narrowedRecord`).
-		this._pendingInlineBlockers.set(key, narrowedRecord(existing, kept));
+		this._pendingInlineBlockers.set(
+			key,
+			narrowedRecord(existing, kept, this.projectRoot || undefined),
+		);
 		return true;
 	}
 
@@ -2788,7 +2802,10 @@ export class RuntimeCoordinator {
 					this.noteResolvedBlockerFile(existing, undefined, true);
 				this._pendingInlineBlockers.delete(key);
 			} else {
-				this._pendingInlineBlockers.set(key, narrowedRecord(existing, kept));
+				this._pendingInlineBlockers.set(
+					key,
+					narrowedRecord(existing, kept, this.projectRoot || undefined),
+				);
 			}
 		}
 		return changed;

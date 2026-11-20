@@ -7373,8 +7373,10 @@ export class LSPService {
 				server.root(filePath),
 			),
 		);
-		return candidates.find((candidate): candidate is string =>
-			Boolean(candidate),
+		// #5720: a declined root is a symbol, never a path, so `typeof` drops it.
+		return candidates.find(
+			(candidate): candidate is string =>
+				typeof candidate === "string" && candidate !== "",
 		);
 	}
 

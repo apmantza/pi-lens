@@ -83,6 +83,30 @@ export function messageIsCutWhenDisplayed(message: string): boolean {
 }
 
 /**
+ * The message without the `[<rule>] ` prefix a runner folded into it, or
+ * `undefined` when the message does not open with the finding's own rule.
+ *
+ * Many runners write their code into the message (`[import-not-found] Cannot
+ * find ...` from mypy; shellcheck, hadolint, yamllint, tflint and others do the
+ * same), and a rendered finding line prints that message whole. An agent that
+ * marks what it was shown passes the bracket as `rule` and the rest as
+ * `message`, so its anchor hashes a message no finding carries. The
+ * disposition seam accepts this form as an alias of the message it came from,
+ * through this one derivation. Only the finding's OWN rule is stripped: a
+ * bracket naming anything else (a category, another rule) is message text.
+ */
+export function messageWithoutRulePrefix(
+	message: string,
+	rule: string | undefined,
+): string | undefined {
+	if (!rule) return undefined;
+	const prefix = `[${rule}]`;
+	if (!message.startsWith(prefix)) return undefined;
+	const rest = message.slice(prefix.length).trim();
+	return rest.length > 0 ? rest : undefined;
+}
+
+/**
  * A finding's line-agnostic identity: `[tool, rule, normalised message]`. The
  * same finding keeps it when an edit above it moves its line, and two
  * occurrences of one rule with one message share it, so callers that must

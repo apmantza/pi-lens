@@ -73,17 +73,165 @@ const isWindows = process.platform === "win32";
 const OWNER_TAG_READ_MS = 5_000;
 
 /**
- * Whether a resolved command must be spawned through a shell on Windows.
- * `.cmd`/`.bat` are scripts cmd.exe must interpret; extensionless or spaced-path
- * commands also go through the shell so cmd resolves/quotes them.
+ * How one server command reaches the OS (#5694).
+ *
+ * On Windows the server must be the process this one spawns. libuv puts every
+ * child it spawns without `detached` into a job object that ends the child when
+ * this process dies, by any route, crash included
+ * (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`), and lets that child's own children
+ * break away silently (`JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK`). A server behind
+ * `cmd.exe` is such a grandchild: the host's exit ended the wrapper and the
+ * server lived on (#5694: 30 PowerShell Editor Services orphans).
+ *
+ * The rule is the spawn seam's (`safeSpawnAsync`): only a `.cmd`/`.bat` script
+ * needs `cmd.exe`, read from the file the command names, never from its
+ * spelling. An `.exe` with a space in its path is spawned directly (libuv
+ * quotes it). An npm shim that runs a Node script is replaced by that Node
+ * script (`resolveNpmCmdShim`). Every other `.cmd`/`.bat`, and a spelling no
+ * file answers, still goes through `cmd.exe`, as before.
+ *
+ * `script` keeps the longer startup window for a launch that came from a
+ * `.cmd`/`.bat`, whether or not `cmd.exe` still runs it.
  */
-function computeNeedsShell(resolvedCommand: string): boolean {
-	return (
-		isWindows &&
-		(resolvedCommand.includes(" ") ||
-			/\.(cmd|bat)$/i.test(resolvedCommand) ||
-			!/\.(exe|cmd|bat)$/i.test(resolvedCommand))
-	);
+interface ServerLaunchPlan {
+	command: string;
+	args: string[];
+	shell: boolean;
+	script: boolean;
+}
+
+function planServerLaunch(
+	command: string,
+	args: string[],
+	cwd: string,
+	env: NodeJS.ProcessEnv,
+): ServerLaunchPlan {
+	if (!isWindows) return { command, args, shell: false, script: false };
+	const file =
+		resolveWindowsCommandForEnvironment(command, cwd, env)?.resolvedPath ??
+		command;
+	if (/\.(exe|com)$/i.test(file)) {
+		return { command: file, args, shell: false, script: false };
+	}
+	const shim = /\.(cmd|bat)$/i.test(file)
+		? resolveNpmCmdShim(file, cwd, env)
+		: undefined;
+	if (shim) {
+		return {
+			command: shim.program,
+			args: [shim.script, ...args],
+			shell: false,
+			script: true,
+		};
+	}
+	return { command: file, args, shell: true, script: true };
+}
+
+/**
+ * The lines npm's `cmd-shim` writes into a `.cmd` for a `#!/usr/bin/env node`
+ * bin, in order, blank lines dropped (#5694). Two releases are admitted:
+ * 6.0.x (npm 9 and 10) and 7.x (npm 11). Only the run line varies, in its
+ * prefix and in the target it names.
+ */
+const NPM_CMD_SHIM_HEAD = [
+	"@ECHO off",
+	"GOTO start",
+	":find_dp0",
+	"SET dp0=%~dp0",
+	"EXIT /b",
+	":start",
+	"SETLOCAL",
+	"CALL :find_dp0",
+	'IF EXIST "%dp0%\\node.exe" (',
+	'SET "_prog=%dp0%\\node.exe"',
+	") ELSE (",
+	'SET "_prog=node"',
+] as const;
+
+const NPM_CMD_SHIM_TEMPLATES = [
+	{
+		tail: ["SET PATHEXT=%PATHEXT:;.JS;=;%", ")"],
+		run: /^endLocal & goto #_undefined_# 2>NUL \|\| title %COMSPEC% & "%_prog%"\s+"%dp0%\\([^"%]+)"\s+%\*$/,
+	},
+	{
+		tail: [")"],
+		run: /^set PATHEXT=%PATHEXT:;\.JS;=;% & "%_prog%"\s+"%dp0%\\([^"%]+)"\s+%\*$/,
+	},
+] as const;
+
+/**
+ * The script an npm `cmd-shim` `.cmd` runs under `node`, relative to the
+ * shim's directory, or undefined (#5694).
+ *
+ * Fail closed: the shim must be one of `NPM_CMD_SHIM_TEMPLATES` line for line.
+ * Anything else keeps `cmd.exe`: a shim that sets variables (`@SET`), passes
+ * interpreter flags from the shebang, runs another interpreter, comes from an
+ * older npm or another package manager, or carries any line not in the
+ * template. Reading such a shim wrong would start the server with arguments
+ * or an environment the shim never gave it; keeping `cmd.exe` only keeps the
+ * containment gap the shim had before.
+ */
+export function parseNpmCmdShim(content: string): string | undefined {
+	const lines = content
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+	for (const template of NPM_CMD_SHIM_TEMPLATES) {
+		const head = [...NPM_CMD_SHIM_HEAD, ...template.tail];
+		if (lines.length !== head.length + 1) continue;
+		if (!head.every((line, index) => lines[index] === line)) continue;
+		const target = template.run.exec(lines[head.length] ?? "")?.[1];
+		if (target !== undefined) return target;
+	}
+	return undefined;
+}
+
+/**
+ * The Node program and script an npm `.cmd` shim would run, read from the shim
+ * the way `cmd.exe` would run it (#5694): `node.exe` beside the shim when it
+ * exists, else `node` from the child's PATH, which must answer an `.exe`.
+ * Undefined when the shim is not an admitted `cmd-shim` (`parseNpmCmdShim`),
+ * its script is not a file, or no Node program answers; the caller then keeps
+ * `cmd.exe`.
+ */
+export function resolveNpmCmdShim(
+	shimFile: string,
+	cwd: string,
+	env: NodeJS.ProcessEnv,
+): { program: string; script: string } | undefined {
+	// Each refusal leaves the server behind cmd.exe, outside the containment
+	// #5694 gives the admitted shims: one record per shim per session says so.
+	const recordUncontained = (why: string): undefined => {
+		recordDegradationOnce({
+			kind: "lsp-server-uncontained",
+			subject: shimFile,
+			reason: `${path.basename(shimFile)} runs behind cmd.exe, so its server outlives a pi that is killed: ${why}`,
+		});
+		return undefined;
+	};
+	let content: string;
+	try {
+		content = fs.readFileSync(shimFile, "utf-8");
+	} catch (cause) {
+		recordUncontained(`the shim could not be read (${String(cause)})`);
+		return undefined;
+	}
+	const target = parseNpmCmdShim(content);
+	if (target === undefined)
+		return recordUncontained("not an npm cmd-shim template");
+	const dir = path.dirname(shimFile);
+	const script = path.resolve(dir, target.replace(/[/\\]/g, path.sep));
+	if (!statIsFile(script))
+		return recordUncontained(`its script is not a file: ${script}`);
+	const besideShim = path.join(dir, "node.exe");
+	const program = statIsFile(besideShim)
+		? besideShim
+		: resolveWindowsCommandForEnvironment("node", cwd, env)?.resolvedPath;
+	if (program === undefined)
+		return recordUncontained("no node.exe beside it or on the child's PATH");
+	if (!/\.exe$/i.test(program))
+		return recordUncontained(`node is not an .exe: ${program}`);
+	return { program, script };
 }
 
 const DEFAULT_STARTUP_FAILURE_WINDOW_MS = 50;
@@ -401,11 +549,12 @@ function isMissingWindowsStartupCommand(
 function bypassPs1OnWindows(
 	ps1Path: string,
 	args: string[],
-): { command: string; args: string[]; needsShell: boolean } | undefined {
-	// 1. Prefer the .cmd sibling — cmd.exe handles it without execution policy issues
+): { command: string; args: string[] } | undefined {
+	// 1. Prefer the .cmd sibling: no execution policy applies, and the spawn
+	// plan runs an npm shim's Node script directly (#5694).
 	const cmdPath = `${ps1Path.slice(0, -4)}.cmd`;
 	if (fs.existsSync(cmdPath)) {
-		return { command: cmdPath, args, needsShell: true };
+		return { command: cmdPath, args };
 	}
 
 	// 2. Parse the .ps1 to find the JS entry point and invoke via node directly.
@@ -424,7 +573,6 @@ function bypassPs1OnWindows(
 				return {
 					command: process.execPath,
 					args: [jsPath, ...args],
-					needsShell: false,
 				};
 			}
 		}
@@ -458,7 +606,7 @@ function bypassPs1OnWindows(
  *
  * Windows keeps its PATHEXT-aware in-process resolver
  * (`resolveWindowsCommandForEnvironment`, the same `where`-equivalent
- * `computeNeedsShell` already asks), so the `.cmd`/`.exe` suffix rules are
+ * `planServerLaunch` asks), so the `.cmd`/`.exe` suffix rules are
  * unchanged. The in-process scan also removes the 5 s child-process bound the
  * spawn needed (#1980): there is no probe binary left to hang.
  */
@@ -730,18 +878,21 @@ function refuseProjectLookup(
 }
 
 /**
- * Try to spawn a process, throwing immediately if it fails
+ * Spawn a server through its launch plan (`planServerLaunch`), throwing
+ * immediately if the spawn fails. The plan comes back with the child: it names
+ * the program that actually runs, for the instance registry and the logs.
  */
 function trySpawn(
-	command: string,
-	args: string[],
+	spawnCommand: string,
+	spawnArgs: string[],
 	cwd: string,
 	env: NodeJS.ProcessEnv,
-	needsShell: boolean,
-): ChildProcess {
+): { proc: ChildProcess; plan: ServerLaunchPlan } {
+	const plan = planServerLaunch(spawnCommand, spawnArgs, cwd, env);
+	const { command, args } = plan;
 	let proc: ChildProcess;
 
-	if (needsShell) {
+	if (plan.shell) {
 		// Build a cmd.exe-safe command string: wrap in double quotes, escape internal
 		// quotes by doubling them, and escape cmd metacharacters (& | < > ^ ( ) !) with ^
 		const escapeCmdArg = (s: string): string => {
@@ -751,8 +902,10 @@ function trySpawn(
 				? `"${escaped.replace(/"/g, '""')}"`
 				: escaped;
 		};
-		// shell:true justified: Windows .cmd/.bat LSP binaries (e.g. typescript-language-server.cmd)
-		// cannot be spawned via execFile — cmd.exe must interpret the script wrapper.
+		// shell:true justified: a Windows .cmd/.bat that is not an admitted npm
+		// shim (resolveNpmCmdShim) cannot be spawned via execFile; cmd.exe must
+		// interpret it. The server then runs behind cmd.exe and outlives a host
+		// that dies (#5694), unless it exits on stdin EOF by itself.
 		const shellCommand = `"${command}" ${args.map(escapeCmdArg).join(" ")}`;
 		// #2015 class-sweep exemption: this is a LONG-LIVED language-server launch,
 		// not a bounded probe - killing it on a timeout would be wrong, and its
@@ -790,7 +943,7 @@ function trySpawn(
 	// by `killProcessTree` when the shutdown ladder is done with the pid.
 	holdOwnChildPid(proc.pid, "lsp-spawn");
 
-	return proc;
+	return { proc, plan };
 }
 
 /**
@@ -908,7 +1061,8 @@ function _attachErrorHandler(
  *
  * Key fixes for Windows:
  * - Uses absolute paths (relative paths fail in shell mode)
- * - Uses shell: true for .cmd files
+ * - Runs an admitted npm .cmd shim's script under node directly, and only
+ *   other .cmd files behind cmd.exe (`planServerLaunch`, #5694)
  * - Uses windowsHide to prevent console window popup
  * - Detects immediate spawn failures (ENOENT) before returning
  *
@@ -972,11 +1126,6 @@ export async function launchLSP(
 		: undefined;
 	const resolvedCommand = scannedCommandPath ?? explicitCommand;
 
-	// Compute needsShell based on command
-	// On Windows, shell: true is needed for .cmd/.bat files and extensionless binaries
-	// .exe files can be spawned directly, but .cmd/.bat require shell interpretation
-	let needsShell = computeNeedsShell(resolvedCommand);
-
 	// Try to spawn the process
 	// If command not found, try npm global as fallback (handles PATH caching after install)
 	let spawnCommand = resolvedCommand;
@@ -986,8 +1135,6 @@ export async function launchLSP(
 		const globalBinPath = await findGlobalBinary(command);
 		if (globalBinPath) {
 			spawnCommand = globalBinPath;
-			// Recompute needsShell for the resolved global path
-			needsShell = computeNeedsShell(spawnCommand);
 		}
 	}
 
@@ -1010,7 +1157,21 @@ export async function launchLSP(
 	// registry. Once PATH resolution selects a project-local installed binary,
 	// trusted session ownership is required (#4248 R2-1, #4299 R2-F1). Global and managed
 	// fallbacks remain compatible because they resolve outside the project root.
-	if (isProjectLocalLspBinary(spawnCommand, cwd)) {
+	// #5674: a candidate spelled as a path that is absent is a resolution miss,
+	// not a trust decision, so it falls through to tool-not-found and the
+	// fallbacks. The stat reads the exact string the classifier judges and the
+	// spawn runs. On Windows `commandPresence` also reads the file cmd.exe runs
+	// for that string under PATHEXT: an absent `Scripts\x` whose `x.exe` exists
+	// is that `.exe`, in the same directory (#5674 verify r4 V1). A bare name
+	// keeps the classifier unconditionally: its lookups answer only with files
+	// that exist, and an unresolved name is not a path (a stat would read pi's
+	// own cwd).
+	if (
+		(isBareCommand ||
+			fs.existsSync(spawnCommand) ||
+			commandPresence === "present") &&
+		isProjectLocalLspBinary(spawnCommand, cwd)
+	) {
 		refuseUntrustedLspExecution({
 			kind: "project-local-binary",
 			command,
@@ -1050,12 +1211,9 @@ export async function launchLSP(
 	if (isWindows && /\.ps1$/i.test(spawnCommand)) {
 		const bypass = bypassPs1OnWindows(spawnCommand, args);
 		if (bypass) {
-			logSessionStart(
-				`lsp ps1-bypass: ${spawnCommand} → ${bypass.command} shell=${bypass.needsShell}`,
-			);
+			logSessionStart(`lsp ps1-bypass: ${spawnCommand} → ${bypass.command}`);
 			spawnCommand = bypass.command;
 			args = bypass.args;
-			needsShell = bypass.needsShell;
 		} else {
 			logSessionStart(
 				`lsp ps1-bypass: no .cmd or JS entry found for ${spawnCommand}, spawn may hang`,
@@ -1063,18 +1221,16 @@ export async function launchLSP(
 		}
 	}
 
-	let proc: ChildProcess;
+	let launched: { proc: ChildProcess; plan: ServerLaunchPlan };
 
 	try {
-		proc = trySpawn(spawnCommand, args, cwd, env, needsShell);
+		launched = trySpawn(spawnCommand, args, cwd, env);
 	} catch (err) {
 		// If spawn failed with simple command, try npm global
 		if (isBareCommand) {
 			const globalBinPath = await findGlobalBinary(command);
 			if (globalBinPath && globalBinPath !== spawnCommand) {
-				// Recompute needsShell for the resolved global path
-				const needsShellGlobal = computeNeedsShell(globalBinPath);
-				proc = trySpawn(globalBinPath, args, cwd, env, needsShellGlobal);
+				launched = trySpawn(globalBinPath, args, cwd, env);
 			} else {
 				throw await classifySpawnFailure(err, { command, cwd });
 			}
@@ -1082,6 +1238,7 @@ export async function launchLSP(
 			throw await classifySpawnFailure(err, { command, cwd });
 		}
 	}
+	const { proc, plan } = launched;
 
 	if (!proc.stdin || !proc.stdout || !proc.stderr) {
 		throw new Error(`Failed to spawn LSP server: ${command}`);
@@ -1103,7 +1260,7 @@ export async function launchLSP(
 	}
 
 	logSessionStart(
-		`lsp launch: command=${command} resolved=${spawnCommand} args=${JSON.stringify(args)} cwd=${cwd} shell=${needsShell ? "true" : "false"} pid=${proc.pid ?? 0}`,
+		`lsp launch: command=${command} resolved=${plan.command} args=${JSON.stringify(plan.args)} cwd=${cwd} shell=${plan.shell ? "true" : "false"} pid=${proc.pid ?? 0}`,
 	);
 
 	const formatStartupStderr = (stderr: string): string => {
@@ -1172,14 +1329,15 @@ export async function launchLSP(
 				if (options?.startupFailureWindowMs) {
 					return options.startupFailureWindowMs;
 				}
-				if (isWindows && needsShell) {
+				if (plan.script) {
 					return WINDOWS_NAV_STARTUP_FAILURE_WINDOW_MS;
 				}
 				return DEFAULT_STARTUP_FAILURE_WINDOW_MS;
 			})();
 
-			// Give shell-backed Windows launches a slightly longer window because
-			// npm/cmd shims can fail asynchronously after the initial spawn succeeds.
+			// Give a Windows launch that came from a .cmd/.bat a slightly longer
+			// window: the script (or the Node script an npm shim names) can fail
+			// asynchronously after the initial spawn succeeds.
 			setTimeout(() => {
 				if (!settled) {
 					settled = true;
@@ -1193,8 +1351,8 @@ export async function launchLSP(
 
 	// Re-attach the permanent error handler now that we've passed the danger zone
 	_attachErrorHandler(proc, command, {
-		command: spawnCommand,
-		args,
+		command: plan.command,
+		args: plan.args,
 		cwd,
 		pid: proc.pid ?? 0,
 	});
@@ -1206,8 +1364,8 @@ export async function launchLSP(
 		stdout: proc.stdout,
 		stderr: proc.stderr,
 		pid: proc.pid ?? 0,
-		command: spawnCommand,
-		args,
+		command: plan.command,
+		args: plan.args,
 	};
 }
 

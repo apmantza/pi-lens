@@ -1695,22 +1695,19 @@ export async function killProcessTree(
 		// (src\win\async.c). Kill the direct child via the handle we already hold
 		// (TerminateProcess; synchronous, no async handle).
 		//
-		// #472 CORRECTION of a prior false claim here ("orphaned grandchildren are
-		// reaped by the OS as the host exits"): Windows does NOT kill children when
-		// a parent dies. For shell/.cmd-wrapped servers the direct child is
-		// cmd.exe, so this path only ever kills the wrapper — the actual server
-		// (its grandchild) survives by design whenever it doesn't independently
-		// exit. It relies entirely on best-effort backstops instead: (1) the
-		// server observing stdin EOF once the wrapper's pipes close, (2) LSP
-		// `initialize.processId: process.pid` (some servers self-watchdog on that
-		// pid dying — typescript-language-server does, ast-grep's native binary
-		// does not, an upstream spec violation), and (3) the #449/#472
-		// cross-process instance registry's orphan reaper, which is the only
-		// mechanism that works regardless of why a pipe write-end stayed open
-		// (e.g. Windows handle-inheritance capture by a long-lived process). This
-		// is why registering every LSP child at spawn matters uniformly — do NOT
-		// weaken this direct-child-only kill to try to chase grandchildren here;
-		// spawning taskkill in this branch is exactly the libuv hazard above.
+		// Windows does not kill a process's children when it dies (#472). What
+		// ends them is libuv's job object: every child spawned without
+		// `detached` is in it, and the kernel ends them when this process dies,
+		// crash included, but NOT their own children (silent breakaway). So the
+		// kill below, and the job after it, reach the server only when the
+		// server IS the direct child. `launchLSP` makes it so for every `.exe`
+		// and every admitted npm shim (`planServerLaunch`, #5694). A server
+		// behind a `.cmd`/`.bat` that `cmd.exe` still runs is a grandchild: it
+		// survives unless it exits on stdin EOF or on `initialize.processId`,
+		// and only the #449/#472 orphan reaper at a later session start finds it
+		// (by the wrapper pid it recorded, so mostly it does not). Do NOT chase
+		// grandchildren here: spawning taskkill in this branch is exactly the
+		// libuv hazard above.
 		if (options.processExiting) {
 			try {
 				proc.kill();

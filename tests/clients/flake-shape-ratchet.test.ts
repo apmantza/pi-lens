@@ -898,6 +898,12 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"a clean-tree HEAD move only exists in a real repository that git checks out, rebases or resets; a stubbed git cannot rewrite the files the server holds",
 	},
+	// The #4493 HEAD look in a sibling linked worktree; its spawns run through the kit.
+	"real-process-spawn:clients/head-move-resync-sibling-worktree.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"a HEAD move in a linked worktree only exists in a real repository whose worktree git checks out; a stubbed git cannot rewrite the files the server holds there",
+	},
 	"real-process-spawn:clients/installer/pip-pep668.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -1108,6 +1114,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	"real-process-spawn:clients/lsp/windows-server-containment-5694.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"#5694: which process the Windows kernel ends when a pi host dies is the subject; only a real host, a real cmd.exe and libuv's kill-on-close job show whether the server outlives it, and no child_process double has a process tree",
 	},
 	"real-process-spawn:clients/lsp/workspace-diagnostics-sweep-attribution.integration.test.ts":
 		{
@@ -2074,6 +2085,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "ungoverned-wait-for",
 		reason:
 			"#5097: the abort must land after the request is on the wire (and the server's own refresh must reach a re-pull, and a loading server must be reported loading, and the workspace pull and the read-only command must be on the wire before the Esc), and only the server's own trace shows that; the poll is bounded by its own timeout",
+	},
+	"ungoverned-wait-for:clients/lsp/windows-server-containment-5694.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"#5694: the server's start shows only as the pid file it writes and its death only as its pid going away; neither exposes an awaitable, and each poll is bounded by its own timeout",
 	},
 	"ungoverned-wait-for:clients/runtime-session.test.ts": {
 		detector: "ungoverned-wait-for",

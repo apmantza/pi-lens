@@ -200,6 +200,9 @@ const lspRunner: RunnerDefinition = {
 		// confirmed clean result and must not be reported as one (#570).
 		let diagnosticsInconclusive = false;
 		let inconclusiveServerIds: readonly string[] = [];
+		let inconclusiveReason:
+			| import("../../lsp/diagnostic-binding.js").TouchInconclusiveReason
+			| undefined;
 		// #4403: set when the touch says no primary answered (`primary-unavailable`).
 		let primaryUnavailable:
 			| Pick<
@@ -327,6 +330,7 @@ const lspRunner: RunnerDefinition = {
 				lspDiags = touched.diags;
 				diagnosticsInconclusive = touched.inconclusive === true;
 				inconclusiveServerIds = touched.inconclusiveServerIds ?? [];
+				inconclusiveReason = touched.inconclusiveReason;
 				if (touched.inconclusiveReason === "primary-unavailable") {
 					const disabledPrimaryServerIds =
 						touched.disabledPrimaryServerIds ?? [];
@@ -471,6 +475,13 @@ const lspRunner: RunnerDefinition = {
 				status: "skipped",
 				diagnostics: [],
 				semantic: "none",
+				...(inconclusiveReason !== undefined && {
+					inconclusiveReason,
+				}),
+				...(inconclusiveServerIds.length > 0 &&
+					inconclusiveReason !== "primary-unavailable" && {
+						unconfirmedServerIds: [...inconclusiveServerIds],
+					}),
 				...primaryUnavailable,
 			};
 		}
@@ -705,6 +716,7 @@ const lspRunner: RunnerDefinition = {
 			// reading (a diagnostics-unsupported primary, an incumbent built before the
 			// confirmation field), which is today's behaviour.
 			...(diagnosticsInconclusive && { inconclusive: true as const }),
+			...(inconclusiveReason !== undefined && { inconclusiveReason }),
 			...(unconfirmedServerIds.length > 0 && {
 				unconfirmedServerIds: [...unconfirmedServerIds],
 			}),

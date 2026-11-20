@@ -626,6 +626,7 @@ export const wallClockBudgetInclude = [
 	"tests/clients/head-move-resync-4476.test.ts",
 	"tests/clients/head-move-resync-4493.test.ts",
 	"tests/clients/head-move-resync-4507.test.ts",
+	"tests/clients/head-move-resync-sibling-worktree.test.ts",
 	// #2557 review round 3: a real 30s deadline margin is the subject of an abort-vs-deadline precedence assertion (flake-shape admission).
 	"tests/clients/hook-await-fold-bounds.test.ts",
 	"tests/clients/installer/pip-pep668.test.ts",
@@ -733,6 +734,10 @@ export const wallClockBudgetInclude = [
 	// #2344: npm test leaves this real-child integration suite in the default
 	// project unless it is explicitly phased here. `test:integration` still
 	// selects the same file positionally, while `test:unit` excludes it below.
+	// #5694: a real host process dies (killed, or the processExiting teardown)
+	// and the case watches whether its language server outlives it on Windows;
+	// real host, real cmd.exe and libuv job, so it runs serialized.
+	"tests/clients/lsp/windows-server-containment-5694.test.ts",
 	"tests/clients/lsp/workspace-diagnostics-sweep-attribution.integration.test.ts",
 	// #5119: the no-fix wrapper child is killed, crashed and re-imported for real (flake-shape admission).
 	"tests/clients/markdownlint-api.test.ts",

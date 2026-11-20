@@ -42,6 +42,8 @@ import {
 // before every test file's `vi.mock`, so whatever it imports is cached before
 // the mock registers (#3703 round 1: 56 files red).
 import { _settleRegistryMutationsForTests } from "../../clients/instance-registry-tail.js";
+import { AMBIENT_PYTHON_ENVIRONMENT_VARIABLES } from "../../clients/python-ambient-environment.js";
+import { pathWithoutActivePythonEnvironments } from "./ambient-python-scrub.js";
 import {
 	claimScratchDir,
 	SCRATCH_DIR_ROOT,
@@ -863,6 +865,25 @@ process.env.PI_LENS_INSTALL_LOG = path.join(
 process.env.PI_CODING_AGENT_DIR = path.join(tmpHygieneHome, "agent");
 fs.mkdirSync(path.join(tmpHygieneHome, "agent"), { recursive: true });
 installGitFixtureEnv(tmpHygieneHome);
+
+// Same class (AGENTS.md shape 82): `detectPythonEnvironment` resolves the
+// interpreter and tool directory from an exported VIRTUAL_ENV, CONDA_PREFIX or
+// UV_PROJECT_ENVIRONMENT, so a developer shell with a global venv active handed
+// every test that venv's pyright: a case whose premise is "no language server
+// checks this file" (`adopted-root-runners.test.ts`) read a pyright finding
+// instead. The owner's own list is scrubbed, so a channel it learns is scrubbed
+// too. Its module is a leaf with no imports, so loading it here fixes no
+// logger's sink path ahead of a case's home pin. Tests that exercise a channel
+// set it themselves.
+// Activation also put each environment's directories on PATH, where a lookup
+// by name (`pytest`) finds that environment's tools; drop exactly those
+// directories, read from the channels before they are deleted.
+{
+	const scrubbedPath = pathWithoutActivePythonEnvironments(process.env);
+	if (scrubbedPath !== undefined) process.env.PATH = scrubbedPath;
+}
+for (const ambientPythonChannel of AMBIENT_PYTHON_ENVIRONMENT_VARIABLES)
+	delete process.env[ambientPythonChannel];
 
 // #3083: session_start reaches the backstop transitively through index.js.
 // Pin the filesystem location once for every file, without a caller registry

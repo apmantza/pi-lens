@@ -64,6 +64,7 @@ import { freshnessFromMtime } from "./freshness.js";
 import {
 	displayedMessage,
 	messageIsCutWhenDisplayed,
+	messageWithoutRulePrefix,
 	normalizeMessage as sharedNormalizeMessage,
 	relativeFile as sharedRelativeFile,
 	stableFindingId,
@@ -99,6 +100,14 @@ export interface DispositionCandidate {
 	 * `ProjectDiagnosticSemantic`) without a cast at every call site.
 	 */
 	semantic?: string;
+	/**
+	 * The finding this candidate spells, when it is one of several `(tool,
+	 * rule)` spellings expanded from one finding (#3246's identity widening in
+	 * `filterDisposed`). The alias ownership test counts findings, not
+	 * spellings, so it reads the finding's own `tool` and `rule` from here.
+	 * Absent: the candidate is its own finding.
+	 */
+	finding?: { tool?: string; rule?: string };
 }
 
 export type Disposition = "false-positive" | "suppress" | "defer" | "flagged";
@@ -718,61 +727,104 @@ export function _resetDeferredForTests(): void {
 	resetDeferredDispositions();
 }
 
+/** One candidate's alias spellings, before the ownership test: the display
+ * form of a cut message, then, for a blocking candidate only, the `[<rule>] `
+ * -stripped form of the message and of that display form. The stripped form
+ * is a spelling of the STOP block, which renders only blockers; a non-blocking
+ * finding keeps the #5367 matching (#5711 review r1 F1). See
+ * {@link messageAliases}. */
+function aliasSpellings(candidate: DispositionCandidate): string[] {
+	const spellings: string[] = [];
+	if (messageIsCutWhenDisplayed(candidate.message)) {
+		spellings.push(displayedMessage(candidate.message));
+	}
+	if (candidate.semantic !== "blocking") return spellings;
+	for (const spelling of [candidate.message, ...spellings]) {
+		const bare = messageWithoutRulePrefix(spelling, candidate.rule);
+		if (bare !== undefined) spellings.push(bare);
+	}
+	return spellings;
+}
+
 /**
- * #5367: the DISPLAY-form alias each candidate may be matched through, or
- * nothing for that candidate.
+ * The alias spellings each candidate may be matched through, beyond its own
+ * message, or nothing for that candidate.
  *
- * A cascade line prints `displayedMessage(d.message)` (first line, cut at 100
- * characters), so an agent that marks what it was SHOWN spells a message no
- * finding carries: the anchor hashes `normalizeMessage(message)`, which folds
- * whitespace and case but never cuts. The mark hid nothing — on either cascade
- * lane — for every multiline or over-budget error.
+ * #5367: a cascade line prints `displayedMessage(d.message)` (first line, cut
+ * at 100 characters), so an agent that marks what it was SHOWN spells a
+ * message no finding carries: the anchor hashes `normalizeMessage(message)`,
+ * which folds whitespace and case but never cuts. #5709: a rendered line also
+ * prints a runner's `[<rule>] ` prefix inside the message, and an agent that
+ * splits it off into `rule` spells the rest. So the aliases are the display
+ * form of a cut message, and the `[<rule>] `-stripped form of the message and
+ * of its display form (`messageWithoutRulePrefix`, the finding's OWN rule
+ * only).
  *
- * The alias therefore re-anchors the SAME candidate on its displayed form. It
- * is honored only while that spelling names one live message: when two live
- * findings in this batch render to the same text, either could be the one the
- * mark quotes, and a false-positive on a STOP-tier error must not silently
- * silence a different error beside it (the #1625 F1 reason, one layer down).
- * Ambiguity is counted on the NORMALIZED message, so two candidates that are
- * the same finding under two `(tool, rule)` spellings (#3248's identity
- * widening) are one owner, not two.
+ * Every alias is honored only while that spelling names one live finding:
+ * when two live findings in this batch render to the same text, either could
+ * be the one the mark quotes, and a false-positive on a STOP-tier error must
+ * not silently silence a different error beside it (the #1625 F1 reason, one
+ * layer down; #5711 review r1 for the stripped forms). Ownership counts
+ * FINDINGS, each its own `(tool, rule)` and NORMALIZED message: two candidates
+ * that are one finding under two `(tool, rule)` spellings (#3248's identity
+ * widening, which names the finding in `candidate.finding`) are one owner,
+ * while two tools, or two rules, reporting the same text are two (#5711, the
+ * same-line collision). A spelling is keyed with the `(tool, rule)` the
+ * candidate carries, the other two inputs of its anchor, so two findings
+ * collide only where one mark could reach both: through a spelling that omits
+ * what tells them apart.
  *
- * Cost is bounded and cold: a candidate whose message renders whole is skipped
- * by a length/newline test before any hashing, and the whole derivation runs
- * only after the caller's empty-store early return, so a project with no marks
- * pays nothing on the per-edit dispatch path.
+ * Cost is bounded and cold: a candidate whose message renders whole and opens
+ * with no bracket of its own rule is skipped before any hashing, and the whole
+ * derivation runs only after the caller's empty-store early return, so a
+ * project with no marks pays nothing on the per-edit dispatch path.
  */
-function displayFormAliases<T extends DispositionCandidate>(
+function messageAliases<T extends DispositionCandidate>(
 	candidates: T[],
-): Map<T, string> {
-	const cut = new Map<T, string>();
+): Map<T, string[]> {
+	const spelled = new Map<T, string[]>();
 	const owners = new Map<string, Set<string>>();
+	const keyOf = (
+		identity: { tool?: string; rule?: string },
+		message: string,
+	): string =>
+		[identity.tool ?? "", identity.rule ?? "", normalizeMessage(message)].join(
+			"\u0000",
+		);
+	const ownerOf = (candidate: T): string =>
+		keyOf(candidate.finding ?? candidate, candidate.message);
 	for (const candidate of candidates) {
-		if (!messageIsCutWhenDisplayed(candidate.message)) continue;
-		const form = displayedMessage(candidate.message);
-		cut.set(candidate, form);
-		const key = normalizeMessage(form);
-		const owner = owners.get(key);
-		const message = normalizeMessage(candidate.message);
-		if (owner === undefined) owners.set(key, new Set([message]));
-		else owner.add(message);
-	}
-	if (cut.size === 0) return new Map();
-	// #5367 r1 F1: every live candidate owns the display form its own folded
-	// text equals, cut or whole. An uncut finding does, and so does a cut one
-	// whose text folds to another's display form ("error\ndetail" and the form
-	// "error detail"). Without this, a mark naming that text also hid a sibling
-	// whose display form it is, which master kept. Counted after the cut pass,
-	// so the alias set itself stays limited to cut messages.
-	for (const candidate of candidates) {
-		const message = normalizeMessage(candidate.message);
-		owners.get(message)?.add(message);
-	}
-	const aliases = new Map<T, string>();
-	for (const [candidate, form] of cut) {
-		if ((owners.get(normalizeMessage(form))?.size ?? 0) === 1) {
-			aliases.set(candidate, form);
+		const spellings = aliasSpellings(candidate);
+		if (spellings.length === 0) continue;
+		spelled.set(candidate, spellings);
+		const owner = ownerOf(candidate);
+		for (const spelling of spellings) {
+			const key = keyOf(candidate, spelling);
+			const known = owners.get(key);
+			if (known === undefined) owners.set(key, new Set([owner]));
+			else known.add(owner);
 		}
+	}
+	if (spelled.size === 0) return new Map();
+	// #5367 r1 F1: every live candidate owns the alias its own folded text
+	// equals, aliased or not. An uncut finding does, and so does a cut one whose
+	// text folds to another's display form ("error\ndetail" and the form
+	// "error detail"), and a bare finding whose text is another's stripped form
+	// (`M` and `[r] M`). Without this, a mark naming that text also hid the
+	// sibling whose alias it is. Counted after the alias pass, so the alias set
+	// itself stays limited to the spellings derived above.
+	for (const candidate of candidates) {
+		owners.get(keyOf(candidate, candidate.message))?.add(ownerOf(candidate));
+	}
+	const aliases = new Map<T, string[]>();
+	for (const [candidate, spellings] of spelled) {
+		const kept: string[] = [];
+		for (const spelling of spellings) {
+			if ((owners.get(keyOf(candidate, spelling))?.size ?? 0) === 1) {
+				kept.push(spelling);
+			}
+		}
+		if (kept.length > 0) aliases.set(candidate, kept);
 	}
 	return aliases;
 }
@@ -805,62 +857,40 @@ export function applyDispositions<T extends DispositionCandidate>(
 	const dispositions = readState(cwd).dispositions;
 	if (nothingToApply(dispositions, cwd)) return diagnostics;
 	const deferred = deferredAnchorsFor(cwd);
-	// #5367: a mark spelled from the DISPLAYED cascade text — see
-	// `displayFormAliases`. Computed once for the batch, because its ambiguity
-	// test is over the batch's live findings, not over one candidate.
-	const aliases = displayFormAliases(diagnostics);
+	// #5367, #5709: a mark spelled from a RENDERED line - see `messageAliases`.
+	// Computed once for the batch, because its ambiguity test is over the
+	// batch's live findings, not over one candidate.
+	const aliases = messageAliases(diagnostics);
 	return diagnostics.filter((d) => {
-		const { strict, weak } = anchorsForDiagnostic(cwd, filePath, d, content);
 		const isBlocking = d.semantic === "blocking";
-		// #5367: the alias anchors use the same two derivations the primary pair
-		// uses, with the message replaced by its displayed form. The WEAK alias is
-		// computed only for a non-blocking candidate: #1625 F1 already guarantees a
-		// blocking finding drops on its STRICT anchor alone, so hashing the weak one
-		// there is dead work on a population where it is always taken (a cascade
-		// renders ERRORs only).
-		const alias = aliases.get(d);
-		let aliasStrict: string | undefined;
-		let aliasWeak: string | undefined;
-		if (alias !== undefined) {
-			// The SAME shared derivation as the primary pair, with the message
-			// replaced by its displayed form: a second spelling of the anchor build
-			// is how a mark and a diagnostic stop converging in the first place.
-			const aliasAnchors = anchorsForDiagnostic(
+		// The alias anchors use the same two derivations the primary pair uses,
+		// with the message replaced by an alias spelling. The WEAK anchors are
+		// checked only for a non-blocking candidate: #1625 F1 already guarantees
+		// a blocking finding drops on its STRICT anchor alone.
+		const messages = [d.message, ...(aliases.get(d) ?? [])];
+		for (const message of messages) {
+			// The SAME shared derivation for every spelling: a second spelling of
+			// the anchor build is how a mark and a diagnostic stop converging in
+			// the first place.
+			const { strict, weak } = anchorsForDiagnostic(
 				cwd,
 				filePath,
-				{ ...d, message: alias },
+				message === d.message ? d : { ...d, message },
 				content,
 			);
-			aliasStrict = aliasAnchors.strict;
-			if (!isBlocking) aliasWeak = aliasAnchors.weak;
-		}
-		if (
-			!isBlocking &&
-			(deferred?.has(weak) ||
-				(aliasWeak !== undefined && deferred?.has(aliasWeak)))
-		) {
-			return false;
-		}
-		if (
-			dispositions?.[strict]?.disposition === "false-positive" ||
-			(aliasStrict !== undefined &&
-				dispositions?.[aliasStrict]?.disposition === "false-positive")
-		) {
-			return false;
-		}
-		// Belt-and-braces: the inline `pi-lens-ignore` comment is the real
-		// suppress enforcement (see suppress-writer.ts) and normally already
-		// dropped this finding upstream via applyInlineSuppressions. This is a
-		// harmless second cover for the store-only audit trail case — gated
-		// off blocking findings per F1 above (the inline comment, unaffected
-		// by this gate, remains the real suppress mechanism for those too).
-		if (
-			!isBlocking &&
-			(dispositions?.[weak]?.disposition === "suppress" ||
-				(aliasWeak !== undefined &&
-					dispositions?.[aliasWeak]?.disposition === "suppress"))
-		) {
-			return false;
+			if (!isBlocking && deferred?.has(weak)) return false;
+			if (dispositions?.[strict]?.disposition === "false-positive") {
+				return false;
+			}
+			// Belt-and-braces: the inline `pi-lens-ignore` comment is the real
+			// suppress enforcement (see suppress-writer.ts) and normally already
+			// dropped this finding upstream via applyInlineSuppressions. This is a
+			// harmless second cover for the store-only audit trail case — gated
+			// off blocking findings per F1 above (the inline comment, unaffected
+			// by this gate, remains the real suppress mechanism for those too).
+			if (!isBlocking && dispositions?.[weak]?.disposition === "suppress") {
+				return false;
+			}
 		}
 		return true;
 	});

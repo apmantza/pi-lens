@@ -566,7 +566,7 @@ describe("resolveToolCwd (#2777)", () => {
 					}
 					const before = await server.root(file);
 					const after = await resolveLspServerCwd(server, file, project);
-					table.push(`${language.id}: ${before} === ${after}`);
+					table.push(`${language.id}: ${String(before)} === ${after}`);
 					expect(after, table.at(-1)).toBe(before);
 				}
 				console.log(table.join("\n"));
