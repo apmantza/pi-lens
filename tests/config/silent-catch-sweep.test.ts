@@ -727,10 +727,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :500
 	"clients/log-cleanup.ts": {
-		silent: 6,
-		identities: "a96b760c3e0e1558",
+		silent: 4,
+		identities: "e7bbd284be93893b",
 		reason: PRE_RULE,
-	}, // :73, :117, :126, :160, :165, :199
+	}, // :93, :168, :177, :335 (6 -> 4, #5707 r2: the dead cleanupOldLogs left with its two handlers)
 	"clients/lsp-budget.ts": {
 		silent: 1,
 		identities: "288709348a380874",

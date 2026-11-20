@@ -502,6 +502,9 @@ function realProjectDataDirRootFs(): ProjectDataDirRootFs {
 							names.push(entry.name);
 						}
 					} catch (cause) {
+						// none: a dangling or looping link names no directory and
+						// is skipped; any other refusal is rethrown, so the whole
+						// listing reads as "cannot judge".
 						const code = (cause as NodeJS.ErrnoException).code ?? "";
 						if (!LINK_NOT_A_DIR_CODES.has(code)) throw cause;
 					}

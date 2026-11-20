@@ -1227,7 +1227,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 68 -> 67 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
 		// 67 -> 68 (#5702): the retention decode's walk joins the parent it
 		// decoded to each real child it visits (`path.join(fromDir, name)`).
-		"clients/file-utils.ts": 68,
+		// 68 -> 69 (#5707 r2): the decode also follows directory links
+		// (`path.join(dir, entry.name)` for the stat) and joins candidates
+		// with `path.posix.join`.
+		"clients/file-utils.ts": 69,
 		"clients/finding-identity.ts": 2,
 		"clients/fix-worklog.ts": 3,
 		// 3 -> 2, 16 -> 15 (#4689): the formatter is handed `realpathOrResolve`,
@@ -1292,7 +1295,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 9 -> 10 (#5702): the retention sweep's runRetentionRow joins the
 		// directory to each enumerated name (`path.join(directory, name)`);
 		// the session-state row routes through sessionsDir, its owner.
-		"clients/log-cleanup.ts": 10,
+		// 10 -> 9 (#5707 r2): the dead cleanupOldLogs left with its join.
+		"clients/log-cleanup.ts": 9,
 		"clients/lsp-mutation.ts": 3,
 		"clients/lsp/client-registry.ts": 2,
 		// 0 -> 1 (#4615): the `[lsp-pub]` debug row's `path` member carries the

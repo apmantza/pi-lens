@@ -319,14 +319,6 @@ const SLASH_FOLD_PINS: Readonly<Record<string, number>> = {};
  *   handed, and the fold is selected by the VALUE's shape (`isWindowsPath`),
  *   not the host, so a POSIX path keeps its literal backslashes (#4876 F1) and
  *   the win32 axis is exercised on every lane (#4876 F4).
- * - `file-utils.ts` (second site, #5702) — the retention decode's win32 arm:
- *   the slug-vs-name matcher folds case only on the platform whose filesystem
- *   folds case, with an INJECTED `platform` argument so the ubuntu lane
- *   exercises it. Deliberately NOT a map key — it compares a directory
- *   entry's on-disk name to slug tokens, and a canonical key seam would
- *   realpath and dot-fold the very names the decode must match verbatim.
- *   The win32 slug never followed the realpath, so no canonical form can
- *   recover it; existence of any case-insensitive reading is the answer.
  * - `file-role.ts` — `toPosix(<win32 or posix dirname>).toLowerCase()`, where
  *   the fold builds the lowercase haystack for the role's directory-name
  *   substrings (`/tests/`, `/migrations/`), not a key. It was an inline
@@ -336,9 +328,7 @@ const SLASH_FOLD_PINS: Readonly<Record<string, number>> = {};
  */
 const CASE_FOLD_PINS: Readonly<Record<string, number>> = {
 	"clients/file-role.ts": 1,
-	// file-utils: 1 -> 2 (#5702): the retention decode's win32 fold joins the
-	// containment form's, both deliberate non-map-keys, both reasoned above.
-	"clients/file-utils.ts": 2,
+	"clients/file-utils.ts": 1,
 	"clients/lsp/launch.ts": 1,
 	"clients/mcp/ipc.ts": 1,
 	"clients/runtime-tool-call.ts": 1,
