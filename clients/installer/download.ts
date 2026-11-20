@@ -47,14 +47,26 @@ export function downloadInstallerFile(
 						return fail(
 							new InstallerDownloadError("stream", "Too many redirects"),
 						);
-					const nextHeaders = res.headers.location.startsWith(url)
+					let next: string;
+					try {
+						// HTTP allows a relative Location; resolve it against this URL.
+						next = new URL(res.headers.location, url).href;
+					} catch {
+						return fail(
+							new InstallerDownloadError(
+								"stream",
+								`invalid redirect Location from ${url}`,
+							),
+						);
+					}
+					const nextHeaders = next.startsWith(url)
 						? headers
 						: (() => {
 								const { Authorization: _drop, ...rest } = headers;
 								return rest;
 							})();
 					downloadInstallerFile(
-						res.headers.location,
+						next,
 						destination,
 						maxRedirects - 1,
 						nextHeaders,
