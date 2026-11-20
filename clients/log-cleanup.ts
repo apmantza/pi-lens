@@ -17,7 +17,8 @@
  *     gone — see classifyIpcSocketName and probeIpcSocketListener)
  *   - ~/.pi-lens/projects/<slug>-<hash>/ (project data directories whose
  *     root no longer exists — see createProjectDataDirRootProbe; at least
- *     PROJECT_DATA_ORPHAN_RETENTION_DAYS old)
+ *     PROJECT_DATA_ORPHAN_RETENTION_DAYS old by the directory's own mtime;
+ *     never on win32)
  *
  * Excluded (intentionally NOT cleaned - project-scoped or persistent):
  *   - <project-data>/worklog.jsonl                - Agent fixable diagnostics
@@ -43,7 +44,7 @@ import { classifyIpcSocketName, probeIpcSocketListener } from "./mcp/ipc.js";
 import { getRegisteredLogFiles } from "./ndjson-logger.js";
 import { getGlobalPiLensLogDir } from "./probe-home-state.js";
 import { pathsEqual } from "./path-utils.js";
-import { sessionsDir } from "./session-state-store.js";
+import { sessionsDir, sessionStateFileName } from "./session-state-store.js";
 
 const LOGS_SUBDIR = () => path.join(getGlobalPiLensLogDir(), "logs");
 
@@ -129,18 +130,18 @@ export function spillResultLogName(
 
 /**
  * Matches the per-session state snapshot `clients/session-state-store.ts`
- * writes under `<project-data>/sessions/`: the session id is sanitized to
- * `[A-Za-z0-9._-]{1,200}` before it becomes a filename, so the sweep matches
- * that whole shape instead of re-deriving the uuid-only live shape.
+ * writes under `<project-data>/sessions/` ({@link sessionStateFileName}):
+ * the id is sanitized to `[A-Za-z0-9._-]{1,200}`, so the sweep matches that
+ * whole shape instead of the uuid-only live shape.
  */
 const SESSION_STATE_FILE_RE = /^[A-Za-z0-9._-]{1,200}\.json$/;
 
 /**
  * How old a project data directory whose root is gone may get before the
- * sweep removes it. The root-existence decode is what protects live projects
- * (a project dir whose root exists stays regardless of age); the window
- * guards the decode's failure mode on a temporarily unmounted or
- * unreachable root, where a fresh directory is the one thing that survives.
+ * sweep removes it, read from the directory's own mtime. The root-existence
+ * decode is what protects live projects (a project dir whose root exists
+ * stays regardless of age); the window only debounces a briefly unmounted
+ * root, and an idle project's dir passes it.
  */
 const PROJECT_DATA_ORPHAN_RETENTION_DAYS = 30;
 
@@ -225,11 +226,7 @@ export function pidScopedSocketLiveness(
 interface RetentionRow {
 	/** Report label, one deletion count per row. */
 	label: string;
-	/**
-	 * Directory the row sweeps, resolved at run time so callers can pin home.
-	 * Async for rows whose directory comes from an owner seam this module can
-	 * only reach through a dynamic import (the #4314 cycle break above).
-	 */
+	/** Directory the row sweeps, resolved at run time so callers can pin home. */
 	directory: () => string;
 	match: (name: string) => boolean;
 	maxAgeDays: () => number;
@@ -303,50 +300,9 @@ function getRetentionRows(options: RetentionOptions): RetentionRow[] {
 			match: () => true,
 			maxAgeDays: () => PROJECT_DATA_ORPHAN_RETENTION_DAYS,
 			deletion: "dir",
-			liveness: (_absPath, name) => projectDataDirLiveness(name),
+			liveness: projectDataDirLiveness,
 		},
 	];
-}
-
-/**
- * Delete files older than retentionDays
- */
-export function cleanupOldLogs(
-	directory: string,
-	pattern: RegExp,
-	retentionDays?: number,
-): { deleted: string[]; errors: string[] } {
-	const config = getConfig();
-	const maxAge = retentionDays ?? config.retentionDays;
-	const deleted: string[] = [];
-	const errors: string[] = [];
-
-	try {
-		if (!fs.existsSync(directory)) {
-			return { deleted, errors };
-		}
-
-		const files = fs.readdirSync(directory);
-		for (const file of files) {
-			if (!pattern.test(file)) continue;
-
-			const filePath = path.join(directory, file);
-			const ageDays = getFileAgeDays(filePath);
-
-			if (ageDays > maxAge) {
-				try {
-					fs.unlinkSync(filePath);
-					deleted.push(file);
-				} catch (err) {
-					errors.push(`${file}: ${err}`);
-				}
-			}
-		}
-	} catch (err) {
-		errors.push(`Directory read failed: ${err}`);
-	}
-
-	return { deleted, errors };
 }
 
 /**
@@ -402,15 +358,33 @@ function sessionStateLiveness(
 	name: string,
 	currentSessionId: string | undefined,
 ): LivenessVerdict {
-	return name === `${currentSessionId}.json` ? "live" : "stale";
+	// The store's own file-name derivation: an id it sanitizes is stored
+	// under the sanitized name (#5707 CodeRabbit 7n).
+	return currentSessionId !== undefined &&
+		name === sessionStateFileName(currentSessionId)
+		? "live"
+		: "stale";
 }
 
 /**
  * The project-data row's gate, answered by the decode beside the naming
- * rules (`clients/file-utils.ts`): a root that exists is live, a root that
- * is gone is stale, and a name the decode cannot judge keeps the directory.
+ * rules (`clients/file-utils.ts`, one probe per name): a root that exists is
+ * live, a root that is gone is stale, and a name the decode cannot judge
+ * keeps the directory. Only a real directory is judged: a file or link of
+ * slug shape in a shared `PILENS_DATA_DIR` is not a project's (#5707 r1 F8).
  */
-function projectDataDirLiveness(name: string): LivenessVerdict {
+function projectDataDirLiveness(
+	absPath: string,
+	name: string,
+): LivenessVerdict {
+	let isDirectory = false;
+	try {
+		isDirectory = fs.lstatSync(absPath).isDirectory();
+	} catch {
+		// none: an entry the sweep cannot stat is not judged; it stays.
+		isDirectory = false;
+	}
+	if (!isDirectory) return "indeterminate";
 	const decoded = createProjectDataDirRootProbe().statusFor(name);
 	if (decoded === "exists") return "live";
 	if (decoded === "gone") return "stale";

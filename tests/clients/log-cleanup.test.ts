@@ -23,7 +23,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-	cleanupOldLogs,
 	getManagedLogFiles,
 	pidScopedSocketLiveness,
 	ROTATED_BACKUP_RE,
@@ -83,27 +82,6 @@ describe("ROTATED_BACKUP_RE", () => {
 	});
 });
 
-describe("cleanupOldLogs on rotated backups", () => {
-	it("deletes aged backups (both shapes) but keeps active + recent ones", () => {
-		write("latency.log"); // active — no timestamp
-		write("sessionstart.log", 400); // active but old — must survive
-		const agedBackup = write("latency.2026-04-20T12-44-37-686Z.log", 30);
-		const agedLegacy = write("cascade.log.2026-03-01", 30);
-		const freshBackup = write("latency.2026-07-01T16-28-00-189Z.log", 2);
-
-		const { deleted } = cleanupOldLogs(dir, ROTATED_BACKUP_RE, 7);
-
-		expect(deleted.sort()).toEqual(
-			["cascade.log.2026-03-01", "latency.2026-04-20T12-44-37-686Z.log"].sort(),
-		);
-		expect(fs.existsSync(agedBackup)).toBe(false);
-		expect(fs.existsSync(agedLegacy)).toBe(false);
-		expect(fs.existsSync(freshBackup)).toBe(true); // < 7d
-		expect(fs.existsSync(path.join(dir, "latency.log"))).toBe(true);
-		expect(fs.existsSync(path.join(dir, "sessionstart.log"))).toBe(true);
-	});
-});
-
 describe("rotate → delete round trip", () => {
 	it("rotation produces a name the deletion pattern reaps", () => {
 		const logFile = path.join(dir, "actionable-warnings.log");
@@ -132,6 +110,9 @@ describe("rotate → delete round trip", () => {
 // saves its pins, so the #4589 restore ratchet reads the coverage.
 const savedRetainHome = process.env.PI_LENS_HOME;
 const savedRetainDataDir = process.env.PILENS_DATA_DIR;
+// CI runs with TMPDIR unset: assigning the saved `undefined` back writes the
+// string "undefined", and every later mkdtemp in the file fails (#5707 r1 F2).
+const savedRetainTmp = process.env.TMPDIR;
 
 describe("runLogCleanup retention rows (#5702)", () => {
 	const DAY_MS = 24 * 60 * 60 * 1000;
@@ -202,9 +183,13 @@ describe("runLogCleanup retention rows (#5702)", () => {
 	}
 
 	it("removes an aged spill log and a rotated backup but keeps a fresh spill log and an active log", async () => {
+		// The writer's own name derivation (tools/render-compact.ts spills
+		// through it), so a naming drift between writer and reaper reds here
+		// (#5707 r1 F4).
+		const { spillResultLogName } = await import("../../clients/log-cleanup.js");
 		const oldSpill = path.join(
 			home,
-			`tool-result-${Date.now() - 40 * DAY_MS}-${randomUUID()}.log`,
+			spillResultLogName(Date.now() - 40 * DAY_MS),
 		);
 		fs.writeFileSync(oldSpill, "x");
 		backdate(oldSpill, 40);
@@ -219,12 +204,20 @@ describe("runLogCleanup retention rows (#5702)", () => {
 		const oldBackup = path.join(home, "latency.2026-04-20T12-44-37-686Z.log");
 		fs.writeFileSync(oldBackup, "x");
 		backdate(oldBackup, 40);
+		const oldLegacyBackup = path.join(home, "cascade.log.2026-03-01");
+		fs.writeFileSync(oldLegacyBackup, "x");
+		backdate(oldLegacyBackup, 40);
+		const freshBackup = path.join(home, "latency.2026-07-01T16-28-00-189Z.log");
+		fs.writeFileSync(freshBackup, "x");
+		backdate(freshBackup, 2);
 
 		const { runLogCleanup } = await loadCleanup();
 		const result = await runLogCleanup();
 
 		expect(fs.existsSync(oldSpill)).toBe(false);
 		expect(fs.existsSync(oldBackup)).toBe(false);
+		expect(fs.existsSync(oldLegacyBackup)).toBe(false);
+		expect(fs.existsSync(freshBackup)).toBe(true);
 		expect(fs.existsSync(freshSpill)).toBe(true);
 		expect(fs.existsSync(activeLog)).toBe(true);
 		expect(result.report).toMatch(/spill log/);
@@ -255,6 +248,16 @@ describe("runLogCleanup retention rows (#5702)", () => {
 			const ephemeralBase = path.join(dataBase, ".ephemeral");
 			fs.mkdirSync(ephemeralBase, { recursive: true });
 			backdate(ephemeralBase, 400);
+			// #5707 r1 F1: a live root whose last component's fold ends in a
+			// dash names a slug the old per-component decode never matched.
+			const dashRoot = path.join(liveRoot, "proj-");
+			fs.mkdirSync(dashRoot);
+			const dashDir = seedProjectDataDir(dashRoot, 40);
+			// #5707 r1 F8: a plain file of slug shape in the base is not a
+			// project data dir, whatever its name decodes to.
+			const slugFile = path.join(dataBase, "backup-0a1b2c3d");
+			fs.writeFileSync(slugFile, "x");
+			backdate(slugFile, 400);
 
 			const { runLogCleanup } = await loadCleanup();
 			const result = await runLogCleanup();
@@ -264,7 +267,9 @@ describe("runLogCleanup retention rows (#5702)", () => {
 			expect(fs.existsSync(liveDir)).toBe(true);
 			expect(fs.existsSync(defaultNamed)).toBe(true);
 			expect(fs.existsSync(ephemeralBase)).toBe(true);
-			expect(result.report).toMatch(/orphaned project data/);
+			expect(fs.existsSync(dashDir)).toBe(true);
+			expect(fs.existsSync(slugFile)).toBe(true);
+			expect(result.report).toMatch(/1 orphaned project data dirs/);
 		} finally {
 			removeTempDirSync(liveRoot);
 			removeTempDirSync(orphanRoot);
@@ -294,6 +299,10 @@ describe("runLogCleanup retention rows (#5702)", () => {
 				"aaaabbbb-cccc-4ddd-8eee-ffff00001111.json",
 			);
 			fs.writeFileSync(freshOther, "{}");
+			// Not a state file the store writes: the row's name pattern keeps it.
+			const notState = path.join(sessions, "notes.txt");
+			fs.writeFileSync(notState, "x");
+			backdate(notState, 40);
 
 			const { runLogCleanup } = await loadCleanup();
 			const result = await runLogCleanup(undefined, {
@@ -304,7 +313,39 @@ describe("runLogCleanup retention rows (#5702)", () => {
 			expect(fs.existsSync(oldOther)).toBe(false);
 			expect(fs.existsSync(currentOld)).toBe(true);
 			expect(fs.existsSync(freshOther)).toBe(true);
+			expect(fs.existsSync(notState)).toBe(true);
 			expect(result.report).toMatch(/session state file/);
+		} finally {
+			removeTempDirSync(root);
+		}
+	});
+
+	it("keeps the current session's state file under the name the store wrote it, for an id the store sanitizes", async () => {
+		// Recurrence: #5707 CodeRabbit 7n. The exemption compared the raw id
+		// with the file name, so an id the store sanitizes (`team/session` is
+		// stored as `team_session.json`) lost its exemption and the live
+		// session's snapshot was reaped once it idled past the window.
+		const root = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-retain-root-sanitized-"),
+		);
+		try {
+			const sessionId = "team/session";
+			const { saveSessionState } =
+				await import("../../clients/session-state-store.js");
+			await saveSessionState(root, sessionId, {});
+			const sessions = path.join(getProjectDataDir(root), "sessions");
+			const stored = fs.readdirSync(sessions);
+			expect(stored).toHaveLength(1);
+			const storedPath = path.join(sessions, stored[0] as string);
+			backdate(storedPath, 40);
+
+			const { runLogCleanup } = await loadCleanup();
+			await runLogCleanup(undefined, {
+				cwd: root,
+				currentSessionId: sessionId,
+			});
+
+			expect(fs.existsSync(storedPath)).toBe(true);
 		} finally {
 			removeTempDirSync(root);
 		}
@@ -356,7 +397,6 @@ describe("runLogCleanup retention rows (#5702)", () => {
 			const socketDir = fs.mkdtempSync(
 				path.join(os.tmpdir(), "pi-lens-retain-sock-"),
 			);
-			const savedTmp = process.env.TMPDIR;
 			let liveServer: net.Server | undefined;
 			try {
 				process.env.TMPDIR = socketDir;
@@ -372,10 +412,13 @@ describe("runLogCleanup retention rows (#5702)", () => {
 					"pi-lens-mcp-999999-diagnostics-fedcba9876543210.sock",
 				);
 				ageStale("pi-lens-mcp-999999-diagnostics-fedcba9876543210.sock");
+				// Every keep below is aged past the 1-day window, so the guard named
+				// beside it is what keeps it, not the window (#5707 r1 F4).
 				liveServer = await seedLiveSocket(
 					socketDir,
 					"pi-lens-mcp-9876543210fedcba.sock",
 				);
+				ageStale("pi-lens-mcp-9876543210fedcba.sock");
 				const livePid = path.join(
 					socketDir,
 					`pi-lens-mcp-${process.pid}-diagnostics-0123456789abcdef.sock`,
@@ -397,6 +440,11 @@ describe("runLogCleanup retention rows (#5702)", () => {
 				await seedStaleSocket(socketDir, path.basename(freshStale));
 				const unrelated = path.join(socketDir, "unrelated.sock");
 				fs.writeFileSync(unrelated, "x");
+				backdate(unrelated, 2);
+				// Another application's dead socket: the name classifier refuses
+				// it, whatever its listener state.
+				await seedStaleSocket(socketDir, "other-app.sock");
+				ageStale("other-app.sock");
 
 				const { runLogCleanup } = await loadCleanup();
 				const result = await runLogCleanup();
@@ -414,16 +462,55 @@ describe("runLogCleanup retention rows (#5702)", () => {
 						),
 					),
 				).toBe(false);
+				expect(
+					fs.existsSync(
+						path.join(socketDir, "pi-lens-mcp-9876543210fedcba.sock"),
+					),
+				).toBe(true);
+				expect(fs.existsSync(path.join(socketDir, "other-app.sock"))).toBe(
+					true,
+				);
 				expect(fs.existsSync(livePid)).toBe(true);
 				expect(fs.existsSync(freshStale)).toBe(true);
 				expect(fs.existsSync(notASocket)).toBe(true);
 				expect(fs.existsSync(unrelated)).toBe(true);
 				expect(result.report).toMatch(/stale socket/);
 			} finally {
-				process.env.TMPDIR = savedTmp;
+				if (savedRetainTmp === undefined) delete process.env.TMPDIR;
+				else process.env.TMPDIR = savedRetainTmp;
 				await new Promise<void>((resolve) =>
 					liveServer?.close(() => resolve()),
 				);
+				removeTempDirSync(socketDir);
+			}
+		},
+	);
+
+	// lane: Unit tests. Root skips: root's connect ignores the socket's mode,
+	// so the dial answers "dead" and the cell this case pins cannot arise.
+	it.skipIf(socketTestLacksRoom || process.getuid?.() === 0)(
+		"keeps an aged workspace socket whose dial neither connects nor proves the listener gone",
+		async () => {
+			// Recurrence: #5707 r1 F4 found the dial's indeterminate arm
+			// mapped to stale with every test green; a socket the sweep cannot
+			// judge (here EACCES on connect) must stay.
+			const socketDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-retain-sock-"),
+			);
+			const name = "pi-lens-mcp-abcdefabcdefabcd.sock";
+			try {
+				process.env.TMPDIR = socketDir;
+				await seedStaleSocket(socketDir, name);
+				fs.chmodSync(path.join(socketDir, name), 0o000);
+				backdate(path.join(socketDir, name), 2);
+
+				const { runLogCleanup } = await loadCleanup();
+				await runLogCleanup();
+
+				expect(fs.existsSync(path.join(socketDir, name))).toBe(true);
+			} finally {
+				if (savedRetainTmp === undefined) delete process.env.TMPDIR;
+				else process.env.TMPDIR = savedRetainTmp;
 				removeTempDirSync(socketDir);
 			}
 		},

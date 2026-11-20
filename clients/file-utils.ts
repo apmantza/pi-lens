@@ -408,7 +408,15 @@ export async function sweepDeadEphemeralDataDirs(options: {
  * maintainer reversed that on 2026-10-21).
  */
 function projectDataDirReadableSlug(canonicalRoot: string): string {
-	const normalized = normalizePathSpelling(canonicalRoot);
+	return readableSlugOfSpelling(normalizePathSpelling(canonicalRoot));
+}
+
+/**
+ * The fold itself, on a spelling already normalized: one derivation for the
+ * writer above and for the retention sweep's decode, which applies it to the
+ * on-disk spellings it walks (#5707 r1 F1).
+ */
+function readableSlugOfSpelling(normalized: string): string {
 	return normalized
 		.replace(/^[a-z]:/i, "") // strip Windows drive letter
 		.replace(/\/+/g, "-") // separators → dashes
@@ -449,208 +457,160 @@ function projectDataDirRootHash(canonicalRoot: string): string {
 	return createHash("sha256").update(canonicalRoot).digest("hex").slice(0, 8);
 }
 
-/**
- * Whether a hashed project data directory's root still exists, judged by
- * decoding its name. The retention sweep (#5702) deletes a project data dir
- * only on `"gone"`; every other answer keeps it, so a name this decode
- * cannot judge never costs data.
- *
- * The readable half of the slug ({@link projectDataDirReadableSlug}) is the
- * root's path with separators folded to dashes and every other character
- * stripped, so it is not reversible in isolation. But the fold is a pure
- * per-component transform, so the root can be reconstructed by walking the
- * real filesystem from the top: at each level, an entry whose own fold equals
- * a dash-joined run of the remaining tokens is a candidate component, and a
- * walk that consumes every token and ends at a directory that exists proves
- * a root with this slug exists. Deleted characters (`.`, `_`, …) never break
- * the match because the comparison folds the on-disk name the same way, and
- * on-disk casing is what {@link normalizePathSpelling} adopted when the slug
- * was written.
- *
- * The win32 arm is existence-only: the win32 slug never followed the
- * realpath (#4689), so the walk compares case-insensitively and any full
- * reading keeps the directory — a casing the writer did not record can never
- * be re-derived, and a kept dir is the safe direction.
- *
- * The walk is bounded: it reads directories at most {@link
- * PROJECT_DATA_DIR_ROOT_PROBE_MAX_READDIRS} times and descends at most
- * {@link PROJECT_DATA_DIR_ROOT_PROBE_MAX_DEPTH} levels, and a walk that
- * exhausts either bound answers `"unrecognized"` (keep), never `"gone"`.
- */
-
+/** What the retention sweep's decode answers for one child of the data base. */
 export type ProjectDataDirRootStatus =
-	/** A full reading exists on disk: the root (or a fold-twin of it) is there. */
+	/** A directory whose writer's slug equals the name exists on disk. */
 	| "exists"
-	/** The name decodes but no full reading exists: the root is gone. */
+	/** The walk searched every candidate it could and none exists. */
 	| "gone"
-	/** `.ephemeral`, `default-…`, a pre-hash legacy name, or a walk that hit a bound. */
+	/** A name the writer never produces, a refused one, an unlistable
+	 * directory or an exhausted budget on the walk, or a win32 host. */
 	| "unrecognized";
 
-/** Shared readdir budget across one sweep run (#5702), mirroring ADOPT_MAX_ENTRIES. */
+/** Readdir calls one name's decode may spend, mirroring ADOPT_MAX_ENTRIES.
+ * Every descent costs one, so it bounds the recursion depth too. */
 const PROJECT_DATA_DIR_ROOT_PROBE_MAX_READDIRS = 256;
-const PROJECT_DATA_DIR_ROOT_PROBE_MAX_DEPTH = 64;
 
-/** Injectable filesystem seam so every platform arm runs on every lane. */
+/** Injectable filesystem seam, so the decode runs on injected trees too. */
 export interface ProjectDataDirRootFs {
-	/** Real directories only (`lstat`-style: a symlink to a dir is excluded),
-	 * memoized by the probe; `undefined` names an unreadable directory. */
-	listRealDirs(dir: string): { name: string }[] | undefined;
-	isRealDir(dir: string): boolean;
-	/** Existing filesystem roots: `/` on POSIX, existing drives on win32. */
-	roots(): string[];
+	/**
+	 * The names in `dir` a path can descend through: directories and links to
+	 * directories. `undefined` when the listing cannot be judged (an
+	 * unreadable directory, a link whose target cannot be checked).
+	 */
+	listDirs(dir: string): string[] | undefined;
 }
 
-function realProjectDataDirRootFs(
-	platform: NodeJS.Platform,
-): ProjectDataDirRootFs {
-	const memo = new Map<string, { name: string }[] | undefined>();
+/** A dangling or looping link names no directory; anything else is unknown. */
+const LINK_NOT_A_DIR_CODES = new Set(["ENOENT", "ENOTDIR", "ELOOP"]);
+
+function realProjectDataDirRootFs(): ProjectDataDirRootFs {
 	return {
-		listRealDirs(dir) {
-			if (memo.has(dir)) return memo.get(dir);
-			let entries: { name: string }[] | undefined;
+		listDirs(dir) {
+			const names: string[] = [];
 			try {
-				// A plain loop, not Array.prototype.filter: `filter` is a retired
-				// glossary identifier whose per-file pins the #3259 census holds.
-				entries = [];
 				for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-					if (entry.isDirectory() && !entry.isSymbolicLink()) {
-						entries.push({ name: entry.name });
+					if (entry.isDirectory()) {
+						names.push(entry.name);
+						continue;
+					}
+					if (!entry.isSymbolicLink()) continue;
+					// v4.2.0 to v4.4.4 named the dir from the caller's spelling,
+					// which may pass through a directory link (#5707 r2).
+					try {
+						if (fs.statSync(path.join(dir, entry.name)).isDirectory()) {
+							names.push(entry.name);
+						}
+					} catch (cause) {
+						const code = (cause as NodeJS.ErrnoException).code ?? "";
+						if (!LINK_NOT_A_DIR_CODES.has(code)) throw cause;
 					}
 				}
 			} catch {
-				// none: an unreadable directory cannot be judged; the decode
-				// refuses to answer and the retention sweep keeps the entry.
-				entries = undefined;
+				// none: the caller reads undefined as "cannot judge" and the
+				// retention sweep keeps the directory it was deciding on.
+				return undefined;
 			}
-			memo.set(dir, entries);
-			return entries;
-		},
-		isRealDir(dir) {
-			try {
-				return fs.lstatSync(dir).isDirectory();
-			} catch {
-				// none: an unreadable path is not judged to exist; the sweep
-				// keeps whatever carries its name.
-				return false;
-			}
-		},
-		roots() {
-			if (platform !== "win32") return ["/"];
-			// A plain loop, not Array.prototype.filter: `filter` is a retired
-			// glossary identifier whose per-file pins the #3259 census holds.
-			const roots: string[] = [];
-			for (let i = 0; i < 26; i++) {
-				const drive = `${String.fromCharCode(65 + i)}:\\`;
-				if (fs.existsSync(drive)) roots.push(drive);
-			}
-			return roots;
+			return names;
 		},
 	};
 }
 
-const SLUG_NAME_RE = /^(.+)-([0-9a-f]{8})$/;
-
 /**
- * The per-component half of {@link projectDataDirReadableSlug}'s transform:
- * everything outside `[A-Za-z0-9-]` is dropped. Dashes survive inside a
- * component, which is why the decode tries dash-joined token runs.
+ * A slug name the writer can produce: a readable half that starts and ends
+ * with a character the fold keeps and holds only those and dashes, then the
+ * 8-hex hash. Any other name is not the decode's to judge.
  */
-function foldProjectDataDirName(name: string): string {
-	return name.replace(/[^A-Za-z0-9-]/g, "");
-}
+const SLUG_NAME_RE = /^([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)-[0-9a-f]{8}$/;
 
 interface RootProbeBudget {
-	/** Remaining readdir calls across this probe run. */
+	/** Remaining readdir calls for this name. */
 	left: number;
-	/** Set when a call was refused for want of budget: "could not judge". */
+	/** Set when the walk could not finish: a refused listing or no budget. */
 	exhausted: boolean;
 }
 
-function decodeProjectDataDirTokens(
-	tokens: string[],
-	fromDir: string,
-	depth: number,
+/**
+ * Whether some directory path below `dir` has a writer's slug equal to one of
+ * `targets` (lowercase). Each candidate is judged by the writer's own fold
+ * ({@link readableSlugOfSpelling}). A candidate is descended only while its
+ * slug is empty or a dash-bounded prefix of a target: every path whose slug
+ * equals a target passes through such prefixes only, so pruning never skips
+ * a reading, and a walk that finishes without the budget running out has
+ * searched every candidate.
+ */
+function hasProjectDataDirReading(
+	dir: string,
+	targets: string[],
 	budget: RootProbeBudget,
 	fsLike: ProjectDataDirRootFs,
-	fold: (name: string) => string,
-): string | undefined {
-	if (depth > PROJECT_DATA_DIR_ROOT_PROBE_MAX_DEPTH) {
-		budget.exhausted = true;
-		return undefined;
-	}
-	if (tokens.length === 0) {
-		return fsLike.isRealDir(fromDir) ? fromDir : undefined;
-	}
+): boolean {
 	if (budget.left <= 0) {
 		budget.exhausted = true;
-		return undefined;
+		return false;
 	}
 	budget.left--;
-	const entries = fsLike.listRealDirs(fromDir);
-	if (!entries) return undefined;
-	for (const entry of entries) {
-		const folded = fold(foldProjectDataDirName(entry.name));
-		for (let take = 1; take <= tokens.length; take++) {
-			if (fold(tokens.slice(0, take).join("-")) !== folded) continue;
-			const rest = decodeProjectDataDirTokens(
-				tokens.slice(take),
-				path.join(fromDir, entry.name),
-				depth + 1,
-				budget,
-				fsLike,
-				fold,
-			);
-			if (rest !== undefined) return rest;
+	const names = fsLike.listDirs(dir);
+	if (names === undefined) {
+		budget.exhausted = true;
+		return false;
+	}
+	for (const name of names) {
+		const candidate = path.posix.join(dir, name);
+		// Case-insensitive: a volume may be, and a released writer spelled the
+		// root as the caller typed it. A wrong "exists" only keeps a dir.
+		const slug = readableSlugOfSpelling(candidate).toLowerCase();
+		let viable = false;
+		for (const target of targets) {
+			if (slug === target) return true;
+			if (slug === "" || target.startsWith(`${slug}-`)) viable = true;
+		}
+		if (
+			viable &&
+			hasProjectDataDirReading(candidate, targets, budget, fsLike)
+		) {
+			return true;
 		}
 	}
-	return undefined;
+	return false;
 }
 
-/**
- * One decode pass with its readdir memo and budget: create once per retention
- * sweep and call {@link ProjectDataDirRootProbe.statusFor} for every child of
- * the projects base. A fresh probe per run bounds the memo's lifetime to the
- * run, so no module-level state accumulates.
- */
+/** The retention sweep's decode; one per call site, no state between names. */
 export interface ProjectDataDirRootProbe {
+	/**
+	 * Whether the root a project data directory was named for still exists.
+	 * The sweep (#5702) deletes the directory only on `"gone"`. The name is
+	 * read two ways, as `<readable>-<hash>` and whole (a pre-hash legacy name
+	 * whose root ends in 8 hex digits, #5707 r1 F3), and either reading on
+	 * disk answers `"exists"`. win32 never answers `"gone"`: its slug never
+	 * followed the realpath, so a junction or 8.3 spelling cannot be found
+	 * again (#5707 r1 F1, maintainer decision 2).
+	 */
 	statusFor(dirName: string): ProjectDataDirRootStatus;
 }
 
 export function createProjectDataDirRootProbe(
 	platform: NodeJS.Platform = process.platform,
-	fsLike: ProjectDataDirRootFs = realProjectDataDirRootFs(platform),
+	fsLike: ProjectDataDirRootFs = realProjectDataDirRootFs(),
 ): ProjectDataDirRootProbe {
-	// win32 slugs came from a resolved spelling, not the realpath, and the
-	// writer never recorded the casing; matching must be case-insensitive.
-	const fold =
-		platform === "win32"
-			? (name: string) => name.toLowerCase()
-			: (name: string) => name;
 	return {
 		statusFor(dirName: string): ProjectDataDirRootStatus {
-			if (dirName === EPHEMERAL_DATA_DIR_NAME) return "unrecognized";
-			const match = SLUG_NAME_RE.exec(dirName);
-			if (!match) return "unrecognized";
-			const readable = match[1] ?? "";
-			if (readable === "" || readable === "default") return "unrecognized";
-			const tokens = readable.split("-");
+			if (platform === "win32") return "unrecognized";
+			const readable = SLUG_NAME_RE.exec(dirName)?.[1];
+			// `default` is also the name of a root whose every character the
+			// fold strips, so no walk can find it.
+			if (readable === undefined || readable === "default") {
+				return "unrecognized";
+			}
 			const budget: RootProbeBudget = {
 				left: PROJECT_DATA_DIR_ROOT_PROBE_MAX_READDIRS,
 				exhausted: false,
 			};
-			for (const root of fsLike.roots()) {
-				const found = decodeProjectDataDirTokens(
-					tokens,
-					root,
-					0,
-					budget,
-					fsLike,
-					fold,
-				);
-				if (found !== undefined) return "exists";
+			const targets = [readable.toLowerCase(), dirName.toLowerCase()];
+			if (hasProjectDataDirReading("/", targets, budget, fsLike)) {
+				return "exists";
 			}
-			// A readdir budget the walk exhausted is "could not judge", not
-			// "gone": the deletion side treats unrecognized as keep.
+			// A walk that could not finish is "could not judge", not "gone".
 			return budget.exhausted ? "unrecognized" : "gone";
 		},
 	};
