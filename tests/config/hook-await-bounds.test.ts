@@ -549,6 +549,16 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"session_start scan goes through.",
 		owner: "#2523 slice 2",
 	},
+	"clients/runtime-session.ts#handleSessionStart:00bf3cfe~e7dded71": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"Deferred log/retention cleanup (#1019): the session-start sweep " +
+			"runs inside a setImmediate whose async callback nothing in the " +
+			"hook awaits, so the hook's wall budget never spends on it. Its " +
+			"only failure path is a counted dbg record (#5702).",
+		owner: "#5702",
+	},
 	"clients/runtime-session.ts#handleSessionStart:2a60d0e5~dbbbc4f4": {
 		family: "hook-await",
 		site: "session_start",
@@ -2701,6 +2711,12 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// wait its MCP caller already had; no hook awaits projectScan.
 	"clients/lens-engine.ts": 2,
 	"clients/lens-map.ts": 2,
+	// #5702: the retention sweep is the deferred session-start cleanup
+	// (#1019): runLogCleanup awaits each row and each row's liveness gate
+	// (a dial probe with its own 250ms socket timeout). session_start fires
+	// it inside a setImmediate and never awaits it, so no hook waits on
+	// these; a failed delete is a counted record, never a hang.
+	"clients/log-cleanup.ts": 3,
 	"clients/lsp-budget.ts": 1,
 	"clients/lsp-document-symbols.ts": 2,
 	"clients/lsp/cascade-tier.ts": 2,

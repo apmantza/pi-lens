@@ -3,7 +3,7 @@ import { isTestMode } from "./env-utils.js";
 import { getGlobalPiLensLogDir } from "./probe-home-state.js";
 import { createNdjsonLogger } from "./ndjson-logger.js";
 import type { TreeSitterParseCacheStats } from "./tree-sitter-client.js";
-import { getMaxLogSizeMB } from "./log-cleanup.js";
+import { getMaxLogSizeMB } from "./log-rotation-limits.js";
 import { normalizeLoggedPath } from "./path-utils.js";
 
 const TREE_SITTER_LOG_DIR = getGlobalPiLensLogDir();
