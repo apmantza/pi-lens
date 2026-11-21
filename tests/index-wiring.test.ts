@@ -1683,4 +1683,44 @@ describe("ui.compactWidget mount seam (#3959)", () => {
 			clearWidgetState();
 		}
 	});
+
+	it("ends with a blank separator line when widget.position is aboveEditor", async () => {
+		try {
+			const component = await mountWidget({
+				widget: { position: "aboveEditor" },
+			});
+			seedSummaryFixture();
+			const lines = component.render(120);
+			expect(lines.length).toBeGreaterThan(1);
+			expect(lines.at(-1)).toBe("");
+			expect(lines.at(-2)).not.toBe("");
+		} finally {
+			clearWidgetState();
+		}
+	});
+
+	it("adds no blank separator line below the editor", async () => {
+		try {
+			const component = await mountWidget({
+				widget: { position: "belowEditor" },
+			});
+			seedSummaryFixture();
+			const lines = component.render(120);
+			expect(lines.at(-1)).not.toBe("");
+		} finally {
+			clearWidgetState();
+		}
+	});
+
+	it("adds no blank line above the editor when the widget renders nothing", async () => {
+		try {
+			const component = await mountWidget({
+				widget: { position: "aboveEditor", hideWhenClean: true },
+			});
+			clearWidgetState();
+			expect(component.render(120)).toEqual([]);
+		} finally {
+			clearWidgetState();
+		}
+	});
 });
