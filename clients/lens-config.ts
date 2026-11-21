@@ -114,6 +114,10 @@ export interface PiLensGlobalConfig {
 	widget?: {
 		/** Whether the diagnostics widget is visible when a session starts. */
 		visible?: boolean;
+		/** Where the widget draws: above or below the input editor. Default `belowEditor`. */
+		position?: "aboveEditor" | "belowEditor";
+		/** Draw nothing while no error, warning or unchecked file is outstanding. */
+		hideWhenClean?: boolean;
 	};
 	/** Whether pi-lens runs at all this session (`--no-lens`). */
 	lens?: PiLensToggleConfig;
@@ -518,15 +522,33 @@ export function loadPiLensGlobalConfig(
 
 		const widget = asConfigObject(raw.widget);
 		if (widget) {
+			const widgetConfig: NonNullable<PiLensGlobalConfig["widget"]> = {};
 			if (typeof widget.visible === "boolean") {
-				config.widget = { visible: widget.visible };
-			} else {
+				widgetConfig.visible = widget.visible;
+			} else if ("visible" in widget) {
 				// #533: present-but-wrong-type warns; absent stays silent.
-				if ("visible" in widget) {
-					warnInvalid("widget.visible must be a boolean", "PILENS_CFG_0005");
-				}
-				config.widget = { visible: undefined };
+				warnInvalid("widget.visible must be a boolean", "PILENS_CFG_0005");
 			}
+			if (
+				widget.position === "aboveEditor" ||
+				widget.position === "belowEditor"
+			) {
+				widgetConfig.position = widget.position;
+			} else if ("position" in widget) {
+				warnInvalid(
+					'widget.position must be "aboveEditor" or "belowEditor"',
+					"PILENS_CFG_0005",
+				);
+			}
+			if (typeof widget.hideWhenClean === "boolean") {
+				widgetConfig.hideWhenClean = widget.hideWhenClean;
+			} else if ("hideWhenClean" in widget) {
+				warnInvalid(
+					"widget.hideWhenClean must be a boolean",
+					"PILENS_CFG_0005",
+				);
+			}
+			config.widget = widgetConfig;
 		}
 
 		const format = asConfigObject(raw.format);

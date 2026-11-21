@@ -554,7 +554,7 @@
 			"\"lens-context-toggle\"": 1,
 			"\"Toggle automatic context injection on/off for the current session (tools/LSP/read-guard/formatting stay active). Usage: /lens-context-toggle\"": 1,
 			"\"lens-widget-toggle\"": 1,
-			"\"Show or hide the pi-lens diagnostics widget below the editor. Usage: /lens-widget-toggle\"": 1,
+			"\"Show or hide the pi-lens diagnostics widget. Usage: /lens-widget-toggle\"": 1,
 			"\"pi-lens widget is not supported by this pi version.\"": 1,
 			"\"pi-lens widget shown. Run /lens-widget-toggle to hide it.\"": 1,
 			"\"pi-lens widget hidden. Run /lens-widget-toggle to show it.\"": 1,

@@ -142,6 +142,22 @@ Hide the diagnostics widget by default, run formatting immediately after write/e
 
 `format.mode` can be `"deferred"` (default) or `"immediate"`. Set `format.enabled` to `false` to match `--no-autoformat`. `/lens-widget-toggle` still works as a session-only override.
 
+### Widget position and hiding
+
+`widget.position` (default `"belowEditor"`) sets where the diagnostics widget draws relative to the input editor. Use `"aboveEditor"` or `"belowEditor"`.
+
+`widget.hideWhenClean` (default `false`) hides the widget while the project is clean. The widget hides 5 seconds after it first shows `✓ clean`.
+
+Clean means no error, warning, or unchecked file, at least one completed check, no analysis running, no suppressed findings, and no language server still starting.
+
+The widget also stays hidden from session start until a first edit gives it something to show. A language server that is up, or a file no check can cover, does not draw a bare header.
+
+The widget returns on any finding, unchecked file, or starting server. It also returns on an edit whose analysis is running, so each edit shows the widget briefly. This feedback is by design.
+
+`/lens-widget-toggle` does not override the hide. A widget toggled visible can draw nothing while the project is clean. A resumed session whose restored state is clean shows `✓ clean` for 5 seconds, then hides.
+
+Both keys are global-only. Neither has a CLI flag, and a project `.pi-lens.json` cannot set them. The delay is not configurable.
+
 `autofix.enabled` (default `true`) is the global-config counterpart to the project `.pi-lens.json` `autofix.enabled` below — set it to `false` to match `--no-autofix` for every project that doesn't set its own `autofix.enabled`. As with `format.enabled` and `actionableWarnings.autoFix.enabled`, a project's own `.pi-lens.json` value overrides this global default in either direction (see "Mutation controls" below).
 
 `contextInjection.enabled` (default `true`) controls whether pi-lens prepends automatic findings — session-start guidance, turn-end findings, and test findings — into the next model turn. Set it to `false` (or use `--no-lens-context` / `PI_LENS_NO_CONTEXT_INJECTION=1` / `/lens-context-toggle`) to keep tools, LSP, read-guard, and formatting running while avoiding the prompt-cache invalidation that injected messages cause in long, cache-sensitive sessions. Findings are still cached, so `lens_diagnostics` and `/lens-health` keep working.

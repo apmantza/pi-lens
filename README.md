@@ -77,7 +77,7 @@ Project-local binaries, such as `node_modules/.bin/eslint` or `.venv/bin/ruff`, 
 | Command | What it does |
 |---|---|
 | `/lens-health` | Show runtime health, latency, and degradation counts |
-| `/lens-widget-toggle` | Show or hide the diagnostics widget below the editor |
+| `/lens-widget-toggle` | Show or hide the diagnostics widget |
 | `/lens-toggle` | Turn pi-lens on or off for the session |
 | `/lens-map` | Build an interactive HTML dependency map of the project |
 | `/lens-allow-edit <path>` | Override the read-before-edit guard for one edit |
