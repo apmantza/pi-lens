@@ -419,6 +419,46 @@ describe("deferred blocker recording (#3814)", () => {
 		}
 	});
 
+	it("stamps the line text of a blocker its runner spelled through the file's real path", async () => {
+		// Recurrence (shape 32 / #2556 remainder): the stamp's `isOwn` compared
+		// the runner's spelling with the dispatched spelling by `path.resolve`
+		// equality, so a runner that printed the real path of a file the session
+		// holds through a link was "another file" and its blocker carried no
+		// line text, the identity-only match #4484 round 5 closed.
+		const env = setupTestEnvironment("pi-lens-2556-settle-alias-");
+		try {
+			fs.mkdirSync(path.join(env.tmpDir, "real"));
+			const realPath = path.join(env.tmpDir, "real", "app.ts");
+			fs.writeFileSync(realPath, "alpha();\n");
+			fs.symlinkSync(
+				path.join(env.tmpDir, "real"),
+				path.join(env.tmpDir, "link"),
+			);
+			const linkPath = path.join(env.tmpDir, "link", "app.ts");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			deferRunnerFindings({
+				filePath: linkPath,
+				cwd: env.tmpDir,
+				projectRoot: env.tmpDir,
+				runnerId: RUNNER_ID,
+				markedAtMs: Date.now(),
+				promise: Promise.resolve({
+					status: "succeeded",
+					diagnostics: [blocking(realPath)],
+					semantic: "blocking",
+				} satisfies RunnerResult),
+			});
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(absorbSettledRunnerBlockers(runtime, env.tmpDir).recorded).toBe(1);
+			expect(runtime.getInlineBlockerDiagnostics(linkPath)?.[0]?.lineHash).toBe(
+				lineHashOf("alpha();"),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("drops a retired producer's settled answer from the gate (staleReject)", async () => {
 		// #3758/#3814: the gate's non-draining peek applies the same owned
 		// admission the turn-end drain does. A commit in the gap before the next
