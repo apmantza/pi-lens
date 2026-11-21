@@ -687,6 +687,47 @@ describe("handleToolCall", () => {
 			env.cleanup();
 		}
 	});
+
+	// RECURRENCE GUARDED: shape 32 / #2556 remainder (see the tool_result cell
+	// "cachedExports compares files by identity, not spelling"). A cached export
+	// whose file this write names through a link is that file, not "another".
+	it("does not block a write that re-declares an export its own file holds under another spelling", async () => {
+		const env = setupTestEnvironment("pi-lens-runtime-tool-call-dupe-alias-");
+		try {
+			const real = createTempFile(
+				env.tmpDir,
+				"real/src/a.ts",
+				"export const y = 1;\n",
+			);
+			fs.symlinkSync(
+				path.join(env.tmpDir, "real"),
+				path.join(env.tmpDir, "link"),
+			);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.cachedExports.set(
+				"shared",
+				path.join(env.tmpDir, "link/src/a.ts"),
+			);
+
+			const result = await runHandlerExpectingNoThrow(() =>
+				handleToolCall(
+					baseDeps({
+						runtime,
+						ctx: { cwd: env.tmpDir },
+						event: {
+							toolName: "write",
+							input: { path: real, content: "export function shared() {}\n" },
+						},
+					}),
+				),
+			);
+
+			expect(result).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
 });
 
 // ── #2402 / #5120: mixed-validity preflight → partial apply contract ────────
