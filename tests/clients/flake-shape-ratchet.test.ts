@@ -638,6 +638,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the real child must remain alive while concurrent format calls are admitted or skipped; a fake clock cannot reproduce the live-child flight recurrence",
 	},
+	// #5746 r4: the late reader of a full stderr pipe starts after the crash
+	// writer met EAGAIN and inside its 1 s deadline; the writer exposes no
+	// event for that moment.
+	"raw-timer-wait:clients/lsp/client-crash-logging.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the late reader of a full stderr pipe must start after the crash writer met EAGAIN and before its 1 s deadline; the writer exposes no event for that moment, so a bounded real delay places the reader",
+	},
 	// 2026-09-07 (#2703 review r1): an unhandled derived-promise rejection is
 	// only observable through Node's `unhandledRejection` event, which fires
 	// on a real macrotask; the file drains one real `setImmediate` tick.
@@ -1468,7 +1476,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"real-process-spawn:real-harness/lsp-host-exit-5699.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"#5699: a language server that ignores EOF and SIGTERM must be gone after a real pi quit, and a quit killed before its exit hook must leave the row the next real pi session reaps, and a crashed pi (#5733 r4) must leave the row the next real session logs as vanished; pi's quit and crash paths, its exit listeners and the next start's reaper and marker run only in real pi processes",
+			"#5699: a language server that ignores EOF and SIGTERM must be gone after a real pi quit, and a quit killed before its exit hook must leave the row the next real pi session reaps, and a crashed pi (#5733 r4) must leave the row the next real session logs as vanished, and a pi that crashes after its server started (#5744) must end the server through its exit listeners; pi's quit and crash paths, its exit listeners and the next start's reaper and marker run only in real pi processes",
 	},
 	"real-process-spawn:real-harness/negative.test.ts": {
 		detector: "real-process-spawn",

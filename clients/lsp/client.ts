@@ -100,6 +100,7 @@ import {
 } from "./workspace-diagnostics-cache.js";
 import { toPosix } from "../path-utils.js";
 import { LspRequestTimeoutError } from "./request-timeout-error.js";
+import { writeLspCrashStack } from "./crash-output.js";
 
 // Opt-in publishDiagnostics trace (PILENS_PUB_DEBUG=1) — read once, negligible
 // hot-path cost. Surfaces each server's publish behavior (version + count) to
@@ -1040,38 +1041,73 @@ const LSP_CRASH_CODES = new Set([
 	"ECONNRESET",
 ]);
 
-let crashGuardInstalled = false;
+interface CrashGuardState {
+	installed: boolean;
+}
+
+const crashGuardState = getProcessSingleton<CrashGuardState>(
+	"lsp-crash-guard",
+	1,
+	() => ({ installed: false }),
+);
 
 function isIgnorableLspRuntimeCrash(err: unknown): boolean {
 	if (!(err instanceof Error)) return false;
-	const code = (err as { code?: string }).code;
-	if (code && LSP_CRASH_CODES.has(code)) return true;
-	const msg = err.message.toLowerCase();
-	const stack = (err.stack ?? "").toLowerCase();
-	return (
-		msg.includes("stream") ||
-		msg.includes("write after end") ||
-		stack.includes("vscode-jsonrpc/lib/node/ril.js")
-	);
+	try {
+		const code = (err as { code?: string }).code;
+		if (code && LSP_CRASH_CODES.has(code)) return true;
+		const msg = err.message.toLowerCase();
+		const stack = (err.stack ?? "").toLowerCase();
+		return (
+			msg.includes("stream") ||
+			msg.includes("write after end") ||
+			stack.includes("vscode-jsonrpc/lib/node/ril.js")
+		);
+	} catch {
+		// none: an error whose fields throw is no LSP stream failure, and a
+		// throw here would end the host with code 7 and no exit listener (#5746 r4)
+		return false;
+	}
 }
 
 function installCrashGuard(): void {
-	if (crashGuardInstalled) return;
-	crashGuardInstalled = true;
+	if (crashGuardState.installed) return;
+	crashGuardState.installed = true;
 
-	process.on("uncaughtException", (err) => {
+	const onUncaughtException = (err: unknown): void => {
 		if (isIgnorableLspRuntimeCrash(err)) {
 			return;
 		}
-		throw err;
-	});
+		if (
+			process
+				.listeners("uncaughtException")
+				.some((listener) => listener !== onUncaughtException)
+		) {
+			return;
+		}
+		writeLspCrashStack(err);
+		process.exit(1);
+	};
+	process.prependListener("uncaughtException", onUncaughtException);
 
-	process.on("unhandledRejection", (reason) => {
+	// A non-LSP rejection goes on as an uncaught exception, as it would with
+	// no guard installed: a host crash handler (pi interactive) then runs its
+	// crash record and detached-child cleanup, which no exit listener repeats,
+	// and with none the guard above reports and exits (#5746 r5).
+	const onUnhandledRejection = (reason: unknown): void => {
 		if (isIgnorableLspRuntimeCrash(reason)) {
 			return;
 		}
-		throw reason instanceof Error ? reason : new Error(String(reason));
-	});
+		if (
+			process
+				.listeners("unhandledRejection")
+				.some((listener) => listener !== onUnhandledRejection)
+		) {
+			return;
+		}
+		throw reason;
+	};
+	process.prependListener("unhandledRejection", onUnhandledRejection);
 }
 
 // --- Client State + Module-level helpers ---

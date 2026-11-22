@@ -25,6 +25,10 @@
  *   the next pi session's start reaps it from the row the quit kept.
  * - crash: an uncaught exception before any language server starts (#5733
  *   r4). pi's row stays, and the next session logs it as vanished.
+ * - crash after the server started (#5744): the LSP crash guard is
+ *   installed, and exits 1 through the exit listeners, so the server is gone
+ *   and pi's row stays. Before #5744 the guard rethrew: Node exited 7, ran no
+ *   exit listener, and the server outlived pi.
  *
  * Linux only: the cases read process liveness and adopt the server for
  * cleanup through `/proc` (`tests/support/kill-guard.ts`).
@@ -259,6 +263,42 @@ describe.runIf(process.platform === "linux")(
 				},
 			);
 		}, 240_000);
+
+		it("ends the server and keeps a crashed pi's row after LSP start", async () => {
+			const ws = stubbornHome();
+			const outcome = await withRealPi(
+				{
+					fixture: FIXTURE,
+					script: "script.json",
+					home: ws.home,
+					project: ws.project,
+					env: ENV,
+					args: ARGS,
+					extensions: [CRASH],
+				},
+				async (pi) => {
+					const launched = await launchServer(pi, ws.pidFile);
+					// Nothing emits this event: the wait ends when pi exits, and
+					// rejects with pi's exit code. No request may follow the crash,
+					// since a write to a dead pi's stdin fails EPIPE.
+					const exitCode = pi.events("lsp-host-exit-never-emitted").then(
+						() => "pi did not exit",
+						(error: { code?: number | null }) => error.code,
+					);
+					// The command returns before its timer throws, so pi answers.
+					await pi.prompt("/real-harness-crash");
+					return { launched, exitCode: await exitCode };
+				},
+			);
+
+			expect({
+				exitCode: outcome.exitCode,
+				serverSurvives: await survives(outcome.launched.server, DEATH_WAIT_MS),
+				hostRowKept: registryRows(ws.home).some(
+					(row) => row.pid === outcome.launched.host,
+				),
+			}).toEqual({ exitCode: 1, serverSurvives: false, hostRowKept: true });
+		}, 180_000);
 
 		// #5733 r4 F2: the exit hook also ran after an uncaught exception and
 		// removed the crashed pi's row, so the next session had no dead row to
