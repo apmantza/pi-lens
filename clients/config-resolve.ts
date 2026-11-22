@@ -197,10 +197,7 @@ export interface ResolvePiLensConfigOptions {
 	 * not quietly upgrade those documents to merge inputs on the way — the
 	 * maintainer decision on #5291 keeps them out. The LSP loader keeps the
 	 * default (legacy documents supply `lsp` values for their deprecation
-	 * window); the caller that owns a records-only contract opts in here: the
-	 * project loader always, and the dispatch policy and `effective_config`'s
-	 * policy half once a canonical file is in the chain
-	 * (`holdsCanonicalProjectConfig`, #5740).
+	 * window); the caller that owns a records-only contract opts in here.
 	 */
 	readonly excludeLegacyProjectDocuments?: boolean;
 	/**
