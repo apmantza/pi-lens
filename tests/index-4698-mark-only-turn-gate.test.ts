@@ -27,7 +27,7 @@
  * the assertion true whether git refuses the commit or creates one, so the
  * case does not depend on the checkout it runs in.
  */
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
 	CLEAN_FILE,
 	GATE_BLOCK,
@@ -44,10 +44,16 @@ import {
 	seed,
 	step,
 	toolResults,
+	warmGuardedSession,
 } from "./support/pi-session-commit-gate.js";
 import { type PiFauxReply, piSessionFixture } from "./support/pi-session.js";
 
 const fixture = piSessionFixture();
+
+// #5731: the file's first case paid the worker's cold first-session cost (1.9 s
+// against 0.4 s for its sibling, 87% of its 5 s cap on CI). The shared warm-up
+// (#5061) pays it in a hook, so no case carries it.
+beforeAll(() => warmGuardedSession(fixture.root));
 
 /** Turn 2 of both cases: a turn that writes no file at all. */
 function noWriteTurn(...calls: Record<string, unknown>[]): PiFauxReply[] {
