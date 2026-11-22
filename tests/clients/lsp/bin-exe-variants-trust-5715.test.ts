@@ -12,8 +12,21 @@ import {
 	resetProjectTrust,
 	setProjectTrustState,
 } from "../../../clients/project-trust.js";
-import { withPlatform } from "../../support/platform-stub.js";
+import { setPlatform, withPlatform } from "../../support/platform-stub.js";
 import { removeTempDirSync } from "../test-utils.js";
+
+async function withPlatformAsync<T>(
+	platform: NodeJS.Platform,
+	body: () => Promise<T>,
+): Promise<T> {
+	const original = process.platform;
+	setPlatform(platform);
+	try {
+		return await body();
+	} finally {
+		setPlatform(original);
+	}
+}
 
 class MockStream extends EventEmitter {}
 class FailingChildProcess extends EventEmitter {
@@ -133,7 +146,7 @@ describe("binExeVariants win32 PATHEXT sibling trust refusal (#5715)", () => {
 			truncateForLedger(`project-command:${exePath}`),
 		]);
 
-		await withPlatform("win32", () =>
+		await withPlatformAsync("win32", () =>
 			GoServer.spawn(sessionDir, { allowInstall: false }),
 		);
 		for (const spawned of spawnCalls) {
@@ -158,7 +171,7 @@ describe("binExeVariants win32 PATHEXT sibling trust refusal (#5715)", () => {
 		expect(candidates).not.toContain(exePath);
 		expect(candidates).not.toContain(extensionless);
 
-		await withPlatform("win32", () =>
+		await withPlatformAsync("win32", () =>
 			RustServer.spawn(sessionDir, { allowInstall: false }),
 		);
 		for (const spawned of spawnCalls) {
