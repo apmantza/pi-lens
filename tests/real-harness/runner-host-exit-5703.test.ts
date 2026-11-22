@@ -20,6 +20,7 @@ const EXTENSION = fileURLToPath(
 		import.meta.url,
 	),
 );
+const RUNNER_SERVER_ID = "safe-spawn:real-harness-runner-5703";
 const REAP_WAIT_MS = 30_000;
 const dirs: string[] = [];
 const childPids: number[] = [];
@@ -36,7 +37,19 @@ afterEach(() => {
 	for (const dir of dirs.splice(0)) removeTempDirSync(dir);
 });
 
-async function waitForPid(pidFile: string): Promise<number> {
+/**
+ * Start one runner through the fixture command and return its pid. The pid
+ * file is removed first: every runner writes the same file, so a leftover
+ * from the previous runner would answer for this one (#5745 r4, F2: the
+ * normal-exit check read the reaped runner's pid and passed with removal
+ * disabled).
+ */
+async function startRunner(
+	pi: { prompt(message: string): Promise<unknown> },
+	pidFile: string,
+): Promise<number> {
+	fs.rmSync(pidFile, { force: true });
+	await pi.prompt("/real-harness-runner-5703");
 	const deadline = Date.now() + REAP_WAIT_MS;
 	while (Date.now() < deadline) {
 		try {
@@ -59,7 +72,8 @@ async function waitGone(pid: number): Promise<void> {
 	throw new Error(`runner child ${pid} remained alive`);
 }
 
-function registeredHostPid(home: string, child?: number): number {
+/** The pid of the host whose `instances.json` entry holds the runner's row. */
+function rowOwner(home: string, child: number): number | undefined {
 	const file = JSON.parse(
 		fs.readFileSync(path.join(home, "instances.json"), "utf8"),
 	) as {
@@ -68,18 +82,11 @@ function registeredHostPid(home: string, child?: number): number {
 			lspChildren?: Array<{ pid: number; serverId?: string }>;
 		}>;
 	};
-	const pid = file.instances[0]?.pid;
-	if (!pid) throw new Error("pi host did not register");
-	if (
-		child !== undefined &&
-		!file.instances[0]?.lspChildren?.some(
-			(row) =>
-				row.pid === child &&
-				row.serverId === "safe-spawn:real-harness-runner-5703",
-		)
-	)
-		throw new Error("runner child is not in instances.json yet");
-	return pid;
+	return file.instances.find((instance) =>
+		instance.lspChildren?.some(
+			(row) => row.pid === child && row.serverId === RUNNER_SERVER_ID,
+		),
+	)?.pid;
 }
 
 describe.runIf(process.platform === "linux")(
@@ -93,39 +100,44 @@ describe.runIf(process.platform === "linux")(
 			const project = createRealPiProject(FIXTURE, home);
 			const pidFile = path.join(home, "runner.pid");
 			const ownerFile = path.join(home, "runner.owner");
+			const releaseFile = path.join(home, "runner.release");
 			dirs.push(home, project);
+			const env = {
+				REAL_HARNESS_RUNNER_PID_FILE: pidFile,
+				REAL_HARNESS_RUNNER_OWNER_FILE: ownerFile,
+				REAL_HARNESS_RUNNER_RELEASE_FILE: releaseFile,
+				PI_LENS_TEST_MODE: "0",
+			};
 			const first = await withRealPi(
 				{
 					fixture: FIXTURE,
 					script: "script.json",
 					home,
 					project,
-					env: {
-						REAL_HARNESS_RUNNER_PID_FILE: pidFile,
-						REAL_HARNESS_RUNNER_OWNER_FILE: ownerFile,
-						PI_LENS_TEST_MODE: "0",
-					},
+					env,
 					extensions: [EXTENSION],
 				},
 				async (pi) => {
-					await pi.prompt("/real-harness-runner-5703");
-					const runner = await waitForPid(pidFile);
+					const runner = await startRunner(pi, pidFile);
 					const ownerTag = fs.readFileSync(ownerFile, "utf8");
 					expect(ownerTag).toMatch(/^\d+:\d+@[0-9a-f-]{36}$/);
 					let host: number | undefined;
 					const ledgerDeadline = Date.now() + REAP_WAIT_MS;
 					while (host === undefined && Date.now() < ledgerDeadline) {
-						try {
-							host = registeredHostPid(home, runner);
-						} catch {
+						host = rowOwner(home, runner);
+						if (host === undefined)
 							await new Promise<void>((resolve) => setTimeout(resolve, 50));
-						}
 					}
 					if (host === undefined)
 						throw new Error("runner ledger row never landed");
 					adoptProcessTree(host, [runner]);
 					childPids.push(runner);
 					process.kill(host, "SIGKILL");
+					// Observe the host's exit before the harness tears down. Teardown
+					// tree-kills a child it has not seen exit, and while the kernel
+					// is still tearing the SIGKILLed host down its `ps` walk lists the
+					// runner as the host's child and kills it too (#5745 r4, F3).
+					await pi.quit();
 					return { runner };
 				},
 			);
@@ -139,13 +151,7 @@ describe.runIf(process.platform === "linux")(
 					script: "script.json",
 					home,
 					project,
-					env: {
-						REAL_HARNESS_RUNNER_PID_FILE: pidFile,
-						REAL_HARNESS_RUNNER_OWNER_FILE: ownerFile,
-						REAL_HARNESS_RUNNER_EXIT: "1",
-						REAL_HARNESS_REJECT_AFTER_FIRST: "1",
-						PI_LENS_TEST_MODE: "0",
-					},
+					env: { ...env, REAL_HARNESS_REJECT_AFTER_FIRST: "1" },
 					extensions: [EXTENSION],
 				},
 				async (pi) => {
@@ -153,36 +159,31 @@ describe.runIf(process.platform === "linux")(
 					// real next host alive until its reaper has had its bounded window.
 					await waitGone(first.runner);
 
-					await pi.prompt("/real-harness-runner-5703");
-					const normalRunner = await waitForPid(pidFile);
+					// A runner that exits on its own leaves no row: the row lands while
+					// it runs, and its observed exit removes it.
+					const normalRunner = await startRunner(pi, pidFile);
 					childPids.push(normalRunner);
 					await expect
-						.poll(() => realIsPidAlive(normalRunner), {
+						.poll(() => rowOwner(home, normalRunner), {
 							timeout: REAP_WAIT_MS,
 							interval: 50,
 						})
-						.toBe(false);
+						.toBeDefined();
+					fs.writeFileSync(releaseFile, "");
+					await waitGone(normalRunner);
 					await expect
-						.poll(
-							() => {
-								const children = JSON.parse(
-									fs.readFileSync(path.join(home, "instances.json"), "utf8"),
-								) as {
-									instances: Array<{ lspChildren?: Array<{ pid: number }> }>;
-								};
-								return children.instances.some((entry) =>
-									entry.lspChildren?.some(
-										(child) => child.pid === normalRunner,
-									),
-								);
-							},
-							{ timeout: REAP_WAIT_MS, interval: 50 },
-						)
-						.toBe(false);
+						.poll(() => rowOwner(home, normalRunner), {
+							timeout: REAP_WAIT_MS,
+							interval: 50,
+						})
+						.toBeUndefined();
 
-					await pi.prompt("/real-harness-runner-5703");
-					const rejectedRunner = await waitForPid(pidFile);
+					// Both ledger operations reject from here on; the runner exits at
+					// once (the release file exists), and the host keeps answering.
+					const rejectedRunner = await startRunner(pi, pidFile);
 					childPids.push(rejectedRunner);
+					await waitGone(rejectedRunner);
+					await expect(pi.getState()).resolves.toBeDefined();
 				},
 			);
 		}, 180_000);

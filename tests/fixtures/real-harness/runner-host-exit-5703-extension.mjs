@@ -26,8 +26,10 @@ export default function runnerHostExit5703(pi) {
 			const pidFile = process.env.REAL_HARNESS_RUNNER_PID_FILE;
 			const ownerFile = process.env.REAL_HARNESS_RUNNER_OWNER_FILE;
 			if (!pidFile) throw new Error("missing runner pid file");
+			// The runner exits once the release file exists, so the test decides
+			// when the child exits; without a release file it runs until killed.
 			const script =
-				'const fs=require("node:fs");fs.writeFileSync(process.argv[1],String(process.pid));fs.writeFileSync(process.argv[2],process.env.PI_LENS_OWNER||"");if(process.env.REAL_HARNESS_RUNNER_EXIT) setTimeout(()=>process.exit(0),50); else setInterval(()=>{},1000);';
+				'const fs=require("node:fs");fs.writeFileSync(process.argv[1],String(process.pid));fs.writeFileSync(process.argv[2],process.env.PI_LENS_OWNER||"");const release=process.env.REAL_HARNESS_RUNNER_RELEASE_FILE;setInterval(()=>{if(release&&fs.existsSync(release))process.exit(0)},20);';
 			if (!ownerFile) throw new Error("missing runner owner file");
 			void safeSpawnAsync(process.execPath, ["-e", script, pidFile, ownerFile], {
 				timeout: 600_000,

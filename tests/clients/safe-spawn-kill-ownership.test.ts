@@ -35,6 +35,7 @@ import {
 	getProcessSingleton,
 	getProcessSingletonResets,
 } from "../../clients/process-singletons.js";
+import { _settleRegistryMutationsForTests } from "../../clients/instance-registry-tail.js";
 import { isOwnLiveChild } from "../../clients/safe-spawn.js";
 
 /** The registry `clients/safe-spawn.ts` shares across module instances. */
@@ -346,6 +347,12 @@ describe("kill-by-pid ownership (#2042)", () => {
 			} finally {
 				owned.kill("SIGKILL");
 				lifetimeState().pids.clear();
+				// The owned child's registry row (#5703) is written and removed on
+				// the shared mutation tail. Join it before the reset drops the
+				// tail, or a fresh tail's write meets the old one's lock in a later
+				// case and probes the holder with `process.kill(pid, 0)` while that
+				// case's spy is watching (#5745 r4, F4).
+				await _settleRegistryMutationsForTests();
 				_resetProcessSingletonsForTests();
 			}
 		}
@@ -506,6 +513,44 @@ describe("kill-by-pid ownership (#2042)", () => {
 				);
 				expect(after?.count).toBe(2);
 				expect(after?.latestReasons).toHaveLength(1);
+			});
+
+			// #5745 r4: the owned-child row is what the next session's reaper kills
+			// by. A fabricated pid that got one would hand the reaper a live
+			// foreign process (here the vitest parent) with its real start bound.
+			it("a fabricated child pid gets no owned-child row in instances.json", async () => {
+				const foreignPid = process.ppid;
+				const child = new FakeChild(foreignPid);
+				vi.doMock("node:child_process", () => ({
+					spawn: vi.fn(() => child),
+					spawnSync: vi.fn(() => ({ status: 0, stdout: "", stderr: "" })),
+					execSync: vi.fn(() => ""),
+					execFileSync: vi.fn(() => ""),
+				}));
+				const registry = await import("../../clients/instance-registry.js");
+				const { safeSpawnAsync } = await import("../../clients/safe-spawn.js");
+				await registry.registerInstance(process.cwd());
+				try {
+					const pending = safeSpawnAsync("which", ["node"], {
+						timeout: 50_000,
+					});
+					// The row write is queued behind the spawn-time start read; one
+					// macrotask drains it onto the registry tail, which the settle joins.
+					await new Promise<void>((resolve) => setImmediate(resolve));
+					await _settleRegistryMutationsForTests();
+					const own = (await registry.readInstanceRegistry()).find(
+						(entry) => entry.pid === process.pid,
+					);
+					expect(own).toBeDefined();
+					expect(own?.lspChildren.map((row) => row.pid)).not.toContain(
+						foreignPid,
+					);
+					child.emit("close", 0, null);
+					await pending;
+				} finally {
+					registry.deregisterInstance();
+					await _settleRegistryMutationsForTests();
+				}
 			});
 
 			it("a fabricated child pid never enters the lifetime registry, so host exit never signals it", async () => {

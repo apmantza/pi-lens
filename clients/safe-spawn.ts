@@ -2369,7 +2369,11 @@ export async function safeSpawnAsync(
 			usageSampler = { stop: () => null };
 		}
 		const resourceLabel = options?.resourceLabel ?? command;
-		const registryChildPid = child.pid;
+		// #5703 r4: only a child the spawn-time ownership check accepted gets a
+		// row. A pid that is alive under another parent (a test double's
+		// invented pid, #2042) would otherwise be written to `instances.json`
+		// with that process's real start, for the next session's reaper.
+		const registryChildPid = ownsChildPid ? child.pid : undefined;
 		const noteOwnedChildLedgerFailure = (
 			operation: "record" | "remove",
 			err: unknown,
@@ -2381,11 +2385,7 @@ export async function safeSpawnAsync(
 			});
 		};
 		if (registryChildPid !== undefined) {
-			void (
-				ownsChildPid
-					? readProcessStart(registryChildPid, { timeoutMs: 1_000 })
-					: Promise.resolve(undefined)
-			)
+			void readProcessStart(registryChildPid, { timeoutMs: 1_000 })
 				.then((processStart) =>
 					recordOwnedChild({
 						pid: registryChildPid,
