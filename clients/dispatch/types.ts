@@ -196,6 +196,12 @@ export interface InconclusiveSources {
 	/** Language servers a run named unconfirmed (`unconfirmedServerIds`). */
 	serverIds: readonly string[];
 	/**
+	 * #5727: per runner in `runnerIds`, the servers that answered these bytes
+	 * all the same (`RunnerResult.answeredServerIds`). A recorded blocker of
+	 * one of them is judged by that answer; any other stays.
+	 */
+	answeredServerIds?: ReadonlyMap<string, readonly string[]>;
+	/**
 	 * #4484 round 3: the subset of `runnerIds` still in flight (collect-later).
 	 * Their settled run answers for the write on its own, so the next write
 	 * owes them no lines.
@@ -700,6 +706,13 @@ export interface RunnerResult {
 	 * the rest of that set has no delivery path and reads as silent.
 	 */
 	deferredServerIds?: readonly string[];
+	/**
+	 * #5727: on a run that reached no verdict, the servers whose answer about
+	 * these bytes it holds all the same (an auxiliary that answered while the
+	 * primary did not). Set only from the touch's own list, never inferred
+	 * from an id the touch left unnamed.
+	 */
+	answeredServerIds?: readonly string[];
 	/**
 	 * #4484 round 6: the verdict covers only the edit's ranges. napi's Gate B
 	 * skip sets it: the ast-grep server answers for the file, but its gate

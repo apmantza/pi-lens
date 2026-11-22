@@ -2040,7 +2040,9 @@ function buildEnrichedBlockerOutput(
  * observed copies matched this way are returned as `matched`. One matched only
  * by `stillObserved` stays as its observed copy. One no finding matches stays,
  * at its position when it has one, only when its runner or server reached no
- * verdict; that carry is counted per file. Round 6: a runner whose verdict
+ * verdict; that carry is counted per file. #5727: a blocker whose own server
+ * answered these bytes, although its runner reached no verdict
+ * (`answeredServerIds`), is judged by that answer. Round 6: a runner whose verdict
  * covers only the edit (`editScopedRunnerIds`) answers only for a blocker
  * inside it: its line was edited or deleted, or its line now lies in
  * `editRanges`. One outside, or unplaced, stays as for no verdict.
@@ -2062,6 +2064,14 @@ function carryRecordedBlockers(
 	if (prior.length === 0) return { carried: [], matched: new Set() };
 	const runnerIds = new Set(dispatchResult.inconclusiveSources?.runnerIds);
 	const serverIds = new Set(dispatchResult.inconclusiveSources?.serverIds);
+	const answered = dispatchResult.inconclusiveSources?.answeredServerIds;
+	// #5727: a runner with no verdict keeps its recorded blockers, except one
+	// whose own server answered these bytes all the same: that answer judges it.
+	const runnerKeeps = (d: Diagnostic) =>
+		d.runnerId !== undefined &&
+		runnerIds.has(d.runnerId) &&
+		(d.serverId === undefined ||
+			!answered?.get(d.runnerId)?.includes(d.serverId));
 	const editScoped = new Set(dispatchResult.editScopedRunnerIds);
 	const insideEdit = (d: Diagnostic) => {
 		const at = d.line === undefined ? ANY_POSITION : positionOf(d);
@@ -2079,7 +2089,7 @@ function carryRecordedBlockers(
 			positionOf,
 			matchesAnywhere,
 			keepUnobserved: (d) =>
-				(d.runnerId !== undefined && runnerIds.has(d.runnerId)) ||
+				runnerKeeps(d) ||
 				(d.serverId !== undefined && serverIds.has(d.serverId)) ||
 				(d.runnerId !== undefined &&
 					editScoped.has(d.runnerId) &&
