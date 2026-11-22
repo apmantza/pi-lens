@@ -1053,15 +1053,21 @@ const crashGuardState = getProcessSingleton<CrashGuardState>(
 
 function isIgnorableLspRuntimeCrash(err: unknown): boolean {
 	if (!(err instanceof Error)) return false;
-	const code = (err as { code?: string }).code;
-	if (code && LSP_CRASH_CODES.has(code)) return true;
-	const msg = err.message.toLowerCase();
-	const stack = (err.stack ?? "").toLowerCase();
-	return (
-		msg.includes("stream") ||
-		msg.includes("write after end") ||
-		stack.includes("vscode-jsonrpc/lib/node/ril.js")
-	);
+	try {
+		const code = (err as { code?: string }).code;
+		if (code && LSP_CRASH_CODES.has(code)) return true;
+		const msg = err.message.toLowerCase();
+		const stack = (err.stack ?? "").toLowerCase();
+		return (
+			msg.includes("stream") ||
+			msg.includes("write after end") ||
+			stack.includes("vscode-jsonrpc/lib/node/ril.js")
+		);
+	} catch {
+		// none: an error whose fields throw is no LSP stream failure, and a
+		// throw here would end the host with code 7 and no exit listener (#5746 r4)
+		return false;
+	}
 }
 
 function installCrashGuard(): void {
@@ -1079,7 +1085,7 @@ function installCrashGuard(): void {
 		) {
 			return;
 		}
-		writeLspCrashStack(err instanceof Error ? (err.stack ?? err) : err);
+		writeLspCrashStack(err);
 		process.exit(1);
 	};
 	process.prependListener("uncaughtException", onUncaughtException);

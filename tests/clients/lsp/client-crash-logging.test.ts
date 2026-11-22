@@ -17,12 +17,20 @@
  * with a real exit code/signal — the exact case that went dark before.
  */
 
+import * as fs from "node:fs";
+import * as net from "node:net";
 import * as path from "node:path";
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { logLatency } from "../../../clients/latency-logger.js";
 import { spawnFakeLspServer } from "../../support/fake-lsp-server.js";
+import { setupTestEnvironment } from "../test-utils.js";
+
+/** The crash report's byte cap and the line that ends a capped report: the
+ *  #5746 r4 bound, pinned here as numbers so a changed cap is a visible edit. */
+const CRASH_STACK_MAX_BYTES = 16 * 1024;
+const TRUNCATION_LINE = "\n[lsp-crash] crash report truncated at 16384 bytes\n";
 
 vi.mock("../../../clients/latency-logger.js", async (importActual) => ({
 	...(await importActual<
@@ -38,6 +46,8 @@ describe("LSP client — crash exit is logged, not silently swallowed", () => {
 			| "rejection"
 			| "large-rejection"
 			| "hostile-rejection"
+			| "hostile-stack"
+			| "closed-stderr"
 			| "duplicate"
 			| "preexisting"
 			| "ignorable"
@@ -76,6 +86,10 @@ if (${JSON.stringify(mode)} === "ignorable") {
   Promise.reject(new Error("PROBE non-LSP rejection"));
 } else if (${JSON.stringify(mode)} === "hostile-rejection") {
   Promise.reject(Object.create(null));
+} else if (${JSON.stringify(mode)} === "hostile-stack") {
+  const error = new Error("PROBE hostile stack");
+  Object.defineProperty(error, "stack", { get() { throw new Error("stack getter"); } });
+  setTimeout(() => { throw error; }, 50);
 } else if (${JSON.stringify(mode)} === "large-rejection") {
   const error = new Error("PROBE large rejection");
   error.stack = "large-crash-stack:" + "x".repeat(1024 * 1024);
@@ -98,6 +112,8 @@ if (${JSON.stringify(mode)} === "ignorable") {
 			child.stderr.setEncoding("utf8");
 			child.stdout.on("data", (chunk: string) => (stdout += chunk));
 			child.stderr.on("data", (chunk: string) => (stderr += chunk));
+			// The child's stderr then has no reader: its crash report fails EPIPE.
+			if (mode === "closed-stderr") child.stderr.destroy();
 			child.once("error", reject);
 			child.once("exit", (code) => resolve({ code, stdout, stderr }));
 		});
@@ -195,18 +211,40 @@ if (${JSON.stringify(mode)} === "ignorable") {
 	it("survives a re-evaluated client module and hostile rejection reason", async () => {
 		const duplicate = await runCrashGuardProbe("duplicate");
 		const hostile = await runCrashGuardProbe("hostile-rejection");
+		// #5746 r4: the guard read a thrown Error's `stack` outside the
+		// writer's catch, so a throwing getter threw inside the handler and
+		// Node exited 7 with no exit listener run.
+		const hostileStack = await runCrashGuardProbe("hostile-stack");
 		expect(duplicate).toMatchObject({ code: 1 });
 		expect(duplicate.stdout).toContain("EXIT_MARKER");
 		expect(hostile).toMatchObject({ code: 1 });
 		expect(hostile.stdout).toContain("EXIT_MARKER");
 		expect(hostile.stderr).toContain("[lsp-crash] unprintable failure");
-	}, 20_000);
+		expect(hostileStack).toMatchObject({ code: 1 });
+		expect(hostileStack.stdout).toContain("EXIT_MARKER");
+		expect(hostileStack.stderr).toContain("[lsp-crash] unprintable failure");
+	}, 30_000);
 
-	it("flushes a large crash stack through a piped stderr", async () => {
+	// #5746 r4 F1: a 1 MiB stack reaches stderr as its head and one
+	// truncation line, so a slow terminal or a full pipe never takes more
+	// than the cap.
+	it("caps a large crash stack through a piped stderr", async () => {
 		const result = await runCrashGuardProbe("large-rejection");
 		expect(result).toMatchObject({ code: 1 });
+		expect(result.stdout).toContain("EXIT_MARKER");
 		expect(result.stderr).toContain("large-crash-stack:");
-		expect(result.stderr.length).toBeGreaterThan(1024 * 1024);
+		expect(result.stderr.endsWith(TRUNCATION_LINE)).toBe(true);
+		expect(Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(
+			CRASH_STACK_MAX_BYTES + Buffer.byteLength(TRUNCATION_LINE),
+		);
+	}, 20_000);
+
+	// The closed-pipe row of the #5746 r4 state table: EPIPE ends the report
+	// at once, and the exit listeners still run.
+	it("exits through the exit listeners when stderr is closed", async () => {
+		const result = await runCrashGuardProbe("closed-stderr");
+		expect(result).toMatchObject({ code: 1 });
+		expect(result.stdout).toContain("EXIT_MARKER");
 	}, 20_000);
 
 	it("keeps ignorable stream failures and delegates to another listener", async () => {
@@ -286,3 +324,141 @@ if (${JSON.stringify(mode)} === "ignorable") {
 		).toBe(closeCount);
 	}, 10_000);
 });
+
+// #5746 r4 F1: the crash report's time bound on a full stderr pipe. A FIFO
+// stands in for stderr because it is a real kernel pipe whose fill the test
+// controls: the test fills it through its own non-blocking write end, then
+// hands the child a separately opened, blocking write end, the state a pipe
+// is in before anything in the process reads `process.stderr`. The child
+// loads only the writer module, so nothing else in its graph has made fd 2
+// non-blocking. POSIX only: Windows has no FIFO, and Node keeps Windows pipes
+// blocking (the state table's stated residual).
+describe.runIf(process.platform !== "win32")(
+	"LSP crash report on a full stderr pipe (#5746 r4)",
+	() => {
+		const children: ChildProcess[] = [];
+		const cleanups: Array<() => void> = [];
+
+		afterEach(() => {
+			for (const child of children.splice(0)) {
+				if (child.exitCode === null && child.signalCode === null)
+					child.kill("SIGKILL");
+			}
+			for (const cleanup of cleanups.splice(0)) cleanup();
+		});
+
+		/** A FIFO filled until a non-blocking write fails EAGAIN, and its
+		 *  read end, which nothing reads until the test says so. */
+		function fullFifo(): {
+			fifo: string;
+			readFd: number;
+			home: string;
+			filled: number;
+		} {
+			const env = setupTestEnvironment("lsp-crash-fifo-");
+			cleanups.push(env.cleanup);
+			const fifo = path.join(env.tmpDir, "stderr.fifo");
+			expect(spawnSync("mkfifo", [fifo]).status).toBe(0);
+			const readFd = fs.openSync(
+				fifo,
+				fs.constants.O_RDONLY | fs.constants.O_NONBLOCK,
+			);
+			const fillFd = fs.openSync(
+				fifo,
+				fs.constants.O_WRONLY | fs.constants.O_NONBLOCK,
+			);
+			const chunk = Buffer.alloc(4096, ".");
+			let filled = 0;
+			try {
+				for (;;) filled += fs.writeSync(fillFd, chunk);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EAGAIN") throw error;
+			} finally {
+				fs.closeSync(fillFd);
+			}
+			return { fifo, readFd, home: path.join(env.tmpDir, "home"), filled };
+		}
+
+		/** A child that writes a 100 MiB crash stack through the built writer
+		 *  into the FIFO as its stderr, and reports on stdout around it. */
+		function writeReportInto(fifo: string, home: string): ChildProcess {
+			const writer = pathToFileURL(
+				path.resolve("clients/lsp/crash-output.js"),
+			).href;
+			const source = `
+import { writeSync } from "node:fs";
+const { writeLspCrashStack } = await import(${JSON.stringify(writer)});
+const error = new Error("PROBE full pipe");
+error.stack = "fifo-crash-stack:" + "x".repeat(100 * 1024 * 1024);
+writeSync(1, "WRITING\\n");
+writeLspCrashStack(error);
+writeSync(1, "RETURNED\\n");`;
+			const stderrFd = fs.openSync(fifo, fs.constants.O_WRONLY);
+			try {
+				const child = spawn(
+					process.execPath,
+					["--input-type=module", "-e", source],
+					{
+						stdio: ["ignore", "pipe", stderrFd],
+						env: { ...process.env, PI_LENS_HOME: home },
+					},
+				);
+				children.push(child);
+				return child;
+			} finally {
+				fs.closeSync(stderrFd);
+			}
+		}
+
+		function settle(
+			child: ChildProcess,
+		): Promise<{ code: number | null; stdout: string }> {
+			let stdout = "";
+			child.stdout?.setEncoding("utf8");
+			child.stdout?.on("data", (chunk: string) => (stdout += chunk));
+			return new Promise((resolve, reject) => {
+				child.once("error", reject);
+				child.once("close", (code) => resolve({ code, stdout }));
+			});
+		}
+
+		// The reviewer's F1 probe: before the bound, writeSync blocked on the
+		// full pipe and the dying host never reached process.exit.
+		it("returns within its deadline when stderr is a full pipe nobody reads", async () => {
+			const { fifo, readFd, home } = fullFifo();
+			try {
+				const result = await settle(writeReportInto(fifo, home));
+				expect(result).toEqual({ code: 0, stdout: "WRITING\nRETURNED\n" });
+			} finally {
+				fs.closeSync(readFd);
+			}
+		}, 20_000);
+
+		// The slow-reader row: the report waits for a reader that starts only
+		// after the writer met the full pipe, and arrives whole, capped.
+		it("delivers the capped report to a reader that drains a full pipe late", async () => {
+			const { fifo, readFd, home, filled } = fullFifo();
+			const child = writeReportInto(fifo, home);
+			const outcome = settle(child);
+			await new Promise<void>((resolve) =>
+				child.stdout?.once("data", () => resolve()),
+			);
+			const reader = new net.Socket({
+				fd: readFd,
+				readable: true,
+				writable: false,
+			});
+			const chunks: Buffer[] = [];
+			reader.on("data", (chunk: Buffer) => chunks.push(chunk));
+			const drained = new Promise<void>((resolve) =>
+				reader.once("close", () => resolve()),
+			);
+			const result = await outcome;
+			await drained;
+			const report = Buffer.concat(chunks).subarray(filled).toString("utf8");
+			expect(result).toEqual({ code: 0, stdout: "WRITING\nRETURNED\n" });
+			expect(report.startsWith("fifo-crash-stack:")).toBe(true);
+			expect(report.endsWith(TRUNCATION_LINE)).toBe(true);
+		}, 20_000);
+	},
+);
