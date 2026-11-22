@@ -515,6 +515,58 @@ describe("kill-by-pid ownership (#2042)", () => {
 				expect(after?.latestReasons).toHaveLength(1);
 			});
 
+			// #5745 r3 F1: a rejected ledger write once escaped as an unhandled
+			// rejection and killed the host. Both rejections now land in one
+			// degradation row per session, and the spawn still settles.
+			it("a rejecting owned-child ledger records one degradation and the spawn settles", async () => {
+				const owned = await spawnOwnedFixtureChild();
+				if (owned.pid === undefined)
+					throw new Error("fixture child did not get a pid");
+				const child = new FakeChild(owned.pid);
+				vi.doMock("node:child_process", () => ({
+					spawn: vi.fn(() => child),
+					spawnSync: vi.fn(() => ({ status: 0, stdout: "", stderr: "" })),
+					execSync: vi.fn(() => ""),
+					execFileSync: vi.fn(() => ""),
+				}));
+				const held = await import("../../clients/held-children.js");
+				const registry = await import("../../clients/instance-registry.js");
+				const { safeSpawnAsync } = await import("../../clients/safe-spawn.js");
+				const { getDegradationSummary: freshSummary } =
+					await import("../../clients/degradation-ledger.js");
+				held.provideOwnedChildLedger({
+					write: async () => {
+						throw new Error("REGISTRY_WRITE_FAILED");
+					},
+					remove: async () => {
+						throw new Error("REGISTRY_REMOVE_FAILED");
+					},
+				});
+				try {
+					const pending = safeSpawnAsync("which", ["node"], {
+						timeout: 50_000,
+					});
+					await new Promise<void>((resolve) => setImmediate(resolve));
+					child.emit("close", 0, null);
+					await pending;
+					await new Promise<void>((resolve) => setImmediate(resolve));
+					const group = freshSummary().find(
+						(entry) => entry.kind === "safe-spawn-owned-child-registry-failed",
+					);
+					expect(group?.count).toBe(1);
+					expect(group?.latestReasons.map((entry) => entry.reason)).toEqual([
+						"record failed: Error: REGISTRY_WRITE_FAILED",
+					]);
+				} finally {
+					held.provideOwnedChildLedger({
+						write: registry.recordLspChild,
+						remove: registry.removeLspChild,
+					});
+					owned.kill("SIGKILL");
+					lifetimeState().pids.clear();
+				}
+			});
+
 			// #5745 r4: the owned-child row is what the next session's reaper kills
 			// by. A fabricated pid that got one would hand the reaper a live
 			// foreign process (here the vitest parent) with its real start bound.
