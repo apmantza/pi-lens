@@ -1180,16 +1180,16 @@ export type DegradationKind =
 	| "lsp-file-birth-unknown"
 	/**
 	 * `lsp-idle-eviction`: An idle LSP client was released by the shared idle-eviction timer (a
-	 * server whose registry `idleEviction` is `transparent`); it respawns on the
+	 * server whose registry `idleEviction` is not `resident`, #5700); it respawns on the
 	 * next request. Subject is the client key.
 	 */
 	| "lsp-idle-eviction"
 	/**
 	 * `lsp-idle-eviction-declined`: #3952: `scheduleIdleEviction` was asked to arm a client and DECLINED,
-	 * because the server object the service holds does not declare
-	 * `idleEviction: "transparent"` and the client is not an adopted-root one.
+	 * because the server object the service holds declares
+	 * `idleEviction: "resident"` (#5700) and the client is not an adopted-root one.
 	 * The pair this row separates is `resident-by-declaration` (a policy answer:
-	 * `unmeasured`/`resident` servers are meant to stay) from
+	 * `resident` servers are meant to stay) from
 	 * `not-evicted` (a measurement whose arm never reached the policy), and
 	 * before it both read as "the timer did not fire". Subject is the server id,
 	 * recorded ONCE per server per session: the declaration is the same every
@@ -1252,6 +1252,15 @@ export type DegradationKind =
 	| "lsp-notify-inflight-stall"
 	/** `lsp-notify-stall-cpu-busy`: A busy notify-stall discriminator was deferred; detail is rising-edge bounded. */
 	| "lsp-notify-stall-cpu-busy"
+	/**
+	 * `lsp-open-document-cap`: #5700: a client held more documents open than the
+	 * registry's cap (`getLspOpenDocumentCap`) and closed its least recently sent
+	 * ones with `didClose`. A closed document's last findings stay in the
+	 * client's cache, marked `closed`, and a later touch opens it again. Subject
+	 * is the server id, ONCE per server per session: the cap is the same every
+	 * time, so one row answers for every close.
+	 */
+	| "lsp-open-document-cap"
 	/**
 	 * `lsp-probe-finding-policy`: #3071: `tools/lsp-diagnostics.ts`'s probe-disposition filter threw while
 	 * applying policy to a batch of findings; the batch is returned unfiltered
@@ -2988,14 +2997,17 @@ const INFORMATIONAL_DEGRADATION_KINDS: ReadonlySet<string> = new Set([
 	// #3952: both are the idle-eviction POLICY answering, not a timer that
 	// failed. `lsp-idle-eviction` is the memory bound releasing a client that
 	// respawns on the next request; `lsp-idle-eviction-declined` is the
-	// declaration `unmeasured`/`resident` doing its job, once per server, so a
-	// nominal session writes up to one row per non-`transparent` server (32 of
-	// the 49 built-ins today). A `⚠` per server on every healthy session is
+	// declaration `resident` doing its job, once per server, so a
+	// nominal session writes up to one row per `resident` server (the five
+	// held indexers today, #5700). A `⚠` per server on every healthy session is
 	// the cry-wolf shape #2505 rejected; the sibling that DOES stand out is a
 	// measurement whose arm never reached the policy, and that one reads as a
 	// missing row, not as a warning here.
 	"lsp-idle-eviction",
 	"lsp-idle-eviction-declined",
+	// #5700: the open-document cap closing a cold document is the resident
+	// budget working; the server reopens it on the next touch.
+	"lsp-open-document-cap",
 ]);
 
 export function renderDegradationLines(

@@ -232,12 +232,14 @@ describe("idleEvictionDrift", () => {
 		]);
 	});
 
-	it("proposes an unmeasured server that is eligible, and confirms one that is vetoed", () => {
+	// #5700: the registry evicts an `unmeasured` server too, so a measured veto
+	// of one is shipped behaviour breaking on respawn: drift, not a proposal.
+	it("proposes an unmeasured server that is eligible, and calls one that is vetoed drift (#5700)", () => {
 		expect(kinds([row("bravo", "eligible")])).toEqual([
 			"bravo:unmeasured-eligible:proposal",
 		]);
 		expect(kinds([row("bravo", "vetoed", "respawn-failed")])).toEqual([
-			"bravo:unmeasured-vetoed:proposal",
+			"bravo:unmeasured-vetoed:drift",
 		]);
 	});
 
@@ -346,14 +348,25 @@ describe("driftIssueState", () => {
 	]);
 	const state = (rows: IdleEvictionRow[]) => driftIssueState(rows, transparent);
 
-	it("is clean only when every transparent server is eligible, whatever the others did", () => {
+	it("is clean only when every transparent server is eligible, whatever the others' evidence", () => {
+		expect(
+			state([
+				row("alpha", "eligible"),
+				row("bravo", "eligible"),
+				row("charlie", "unavailable", "tool-unavailable"),
+			]),
+		).toBe("clean");
+	});
+
+	// #5700: an `unmeasured` server is evicted too, so its veto is drift.
+	it("is drift when an unmeasured server is vetoed (#5700)", () => {
 		expect(
 			state([
 				row("alpha", "eligible"),
 				row("bravo", "eligible"),
 				row("charlie", "vetoed", "respawn-failed"),
 			]),
-		).toBe("clean");
+		).toBe("drift");
 	});
 
 	it("is drift when any transparent server is vetoed, even if the others are eligible", () => {

@@ -1310,6 +1310,40 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	const files = ownFiles;
 
 	/**
+	 * Arm the session's LSP idle reset from this turn end: after a quiet turn
+	 * and, since #5700, after an edit turn too. A later turn end re-arms it, so
+	 * it fires only after a whole idle window with no turn end.
+	 */
+	const armLspIdleReset = (why: string): void => {
+		// #713: subagent sessions use a shorter idle reset (nominally 60s) — a
+		// short-lived task agent holding a warm fleet for 4 minutes after its
+		// last turn is pure waste under fan-out. Classify ONCE here so every
+		// tick in this call path shares the same answer. PI_LENS_SUBAGENT_FULL=1
+		// restores the base delay via isSubagentSession() returning false.
+		// #1618: both branches route through `getEffectiveLspIdleResetMs` so
+		// AC6's derivation applies universally — see that function's doc for
+		// why the "shorter" path is not always literally 60s anymore.
+		const idleResetMs = getEffectiveLspIdleResetMs();
+		dbg(`turn_end: ${why}, scheduling LSP idle reset (${idleResetMs / 1000}s)`);
+		if (getFlag("no-lsp")) return;
+		const sessionGeneration = runtime.sessionGeneration;
+		scheduleLSPIdleReset(resetLSPService, idleResetMs, {
+			isCurrentSession: () => runtime.isCurrentSession(sessionGeneration),
+			// #2157 fix round 2: a secondary (subagent) evaluation's own timer
+			// must not release the primary's shared fleet — see the option's
+			// doc comment on `scheduleLSPIdleReset`.
+			isPrimarySession: () => {
+				const activePrimarySessionId = getActiveSessionId();
+				return (
+					activePrimarySessionId === undefined ||
+					activePrimarySessionId === runtime.telemetrySessionId
+				);
+			},
+			onError: (err) => dbg(`lsp idle reset failed: ${err}`),
+		});
+	};
+
+	/**
 	 * #2275: widget-footer sibling of #1950's inline-blocker cap, for the
 	 * widget store's OWN dependency-drift demotion
 	 * (`markWidgetFileBlockersStale`, driven by the freshness sweep further
@@ -1382,35 +1416,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		if (getFlag("lens-guard") && !runtime.gitGuardHasBlockers) {
 			retireSettledGitGuardRecord(runtime, cacheManager, cwd, sessionId);
 		}
-		// #713: subagent sessions use a shorter idle reset (nominally 60s) — a
-		// short-lived task agent holding a warm fleet for 4 minutes after its
-		// last turn is pure waste under fan-out. Classify ONCE here so every
-		// tick in this call path shares the same answer. PI_LENS_SUBAGENT_FULL=1
-		// restores the base delay via isSubagentSession() returning false.
-		// #1618: both branches route through `getEffectiveLspIdleResetMs` so
-		// AC6's derivation applies universally — see that function's doc for
-		// why the "shorter" path is not always literally 60s anymore.
-		const idleResetMs = getEffectiveLspIdleResetMs();
-		dbg(
-			`turn_end: no modified files, scheduling LSP idle reset (${idleResetMs / 1000}s)`,
-		);
-		if (!getFlag("no-lsp")) {
-			const sessionGeneration = runtime.sessionGeneration;
-			scheduleLSPIdleReset(resetLSPService, idleResetMs, {
-				isCurrentSession: () => runtime.isCurrentSession(sessionGeneration),
-				// #2157 fix round 2: a secondary (subagent) evaluation's own timer
-				// must not release the primary's shared fleet — see the option's
-				// doc comment on `scheduleLSPIdleReset`.
-				isPrimarySession: () => {
-					const activePrimarySessionId = getActiveSessionId();
-					return (
-						activePrimarySessionId === undefined ||
-						activePrimarySessionId === runtime.telemetrySessionId
-					);
-				},
-				onError: (err) => dbg(`lsp idle reset failed: ${err}`),
-			});
-		}
+		armLspIdleReset("no modified files");
 		resetFormatService();
 		// #3218 criterion 2: a retirement nobody has reported (a
 		// `lens_diagnostics` confirmation lands on exactly this turn) falls
@@ -1430,17 +1436,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			return;
 	}
 
-	// Cancel any pending idle reset since we're actively working. #1618: also
-	// checks `pendingSweepRearm` — a timer deferred behind an in-flight
-	// workspace sweep already nulled `lspIdleResetTimeout` (the setTimeout
-	// callback clears it before checking the hold), so this guard used to
-	// read "nothing pending" and skip the cancel while a rearm was still
-	// queued to fire the instant the sweep released its hold — resurrecting
-	// idle reset on a session that had since gone back to active editing.
-	if (files.length > 0 && (lspIdleResetTimeout || pendingSweepRearm)) {
-		cancelLSPIdleReset();
-		dbg("turn_end: cancelled pending LSP idle reset (active editing)");
-	}
+	// #5700 (B3): an edit turn restarts the idle window instead of cancelling
+	// it. It used to cancel and nothing armed it again, so a session whose last
+	// turn wrote a file kept its whole fleet. Re-arming replaces the pending
+	// timer and any rearm parked behind a workspace sweep (#1618), so a parked
+	// rearm cannot fire early against a session that went back to editing.
+	if (files.length > 0) armLspIdleReset(`${files.length} modified file(s)`);
 
 	dbg(
 		`turn_end: ${files.length} file(s) modified, cycles: ${turnState.turnCycles}/${turnState.maxCycles}, access: ${access}, owner: ${gateOwnerLabel}`,

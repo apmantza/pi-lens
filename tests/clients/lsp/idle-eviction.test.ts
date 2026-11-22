@@ -231,11 +231,27 @@ describe("LSP idle eviction (#1332 b2)", () => {
 		await service.shutdown();
 	});
 
-	it("keeps an unmeasured server resident", async () => {
+	// #5700: an unmeasured server lived as long as its host; it is evicted now.
+	it("evicts an unmeasured server (#5700)", async () => {
 		vi.useFakeTimers();
 		const client = fakeClient("unmeasured");
 		createLSPClient.mockResolvedValue(client);
 		configureServer("go", "unmeasured");
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+
+		await service.getClientForFile("/repo/main.ts");
+		await vi.advanceTimersByTimeAsync(20);
+		expect(client.shutdown).toHaveBeenCalledWith({ reason: "idle_eviction" });
+		expect(service.getAliveClientCount()).toBe(0);
+		await service.shutdown();
+	});
+
+	it("keeps a resident server resident", async () => {
+		vi.useFakeTimers();
+		const client = fakeClient("resident");
+		createLSPClient.mockResolvedValue(client);
+		configureServer("go", "resident");
 		const { LSPService } = await import("../../../clients/lsp/index.js");
 		const service = new LSPService();
 

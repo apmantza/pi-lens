@@ -64,6 +64,8 @@
 		// consumer, so a lane can never hide dead code from knip.
 		"tests/real-harness/*.test.ts",
 		"tests/config/*.test.ts",
+		// #5700: a serialized wall-clock lane member (real spawned MCP child).
+		"tests/mcp/lsp-resident-budget-5700.smoke.test.ts",
 		"tests/mcp/session-end.smoke.test.ts",
 		// #5159: the stale-cell smoke is a serialized wall-clock lane member
 		// (real spawned MCP child), so the lane coverage gate (#2837)

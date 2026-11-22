@@ -664,11 +664,13 @@ export interface LSPServerInfo {
 	name: string;
 	extensions: readonly string[];
 	/**
-	 * Idle-eviction policy for this server's clients. `transparent` = the client
-	 * may be released after the shared idle window and rebuilds on the next
-	 * request; it requires measured per-server evidence. `resident` = deliberately
-	 * kept resident. `unmeasured` = no evidence yet; treated as resident so an
-	 * unmeasured server is never evicted by omission.
+	 * Idle-eviction policy for this server's clients. #5700: every client is
+	 * released after the shared idle window and rebuilds on the next request,
+	 * unless the server is declared `resident` (the only opt-out; it needs a
+	 * reason row in `tests/config/lsp-idle-eviction-reasons.json`).
+	 * `transparent` = the nightly measured the release as safe (findings
+	 * preserved after respawn). `unmeasured` = no such evidence yet; evicted
+	 * all the same, and the nightly's drift check flags a measured veto.
 	 */
 	idleEviction: "transparent" | "resident" | "unmeasured";
 	/** True for entries supplied through `lsp.servers.*`, not the built-in table. */
@@ -3978,7 +3980,7 @@ function JavaWorkspaceRoot(): RootFunction {
 
 export const RustServer: LSPServerInfo = {
 	id: "rust",
-	idleEviction: "unmeasured",
+	idleEviction: "resident",
 	role: "language",
 	// Measured (#3750): rust-analyzer answers an empty result for a detached file.
 	requiresProjectRoot: true,
@@ -4169,7 +4171,7 @@ function buildPsesArgs(bundleDir: string): string[] {
 
 export const PowerShellServer: LSPServerInfo = {
 	id: "powershell",
-	idleEviction: "unmeasured",
+	idleEviction: "resident",
 	role: "language",
 	name: "PowerShell Editor Services",
 	executesProjectCode: true,
@@ -4295,7 +4297,7 @@ export const JavaServer = createInteractiveServer({
 
 export const KotlinServer: LSPServerInfo = {
 	id: "kotlin",
-	idleEviction: "unmeasured",
+	idleEviction: "resident",
 	role: "language",
 	name: "Kotlin Language Server",
 	executesProjectCode: true,
@@ -4556,7 +4558,7 @@ export const ElixirServer = createInteractiveServer({
 
 export const ElixirExpertServer: LSPServerInfo = {
 	id: "expert",
-	idleEviction: "unmeasured",
+	idleEviction: "resident",
 	role: "language",
 	name: "Expert",
 	executesProjectCode: true,
@@ -5151,7 +5153,7 @@ export const VueServer: LSPServerInfo = {
 export const SvelteServer: LSPServerInfo = {
 	id: "svelte",
 	executesProjectCode: true,
-	idleEviction: "unmeasured",
+	idleEviction: "resident",
 	role: "language",
 	name: "Svelte Language Server",
 	extensions: [".svelte"],

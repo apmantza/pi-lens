@@ -143,7 +143,13 @@
   `.oxlintrc.json` (`npm run lint:js`, #2372/#277; it replaced the
   `lsp-capabilities-import-sweep` test in #4865).
 - Idle-eviction policy is the registry's `idleEviction` field, declared per
-  server. The nightly (`scripts/measure-lsp-idle-eviction.mjs`) measures every
+  server. Every client whose server is not declared `resident` arms the shared
+  idle timer, on the pi host and the MCP host alike; `resident` is the only
+  opt-out and needs a reason row (#5700). Each client also caps its open
+  documents (`PI_LENS_LSP_OPEN_DOCUMENT_CAP`, default 256) and closes the least
+  recently sent one with an ordinary queued `didClose`, never beside a live
+  notify queue; the closed file's last findings stay readable, marked
+  `closed`. The nightly (`scripts/measure-lsp-idle-eviction.mjs`) measures every
   registry server's eviction cost and respawn safety into
   `docs/lsp-idle-eviction.md` and changes no policy; a declaration change is a
   follow-up that cites its row, or the nightly's draft promotion PR
@@ -154,7 +160,8 @@
   the registry test's `TRANSPARENT_IDS`; night memory in the matrix doc's
   refresh-state block; never auto-merged, never demotes). `tests/config/lsp-idle-eviction-measurement.test.ts`
   fails when a registry server can go unmeasured without an admission or when
-  the committed measurement vetoes a server declared `transparent`.
+  the committed measurement vetoes a server the registry evicts (any
+  declaration but `resident`, #5700).
 - The compiled registry holds the CATALOG ENTRY for every built-in with no
   command override (`compileLspRegistry`), so the object the client registry
   keeps (`SpawnedServer.info`) is the object `LSP_SERVERS`/`getServerById`
@@ -164,7 +171,7 @@
   first (history: `HISTORY.md`, 2026-10-19).
   `tests/clients/lsp/lsp-registry-trust.test.ts` pins both directions;
   `scheduleIdleEviction` records `lsp-idle-eviction-declined` once per server
-  per session when it arms no timer.
+  per session when it arms no timer (a `resident` server).
 - The server-role vocabulary and the declared trait table have one owner,
   `clients/lsp/server-traits.ts` (#1488, #1756 stage 1). Ask `isAuxiliary`,
   never a comparison against the role literal, and read `notifyInflightLimit`

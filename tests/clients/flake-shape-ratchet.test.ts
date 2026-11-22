@@ -1032,6 +1032,12 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
 	},
+	// 2026-11-22 (#5700): the open-document cap is a wire claim.
+	"real-process-spawn:clients/lsp/open-document-budget-5700.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"#5700: which didOpen and didClose a real server receives, and in which order, is the subject; a stubbed transport cannot show what the server holds open.",
+	},
 	"real-process-spawn:clients/lsp/opengrep-late-empty-4786.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -2140,6 +2146,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// 2026-11-01 (#5146): the fast POSIX shutdown returns before its ast-grep
 	// child exits, and that exit exposes no awaitable, so the shared session
 	// teardown polls /proc.
+	// 2026-11-22 (#5700): the MCP child releases an idle server on its own
+	// registry timer; only the server's trace shows the shutdown.
+	"ungoverned-wait-for:mcp/lsp-resident-budget-5700.smoke.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"#5700: the idle release lands on the language server's own registry timer inside the MCP child, which exposes no awaitable; the poll reads the server's trace for its shutdown and is bounded by its own timeout",
+	},
 	"ungoverned-wait-for:support/mock-session-teardown.ts": {
 		detector: "ungoverned-wait-for",
 		reason:

@@ -680,6 +680,10 @@ export const wallClockBudgetInclude = [
 	"tests/clients/lsp/lean-real-smoke.test.ts",
 	"tests/clients/lsp/liveness-probe-capability-gate.test.ts",
 	"tests/clients/lsp/navigation-timeout.integration.test.ts",
+	// #5700: one real fake-server child through the real LSPService; the
+	// open-document cap is read off the server's trace of didOpen/didClose
+	// (flake-shape admission).
+	"tests/clients/lsp/open-document-budget-5700.test.ts",
 	// #4786: a real `createLSPClient` over stdio fake-server children that publish
 	// a finding then an unversioned empty; waits on real handshakes and debounce
 	// windows, the same #1022/#2332 contention class as its siblings.
@@ -927,6 +931,10 @@ export const wallClockBudgetInclude = [
 	// #5553: real `sed`, ast-grep, git and fake-LSP children behind a real pi
 	// session; the gate reads the writers' baselines (flake-shape admission).
 	"tests/index-5553-writer-baselines.test.ts",
+	// #5700: the MCP child's language server is released on its own idle timer;
+	// the read polls the server's trace on a real-clock deadline (shape 86,
+	// flake-shape admission).
+	"tests/mcp/lsp-resident-budget-5700.smoke.test.ts",
 	// #5150 R2: the parity smoke polls the real MCP child's background
 	// review-graph build on a scaled real-clock deadline (shape 86) before
 	// comparing the two surfaces' text (flake-shape admission); serializing it

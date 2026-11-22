@@ -10384,6 +10384,9 @@ export class LSPService {
 				diags: import("./client.js").LSPDiagnostic[];
 				ts: number;
 				binding?: DiagnosticBinding;
+				/** #5700: a contributing client's open-document cap closed the
+				 *  file; its rows are that server's last findings, not live ones. */
+				closed?: true;
 			}
 		>
 	> {
@@ -10393,6 +10396,7 @@ export class LSPService {
 				diags: import("./client.js").LSPDiagnostic[];
 				ts: number;
 				binding?: DiagnosticBinding;
+				closed?: true;
 			}
 		>();
 		// #1095: per-file stored bindings across every contributing client, merged
@@ -10434,8 +10438,13 @@ export class LSPService {
 						...attributed,
 					]);
 					existing.ts = Math.max(existing.ts, entry.ts);
+					if (entry.closed) existing.closed = true;
 				} else {
-					all.set(filePath, { diags: attributed, ts: entry.ts });
+					all.set(filePath, {
+						diags: attributed,
+						ts: entry.ts,
+						...(entry.closed && { closed: true }),
+					});
 				}
 				const list = bindingsByPath.get(filePath) ?? [];
 				list.push(entry.binding);

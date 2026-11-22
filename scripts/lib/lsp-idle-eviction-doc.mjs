@@ -82,9 +82,10 @@ export function summarizeRows(rows) {
  * Declared-versus-measured findings. `declared` maps a server id to its
  * registry `idleEviction`; `rows` are this run's measurements.
  *
- * Only `transparent-vetoed` is drift: the registry evicts a server the
- * measurement says breaks. Everything else is a proposal or a note for a
- * human, because the measurement proposes and a follow-up flips the policy.
+ * Drift is a vetoed server the registry evicts: since #5700 that is every
+ * server not declared `resident` (`transparent-vetoed`, `unmeasured-vetoed`).
+ * Everything else is a proposal or a note for a human, because the
+ * measurement proposes and a follow-up flips the policy.
  *
  * @returns {{ serverId: string, kind: string, severity: "drift" | "proposal" | "info", detail: string }[]}
  */
@@ -129,11 +130,12 @@ export function idleEvictionDrift(rows, declared) {
 					"declared unmeasured but eviction and respawn preserved its findings",
 			});
 		} else if (policy === "unmeasured" && row.result === "vetoed") {
+			// #5700: `unmeasured` is evicted like `transparent`, so a veto is drift.
 			findings.push({
 				serverId: row.serverId,
 				kind: "unmeasured-vetoed",
-				severity: "proposal",
-				detail: `declared unmeasured and the measurement vetoes eviction${why}; consider declaring resident`,
+				severity: "drift",
+				detail: `declared unmeasured and the measurement vetoes eviction${why}; the registry evicts it, so declare it resident or fix the respawn`,
 			});
 		} else if (policy === "resident" && row.result === "eligible") {
 			findings.push({
@@ -167,7 +169,7 @@ export function buildIdleEvictionDriftBody(findings, options = {}) {
 	const lines = [
 		"Auto-filed by the nightly `tool-smoke` idle-eviction measurement (#3645).",
 		"",
-		"The registry declares these servers `idleEviction: \"transparent\"`, so the shared idle timer releases them, but this run's respawn of each one failed or reported fewer findings than before eviction. Declare them `resident` (with a reason in `tests/config/lsp-idle-eviction-reasons.json`) or fix the respawn. This run's measurement is in its step log and job summary; `docs/lsp-idle-eviction.md` shows the prior row until two nights agree.",
+		"The registry does not declare these servers `idleEviction: \"resident\"`, so the shared idle timer releases them (#5700), but this run's respawn of each one failed or reported fewer findings than before eviction. Declare them `resident` (with a reason in `tests/config/lsp-idle-eviction-reasons.json`) or fix the respawn. This run's measurement is in its step log and job summary; `docs/lsp-idle-eviction.md` shows the prior row until two nights agree.",
 		"",
 		...drift.map((f) => `- **${f.serverId}**: ${f.detail}`),
 	];
@@ -181,7 +183,8 @@ export function buildIdleEvictionDriftBody(findings, options = {}) {
 
 /**
  * What the tracking issue should do. `drift`: at least one server the registry
- * declares `transparent` is vetoed. `clean`: EVERY transparent server has an
+ * evicts (any policy but `resident`, #5700) is vetoed. `clean`: no such veto,
+ * and EVERY transparent server has an
  * `eligible` row this run. `unknown`: anything else (a transparent server that
  * is unavailable, budget-exhausted, client-died, not-evicted, no-baseline, or
  * absent from a filtered run): no evidence either way, so the issue is left
@@ -194,10 +197,10 @@ export function driftIssueState(rows, declared) {
 	const byId = new Map(rows.map((row) => [row.serverId, row]));
 	let clean = true;
 	for (const [serverId, policy] of declared) {
-		if (policy !== "transparent") continue;
+		if (policy === "resident") continue;
 		const row = byId.get(serverId);
 		if (row?.result === "vetoed") return "drift";
-		if (row?.result !== "eligible") clean = false;
+		if (policy === "transparent" && row?.result !== "eligible") clean = false;
 	}
 	return clean ? "clean" : "unknown";
 }
