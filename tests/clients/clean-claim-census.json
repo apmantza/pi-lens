@@ -535,7 +535,7 @@
 			"\"--no-tool=\"": 2,
 			"\",\"": 1,
 			"` and ${omitted} more`": 1,
-			"\"\"": 30,
+			"\"\"": 31,
 			"`${shown.join(\", \")}${suffix} (${names.length} total)`": 1,
 			"\"mutation\"": 1,
 			"\"io\"": 1,
@@ -554,7 +554,7 @@
 			"\"lens-context-toggle\"": 1,
 			"\"Toggle automatic context injection on/off for the current session (tools/LSP/read-guard/formatting stay active). Usage: /lens-context-toggle\"": 1,
 			"\"lens-widget-toggle\"": 1,
-			"\"Show or hide the pi-lens diagnostics widget below the editor. Usage: /lens-widget-toggle\"": 1,
+			"\"Show or hide the pi-lens diagnostics widget. Usage: /lens-widget-toggle\"": 1,
 			"\"pi-lens widget is not supported by this pi version.\"": 1,
 			"\"pi-lens widget shown. Run /lens-widget-toggle to hide it.\"": 1,
 			"\"pi-lens widget hidden. Run /lens-widget-toggle to show it.\"": 1,
@@ -850,7 +850,9 @@
 			"`${dotChar} ${linked}${countsStyled}`": 1,
 			"`\\x1b]8;;${uri}\\x1b\\\\${label}\\x1b]8;;\\x1b\\\\`": 1,
 			"\"/\"": 1,
-			"\"widget-change-listener-failed\"": 1
+			"\"widget-change-listener-failed\"": 2,
+			"\"widget-hide-timer\"": 1,
+			"`hide-timer repaint threw: ${err instanceof Error ? err.message : String(err)}`": 1
 		}
 	},
 	"mcp/analyze-cli.ts": {

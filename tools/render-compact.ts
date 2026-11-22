@@ -23,8 +23,8 @@ import { Text } from "../clients/deps/pi-tui.js";
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { randomUUID } from "node:crypto";
 import { recordDegradationOnce } from "../clients/degradation-ledger.js";
+import { spillResultLogName } from "../clients/log-cleanup.js";
 import { getGlobalPiLensLogDir } from "../clients/probe-home-state.js";
 
 /** The per-result delivery bound (#2848). Exported so surface gates and their
@@ -119,9 +119,12 @@ export function boundToolText(
 		return { text, truncated: false, omittedCharacters: 0 };
 	}
 
+	// The name comes from the retention sweep's own derivation (one source for
+	// writer and reaper, #5702): a name the sweep could not reap is exactly how
+	// the rotated-backup drift accumulated backups indefinitely.
 	const fullOutputPath = path.join(
 		getGlobalPiLensLogDir(),
-		`tool-result-${Date.now()}-${randomUUID()}.log`,
+		spillResultLogName(),
 	);
 	fs.mkdirSync(path.dirname(fullOutputPath), { recursive: true });
 

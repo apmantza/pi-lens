@@ -30,6 +30,7 @@
 import path from "node:path";
 import { logLatency } from "./latency-logger.js";
 import { normalizeLoggedPath } from "./path-utils.js";
+import { getProcessSingleton } from "./process-singletons.js";
 
 interface SpawnTimeoutRecord {
 	tool: string;
@@ -39,26 +40,24 @@ interface SpawnTimeoutRecord {
 }
 
 /**
- * The map lives behind Symbol.for process-global state (same pattern as the
- * shared NDJSON writer registry): multiple module instances of THIS file must
- * share one cooldown population, because a consumer holding instance A must
- * observe what a consumer holding instance B recorded. Re-evaluation happens
- * whenever vi.resetModules() runs in tests or a bundled copy loads beside a
- * compiled one - module identity is simply not a reliable key for
- * session-scoped state.
+ * The map lives in one process-wide cell (`getProcessSingleton`): multiple
+ * module instances of THIS file must share one cooldown population, because a
+ * consumer holding instance A must observe what a consumer holding instance B
+ * recorded. Re-evaluation happens whenever vi.resetModules() runs in tests or
+ * a bundled copy loads beside a compiled one - module identity is simply not
+ * a reliable key for session-scoped state. The seam's family version also
+ * keeps a cell another build shaped differently from being read as this one.
  */
 interface SpawnTimeoutGlobalState {
 	timedOutByCommand: Map<string, SpawnTimeoutRecord>;
 }
-const COOLDOWN_STATE_KEY = Symbol.for("pi-lens:spawn-timeout-cooldown");
-type GlobalWithCooldownState = typeof globalThis & {
-	[COOLDOWN_STATE_KEY]?: SpawnTimeoutGlobalState;
-};
-const _global = globalThis as GlobalWithCooldownState;
-if (!_global[COOLDOWN_STATE_KEY]) {
-	_global[COOLDOWN_STATE_KEY] = { timedOutByCommand: new Map() };
+function cooldowns(): Map<string, SpawnTimeoutRecord> {
+	return getProcessSingleton<SpawnTimeoutGlobalState>(
+		"spawn-timeout-cooldown",
+		1,
+		() => ({ timedOutByCommand: new Map() }),
+	).timedOutByCommand;
 }
-const timedOutByCommand = _global[COOLDOWN_STATE_KEY]!.timedOutByCommand;
 
 /** Wrapper kind for the telemetry record: how the command will be launched. */
 function wrapperKindOf(command: string): string {
@@ -109,7 +108,7 @@ function cooldownKey(command: string): string {
 
 export function noteSpawnTimeout(input: NoteSpawnTimeoutInput): void {
 	const key = cooldownKey(input.subject ?? input.command);
-	timedOutByCommand.set(key, {
+	cooldowns().set(key, {
 		tool: input.tool,
 		command: input.command,
 		phase: input.phase,
@@ -157,7 +156,7 @@ export function noteSpawnTimeout(input: NoteSpawnTimeoutInput): void {
  * an honest "not checked" outcome (skipped / 0-fixes), never clean.
  */
 export function isInSpawnTimeoutCooldown(command: string): boolean {
-	return timedOutByCommand.has(cooldownKey(command));
+	return cooldowns().has(cooldownKey(command));
 }
 
 /**
@@ -166,5 +165,5 @@ export function isInSpawnTimeoutCooldown(command: string): boolean {
  * the executable or its environment may have changed.
  */
 export function resetSpawnTimeoutCooldowns(): void {
-	timedOutByCommand.clear();
+	cooldowns().clear();
 }

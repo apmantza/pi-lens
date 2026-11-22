@@ -1415,6 +1415,9 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// tree kill and the kill guard are tested against (a self-exiting mid
 	// process, a root forking during the kill, a reparented orphan); the
 	// guard's verdict reads the kernel's PPid, which no double has.
+	// 7 -> 8 in #5722 round 2: one real `safeSpawnAsync` child shows that the
+	// lifetime registry the guard wraps is the cell production registers in; a
+	// double carries no pid the ownership oracle can read.
 	"real-process-spawn:real-harness/child-exit.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -2077,6 +2080,9 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// 2026-10-16 (#4528 r1 F3): the spawn-gate window of a dependency restart
 	// exists only between real server processes, and the tool_call hook bounds
 	// its look, so the restart finishes after the hook returns.
+	// 2026-11-19 (#5702): the deferred retention sweep joins no awaitable from
+	// the hook (a setImmediate plus an async sweep), so the wiring pin and the
+	// phase-record read-back join it with real-time waits.
 	"ungoverned-wait-for:clients/head-move-resync-4476.test.ts": {
 		detector: "ungoverned-wait-for",
 		reason:
@@ -2096,10 +2102,20 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"#5694: the server's start shows only as the pid file it writes and its death only as its pid going away; neither exposes an awaitable, and each poll is bounded by its own timeout",
 	},
+	"ungoverned-wait-for:clients/runtime-session.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"the deferred sweep runs on a setImmediate the hook does not await; the wiring pin joins its effect with vi.waitFor and the phase-record case ticks the real queue",
+	},
 	"ungoverned-wait-for:clients/session-repository-trust-4530.test.ts": {
 		detector: "ungoverned-wait-for",
 		reason:
 			"the late-write cell holds a real formatter detection open in a child `go` until trust changes; the child's start exposes no awaitable, only the file it writes",
+	},
+	"ungoverned-wait-for:clients/startup-overhead.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"the deferred sweep's phase record lands on a setImmediate the hook does not await; the read-back ticks the real queue and joins with vi.waitFor",
 	},
 	"ungoverned-wait-for:clients/word-index-lifecycle.test.ts": {
 		detector: "ungoverned-wait-for",

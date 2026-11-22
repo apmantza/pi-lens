@@ -5,6 +5,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import extension from "../index.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 import { removeTempDirSync } from "./clients/test-utils.js";
+import { useGlobalConfig } from "./support/global-config.js";
+import {
+	clearWidgetState,
+	recordDiagnostics,
+	recordRunner,
+	setSessionLanguages,
+	WIDGET_CLEAR_HIDE_DELAY_MS,
+} from "../clients/widget-state.js";
 import {
 	getDegradationSummary,
 	resetDegradationLedger,
@@ -52,6 +60,7 @@ vi.mock("../clients/runtime-session.js", () => ({
 }));
 
 const tmpDirs: string[] = [];
+const setGlobalConfig = useGlobalConfig();
 
 function tmpProject(): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-mode-aware-"));
@@ -60,6 +69,8 @@ function tmpProject(): string {
 }
 
 afterEach(() => {
+	vi.useRealTimers();
+	clearWidgetState();
 	resetDegradationLedger();
 	for (const dir of tmpDirs.splice(0)) removeTempDirSync(dir);
 });
@@ -117,6 +128,131 @@ describe("widget mounting is mode-derived (#1334 S2)", () => {
 			key: "pi-lens",
 			options: { placement: "belowEditor" },
 		});
+	});
+
+	it('mounts the widget above the editor when widget.position is "aboveEditor"', async () => {
+		setGlobalConfig({ widget: { position: "aboveEditor" } });
+
+		const ctx = await toggleTwice("tui");
+
+		expect(mounts(ctx)).toHaveLength(1);
+		expect(mounts(ctx)[0]).toMatchObject({
+			key: "pi-lens",
+			options: { placement: "aboveEditor" },
+		});
+	});
+
+	/** Mount, then render the mounted component over a settled clean store. */
+	async function renderCleanAfterDelay(): Promise<string[]> {
+		const ctx = await toggleTwice("tui");
+		const factory = mounts(ctx)[0]?.content as (
+			tui: { requestRender: () => void },
+			theme: { fg: (color: string, text: string) => string },
+		) => { render: (width: number) => string[] };
+		vi.useFakeTimers();
+		const component = factory(
+			{ requestRender: () => {} },
+			{ fg: (_color, text) => text },
+		);
+		setSessionLanguages(["jsts"]);
+		recordRunner("/repo/a.ts", "type-safety", "succeeded", 0);
+		recordDiagnostics("/repo/a.ts", []);
+		expect(component.render(120).join("\n")).toContain("✓ clean");
+		vi.advanceTimersByTime(WIDGET_CLEAR_HIDE_DELAY_MS);
+		return component.render(120);
+	}
+
+	it("hides the mounted widget once clean for the delay when widget.hideWhenClean is true", async () => {
+		setGlobalConfig({ widget: { hideWhenClean: true } });
+
+		expect(await renderCleanAfterDelay()).toEqual([]);
+	});
+
+	it("keeps a clean widget hidden when /lens-widget-toggle mounts it again", async () => {
+		setGlobalConfig({ widget: { hideWhenClean: true } });
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+		const ctx = makeCtx({ cwd: tmpProject(), mode: "tui" });
+		const toggle = () => pi.runCommand("lens-widget-toggle", "", ctx);
+		const mountLast = () => {
+			const factory = ctx.widgetCalls
+				.filter((c) => typeof c.content === "function")
+				.at(-1)?.content as
+				| ((
+						tui: { requestRender: () => void },
+						theme: { fg: (color: string, text: string) => string },
+				  ) => { render: (width: number) => string[] })
+				| undefined;
+			if (!factory) throw new Error("no widget mount recorded");
+			return factory(
+				{ requestRender: () => {} },
+				{ fg: (_color, text) => text },
+			);
+		};
+		await toggle();
+		await toggle();
+		vi.useFakeTimers();
+		setSessionLanguages(["jsts"]);
+		recordRunner("/repo/a.ts", "type-safety", "succeeded", 0);
+		recordDiagnostics("/repo/a.ts", []);
+		const first = mountLast();
+		expect(first.render(120).join("\n")).toContain("✓ clean");
+		vi.advanceTimersByTime(WIDGET_CLEAR_HIDE_DELAY_MS);
+		expect(first.render(120)).toEqual([]);
+
+		await toggle();
+		await toggle();
+
+		expect(
+			ctx.widgetCalls.filter((c) => typeof c.content === "function"),
+		).toHaveLength(2);
+		expect(mountLast().render(120)).toEqual([]);
+	});
+
+	it("keeps the mounted widget drawn after the delay when widget.hideWhenClean is unset", async () => {
+		setGlobalConfig({ widget: {} });
+
+		expect((await renderCleanAfterDelay()).join("\n")).toContain("✓ clean");
+	});
+
+	// Recurrence: PR #5725 r1 F1. The hide timer asks the host for a repaint
+	// from a detached timer callback; a throwing host repaint escaped it as an
+	// uncaught timer error, with no caller to contain it.
+	it("contains a throwing host repaint in the hide timer and records it once", async () => {
+		setGlobalConfig({ widget: { hideWhenClean: true } });
+		const ctx = await toggleTwice("tui");
+		const factory = mounts(ctx)[0]?.content as (
+			tui: { requestRender: () => void },
+			theme: { fg: (color: string, text: string) => string },
+		) => { render: (width: number) => string[] };
+		vi.useFakeTimers();
+		// Healthy while the store writes; throws once the timer repaints.
+		let hostBroken = false;
+		const requestRender = vi.fn(() => {
+			if (hostBroken) throw new Error("host repaint failed");
+		});
+		const component = factory({ requestRender }, { fg: (_c, text) => text });
+		setSessionLanguages(["jsts"]);
+		recordRunner("/repo/a.ts", "type-safety", "succeeded", 0);
+		recordDiagnostics("/repo/a.ts", []);
+		expect(component.render(120).join("\n")).toContain("✓ clean");
+		requestRender.mockClear();
+		hostBroken = true;
+
+		expect(() =>
+			vi.advanceTimersByTime(WIDGET_CLEAR_HIDE_DELAY_MS),
+		).not.toThrow();
+
+		expect(requestRender).toHaveBeenCalledTimes(1);
+		const groups = getDegradationSummary().filter(
+			(g) => g.kind === "widget-change-listener-failed",
+		);
+		expect(groups).toHaveLength(1);
+		expect(groups[0]?.count).toBe(1);
+		expect(groups[0]?.latestReasons[0]?.subject).toBe("widget-hide-timer");
+		// The timer stays cleared: a later render hides without a second timer.
+		expect(component.render(120)).toEqual([]);
+		expect(vi.getTimerCount()).toBeLessThanOrEqual(1);
 	});
 
 	it("mounts the widget on an older host with no mode field", async () => {

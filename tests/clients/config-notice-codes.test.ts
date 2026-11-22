@@ -211,6 +211,16 @@ const GLOBAL_CASES = [
 		'{ "widget": { "visible": "x" } }',
 		"PILENS_CFG_0005",
 	],
+	[
+		"a widget position that is not a placement",
+		'{ "widget": { "position": "left" } }',
+		"PILENS_CFG_0005",
+	],
+	[
+		"a widget hideWhenClean flag that is not a boolean",
+		'{ "widget": { "hideWhenClean": 1 } }',
+		"PILENS_CFG_0005",
+	],
 	// Controls: unchanged by #5140.
 	[
 		"an unknown tool name",

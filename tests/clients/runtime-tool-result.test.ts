@@ -8103,3 +8103,73 @@ describe("searchReads survive the path-attribution refusal (#1884)", () => {
 		}
 	});
 });
+
+// RECURRENCE GUARDED: shape 32 / #2556 remainder. `refreshCachedExports` and
+// the pre-write duplicate-export STOP both compared two spellings of one file
+// with `path.resolve` equality, so a file reached through a link (or, on
+// win32, with another drive-letter case) was two files: the refresh left the
+// names an edit had removed, and the next write that declared one was blocked.
+describe("cachedExports compares files by identity, not spelling (#2556)", () => {
+	it("an edit through one spelling retires the names cached under another", async () => {
+		const { runPipeline } = await import("../../clients/pipeline.js");
+		vi.mocked(runPipeline).mockReset();
+		vi.mocked(runPipeline).mockResolvedValue({
+			output: "",
+			hasBlockers: false,
+			isError: false,
+			fileModified: false,
+			checkedClean: false,
+		});
+		const env = setupTestEnvironment("pi-lens-cached-exports-spelling-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const real = createTempFile(
+				env.tmpDir,
+				"real/src/a.ts",
+				"export const kept = 1;\n",
+			);
+			const other = createTempFile(
+				env.tmpDir,
+				"real/src/b.ts",
+				"export const other = 1;\n",
+			);
+			fs.symlinkSync(
+				path.join(env.tmpDir, "real"),
+				path.join(env.tmpDir, "link"),
+			);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.beginTurn();
+			// The session scan spelled the file through the link; the edit names it
+			// by its real path (a stack trace prints real paths).
+			runtime.cachedExports.set("gone", path.join(env.tmpDir, "link/src/a.ts"));
+			runtime.cachedExports.set("other", other);
+			await handleToolResult({
+				event: {
+					toolName: "edit",
+					input: { path: real },
+					details: { diff: "+  1 export const kept = 1;" },
+					content: [{ type: "text", text: "ok" }],
+				},
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				biomeClient: {},
+				ruffClient: {},
+				resetLSPService: () => {},
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as any);
+			expect({
+				gone: runtime.cachedExports.has("gone"),
+				other: runtime.cachedExports.get("other"),
+			}).toEqual({ gone: false, other });
+		} finally {
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
+			env.cleanup();
+		}
+	});
+});

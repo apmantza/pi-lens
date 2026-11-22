@@ -459,6 +459,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// field (SpawnResult.error), not a delivery tier.
 		// 28 -> 30 (#5561 r3): candidateFailure's tail reads the pip failure text, not a delivery tier.
 		"clients/installer/index.ts": 30,
+		"clients/installer/download.ts": 12,
 		"clients/installer/managed-tool-refresh.ts": 2,
 		"clients/instance-reaper.ts": 4,
 		"clients/instance-registry-lock.ts": 3,
@@ -1225,7 +1226,12 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// DIRECTORY's identity (`path.dirname` + `path.basename` of the caller's
 		// own spelling), so the kernel — not `path.resolve` — folds the `..`.
 		// 68 -> 67 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
-		"clients/file-utils.ts": 67,
+		// 67 -> 68 (#5702): the retention decode's walk joins the parent it
+		// decoded to each real child it visits (`path.join(fromDir, name)`).
+		// 68 -> 69 (#5707 r2): the decode also follows directory links
+		// (`path.join(dir, entry.name)` for the stat) and joins candidates
+		// with `path.posix.join`.
+		"clients/file-utils.ts": 69,
 		"clients/finding-identity.ts": 2,
 		"clients/fix-worklog.ts": 3,
 		// 3 -> 2, 16 -> 15 (#4689): the formatter is handed `realpathOrResolve`,
@@ -1254,7 +1260,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/install-diagnostics.ts": 11,
 		// 104 -> 107 (#5624): the opengrep zip's DLL move computes the extraction
 		// directory with `path.dirname` and each destination with `path.join`.
-		"clients/installer/index.ts": 107,
+		"clients/installer/index.ts": 111,
 		// 4 -> 9 (#4765): refreshOpengrepRulePack computes the candidate's
 		// scratch directory, cwd and sweep with `path.dirname`/`path.join`.
 		"clients/installer/managed-tool-refresh.ts": 9,
@@ -1290,6 +1296,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lens-engine.ts": 7,
 		"clients/lens-flag-registry.ts": 13,
 		"clients/lens-map.ts": 14,
+		// 9 -> 10 (#5702): the retention sweep's runRetentionRow joins the
+		// directory to each enumerated name (`path.join(directory, name)`);
+		// the session-state row routes through sessionsDir, its owner.
+		// 10 -> 9 (#5707 r2): the dead cleanupOldLogs left with its join.
 		"clients/log-cleanup.ts": 9,
 		"clients/lsp-mutation.ts": 3,
 		"clients/lsp/client-registry.ts": 2,
@@ -1560,7 +1570,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// the tool declares, in its condition and its return.
 		// 22 -> 23 (#5553): `namedWriterPaths` resolves the `path` field of an
 		// unclassified foreign tool the net arms for.
-		"clients/runtime-tool-call.ts": 23,
+		"clients/runtime-tool-call.ts": 21,
 		// 22 -> 20 (#3650): the tool_result path read is routed through
 		// readToolResultPathField; the open-coded input.path cast is gone.
 		// 19 -> 18 (#4576): the tool_result path resolves through
@@ -1573,7 +1583,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// recognized-set subtraction compare REAL paths (`realpathOrResolve`), so
 		// a symlinked spelling of a worktree file matches the identity git
 		// reported. Three `path.resolve` reads became realpath reads.
-		"clients/runtime-tool-result.ts": 17,
+		"clients/runtime-tool-result.ts": 15,
 		// 25 -> 27 (#3218): the resolved-blocker filter keys both the current
 		// blocker set and each resolved entry with `path.resolve`.
 		// 27 -> 26 (#2542 ask 3): `deferralEntryKey` moved to

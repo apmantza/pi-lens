@@ -2919,34 +2919,44 @@ export async function handleSessionStart(
 	});
 
 	// #1019: log cleanup is deferred OFF the interactive critical path. It does
-	// synchronous fs sweeps (~7ms) whose only consumer is an async notification —
+	// fs sweeps (~7ms) whose only consumer is an async notification —
 	// nothing on the hot path reads its result — so running it inline just taxed
 	// every session start. It still runs every session (correctness unchanged),
 	// now on the next tick, and notifies when done. Errors are swallowed to a
 	// dbg line: a best-effort log sweep must never surface as a session failure.
+	// #5702: the sweep is async (the socket row dials stale endpoints) and the
+	// callback is not awaited by this hook, so its failure path stays inside.
 	const cleanupCwd = ctxCwd ?? process.cwd();
 	setImmediate(() => {
-		const logCleanupStartedAt = Date.now();
-		try {
-			const logCleanup = runLogCleanup(dbg);
-			logLatency({
-				type: "phase",
-				phase: "session_start_log_cleanup",
-				filePath: cleanupCwd,
-				startedAt: new Date(logCleanupStartedAt).toISOString(),
-				durationMs: Date.now() - logCleanupStartedAt,
-				metadata: {
-					mode: startupMode,
-					reason: deps.sessionReason,
-					deferred: true,
-				},
-			});
-			if (logCleanup.cleaned > 0 || logCleanup.rotated > 0) {
-				notify(`🧹 ${logCleanup.report}`, "info");
+		void (async () => {
+			const logCleanupStartedAt = Date.now();
+			try {
+				const logCleanup = await runLogCleanup(dbg, {
+					cwd: cleanupCwd,
+					// The same id the turn-end arm persists session state under
+					// (index.ts's persistScope call), so the sweep exempts the
+					// file a live session saves into.
+					currentSessionId: deps.runtime.telemetrySessionId,
+				});
+				logLatency({
+					type: "phase",
+					phase: "session_start_log_cleanup",
+					filePath: cleanupCwd,
+					startedAt: new Date(logCleanupStartedAt).toISOString(),
+					durationMs: Date.now() - logCleanupStartedAt,
+					metadata: {
+						mode: startupMode,
+						reason: deps.sessionReason,
+						deferred: true,
+					},
+				});
+				if (logCleanup.cleaned > 0 || logCleanup.rotated > 0) {
+					notify(`🧹 ${logCleanup.report}`, "info");
+				}
+			} catch (err) {
+				dbg(`session_start: deferred log cleanup failed: ${err}`);
 			}
-		} catch (err) {
-			dbg(`session_start: deferred log cleanup failed: ${err}`);
-		}
+		})();
 	});
 	dbg(`session_start startup mode: ${startupMode}`);
 

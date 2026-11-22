@@ -29,9 +29,11 @@ import { resetDegradationLedger } from "../../clients/degradation-ledger.js";
 import { getDisposition } from "../../clients/diagnostic-dispositions.js";
 import { CacheManager } from "../../clients/cache-manager.js";
 import {
+	createProjectDataDirRootProbe,
 	dataDirCanonicalRoot,
 	drainProjectDataDirMigrations,
 	getProjectDataDir,
+	type ProjectDataDirRootFs,
 	_resetProjectDataDirMemoForTests,
 } from "../../clients/file-utils.js";
 import { evaluateGitGuard } from "../../clients/git-guard.js";
@@ -947,4 +949,231 @@ describe("adopting the unhashed data dir a link spelling named before v4.2.0 (#4
 			{ to: dir, outcome: "adopted" },
 		]);
 	});
+});
+
+/**
+ * #5702: the retention sweep may delete a project data directory only when
+ * its slug decodes to a root that no longer exists. The decode lives beside
+ * the naming rules that produce the slug; a name it cannot judge answers
+ * "unrecognized", which the sweep keeps.
+ */
+describe("project data-dir root decode for the retention sweep (#5702)", () => {
+	/**
+	 * An injected directory tree: `tree[dir]` lists the names a path can
+	 * descend through (directories and links to directories); a dir absent
+	 * from `tree` is unreadable.
+	 */
+	function fsLikeOf(tree: Record<string, string[]>): ProjectDataDirRootFs {
+		return {
+			listDirs: (dir) => tree[dir],
+		};
+	}
+
+	it("answers exists for a root whose full reading is on disk, through dashes and stripped characters", () => {
+		// A root spelled /repos/my-app.v2 folds to repos-my-appv2; the decode
+		// recomputes the writer's fold on each candidate path, so the stripped
+		// dot never breaks the match.
+		const probe = createProjectDataDirRootProbe(
+			"linux",
+			fsLikeOf({ "/": ["repos"], "/repos": ["my-app.v2"] }),
+		);
+		expect(probe.statusFor("repos-my-appv2-01234567")).toBe("exists");
+		// A first component the fold strips to nothing: `/é/proj` names `proj`.
+		const stripped = createProjectDataDirRootProbe(
+			"linux",
+			fsLikeOf({ "/": ["é"], "/é": ["proj"] }),
+		);
+		expect(stripped.statusFor("proj-01234567")).toBe("exists");
+	});
+
+	it("answers gone when no full reading exists", () => {
+		const probe = createProjectDataDirRootProbe(
+			"linux",
+			fsLikeOf({ "/": ["repos"], "/repos": ["other"], "/repos/other": [] }),
+		);
+		expect(probe.statusFor("repos-my-appv2-01234567")).toBe("gone");
+	});
+
+	it("answers unrecognized for names it cannot judge and keeps them out of the sweep", () => {
+		const probe = createProjectDataDirRootProbe(
+			"linux",
+			fsLikeOf({ "/": ["repos"], "/repos": [] }),
+		);
+		expect(probe.statusFor(".ephemeral")).toBe("unrecognized");
+		expect(probe.statusFor("default-01234567")).toBe("unrecognized");
+		// Pre-hash legacy directories (<v4.2.0 spelled the readable half alone).
+		expect(probe.statusFor("repos-my-appv2")).toBe("unrecognized");
+		expect(probe.statusFor("repos-my-appv2-0123456")).toBe("unrecognized");
+		expect(probe.statusFor("")).toBe("unrecognized");
+		// A readable half the writer can never produce (#5707 r2: a user dir
+		// in a shared PILENS_DATA_DIR): characters the fold strips, or a dash
+		// the fold trims.
+		expect(probe.statusFor("my notes-01234567")).toBe("unrecognized");
+		expect(probe.statusFor("my_notes-01234567")).toBe("unrecognized");
+		expect(probe.statusFor("-repos-01234567")).toBe("unrecognized");
+		expect(probe.statusFor("repos--01234567")).toBe("unrecognized");
+	});
+
+	it("answers unrecognized when the walk exhausts its readdir budget, never gone", () => {
+		// A chain of 300 directories whose names fold to nothing: every level
+		// is a viable prefix, none completes, and the walk runs out of readdir
+		// budget. It must refuse to judge rather than answer gone for a root
+		// it never finished looking for.
+		const tree: Record<string, string[]> = {};
+		let dir = "/";
+		for (let i = 0; i < 300; i++) {
+			tree[dir] = ["_"];
+			dir = dir === "/" ? "/_" : `${dir}/_`;
+		}
+		tree[dir] = [];
+		const probe = createProjectDataDirRootProbe("linux", fsLikeOf(tree));
+		expect(probe.statusFor("a-b-01234567")).toBe("unrecognized");
+	});
+
+	it("answers unrecognized when a directory on the walk cannot be listed, never gone", () => {
+		// Recurrence: #5707 r1 F1. An unreadable directory read as "no
+		// reading here", so a live root below it was judged gone.
+		const probe = createProjectDataDirRootProbe(
+			"linux",
+			fsLikeOf({ "/": ["work"] }),
+		);
+		expect(probe.statusFor("work-proj-01234567")).toBe("unrecognized");
+	});
+
+	it("answers exists for a last component whose fold ends in a dash or strips to nothing", () => {
+		// Recurrence: #5707 r1 F1. The writer trims the whole slug's trailing
+		// dashes, so `/w/proj-` and `/w/proj-é` both name `w-proj`; a
+		// per-component match never found them and the sweep deleted live data.
+		for (const last of ["proj-", "proj-é", "proj-🚀"]) {
+			const probe = createProjectDataDirRootProbe(
+				"linux",
+				fsLikeOf({ "/": ["w"], "/w": [last], [`/w/${last}`]: [] }),
+			);
+			expect(probe.statusFor("w-proj-01234567"), last).toBe("exists");
+		}
+	});
+
+	it("answers exists when the name's casing differs from the disk's", () => {
+		// v4.2.0 to v4.4.4 named the dir from the caller's spelling; on a
+		// case-insensitive volume that spelling need not match the disk's.
+		const probe = createProjectDataDirRootProbe(
+			"linux",
+			fsLikeOf({ "/": ["Work"], "/Work": ["Proj"] }),
+		);
+		expect(probe.statusFor("work-proj-01234567")).toBe("exists");
+	});
+
+	it("never answers gone on win32, whose slug never followed the realpath", () => {
+		// Recurrence: #5707 r1 F1 (maintainer decision 2). A junction or 8.3
+		// spelling of a live root can never be re-derived from the listing.
+		const probe = createProjectDataDirRootProbe(
+			"win32",
+			fsLikeOf({ "/": ["work"], "/work": ["proj"] }),
+		);
+		expect(probe.statusFor("dev-proj-0123abcd")).toBe("unrecognized");
+		expect(probe.statusFor("Users-RUNNER1-proj-0123abcd")).toBe("unrecognized");
+	});
+
+	it("decodes a real on-disk root and notices its removal (linux)", () => {
+		isolateDataDir();
+		const root = makeScratch("pi-lens-decode-root-");
+		// The writer names the dir; the probe agrees in both directions.
+		const name = path.basename(getProjectDataDir(root));
+		expect(createProjectDataDirRootProbe().statusFor(name)).toBe("exists");
+		fs.rmSync(root, { recursive: true, force: true });
+		expect(createProjectDataDirRootProbe().statusFor(name)).toBe("gone");
+	});
+
+	it("answers exists for live roots the writer names with a trailing dash or stripped tail (linux)", () => {
+		// Recurrence: #5707 r1 F1 probe 1, through the real writer and disk.
+		isolateDataDir();
+		const parent = makeScratch("pi-lens-decode-tail-");
+		for (const last of ["proj-", "proj-é", "tail/é"]) {
+			const root = path.join(parent, last);
+			fs.mkdirSync(root, { recursive: true });
+			const name = path.basename(getProjectDataDir(root));
+			expect(createProjectDataDirRootProbe().statusFor(name), last).toBe(
+				"exists",
+			);
+		}
+	});
+
+	it("answers exists for a 4.4.4 dir named through a directory link to a live root (linux)", () => {
+		// Recurrence: #5707 r2 (CodeRabbit 7g). v4.2.0 to v4.4.4 named the dir
+		// from the caller's link spelling; the walk skipped links, so the live
+		// root read as gone and its not-yet-adopted data was deleted.
+		const base = isolateDataDir();
+		const parent = makeScratch("pi-lens-decode-link-");
+		fs.mkdirSync(path.join(parent, "real", "proj"), { recursive: true });
+		fs.symlinkSync(path.join(parent, "real"), path.join(parent, "link"));
+		const name = path.basename(
+			dataDir444(base, path.join(parent, "link", "proj")),
+		);
+		expect(createProjectDataDirRootProbe().statusFor(name)).toBe("exists");
+	});
+
+	it("answers exists for a pre-hash legacy dir whose root name ends in eight hex digits (linux)", () => {
+		// Recurrence: #5707 r1 F3. `release-deadbeef` parsed as readable
+		// `…-release` plus hash, the decode looked for a missing root and the
+		// sweep deleted the legacy dir before getProjectDataDir migrated it.
+		const base = isolateDataDir();
+		const root = path.join(
+			makeScratch("pi-lens-decode-legacy-"),
+			"release-deadbeef",
+		);
+		fs.mkdirSync(root);
+		const name = path.basename(dataDir416(base, root));
+		expect(createProjectDataDirRootProbe().statusFor(name)).toBe("exists");
+	});
+
+	// lane: Unit tests. Root skips: root lists a mode-0311 directory anyway,
+	// so the unreadable-parent cell cannot arise.
+	it.skipIf(process.getuid?.() === 0)(
+		"answers unrecognized for a live root below a directory it cannot list (linux)",
+		() => {
+			// Recurrence: #5707 r1 F1 probe 1 (`--x` parent), real disk.
+			isolateDataDir();
+			const parent = makeScratch("pi-lens-decode-noread-");
+			const root = path.join(parent, "noread", "child");
+			fs.mkdirSync(root, { recursive: true });
+			const name = path.basename(getProjectDataDir(root));
+			fs.chmodSync(path.join(parent, "noread"), 0o311);
+			try {
+				expect(createProjectDataDirRootProbe().statusFor(name)).toBe(
+					"unrecognized",
+				);
+			} finally {
+				fs.chmodSync(path.join(parent, "noread"), 0o755);
+			}
+		},
+	);
+
+	// lane: Unit tests. Root skips: root stats through a mode-0600 directory.
+	it.skipIf(process.getuid?.() === 0)(
+		"answers unrecognized when a link on the walk points where it cannot be checked (linux)",
+		() => {
+			// Recurrence: a link whose target stat refuses (EACCES) was read as
+			// "not a directory", so a live root behind it would read as gone.
+			const base = isolateDataDir();
+			const parent = makeScratch("pi-lens-decode-linkacl-");
+			fs.mkdirSync(path.join(parent, "locked", "real", "proj"), {
+				recursive: true,
+			});
+			fs.symlinkSync(
+				path.join(parent, "locked", "real"),
+				path.join(parent, "link"),
+			);
+			const name = path.basename(
+				dataDir444(base, path.join(parent, "link", "proj")),
+			);
+			fs.chmodSync(path.join(parent, "locked"), 0o600);
+			try {
+				expect(createProjectDataDirRootProbe().statusFor(name)).toBe(
+					"unrecognized",
+				);
+			} finally {
+				fs.chmodSync(path.join(parent, "locked"), 0o755);
+			}
+		},
+	);
 });

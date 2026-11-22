@@ -797,6 +797,10 @@ export const wallClockBudgetInclude = [
 	// #4126: the first-session warmup has no awaitable completion signal; keep
 	// its real deferred-notification ordering in the serialized phase.
 	"tests/clients/runtime-session-warm-skip-notify.test.ts",
+	// #5702: the deferred retention sweep joins no awaitable from the hook (a
+	// setImmediate plus an async sweep), so the wiring pin joins it with
+	// real-time waits (flake-shape admission).
+	"tests/clients/runtime-session.test.ts",
 	// #3872: real `git worktree add` children are the fixture (flake-shape admission).
 	"tests/clients/runtime-turn-knip-checkout-root.test.ts",
 	// #2528: the bounded batch helper tests race a real wall-clock budget against settle latency (flake-shape admission).

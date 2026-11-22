@@ -243,6 +243,10 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	// hand-rolled `..` containment test over a `path.relative` result, so it is
 	// a both-tree scanner and is registered in TEST_TREE_GOVERNANCE_TESTS too.
 	"tests/config/path-containment-sweep.test.ts",
+	// Shape 25 (#2146): walks clients/, tools/, mcp/ and index.ts for a
+	// hand-rolled process-wide slot outside `getProcessSingleton`; production
+	// trees only, so it is not in TEST_TREE_GOVERNANCE_TESTS.
+	"tests/config/process-slot-sweep.test.ts",
 	// #4590: the one scanner that walks BOTH trees (clients/, scripts/ AND
 	// tests/), so it is registered in both lists: a production change arms it
 	// here, a tests/ change through TEST_TREE_GOVERNANCE_TESTS below.

@@ -1282,6 +1282,8 @@ describe("selectTargetedTests — path-mirror pass", () => {
 			// #2556: walks the production trees and tests/support, so both change kinds
 			// arm it.
 			"tests/config/path-containment-sweep.test.ts",
+			// Shape 25 (#2146): walks the four production roots for process-wide slots.
+			"tests/config/process-slot-sweep.test.ts",
 			// #4590: walks both trees, so both change kinds must arm it.
 			"tests/config/env-path-key-composition-sweep.test.ts",
 			"tests/config/git-fixture-governance.test.ts",

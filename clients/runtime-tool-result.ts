@@ -1453,8 +1453,9 @@ function refreshCachedExports(
 		"export\\s+(?:async\\s+)?(?:function|class|const|let|type|interface)\\s+(\\w+)",
 		"g",
 	);
+	const fileKey = normalizeMapKey(filePath);
 	for (const [name, file] of runtime.cachedExports) {
-		if (path.resolve(file) === path.resolve(filePath)) {
+		if (normalizeMapKey(file) === fileKey) {
 			runtime.cachedExports.delete(name);
 		}
 	}
