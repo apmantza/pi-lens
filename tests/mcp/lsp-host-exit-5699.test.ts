@@ -23,7 +23,9 @@
  *   the dead host left, and prunes the row.
  * - the `fresh` worker (`mcp/worker.ts`, audit A5/A6): it exits through
  *   `process.exit` with its servers alive, and before the fix left its
- *   `instances.json` row behind with them. Its row is gone once it exits.
+ *   `instances.json` row behind with them. It reads the same `lsp.json`, so
+ *   its server is the stubborn fixture too; that server and the worker's row
+ *   are gone once it exits.
  *
  * Linux only: the cases read process liveness and adopt the server for
  * cleanup through `/proc` (`tests/support/kill-guard.ts`). lane: unit (Linux).
@@ -37,7 +39,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { realIsPidAlive } from "../../clients/pid-liveness.js";
 import { setupTestEnvironment } from "../clients/test-utils.js";
 import { adoptProcessTree } from "../support/kill-guard.js";
-import { readNdjsonRows } from "../support/ndjson-rows.js";
 import { McpHarness } from "./harness.js";
 
 const STUBBORN_SERVER = fileURLToPath(
@@ -241,7 +242,7 @@ describe.runIf(process.platform === "linux")(
 			expect(await survives(pids.server, DEATH_WAIT_MS)).toBe(false);
 		}, 120_000);
 
-		it("drops the fresh worker's row when the worker exits with its servers", async () => {
+		it("ends the fresh worker's server and drops its row when the worker exits", async () => {
 			const ws = stubbornRustProject();
 			const harness = startHost(ws);
 			const response = await harness.request(
@@ -254,27 +255,21 @@ describe.runIf(process.platform === "linux")(
 				120_000,
 			);
 			expect(JSON.stringify(response)).not.toContain("fresh analyze failed");
-			// The worker launched at least one server: a pid other than the
-			// host's wrote the spawn record (the worker is dead once the call
-			// returns, since analyzeFileFresh settles on its close).
-			const { rows, skipped } = readNdjsonRows<{
-				phase?: string;
-				pid?: number;
-			}>(path.join(ws.home, "latency.log"));
-			expect(skipped).toBe(0);
-			const workerPids = [
-				...new Set(
-					rows
-						.filter((row) => row.phase === "lsp_server_spawned")
-						.map((row) => row.pid)
-						.filter((pid): pid is number => typeof pid === "number"),
-				),
-			].filter((pid) => !realIsPidAlive(pid));
-			expect(workerPids.length).toBeGreaterThan(0);
+			// The worker reads the user's lsp.json as its host does, so its rust
+			// server is the stubborn fixture, whose pid file names the worker as
+			// its parent. Before #5733 r1 the worker read no LSP config: it ran
+			// whatever rust-analyzer the machine had, and nothing where none was
+			// installed. analyzeFileFresh settles on the worker's close, so the
+			// worker has exited, and its exit hook has run, by now.
+			const pids = readPids(ws.pidFile);
+			expect(pids).toBeDefined();
+			const { server, host: worker } = pids as { server: number; host: number };
+			expect(realIsPidAlive(worker)).toBe(false);
 
-			expect(
-				registryRowPids(ws.home).filter((pid) => workerPids.includes(pid)),
-			).toEqual([]);
+			expect({
+				serverSurvives: await survives(server, DEATH_WAIT_MS),
+				workerRowLeft: registryRowPids(ws.home).includes(worker),
+			}).toEqual({ serverSurvives: false, workerRowLeft: false });
 		}, 150_000);
 
 		it("reaps a SIGKILLed host's server at the next MCP host's start", async () => {
