@@ -3,7 +3,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { realIsPidAlive } from "../../clients/pid-liveness.js";
 import {
 	claimScratchDir,
@@ -142,97 +142,47 @@ describe.runIf(process.platform === "linux")(
 					env: {
 						REAL_HARNESS_RUNNER_PID_FILE: pidFile,
 						REAL_HARNESS_RUNNER_OWNER_FILE: ownerFile,
+						REAL_HARNESS_RUNNER_EXIT: "1",
+						REAL_HARNESS_REJECT_AFTER_FIRST: "1",
 						PI_LENS_TEST_MODE: "0",
 					},
+					extensions: [EXTENSION],
 				},
-				async () => {
+				async (pi) => {
 					// The pi host's session_start reaper is fire-and-forget; keep this
 					// real next host alive until its reaper has had its bounded window.
 					await waitGone(first.runner);
-				},
-			);
-		}, 180_000);
 
-		it("removes the owned-child row after normal runner completion", async () => {
-			const home = claimScratchDir(
-				SCRATCH_DIR_ROOT,
-				"runner-host-exit-5703-normal-home",
-			);
-			const project = createRealPiProject(FIXTURE, home);
-			const pidFile = path.join(home, "runner.pid");
-			const ownerFile = path.join(home, "runner.owner");
-			dirs.push(home, project);
-			await withRealPi(
-				{
-					fixture: FIXTURE,
-					script: "script.json",
-					home,
-					project,
-					env: {
-						REAL_HARNESS_RUNNER_PID_FILE: pidFile,
-						REAL_HARNESS_RUNNER_OWNER_FILE: ownerFile,
-						REAL_HARNESS_RUNNER_EXIT: "1",
-						PI_LENS_TEST_MODE: "0",
-					},
-					extensions: [EXTENSION],
-				},
-				async (pi) => {
 					await pi.prompt("/real-harness-runner-5703");
-					const runner = await waitForPid(pidFile);
-					childPids.push(runner);
-					await vi.waitFor(
-						() => {
-							if (realIsPidAlive(runner)) throw new Error("runner still alive");
-						},
-						{ timeout: REAP_WAIT_MS, interval: 50 },
-					);
-					await vi.waitFor(
-						() => {
-							const children = JSON.parse(
-								fs.readFileSync(path.join(home, "instances.json"), "utf8"),
-							) as {
-								instances: Array<{ lspChildren?: Array<{ pid: number }> }>;
-							};
-							if (
-								children.instances.some((entry) =>
-									entry.lspChildren?.some((child) => child.pid === runner),
-								)
-							)
-								throw new Error("normal runner row remains");
-						},
-						{ timeout: REAP_WAIT_MS, interval: 50 },
-					);
-				},
-			);
-		}, 180_000);
+					const normalRunner = await waitForPid(pidFile);
+					childPids.push(normalRunner);
+					await expect
+						.poll(() => realIsPidAlive(normalRunner), {
+							timeout: REAP_WAIT_MS,
+							interval: 50,
+						})
+						.toBe(false);
+					await expect
+						.poll(
+							() => {
+								const children = JSON.parse(
+									fs.readFileSync(path.join(home, "instances.json"), "utf8"),
+								) as {
+									instances: Array<{ lspChildren?: Array<{ pid: number }> }>;
+								};
+								return children.instances.some((entry) =>
+									entry.lspChildren?.some(
+										(child) => child.pid === normalRunner,
+									),
+								);
+							},
+							{ timeout: REAP_WAIT_MS, interval: 50 },
+						)
+						.toBe(false);
 
-		it("keeps the pi host alive when owned-child registry writes reject", async () => {
-			const home = claimScratchDir(
-				SCRATCH_DIR_ROOT,
-				"runner-host-exit-5703-reject-home",
-			);
-			const project = createRealPiProject(FIXTURE, home);
-			const pidFile = path.join(home, "runner.pid");
-			const ownerFile = path.join(home, "runner.owner");
-			dirs.push(home, project);
-			await withRealPi(
-				{
-					fixture: FIXTURE,
-					script: "script.json",
-					home,
-					project,
-					env: {
-						REAL_HARNESS_RUNNER_PID_FILE: pidFile,
-						REAL_HARNESS_RUNNER_OWNER_FILE: ownerFile,
-						REAL_HARNESS_REJECT_LEDGER: "1",
-						PI_LENS_TEST_MODE: "0",
-					},
-					extensions: [EXTENSION],
-				},
-				async (pi) => {
 					await pi.prompt("/real-harness-runner-5703");
-					await waitForPid(pidFile);
-					await pi.prompt("/real-harness-runner-5703");
+					const rejectedRunner = await waitForPid(pidFile);
+					childPids.push(rejectedRunner);
 				},
 			);
 		}, 180_000);

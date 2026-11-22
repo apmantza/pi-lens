@@ -902,8 +902,6 @@ export type DegradationKind =
 	 * normalized root it would have registered.
 	 */
 	| "instance-registry-registration-superseded"
-	/** A safeSpawnAsync child was created, but its best-effort registry update failed. */
-	| "safe-spawn-owned-child-registry-failed"
 	/**
 	 * `io-bridge-mutate-dropped`: #3654: the File I/O Lifecycle Bridge dropped a `mutate` facet. The entry
 	 * was malformed, out of scope, ignored, refused under `no-read-guard`, or
@@ -2011,6 +2009,8 @@ export type DegradationKind =
 	 * coverage gap once instead of once per edit.
 	 */
 	| "runner-spawn-timeout-cooldown"
+	/** `safe-spawn-owned-child-registry-failed`: A safeSpawnAsync child was created, but its best-effort registry update failed. */
+	| "safe-spawn-owned-child-registry-failed"
 	/**
 	 * `safe-spawn-signal-reraise-unsupported`: The self-signal re-raise at the end of `installLifetimeCleanup`'s signal
 	 * handler did not happen, so the host exits without the signal's default

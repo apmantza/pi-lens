@@ -3,20 +3,26 @@ import { safeSpawnAsync } from "../../../clients/safe-spawn.js";
 import "../../../clients/instance-registry.js";
 import { provideOwnedChildLedger } from "../../../clients/held-children.js";
 
+let commandCount = 0;
+
 export default function runnerHostExit5703(pi) {
-	if (process.env.REAL_HARNESS_REJECT_LEDGER) {
-		provideOwnedChildLedger({
-			write: async () => {
-				throw new Error("REGISTRY_WRITE_FAILED");
-			},
-			remove: async () => {
-				throw new Error("REGISTRY_REMOVE_FAILED");
-			},
-		});
-	}
 	pi.registerCommand("real-harness-runner-5703", {
 		description: "Start a stubborn safeSpawnAsync child",
 		handler: async () => {
+			commandCount += 1;
+			if (
+				process.env.REAL_HARNESS_REJECT_AFTER_FIRST &&
+				commandCount > 1
+			) {
+				provideOwnedChildLedger({
+					write: async () => {
+						throw new Error("REGISTRY_WRITE_FAILED");
+					},
+					remove: async () => {
+						throw new Error("REGISTRY_REMOVE_FAILED");
+					},
+				});
+			}
 			const pidFile = process.env.REAL_HARNESS_RUNNER_PID_FILE;
 			const ownerFile = process.env.REAL_HARNESS_RUNNER_OWNER_FILE;
 			if (!pidFile) throw new Error("missing runner pid file");
