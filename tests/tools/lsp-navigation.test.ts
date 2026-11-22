@@ -2425,6 +2425,44 @@ describe("lsp_navigation workspaceDiagnostics delivery gate (#1634)", () => {
 		);
 	});
 
+	// #5700: a document the open-document cap closed keeps its last findings in
+	// the client's cache, but its server no longer re-checks it. The snapshot
+	// row says so; without the mark it read like any re-published file.
+	it("marks a snapshot row whose document the open-document cap closed (#5700)", async () => {
+		(mocked.service as { getAllDiagnostics: unknown }).getAllDiagnostics = vi
+			.fn()
+			.mockResolvedValue(
+				new Map([
+					[
+						filePath,
+						{
+							diags: serverDiagnostics(),
+							ts: Date.now() - 60_000,
+							closed: true,
+						},
+					],
+				]),
+			);
+
+		const result = await createLspNavigationTool(
+			(flag) => flag === "lens-lsp",
+		).execute(
+			"nav-5700-closed",
+			{ operation: "workspaceDiagnostics" },
+			new AbortController().signal,
+			null,
+			{ cwd },
+		);
+		const envelope = parseToolJson(result);
+		const [entry] = envelope.result as Array<{ closed?: boolean }>;
+		expect(entry?.closed).toBe(true);
+		expect(envelope.notes).toContainEqual(
+			expect.stringContaining(
+				"1 file(s) with closed: true were closed on their server by the open-document cap",
+			),
+		);
+	});
+
 	const COMPILE = "SyntaxError: multiple exception types must be parenthesized";
 	const PYRIGHT = 'Cannot access attribute "value" for class "object"';
 

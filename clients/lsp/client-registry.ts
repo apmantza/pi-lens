@@ -181,12 +181,13 @@ const OPTIONAL_LSP_RETRY_COOLDOWN_MS = 5 * 60_000;
 const OPTIONAL_LSP_SERVER_IDS = new Set<string>();
 
 const DEFAULT_LSP_CLIENT_CEILING = 24;
+const DEFAULT_LSP_OPEN_DOCUMENT_CAP = 256;
 const DEFAULT_IDLE_EVICT_MS = 20 * 60_000;
 const DEFAULT_EPHEMERAL_IDLE_EVICT_MS = 60_000;
 
 /**
- * #3645: the idle window shared by every server whose registry policy is
- * `transparent`. `PI_LENS_LSP_IDLE_EVICT_MS` is the generic spelling; the
+ * #3645: the idle window shared by every server whose registry policy is not
+ * `resident` (#5700). `PI_LENS_LSP_IDLE_EVICT_MS` is the generic spelling; the
  * original `PI_LENS_TS_IDLE_EVICT_MS` keeps its meaning and is consulted when
  * the generic one is unset or invalid.
  */
@@ -225,6 +226,23 @@ export function getLspClientCeiling(): number {
 	return Number.isSafeInteger(parsed) && parsed > 0
 		? parsed
 		: DEFAULT_LSP_CLIENT_CEILING;
+}
+
+/**
+ * #5700: how many documents one client keeps open on its server. Past it the
+ * client closes its least recently sent document (`didClose`); the server then
+ * drops that document's text and syntax tree, and a later touch opens it
+ * again. The registry owns the number and hands it to every client it creates.
+ * Well above the workspace sweep's in-flight width (8 groups x 8 pre-opens).
+ */
+export function getLspOpenDocumentCap(): number {
+	const parsed = Number.parseInt(
+		process.env.PI_LENS_LSP_OPEN_DOCUMENT_CAP ?? "",
+		10,
+	);
+	return Number.isSafeInteger(parsed) && parsed > 0
+		? parsed
+		: DEFAULT_LSP_OPEN_DOCUMENT_CAP;
 }
 
 export interface SpawnedServer {
@@ -745,14 +763,17 @@ export class ClientRegistry {
 	}
 
 	scheduleIdleEviction(key: string, server: LSPServerInfo): void {
-		// The registry owns this policy. Unmeasured and resident servers stay resident.
+		// The registry owns this policy. #5700: every server is released after the
+		// idle window unless it is declared `resident`, which needs a reason row
+		// (tests/config/lsp-idle-eviction-reasons.json). `unmeasured` used to stay
+		// too, so 32 built-ins and every config-declared server never left.
 		if (
-			server.idleEviction !== "transparent" &&
+			server.idleEviction === "resident" &&
 			!this.adoptedClientKeys.has(key)
 		) {
 			// #3952: say why no timer was scheduled. Without this row a caller
-			// that ARMS an `unmeasured` server and waits for the eviction (the
-			// nightly probe's whole protocol) sees the same "nothing happened" as
+			// that waits for a `resident` server's eviction (the nightly
+			// probe's protocol, before it arms the server) sees the same "nothing happened" as
 			// a server whose timer is merely slow, and the two are opposite
 			// verdicts: `not-evicted` here means the policy was never read off the
 			// object the service holds, which is a pi-lens defect, not a slow
@@ -761,7 +782,7 @@ export class ClientRegistry {
 			recordDegradationOnce({
 				kind: "lsp-idle-eviction-declined",
 				subject: server.id,
-				reason: `no idle-eviction timer: declared ${server.idleEviction ?? "unmeasured"}`,
+				reason: "no idle-eviction timer: declared resident",
 			});
 			return;
 		}
@@ -1575,6 +1596,8 @@ export class ClientRegistry {
 					onDiagnosticsPublished: (serverId) => {
 						this.hooks.noteDiagnosticsPublished(serverId);
 					},
+					// #5700: the registry's resident budget, read per spawn.
+					openDocumentCap: getLspOpenDocumentCap(),
 				});
 			};
 

@@ -493,47 +493,59 @@ describe("a clean-tree HEAD move resyncs held documents (#4493)", () => {
 	// so the record is dropped through the tracker's own API to keep the case
 	// the move must answer: held, no record, still on the wire.
 	it("resyncs a held document whose drift record is gone", async () => {
-		const held = Array.from(
-			{ length: 513 },
-			(_, i) => `src/f${String(i).padStart(3, "0")}.ts`,
-		);
-		const moved = held.slice(0, 20);
-		const repo = await makeRepo(
-			Object.fromEntries(held.map((name) => [name, "export const v = 0;\n"])),
-			Object.fromEntries(moved.map((name) => [name, "export const v = 1;\n"])),
-		);
-		await hold(repo, held);
-		const service = await lspService();
-		const drift = (
-			service as unknown as {
-				documentDrift: {
-					peek(file: string): unknown;
-					forget(file: string): void;
-				};
-			}
-		).documentDrift;
-		// #4503: 513 held records no longer evict the oldest one, so the record
-		// of a document the server holds survives the cap.
-		expect(drift.peek(repo.file(held[0]!))).toBeDefined();
-		// The state #4493 is about: a held document with no drift record at all.
-		drift.forget(repo.file(held[0]!));
-		expect(drift.peek(repo.file(held[0]!))).toBeUndefined();
-		const s = session(repo, "s-evicted");
-		const mark = (await wire(repo, held[0]!)).length;
+		// #5700: the server must hold all 513 documents, past the default
+		// open-document cap of 256 that would close the 20 moved ones first.
+		const previousCap = process.env.PI_LENS_LSP_OPEN_DOCUMENT_CAP;
+		process.env.PI_LENS_LSP_OPEN_DOCUMENT_CAP = "1024";
+		try {
+			const held = Array.from(
+				{ length: 513 },
+				(_, i) => `src/f${String(i).padStart(3, "0")}.ts`,
+			);
+			const moved = held.slice(0, 20);
+			const repo = await makeRepo(
+				Object.fromEntries(held.map((name) => [name, "export const v = 0;\n"])),
+				Object.fromEntries(
+					moved.map((name) => [name, "export const v = 1;\n"]),
+				),
+			);
+			await hold(repo, held);
+			const service = await lspService();
+			const drift = (
+				service as unknown as {
+					documentDrift: {
+						peek(file: string): unknown;
+						forget(file: string): void;
+					};
+				}
+			).documentDrift;
+			// #4503: 513 held records no longer evict the oldest one, so the record
+			// of a document the server holds survives the cap.
+			expect(drift.peek(repo.file(held[0]!))).toBeDefined();
+			// The state #4493 is about: a held document with no drift record at all.
+			drift.forget(repo.file(held[0]!));
+			expect(drift.peek(repo.file(held[0]!))).toBeUndefined();
+			const s = session(repo, "s-evicted");
+			const mark = (await wire(repo, held[0]!)).length;
 
-		await s.bash("git checkout B", () => repo.git("checkout", "-q", "B"));
+			await s.bash("git checkout B", () => repo.git("checkout", "-q", "B"));
 
-		expect(moved.filter((name) => !sentDiskBytes(service, repo, name))).toEqual(
-			[],
-		);
-		expect(await textSince(repo, mark, held[0]!)).toContain(
-			textLine(repo, held[0]!),
-		);
-		const rows = await settledHeadMovedRows(repo, 1);
-		expect(rows).toHaveLength(1);
-		expect(rows[0]).toMatchObject({
-			metadata: { changed: 20, held: 20, resynced: 20, deferred: 0 },
-		});
+			expect(
+				moved.filter((name) => !sentDiskBytes(service, repo, name)),
+			).toEqual([]);
+			expect(await textSince(repo, mark, held[0]!)).toContain(
+				textLine(repo, held[0]!),
+			);
+			const rows = await settledHeadMovedRows(repo, 1);
+			expect(rows).toHaveLength(1);
+			expect(rows[0]).toMatchObject({
+				metadata: { changed: 20, held: 20, resynced: 20, deferred: 0 },
+			});
+		} finally {
+			if (previousCap === undefined)
+				delete process.env.PI_LENS_LSP_OPEN_DOCUMENT_CAP;
+			else process.env.PI_LENS_LSP_OPEN_DOCUMENT_CAP = previousCap;
+		}
 	}, 120_000);
 
 	// Recurrence: #4528 r4. The HEAD-move resync ran under the 500 ms

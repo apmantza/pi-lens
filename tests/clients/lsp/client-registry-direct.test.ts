@@ -942,8 +942,21 @@ describe("ClientRegistry.scheduleIdleEviction (#4449)", () => {
 		);
 	});
 
-	// Recurrence: only `transparent` servers are evicted on idle; every other
-	// policy stays resident (#3645). Adopted roots are evicted regardless, on the
+	// #5700 recurrence: an `unmeasured` declaration (32 built-ins, every
+	// config-declared server) armed no timer, so ast-grep, typos, rust-analyzer
+	// and gopls stayed for the client's life (42 decline rows in 15 days of real
+	// logs). Only `resident` opts out now; no evidence is not a reason to stay.
+	it("arms the idle timer for an unmeasured server and releases it (#5700)", async () => {
+		const f = idleFixture({ idleEviction: "unmeasured" }, "ast-grep");
+		f.registry.scheduleIdleEviction(f.key, f.serverInfo);
+		expect(declinedRecord()).toBeUndefined();
+		await vi.advanceTimersByTimeAsync(IDLE_MS);
+		expect(f.client.shutdown).toHaveBeenCalledWith({ reason: "idle_eviction" });
+		expect(f.registry.clients.has(f.key)).toBe(false);
+	});
+
+	// Recurrence: only `resident` servers stay on idle; every other
+	// policy is evicted (#5700). Adopted roots are evicted regardless, on the
 	// fixed adopted window rather than the configured one.
 	//
 	// #3952: the decline is also WRITTEN DOWN, once per server per session. A

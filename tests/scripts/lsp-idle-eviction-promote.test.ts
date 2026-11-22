@@ -402,12 +402,16 @@ describe("the structured declaration edit (#3989)", () => {
 			path.join(repoRoot, "clients/lsp/server.ts"),
 			"utf8",
 		);
-		// An id the nightly never promotes (HOLD_INDEXER class), so the witness
-		// cannot go stale when the promotion PR flips NEXT_PHASE servers (#3994 r3:
-		// a hard-coded json here went red after a real plan).
-		const witnessId = realClass("HOLD_INDEXER_IDS")[0];
-		expect(witnessId, "a HOLD_INDEXER id").toBeDefined();
-		const witness = promoteDeclaration(real, witnessId);
+		// An id the nightly does not promote (UNPROVEN class, declared with its
+		// own line), so the witness cannot go stale when the promotion PR flips
+		// NEXT_PHASE servers (#3994 r3: a hard-coded json here went red after a
+		// real plan). The HOLD_INDEXER class served before #5700 declared it
+		// `resident`.
+		const witnessId = realClass("UNPROVEN_IDS").find((id) =>
+			real.includes(`\tid: "${id}",\n\tidleEviction: "unmeasured",\n`),
+		);
+		expect(witnessId, "a directly declared UNPROVEN id").toBeDefined();
+		const witness = promoteDeclaration(real, witnessId!);
 		expect(witness.ok, witnessId).toBe(true);
 		const diff = real
 			.split("\n")
@@ -419,6 +423,11 @@ describe("the structured declaration edit (#3989)", () => {
 		expect(promoteDeclaration(real, "typescript")).toEqual({
 			ok: false,
 			reason: "already declared transparent",
+		});
+		// #5700: a held indexer is declared `resident`; a promotion never flips it.
+		expect(promoteDeclaration(real, realClass("HOLD_INDEXER_IDS")[0])).toEqual({
+			ok: false,
+			reason: "already declared resident",
 		});
 	});
 });
@@ -902,7 +911,16 @@ describe("the registry test's class pin (#3989 F1)", () => {
 			expect(declared(id) ?? "transparent", `${id} is transparent`).toBe(
 				"transparent",
 			);
-		for (const name of classes.slice(1))
+		// #5700: the held indexers are declared `resident` and stay so.
+		// (svelte declares `executesProjectCode` between its id and its policy.)
+		for (const id of ids(plan.registrySource, "HOLD_INDEXER_IDS"))
+			expect(
+				new RegExp(
+					`\\tid: "${id}",\\n(?:\\t\\w+: [^\\n]*\\n)??\\tidleEviction: "(\\w+)"`,
+				).exec(plan.serverSource)?.[1],
+				`${id} stays resident`,
+			).toBe("resident");
+		for (const name of ["NEXT_PHASE_ELIGIBLE_IDS", "UNPROVEN_IDS"])
 			for (const id of ids(plan.registrySource, name))
 				expect(declared(id) ?? "unmeasured", `${id} stays unmeasured`).toBe(
 					"unmeasured",

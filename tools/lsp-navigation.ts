@@ -1558,7 +1558,7 @@ export function createLspNavigationTool(
 					PythonCompileWithheld | undefined
 				> = [];
 				const result = Array.from(allDiagnostics.entries()).map(
-					([trackedFile, { diags, ts }]) => {
+					([trackedFile, { diags, ts, closed }]) => {
 						let kept = diags;
 						if (diags.length > 0) {
 							const policy = applyProbeFindingPolicy(
@@ -1581,6 +1581,9 @@ export function createLspNavigationTool(
 							diagnostics: kept,
 							count: kept.length,
 							lag: formatCacheAgeLabel(ts),
+							// #5700: the open-document cap closed this file on its server,
+							// which no longer re-checks it; a touch opens it again.
+							...(closed && { closed: true }),
 						};
 					},
 				);
@@ -1588,6 +1591,14 @@ export function createLspNavigationTool(
 					dispositionSuppressedLine(snapshotSuppressed);
 				const snapshotWithheld = mergeWithheld(snapshotWithheldEntries);
 				const snapshotWithheldLine = withheldCompileNote(snapshotWithheld);
+				const closedRows = result.reduce(
+					(count, row) => count + (row.closed ? 1 : 0),
+					0,
+				);
+				const snapshotClosedLine =
+					closedRows > 0
+						? `${closedRows} file(s) with closed: true were closed on their server by the open-document cap; their rows are the last findings, not a re-check. Provide path to check one again.`
+						: undefined;
 				const noteMap2: Record<string, string> = {
 					"push-only":
 						"Note: push-only tracked diagnostics snapshot (not full workspace pull diagnostics).",
@@ -1601,7 +1612,7 @@ export function createLspNavigationTool(
 						content: [
 							{
 								type: "text" as const,
-								text: `${note}\n${JSON.stringify(result)}${snapshotSuppressedLine ? `\nNote: ${snapshotSuppressedLine}` : ""}${snapshotWithheldLine ? `\nNote: ${snapshotWithheldLine}` : ""}`,
+								text: `${note}\n${JSON.stringify(result)}${snapshotSuppressedLine ? `\nNote: ${snapshotSuppressedLine}` : ""}${snapshotWithheldLine ? `\nNote: ${snapshotWithheldLine}` : ""}${snapshotClosedLine ? `\nNote: ${snapshotClosedLine}` : ""}`,
 							},
 						],
 						details: {

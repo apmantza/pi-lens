@@ -92,6 +92,11 @@ export const BOUNDED_TELEMETRY_PHASES = [
 	/** #1743 review: the same skip, for a temporarily unavailable command. */
 	"lsp_client_skipped_unavailable_command",
 	/**
+	 * #5700: the open-document cap's didClose failed for a reason other than a
+	 * closed stream. Rising-edge per server, the ledger holding the count.
+	 */
+	"lsp_open_document_cap_close_failed",
+	/**
 	 * #1934: `getWarmClientForFile` found no live client for a file that has at
 	 * least one language server with a resolvable root. Its callers run per
 	 * file (the cascade quiet window, read expansion, `hasWarmLSP`), so it is

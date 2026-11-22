@@ -352,14 +352,24 @@ complete field definitions are in
 
 ### `PI_LENS_LSP_IDLE_EVICT_MS`
 
-Shared idle window (ms) after which every language-service client whose registry
-`idleEviction` is `transparent` releases its hydrated program and shuts down,
-rebuilding transparently on the next request. Servers declared `resident` or
-`unmeasured` are never evicted. Which servers are declared which way, and the
-nightly measurement behind each declaration, is in
+Shared idle window (ms) after which every language-service client releases its
+hydrated program and shuts down, rebuilding on the next request, on the pi host
+and the MCP host alike. Only servers declared `resident` stay (#5700): today
+the five project indexers held by #3952 (expert, kotlin, powershell, rust,
+svelte). Which servers are declared which way, and the nightly measurement
+behind each declaration, is in
 [`lsp-idle-eviction.md`](lsp-idle-eviction.md).
 When unset or invalid, `PI_LENS_TS_IDLE_EVICT_MS` (below) is read.
 **Default:** 20 minutes (`1200000`).
+
+### `PI_LENS_LSP_OPEN_DOCUMENT_CAP`
+
+How many documents one language-server client keeps open (#5700). Past it the
+client closes its least recently sent document with `didClose`, so the server
+drops its text and syntax tree. The closed file's last findings stay readable,
+marked `closed: true` in the `lsp_navigation` workspace snapshot, and the next
+touch opens the file again.
+**Default:** `256`.
 
 ### `PI_LENS_EPHEMERAL_LSP_IDLE_EVICT_MS`
 

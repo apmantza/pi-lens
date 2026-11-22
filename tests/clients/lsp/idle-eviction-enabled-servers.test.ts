@@ -72,13 +72,8 @@ const ENABLED_IDS = [
 	"yaml",
 ] as const;
 
-/**
- * A server that must stay resident (excluded-default witness). Taken from
- * #3952's HOLD_INDEXER class, which the nightly promotion (#3989) never
- * auto-promotes: a hard-coded `docker` here went red the moment the promotion
- * PR flipped it (#3994 r3).
- */
-const RESIDENT_WITNESS_ID = (() => {
+/** The ids of one #3952 decision class, read from the registry test. */
+function registryClass(name: string): string[] {
 	const registryTest = readFileSync(
 		path.join(
 			path.dirname(fileURLToPath(import.meta.url)),
@@ -86,13 +81,35 @@ const RESIDENT_WITNESS_ID = (() => {
 		),
 		"utf8",
 	);
-	const body = /const HOLD_INDEXER_IDS = \[([^\]]*)\] as const;/.exec(
+	const body = new RegExp(`const ${name} = \\[([^\\]]*)\\] as const;`).exec(
 		registryTest,
 	)?.[1];
-	const id = /"([^"]+)"/.exec(body ?? "")?.[1];
-	if (!id) throw new Error("HOLD_INDEXER_IDS not found in the registry test");
-	return id;
-})();
+	const ids = [...(body ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+	if (ids.length === 0)
+		throw new Error(`${name} not found in the registry test`);
+	return ids;
+}
+
+/**
+ * A server declared `resident` (the opt-out witness, #5700). Taken from
+ * #3952's HOLD_INDEXER class, which the nightly promotion (#3989) never
+ * auto-promotes: a hard-coded `docker` here went red the moment the promotion
+ * PR flipped it (#3994 r3).
+ */
+const RESIDENT_WITNESS_ID = registryClass("HOLD_INDEXER_IDS")[0];
+
+/**
+ * A server declared `unmeasured` (the default witness, #5700): the first
+ * UNPROVEN id with an owned smoke fixture. The nightly promotes only an id it
+ * measured eligible on two nights, which an unproven one is not.
+ */
+const UNMEASURED_WITNESS_ID = registryClass("UNPROVEN_IDS").find((id) => {
+	const server = LSP_SERVERS.find((s) => s.id === id);
+	return (
+		server !== undefined &&
+		selectFixtureForServer(server, LSP_FIXTURES) !== null
+	);
+});
 
 const IDLE_WINDOW_MS = 20;
 
@@ -271,13 +288,41 @@ describe("declared-transparent servers evict through the real registry (#3952)",
 		});
 	}
 
-	it("keeps an unmeasured registry server resident (policy-gate witness)", async () => {
+	// #5700: the excluded default flipped. An `unmeasured` registry server
+	// (declined before, so it lived as long as the host) is evicted on idle
+	// through the compiled registry; only `resident` opts out.
+	it("evicts an unmeasured registry server on idle (#5700 policy-gate witness)", async () => {
+		vi.useFakeTimers();
+		process.env.PI_LENS_LSP_IDLE_EVICT_MS = String(IDLE_WINDOW_MS);
+		const witness = UNMEASURED_WITNESS_ID;
+		expect(witness, "an unproven server with a smoke fixture").toBeDefined();
+		doubleSpawnBoundary(witness!, () => nextPid);
+		const server = getServerById(witness!) as LSPServerInfo;
+		expect(server.idleEviction, `${witness} declared`).toBe("unmeasured");
+		const { dir, file } = fixtureFor(server);
+		const config = await import("../../../clients/lsp/config.js");
+		await config.initLSPConfig(dir);
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+
+		const entry = await service.getClientForFile(file);
+		expect(entry?.info, `${witness} registry object`).toBe(server);
+		await vi.advanceTimersByTimeAsync(IDLE_WINDOW_MS);
+		expect(entry!.client.shutdown, `${witness} released`).toHaveBeenCalledWith({
+			reason: "idle_eviction",
+		});
+		expect(service.getAliveClientCount()).toBe(0);
+
+		await service.shutdown();
+	});
+
+	it("keeps a server declared resident (#5700 opt-out witness)", async () => {
 		vi.useFakeTimers();
 		process.env.PI_LENS_LSP_IDLE_EVICT_MS = String(IDLE_WINDOW_MS);
 		doubleSpawnBoundary(RESIDENT_WITNESS_ID, () => nextPid);
 		const server = getServerById(RESIDENT_WITNESS_ID) as LSPServerInfo;
 		expect(server.idleEviction, `${RESIDENT_WITNESS_ID} declared`).toBe(
-			"unmeasured",
+			"resident",
 		);
 		const { dir, file } = fixtureFor(server);
 		const config = await import("../../../clients/lsp/config.js");
@@ -303,7 +348,7 @@ describe("declared-transparent servers evict through the real registry (#3952)",
 		doubleSpawnBoundary(RESIDENT_WITNESS_ID, () => nextPid);
 		const server = getServerById(RESIDENT_WITNESS_ID) as LSPServerInfo;
 		expect(server.idleEviction, `${RESIDENT_WITNESS_ID} declared`).toBe(
-			"unmeasured",
+			"resident",
 		);
 		const { dir, file } = fixtureFor(server);
 		const config = await import("../../../clients/lsp/config.js");
@@ -341,7 +386,7 @@ describe("declared-transparent servers evict through the real registry (#3952)",
 		} finally {
 			// The catalog entry is process-wide: put the declaration back before
 			// any other case in this file reads it.
-			server.idleEviction = "unmeasured";
+			server.idleEviction = "resident";
 			await service.shutdown();
 		}
 	});
