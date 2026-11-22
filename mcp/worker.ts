@@ -61,7 +61,11 @@ async function main(): Promise<void> {
 		await initLSPConfig(cwd);
 		// pi-lens-ignore: missing-error-propagation
 	} catch (err) {
-		process.stderr.write(`worker: initLSPConfig failed for ${cwd}: ${err}\n`);
+		logExtension({
+			subsystem: "lsp-config",
+			level: "warn",
+			message: `mcp-worker: initLSPConfig failed for ${cwd}: ${String(err)}`,
+		});
 	}
 
 	const result = await analyzeFile(file, cwd, { flags });

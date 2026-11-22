@@ -24,6 +24,8 @@
  */
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -62,6 +64,58 @@ async function launchLspGroup(
 	handles.push(handle);
 	children.push(handle.process);
 	return handle;
+}
+
+/**
+ * #5733 F1: a group whose leader (`sh`) exits on SIGTERM while a descendant
+ * in the same group ignores it. The descendant writes its pid only after
+ * its SIGTERM disposition is set (inherited across `exec`), so no signal can
+ * reach it before it is stubborn.
+ */
+async function launchGroupOutlivingItsLeader(): Promise<{
+	handle: LSPProcess;
+	descendant: number;
+}> {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "f1-5733-"));
+	const pidFile = path.join(dir, "descendant.pid");
+	const handle = await launchLSP(
+		"/bin/sh",
+		[
+			"-c",
+			`(trap '' TERM; exec /bin/sh -c 'echo $$ > "$0"; exec sleep 60' "$1") & wait`,
+			"sh",
+			pidFile,
+		],
+		{ cwd: process.cwd() },
+	);
+	handles.push(handle);
+	children.push(handle.process);
+	const descendant = await vi.waitFor(
+		() => {
+			const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
+			if (!(pid > 0)) throw new Error("descendant not started");
+			return pid;
+		},
+		{ timeout: 10_000, interval: 20 },
+	);
+	fs.rmSync(dir, { recursive: true, force: true });
+	return { handle, descendant };
+}
+
+/** Gone, or a zombie nobody will run again. */
+function isGone(pid: number): boolean {
+	try {
+		const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+		return stat.slice(stat.lastIndexOf(")") + 2).startsWith("Z");
+	} catch {
+		return true;
+	}
+}
+
+function outlivedLeaderRows() {
+	return getDegradationSummary().filter(
+		(row) => row.kind === "held-group-outlived-leader",
+	);
 }
 
 /** A real child in its OWN process group, so `-pid` is a real group id. */
@@ -222,6 +276,55 @@ describe.skipIf(process.platform !== "linux")(
 			expect(fs.existsSync(`/proc/${pid}`)).toBe(false);
 
 			expect(isOwnLiveChild(pid, "after-release")).toBe(false);
+		});
+
+		// #5733 F1: the ladder released the hold on the leader's exit, so a
+		// descendant that ignored SIGTERM outlived the shutdown AND the host,
+		// whose exit handler kills only held groups.
+		it("ends a group that outlives its SIGTERM-exited leader before releasing it (#5733 F1)", async () => {
+			resetDegradationLedger();
+			const { handle, descendant } = await launchGroupOutlivingItsLeader();
+			const pid = handle.pid;
+
+			await killProcessTree(handle.process, pid);
+
+			expect(handle.process.signalCode).toBe("SIGTERM");
+			await vi.waitFor(
+				() => {
+					if (!isGone(descendant)) throw new Error("descendant alive");
+				},
+				{ timeout: 5_000, interval: 20 },
+			);
+			expect(isOwnLiveChild(pid, "after-group-end")).toBe(false);
+			expect(outlivedLeaderRows()).toMatchObject([
+				{ count: 1, latestReasons: [{ subject: "lsp-shutdown" }] },
+			]);
+		});
+
+		it("keeps the hold through the fast window while the group outlives its leader (#5733 F1)", async () => {
+			resetDegradationLedger();
+			const { handle, descendant } = await launchGroupOutlivingItsLeader();
+			const pid = handle.pid;
+			vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+			try {
+				await killProcessTree(handle.process, pid, { fast: true });
+				await exited(handle.process);
+				// The leader is gone and the group is not: the hold is what lets
+				// the host-exit handlers still SIGKILL it inside this window.
+				expect(isGone(descendant)).toBe(false);
+				expect(isOwnLiveChild(pid, "fast-window")).toBe(true);
+
+				await vi.advanceTimersByTimeAsync(1500);
+			} finally {
+				vi.useRealTimers();
+			}
+			await vi.waitFor(
+				() => {
+					if (!isGone(descendant)) throw new Error("descendant alive");
+				},
+				{ timeout: 5_000, interval: 20 },
+			);
+			expect(isOwnLiveChild(pid, "after-fast-tick")).toBe(false);
 		});
 
 		it("a held pid survives past the FIFO cap, where an aged verdict does not (F1-r2b)", async () => {

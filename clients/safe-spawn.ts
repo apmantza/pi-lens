@@ -620,11 +620,31 @@ export function holdOwnChildPid(
 }
 
 /**
- * Retire a held pid once nothing will signal it again — the end of the
- * shutdown ladder. Idempotent.
+ * Retire a held pid at the end of the shutdown ladder, once its process
+ * GROUP is confirmed ended, never on its leader's exit alone (#5733 F1). A
+ * group that outlived its leader (a descendant that ignored the ladder's
+ * SIGTERM) gets SIGKILL here, with the ownership the hold still gives, and
+ * the hold goes only once that kill is confirmed as `endHeldChildren`
+ * confirms it. A kill this process cannot confirm keeps the hold, so the
+ * host-exit handlers try again. Idempotent.
  */
 export function releaseOwnChildPid(pid: number | undefined): void {
-	if (typeof pid === "number") heldChildren().delete(pid);
+	if (typeof pid !== "number") return;
+	const held = heldChildren();
+	const child = held.get(pid);
+	if (child === undefined) return;
+	if (!groupIsGone(pid)) {
+		// Counted only when the leader is seen gone: after the ladder's own
+		// SIGKILL escalation the leader is merely not reaped yet.
+		if (child.exitCode !== null || child.signalCode !== null)
+			incrementDegradationCount({
+				kind: "held-group-outlived-leader",
+				subject: "lsp-shutdown",
+				reason: `process group ${pid} outlived its leader's exit at shutdown`,
+			});
+		if (!endHeldGroup(pid, child, "lsp-shutdown")) return;
+	}
+	held.delete(pid);
 }
 
 /**
@@ -641,19 +661,19 @@ function endHeldChildren(): boolean {
 	const held = heldChildren();
 	let allEnded = true;
 	for (const [pid, child] of held.entriesArray()) {
-		if (endHeldGroup(pid, child)) held.delete(pid);
+		if (endHeldGroup(pid, child, "lsp-host-exit")) held.delete(pid);
 		else allEnded = false;
 	}
 	return allEnded;
 }
 
-function endHeldGroup(pid: number, child: HeldChild): boolean {
+function endHeldGroup(pid: number, child: HeldChild, site: string): boolean {
 	if (groupIsGone(pid)) return true;
 	// Where `/proc` cannot answer, a leader that has exited may have had its
 	// pid recycled, so the handle arm refuses the group signal there. On Linux
 	// the kernel answers, and a group outliving its leader still gets the
 	// signal (#2026).
-	if (!isOwnLiveChild(pid, "lsp-host-exit", child)) return false;
+	if (!isOwnLiveChild(pid, site, child)) return false;
 	try {
 		process.kill(-pid, "SIGKILL");
 		return true;
