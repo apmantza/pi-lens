@@ -36,6 +36,7 @@ import {
 import {
 	isUnderDir,
 	isWindowsPath,
+	normalizeFilePath,
 	pathsEqual,
 	toProjectRelativePath,
 } from "../path-utils.js";
@@ -148,9 +149,11 @@ export function ruleThresholdFromResolution(
  * at the declaring file's directory, a trailing `/` matches directories only.
  * They are relative to the directory of the config file that declares them. A
  * global entry, and an entry in the workspace root's own file, are relative to
- * `root`; an entry from a nested `.pi-lens.json` is relative to that file's
+ * `root`; an entry from any other `.pi-lens.json` is relative to that file's
  * directory, so `generated/**` in `pkg/.pi-lens.json` carves out
- * `pkg/generated/**` and nothing at the root. Each file is its own scope and a
+ * `pkg/generated/**` and nothing at the root, and `generated/**` in
+ * `repo/.pi-lens.json` carves out `repo/generated/**` for a session started in
+ * `repo/pkg` (#5738). Each file is its own scope and a
  * path is carved out when ANY scope ignores it (`array-union`): a nearer file
  * adds carve-outs and never lifts one, so a `!` re-includes only against the
  * lines of its own file.
@@ -189,9 +192,8 @@ function anchoredIgnorePaths(
 		if (document.location.lspScoped) continue;
 		const rules = resolveOnePiLensConfigDocument(document).value.rules;
 		if (!rules || typeof rules !== "object" || Array.isArray(rules)) continue;
-		const prefix =
-			document.tier === "global" ? undefined : anchorPrefix(document, root);
-		const baseDir = prefix ? nodePath.resolve(root, prefix) : root;
+		const baseDir =
+			document.tier === "global" ? root : ignoreBaseDir(document, root);
 		for (const [key, rawEntry] of Object.entries(rules)) {
 			const ignorePaths = (rawEntry as { ignorePaths?: unknown } | undefined)
 				?.ignorePaths;
@@ -209,14 +211,16 @@ function anchoredIgnorePaths(
 }
 
 /**
- * The forward-slashed path from `root` to the directory `document` configures,
- * or `undefined` when that directory is `root` itself or lies outside it (its
- * globs keep matching against `root`, as they always have).
+ * The directory `document`'s `ignorePaths` lines are anchored at, spelled as
+ * `root` is spelled so a file path under `root` relates to it.
+ *
+ * The declaring file's own directory, wherever the session started (#5738): a
+ * file at or below `root` anchors there, and a file ABOVE `root` (a session in
+ * `repo/pkg` reads `repo/.pi-lens.json`) anchors at the directory above, not at
+ * `root`, as the `ignore` field anchors it. Only the workspace root's own file
+ * and the global tier anchor at `root` itself.
  */
-function anchorPrefix(
-	document: ConfigDocument,
-	root: string,
-): string | undefined {
+function ignoreBaseDir(document: ConfigDocument, root: string): string {
 	const pathApi =
 		isWindowsPath(root) || isWindowsPath(document.file)
 			? nodePath.win32
@@ -225,12 +229,23 @@ function anchorPrefix(
 	for (const _segment of document.location.relativePath.split("/")) {
 		dir = pathApi.dirname(dir);
 	}
-	if (pathsEqual(dir, root) || !isUnderDir(dir, root)) return undefined;
-	// Config discovery records `document.file` under its real path, and `root`
-	// may be the caller's link spelling: the relative is lexical when the two
-	// spellings agree and taken on the identity axis when they do not, so a
-	// symlinked root anchors `pkg/`, never `../real/pkg/` (#5011 r8, F25).
-	return toProjectRelativePath(dir, root);
+	if (pathsEqual(dir, root)) return root;
+	if (isUnderDir(dir, root)) {
+		// Config discovery records `document.file` under its real path, and `root`
+		// may be the caller's link spelling: the relative is lexical when the two
+		// spellings agree and taken on the identity axis when they do not, so a
+		// symlinked root anchors `pkg/`, never `../real/pkg/` (#5011 r8, F25).
+		return nodePath.resolve(root, toProjectRelativePath(dir, root));
+	}
+	// Above the root. Climb from `root` in its own spelling, so a path spelled
+	// under `root` (the form every caller matches with) relates to the base. A
+	// link at the root's leaf makes that climb land elsewhere: the identity
+	// check then keeps `root`, the base this code always used for it.
+	const above = pathApi.resolve(
+		root,
+		pathApi.relative(normalizeFilePath(root), dir),
+	);
+	return pathsEqual(above, dir) ? above : root;
 }
 
 /**
