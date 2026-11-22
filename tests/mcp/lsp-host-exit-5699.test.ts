@@ -20,6 +20,9 @@
  * - SIGKILL: no code of the host runs, so the server survives that host
  *   (the stated residual); the next MCP host's start reaps it from the row
  *   the dead host left, and prunes the row.
+ * - the `fresh` worker (`mcp/worker.ts`, audit A5/A6): it exits through
+ *   `process.exit` with its servers alive, and before the fix left its
+ *   `instances.json` row behind with them. Its row is gone once it exits.
  *
  * Linux only: the cases read process liveness and adopt the server for
  * cleanup through `/proc` (`tests/support/kill-guard.ts`). lane: unit (Linux).
@@ -33,6 +36,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { realIsPidAlive } from "../../clients/pid-liveness.js";
 import { setupTestEnvironment } from "../clients/test-utils.js";
 import { adoptProcessTree } from "../support/kill-guard.js";
+import { readNdjsonRows } from "../support/ndjson-rows.js";
 import { McpHarness } from "./harness.js";
 
 const STUBBORN_SERVER = fileURLToPath(
@@ -219,6 +223,42 @@ describe.runIf(process.platform === "linux")(
 
 			expect(await survives(pids.server, DEATH_WAIT_MS)).toBe(false);
 		}, 120_000);
+
+		it("drops the fresh worker's row when the worker exits with its servers", async () => {
+			const ws = stubbornRustProject();
+			const harness = startHost(ws);
+			const response = await harness.request(
+				56992,
+				"tools/call",
+				{
+					name: "pilens_analyze",
+					arguments: { path: ws.file, mode: "fresh" },
+				},
+				120_000,
+			);
+			expect(JSON.stringify(response)).not.toContain("fresh analyze failed");
+			// The worker launched at least one server: a pid other than the
+			// host's wrote the spawn record (the worker is dead once the call
+			// returns, since analyzeFileFresh settles on its close).
+			const { rows, skipped } = readNdjsonRows<{
+				phase?: string;
+				pid?: number;
+			}>(path.join(ws.home, "latency.log"));
+			expect(skipped).toBe(0);
+			const workerPids = [
+				...new Set(
+					rows
+						.filter((row) => row.phase === "lsp_server_spawned")
+						.map((row) => row.pid)
+						.filter((pid): pid is number => typeof pid === "number"),
+				),
+			].filter((pid) => !realIsPidAlive(pid));
+			expect(workerPids.length).toBeGreaterThan(0);
+
+			expect(
+				registryRowPids(ws.home).filter((pid) => workerPids.includes(pid)),
+			).toEqual([]);
+		}, 150_000);
 
 		it("reaps a SIGKILLed host's server at the next MCP host's start", async () => {
 			const ws = stubbornRustProject();
