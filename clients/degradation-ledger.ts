@@ -893,9 +893,17 @@ export type DegradationKind =
 	/**
 	 * `instance-registry-registration-missing`: #3071: an LSP child was recorded before `registerInstance` had run for
 	 * this process (or its entry was reaped) — `instance-registry.ts`
-	 * synthesizes a minimal host entry so the child stays tracked.
+	 * synthesizes a minimal host entry so the child stays tracked. A
+	 * `safeSpawnAsync` child's row is dropped instead (#5745 r5, subject
+	 * `owned-child:<pid>`): a spawned command never creates its host's entry.
 	 */
 	| "instance-registry-registration-missing"
+	/**
+	 * `instance-registry-exit-settle-timeout`: #5745: a process about to exit
+	 * explicitly (the MCP `fresh` worker) waited `settleRegistryWritesBeforeExit`'s
+	 * 2 s bound for its queued registry writes and gave up; its entry may outlive it.
+	 */
+	| "instance-registry-exit-settle-timeout"
 	/**
 	 * `instance-registry-registration-superseded`: #3498: a registration made before `deregisterInstance` reached its
 	 * intent or its write after it, and dropped itself. Subject is the
