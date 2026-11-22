@@ -293,7 +293,7 @@ describe.skipIf(process.platform !== "linux")(
 				() => {
 					if (!isGone(descendant)) throw new Error("descendant alive");
 				},
-				{ timeout: 5_000, interval: 20 },
+				{ timeout: 3_000, interval: 20 },
 			);
 			expect(isOwnLiveChild(pid, "after-group-end")).toBe(false);
 			expect(outlivedLeaderRows()).toMatchObject([
@@ -322,7 +322,7 @@ describe.skipIf(process.platform !== "linux")(
 				() => {
 					if (!isGone(descendant)) throw new Error("descendant alive");
 				},
-				{ timeout: 5_000, interval: 20 },
+				{ timeout: 3_000, interval: 20 },
 			);
 			expect(isOwnLiveChild(pid, "after-fast-tick")).toBe(false);
 		});
