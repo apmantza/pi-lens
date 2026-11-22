@@ -27,7 +27,9 @@ class FailingChildProcess extends EventEmitter {
 	}
 }
 
-const { spawnCalls } = vi.hoisted(() => ({ spawnCalls: [] as string[] }));
+const { spawnCalls } = vi.hoisted(() => ({
+	spawnCalls: [] as Array<{ command: string; platform: string }>,
+}));
 
 vi.mock("node:child_process", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:child_process")>();
@@ -36,7 +38,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 		spawnSync: vi.fn(() => ({ status: 0, stdout: "", stderr: "" })),
 		execFileSync: vi.fn(() => ""),
 		spawn: vi.fn((command: string) => {
-			spawnCalls.push(String(command));
+			spawnCalls.push({ command: String(command), platform: process.platform });
 			const proc = new FailingChildProcess(999_999);
 			queueMicrotask(() => {
 				const err = Object.assign(new Error(`spawn ${command} ENOENT`), {
@@ -66,8 +68,6 @@ vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({
 import {
 	cargoBinCandidates,
 	goBinCandidates,
-	GoServer,
-	RustServer,
 } from "../../../clients/lsp/server.js";
 
 function trustRefusals(): string[] {
@@ -76,6 +76,14 @@ function trustRefusals(): string[] {
 			.find((group) => group.kind === "trust-refusal")
 			?.latestReasons.map((entry) => entry.subject) ?? []
 	);
+}
+
+/**
+ * The file a spawn double was asked to start, with the shell wrapper's quotes
+ * and arguments removed (a `.cmd` launch spawns `"<file>" --stdio`).
+ */
+function spawnedTarget(command: string): string {
+	return command.replace(/^"([^"]*)".*$/, "$1");
 }
 
 function plantDummyExe(binDir: string, fileName: string): string {
@@ -113,10 +121,41 @@ describe("binExeVariants win32 PATHEXT sibling trust refusal (#5715)", () => {
 	afterEach(() => {
 		process.chdir(originalCwd);
 		vi.unstubAllEnvs();
+		vi.resetModules();
 		resetDegradationLedger();
 		resetProjectTrust();
 		removeTempDirSync(tempRoot);
 	});
+
+	/**
+	 * Start the server through its production `spawn` (candidate list, then
+	 * `resolveAndLaunch`, then `launchLSP`) with the platform held at win32 for
+	 * the whole awaited flow and the modules loaded under it: `launch.ts` reads
+	 * the platform into a load-time constant, so a module cached from the host
+	 * platform would run the POSIX launch path (#5715 F2).
+	 */
+	async function spawnUnderWin32(which: "go" | "rust"): Promise<void> {
+		await withPlatform("win32", async () => {
+			vi.resetModules();
+			const trust = await import("../../../clients/project-trust.js");
+			trust.setProjectTrustState("untrusted");
+			const server = await import("../../../clients/lsp/server.js");
+			const info = which === "go" ? server.GoServer : server.RustServer;
+			await info.spawn(sessionDir, { allowInstall: false });
+		});
+	}
+
+	/** Every spawn the double saw ran under win32 and none started `forbidden`. */
+	function expectLaunchedOnWin32Without(forbidden: string[]): void {
+		// The bare PATH candidate always reaches spawn, so an empty list means the
+		// launch path never ran and the assertions below would be vacuous.
+		expect(spawnCalls.length).toBeGreaterThan(0);
+		expect(spawnCalls.map((call) => call.platform)).toEqual(
+			spawnCalls.map(() => "win32"),
+		);
+		const targets = spawnCalls.map((call) => spawnedTarget(call.command));
+		for (const file of forbidden) expect(targets).not.toContain(file);
+	}
 
 	it("win32: refuses extensionless sibling when untrusted project $GOPATH/bin/<tool>.exe exists and never reaches spawn", async () => {
 		const gopath = path.join(sessionDir, "gopath");
@@ -133,13 +172,8 @@ describe("binExeVariants win32 PATHEXT sibling trust refusal (#5715)", () => {
 			truncateForLedger(`project-command:${exePath}`),
 		]);
 
-		await withPlatform("win32", () =>
-			GoServer.spawn(sessionDir, { allowInstall: false }),
-		);
-		for (const spawned of spawnCalls) {
-			expect(spawned).not.toContain(extensionless);
-			expect(spawned).not.toContain(exePath);
-		}
+		await spawnUnderWin32("go");
+		expectLaunchedOnWin32Without([extensionless, exePath]);
 	});
 
 	it("win32: refuses extensionless sibling when untrusted project $CARGO_HOME/bin/<tool>.exe exists and never reaches spawn", async () => {
@@ -158,18 +192,49 @@ describe("binExeVariants win32 PATHEXT sibling trust refusal (#5715)", () => {
 		expect(candidates).not.toContain(exePath);
 		expect(candidates).not.toContain(extensionless);
 
-		await withPlatform("win32", () =>
-			RustServer.spawn(sessionDir, { allowInstall: false }),
-		);
-		for (const spawned of spawnCalls) {
-			expect(spawned).not.toContain(extensionless);
-			expect(spawned).not.toContain(exePath);
-		}
+		await spawnUnderWin32("rust");
+		expectLaunchedOnWin32Without([extensionless, exePath]);
 	});
 
-	it("win32: keeps admitting variants when project is trusted or .exe is absent", () => {
+	// #5715 F1: cmd.exe completes the extensionless spelling under PATHEXT to
+	// any executable sibling, not only `.exe`, and the launcher judges no
+	// toolchain dir. The refusal must not depend on which sibling exists.
+	it.each([".cmd", ".bat", ".com"])(
+		"win32: untrusted $GOPATH/bin/gopls%s sibling never reaches spawn through the extensionless candidate",
+		async (ext) => {
+			const gopath = path.join(sessionDir, "gopath");
+			const sibling = plantDummyExe(path.join(gopath, "bin"), "gopls" + ext);
+			const extensionless = path.join(gopath, "bin", "gopls");
+			vi.stubEnv("GOPATH", gopath);
+
+			const candidates = withPlatform("win32", () => goBinCandidates("gopls"));
+			expect(candidates).not.toContain(extensionless);
+			expect(trustRefusals()).toEqual([
+				truncateForLedger(`project-command:${sibling}`),
+			]);
+
+			await spawnUnderWin32("go");
+			expectLaunchedOnWin32Without([extensionless]);
+		},
+	);
+
+	it.each([".cmd", ".bat", ".com"])(
+		"win32: untrusted $CARGO_HOME/bin/rust-analyzer%s sibling never reaches spawn through the extensionless candidate",
+		async (ext) => {
+			const cargoHome = path.join(sessionDir, "cargo");
+			plantDummyExe(path.join(cargoHome, "bin"), "rust-analyzer" + ext);
+			const extensionless = path.join(cargoHome, "bin", "rust-analyzer");
+			vi.stubEnv("CARGO_HOME", cargoHome);
+
+			await spawnUnderWin32("rust");
+			expectLaunchedOnWin32Without([extensionless]);
+		},
+	);
+
+	it("win32: keeps admitting variants when the project is trusted", () => {
 		const gopath = path.join(sessionDir, "gopath");
 		const exePath = plantDummyExe(path.join(gopath, "bin"), "gopls.exe");
+		plantDummyExe(path.join(gopath, "bin"), "gopls.cmd");
 		const extensionless = path.join(gopath, "bin", "gopls");
 		vi.stubEnv("GOPATH", gopath);
 
@@ -178,18 +243,39 @@ describe("binExeVariants win32 PATHEXT sibling trust refusal (#5715)", () => {
 			goBinCandidates("gopls"),
 		);
 		expect(trustedCandidates).toEqual(["gopls", exePath, extensionless]);
+		expect(trustRefusals()).toEqual([]);
+	});
 
-		setProjectTrustState("untrusted");
+	// Fail closed on the directory, not on a sibling that happens to exist now:
+	// the extensionless spelling is only ever a PATHEXT completion on win32, so
+	// an untrusted project dir never yields it (nothing is refused when nothing
+	// is there, so no record).
+	it("win32: an untrusted project toolchain dir yields no extensionless candidate even when empty", () => {
 		const missingDir = path.join(sessionDir, "empty-gopath");
 		vi.stubEnv("GOPATH", missingDir);
-		const absentCandidates = withPlatform("win32", () =>
-			goBinCandidates("gopls"),
-		);
-		expect(absentCandidates).toEqual([
+		const candidates = withPlatform("win32", () => goBinCandidates("gopls"));
+		expect(candidates).toEqual([
 			"gopls",
 			path.join(missingDir, "bin", "gopls.exe"),
-			path.join(missingDir, "bin", "gopls"),
 		]);
+		expect(trustRefusals()).toEqual([]);
+	});
+
+	it("win32: an untrusted toolchain dir outside the project keeps both spellings", () => {
+		const outside = fs.realpathSync(
+			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-5715-out-")),
+		);
+		try {
+			vi.stubEnv("GOPATH", outside);
+			const candidates = withPlatform("win32", () => goBinCandidates("gopls"));
+			expect(candidates).toEqual([
+				"gopls",
+				path.join(outside, "bin", "gopls.exe"),
+				path.join(outside, "bin", "gopls"),
+			]);
+		} finally {
+			removeTempDirSync(outside);
+		}
 	});
 
 	it("win32: still refuses untrusted extensionless binary when .exe is absent", () => {
@@ -207,6 +293,8 @@ describe("binExeVariants win32 PATHEXT sibling trust refusal (#5715)", () => {
 		]);
 	});
 
+	// The extensionless spelling is the ONLY launchable one on POSIX, so the
+	// win32 rule must not reach it.
 	it("POSIX: behavior is unchanged when only <tool>.exe exists in untrusted $GOPATH/bin", () => {
 		const gopath = path.join(sessionDir, "gopath");
 		plantDummyExe(path.join(gopath, "bin"), "gopls.exe");
@@ -216,5 +304,15 @@ describe("binExeVariants win32 PATHEXT sibling trust refusal (#5715)", () => {
 		const candidates = withPlatform("linux", () => goBinCandidates("gopls"));
 		expect(candidates).toEqual(["gopls", extensionless]);
 		expect(trustRefusals()).toEqual([]);
+	});
+
+	it("POSIX: an untrusted project toolchain dir keeps the extensionless candidate when empty", () => {
+		const missingDir = path.join(sessionDir, "empty-gopath");
+		vi.stubEnv("GOPATH", missingDir);
+		const candidates = withPlatform("linux", () => goBinCandidates("gopls"));
+		expect(candidates).toEqual([
+			"gopls",
+			path.join(missingDir, "bin", "gopls"),
+		]);
 	});
 });
