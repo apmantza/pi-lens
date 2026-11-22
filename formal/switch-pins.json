@@ -1061,7 +1061,8 @@
 						"OtherProcs",
 						"LateRecord",
 						"ScanFail",
-						"Stubborn"
+						"Stubborn",
+						"Descendant"
 					]
 				}
 			],

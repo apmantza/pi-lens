@@ -53,9 +53,11 @@ CONSTANTS
     ScanFail,       \* the identity query may fail (empty map)
     StalePrune,     \* heartbeat staleness removes the entry (pid alive)
     Guards,         \* existing guards, subset of {"parentDead","identity","ppid","tracked","lock"}
-    FixParts,       \* candidate fix, subset of {"birth","recheck","tag","retain","ledger"}
-    Stubborn        \* #5699: LSP children ignore EOF and SIGTERM and name no
+    FixParts,       \* candidate fix, subset of {"birth","recheck","tag","retain","ledger","confirm"}
+    Stubborn,       \* #5699: LSP children ignore EOF and SIGTERM and name no
                     \* managed binary, so only SIGKILL or a registry kill ends them
+    Descendant      \* #5733: an LSP child's leader may exit while a descendant
+                    \* in its process group, which ignored SIGTERM, lives on
 
 Birth   == "birth"   \in FixParts
 Recheck == "recheck" \in FixParts
@@ -64,6 +66,11 @@ Retain  == "retain"  \in FixParts
 \* #5699 exit ledger: a quitting host keeps its entry while it holds
 \* children, SIGKILLs them in its exit handler, and only then drops it.
 Ledger  == "ledger"  \in FixParts
+\* #5733 F1: the hold is released only once the group is confirmed ended:
+\* a group that outlived its leader is SIGKILLed at the end of the shutdown
+\* ladder (`releaseOwnChildPid`), and stays held, so the exit kill reaches
+\* it, until then. Without it the hold went with the leader.
+Confirm == "confirm" \in FixParts
 
 Kinds == {"free", "host", "lsp", "other"}
 Toks  == {"node", "ts"}
@@ -234,6 +241,30 @@ LspExit(p) ==
        /\ pend' = [pend EXCEPT ![i] = {x \in @ : x.p # p}]
     /\ UNCHANGED <<nb, used, st, hp, hb, kidsN, rpc, rkill, rprune, bpc, bkill, wrong>>
 
+\* #5733: the leader exits (it honoured SIGTERM) and a descendant in its
+\* group lives on. The group is what pid p names now: its leader's identity
+\* is gone (t = {}), so neither a registry record nor the backstop can match
+\* it, and the reaper signals only a live leader pid. The record leaves on
+\* the leader's observed exit, as in the code.
+LeaderExit(p) ==
+    /\ Descendant
+    /\ procs[p].k = "lsp" /\ procs[p].t # {}
+    /\ LET i == procs[p].i IN
+       /\ st[i] \in {"live", "quitting"}
+       /\ procs' = [procs EXCEPT ![p].t = {}]
+       /\ reg' = {IF Mine(e, i) THEN [e EXCEPT !.kids = {x \in e.kids : x.p # p}] ELSE e : e \in reg}
+       /\ pend' = [pend EXCEPT ![i] = {x \in @ : x.p # p}]
+    /\ UNCHANGED <<nb, used, st, hp, hb, kidsN, rpc, rkill, rprune, bpc, bkill, wrong>>
+
+\* #5733 F1 fix: the ladder's end SIGKILLs a group that outlived its leader,
+\* while host code still runs.
+GroupEnd(p) ==
+    /\ Confirm
+    /\ procs[p].k = "lsp" /\ procs[p].t = {}
+    /\ st[procs[p].i] \in {"live", "quitting"}
+    /\ procs' = [procs EXCEPT ![p] = Free]
+    /\ UNCHANGED <<nb, used, st, hp, hb, kidsN, pend, reg, rpc, rkill, rprune, bpc, bkill, wrong>>
+
 \* Crash: the host dies without shutdown, or (#5699) is SIGKILLed during
 \* one; its LSP children live on.
 Crash(i) ==
@@ -273,11 +304,13 @@ QuitBegin(i) ==
 
 \* The host process exits. With the ledger its exit handler SIGKILLs every
 \* held child, then drops the entry; before it the children outlive it.
+\* #5733: a group whose leader exited is still held only with `confirm`.
 QuitEnd(i) ==
     /\ st[i] = "quitting"
     /\ st' = [st EXCEPT ![i] = "dead"]
     /\ procs' = [p \in Pids |->
-                   IF p = hp[i] \/ (Ledger /\ procs[p].k = "lsp" /\ procs[p].i = i)
+                   IF p = hp[i] \/ (Ledger /\ procs[p].k = "lsp" /\ procs[p].i = i
+                                       /\ (Confirm \/ procs[p].t # {}))
                    THEN Free
                    ELSE IF procs[p].k = "lsp" /\ procs[p].i = i /\ Posix
                         THEN [procs[p] EXCEPT !.pp = 0]
@@ -381,6 +414,7 @@ Next ==
     \/ \E i \in Insts : Start(i) \/ Register(i) \/ Spawn(i) \/ Record(i) \/ Crash(i) \/ Exit(i)
                         \/ QuitBegin(i) \/ QuitEnd(i)
     \/ \E p \in Pids \ {0} : LspExit(p) \/ OtherExit(p) \/ Age(p)
+                             \/ LeaderExit(p) \/ GroupEnd(p)
     \/ OtherStart \/ GoStale \/ Footprint
     \/ \E r \in Reapers : RDecide(r) \/ RKill(r) \/ RPrune(r)
     \/ \E b \in Backstops : BDecide(b) \/ BKill(b) \/ BDone(b)
