@@ -358,6 +358,28 @@ describe("driftIssueState", () => {
 		).toBe("clean");
 	});
 
+	// #5700/#3952: resident indexers are deliberately not measured for eviction.
+	// Recurrence: counting a resident row as an evicted server made an otherwise
+	// complete run become `unknown` (or `drift`) and could mismanage the issue.
+	it("ignores an unavailable resident indexer beside measured eligible rows", () => {
+		const declaredWithResident = new Map([
+			["alpha", "transparent"],
+			["bravo", "unmeasured"],
+			["rust", "resident"],
+		]);
+
+		expect(
+			driftIssueState(
+				[
+					row("alpha", "eligible"),
+					row("bravo", "eligible"),
+					row("rust", "unavailable", "server-not-started"),
+				],
+				declaredWithResident,
+			),
+		).toBe("clean");
+	});
+
 	// #5737 (thread X): an unmeasured server is evicted too, so unavailable
 	// evidence for it is no evidence either way, and the issue is left alone.
 	// Recurrence: the rule read only `transparent`, so an unmeasured server that
