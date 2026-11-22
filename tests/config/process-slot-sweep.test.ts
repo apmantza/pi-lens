@@ -98,6 +98,8 @@ const BASELINE: Readonly<Record<string, string>> = {
 		"its own versioned adopt-or-decline protocol, which the seam cannot express: it adopts a LEGACY-shaped state from an older build and throws on an incompatible one rather than resetting, because the old graph still owns private write queues. Folding it would drop the legacy adoption.",
 	"clients/ndjson-logger.ts#globalStateHost":
 		"the host object for the logger's own versioned slot above (`globalThis` typed to carry a symbol key); it is the same deliberate stay and moves with that row.",
+	"clients/installer/download.ts#InstallerDownloadError":
+		"a read of the builtin `Error` constructor through `globalThis` (`extends globalThis.Error`), not a slot: nothing is stored and no second evaluation reads it. Added by the merge of master in #5722 round 2.",
 	"clients/lsp/request-timeout-error.ts#timeoutBrand": BRAND,
 	"clients/session-scope.ts#CAPTURED_SCOPE": `${BRAND} The brand reads a captured scope off a handle another evaluation made.`,
 	"clients/grammar-wasm-imports.ts#wasm": PLATFORM_READ,

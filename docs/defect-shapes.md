@@ -840,7 +840,7 @@ file-scoped worklist and receives no project-wide scanner output.
     a `process.env.<name>` write is admitted, and a module-level `let` latch
     that guards a per-evaluation exit hook is not a slot). Census:
     `PI_LENS_PRINT_PINS=1 npx vitest run tests/config/process-slot-sweep.test.ts`
-    prints one `ROW` per site (26 on master after the fold).
+    prints one `ROW` per site (27 on master after the fold).
     Consolidation verdict: folded onto `getProcessSingleton` for the four
     hand-rolled slots that adopted any value under their key (spawn-timeout
     cooldown, opaque baseline store, probe-home memo, safe-spawn lifetime
