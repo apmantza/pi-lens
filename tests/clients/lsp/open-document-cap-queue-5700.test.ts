@@ -1,0 +1,172 @@
+/**
+ * #5700: which document the open-document cap closes, and which it must not.
+ *
+ * Recurrences this file prevents (each guard in `enforceOpenDocumentCap`):
+ * - recency: a document the agent keeps editing is sent as `didChange`, never
+ *   re-opened, so without `noteDocumentSent` it stays at the head of the send
+ *   order and the cap closes the file being worked on instead of a cold one.
+ * - live queue: the cap's close is an ordinary entry on the path's notify
+ *   queue, and a newer entry replaces an unsent one. Issued while an edit
+ *   waits behind a send in flight, the close replaces that edit: its bytes
+ *   never reach the server, and its caller is told they were sent.
+ *   `formal/lsp-document-lifecycle` `MutBudgetCloseNoSkip` is the same
+ *   defect in the model.
+ * - settling publish: a publish still in its debounce window answers the
+ *   bytes last sent. Closing the document then drops that answer, so the
+ *   cache keeps the older finding and the wait on it never confirms.
+ *
+ * Production chain: the REAL client functions over `createMockState`; the
+ * JSON-RPC connection is the only double, as in `close-document-queue.test.ts`.
+ */
+
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	handleNotifyChange,
+	handleNotifyOpen,
+	type LSPClientState,
+	type LSPDiagnostic,
+	setupIncomingHandlers,
+} from "../../../clients/lsp/client.js";
+import { normalizeMapKey } from "../../../clients/path-utils.js";
+import {
+	gatedPromise,
+	type GatedPromise,
+} from "../../support/fault-injection.js";
+import { waitFor } from "../interleaving-kit.js";
+import { removeTempDirSync } from "../test-utils.js";
+import { createMockState } from "./mock-client-state.js";
+
+let tmpDir: string;
+const file = (name: string) => path.join(tmpDir, name);
+const key = (name: string) => normalizeMapKey(file(name));
+
+const D: LSPDiagnostic = {
+	severity: 1,
+	message: "unused import",
+	range: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } },
+};
+
+/** Record each lifecycle message as `<method> <file name>`; hold the ones gated. */
+function recordWire(
+	state: LSPClientState,
+	gates: Partial<Record<string, GatedPromise<void>>> = {},
+) {
+	const order: string[] = [];
+	vi.mocked(state.connection.sendNotification).mockImplementation(
+		async (method: unknown, params: unknown) => {
+			const m = String(method).replace("textDocument/", "");
+			if (!["didOpen", "didChange", "didClose"].includes(m)) return;
+			const uri = (params as { textDocument: { uri: string } }).textDocument
+				.uri;
+			order.push(`${m} ${path.basename(new URL(uri).pathname)}`);
+			const gate = gates[m];
+			if (gate) await gate.promise;
+		},
+	);
+	return order;
+}
+
+async function open(state: LSPClientState, name: string) {
+	expect(
+		await handleNotifyOpen(state, file(name), `// ${name}\n`, "typescript"),
+	).toBe(true);
+}
+
+describe("#5700 open-document cap: the victim", () => {
+	beforeEach(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-open-cap-"));
+		for (const name of ["a.ts", "b.ts", "c.ts"])
+			fs.writeFileSync(file(name), `// ${name}\n`);
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+		removeTempDirSync(tmpDir);
+		vi.restoreAllMocks();
+	});
+
+	it("closes the least recently SENT document, so an edited one stays open", async () => {
+		const state = createMockState({ root: tmpDir, openDocumentCap: 2 });
+		const order = recordWire(state);
+		await open(state, "a.ts");
+		await open(state, "b.ts");
+		// a.ts was opened first, but this edit makes it the most recent.
+		expect(await handleNotifyChange(state, file("a.ts"), "// a2\n")).toBe(true);
+		await open(state, "c.ts");
+		await waitFor(
+			() => state.openDocuments.size,
+			(n) => n === 2,
+		);
+
+		expect(order).toEqual([
+			"didOpen a.ts",
+			"didOpen b.ts",
+			"didChange a.ts",
+			"didOpen c.ts",
+			"didClose b.ts",
+		]);
+		expect([...state.openDocuments]).toEqual([key("a.ts"), key("c.ts")]);
+	});
+
+	it("leaves a document alone while an edit waits behind its send in flight", async () => {
+		const state = createMockState({ root: tmpDir, openDocumentCap: 1 });
+		const change = gatedPromise<void>();
+		const order = recordWire(state, { didChange: change });
+		await open(state, "a.ts");
+
+		const first = handleNotifyChange(state, file("a.ts"), "// a1\n");
+		await waitFor(
+			() => order.length,
+			(n) => n === 2,
+		);
+		const second = handleNotifyChange(state, file("a.ts"), "// a2\n");
+		// b.ts lands past the cap while a.ts has a send in flight and an edit
+		// queued behind it.
+		await open(state, "b.ts");
+		change.resolve();
+		await expect(first).resolves.toBe(true);
+		await expect(second).resolves.toBe(true);
+
+		expect(order).toEqual([
+			"didOpen a.ts",
+			"didChange a.ts",
+			"didOpen b.ts",
+			"didChange a.ts",
+		]);
+		expect(state.openDocuments.has(key("a.ts"))).toBe(true);
+	});
+
+	it("leaves a document alone while its publish is still settling", async () => {
+		const state = createMockState({ root: tmpDir, openDocumentCap: 1 });
+		const order = recordWire(state);
+		setupIncomingHandlers(state, {});
+		type Publish = (params: {
+			uri: string;
+			version?: number;
+			diagnostics: LSPDiagnostic[];
+		}) => void;
+		const publish = (
+			vi.mocked(state.connection.onNotification).mock.calls as unknown as Array<
+				[string, Publish]
+			>
+		).find(([method]) => method === "textDocument/publishDiagnostics")?.[1];
+		expect(publish).toBeDefined();
+		await open(state, "a.ts");
+
+		vi.useFakeTimers();
+		publish!({
+			uri: pathToFileURL(file("a.ts")).href,
+			version: 0,
+			diagnostics: [D],
+		});
+		expect(state.pendingDiagnostics.has(key("a.ts"))).toBe(true);
+		await open(state, "b.ts");
+		await vi.advanceTimersByTimeAsync(2_000);
+
+		expect(order).toEqual(["didOpen a.ts", "didOpen b.ts"]);
+		expect(state.pushDiagnostics.get(key("a.ts"))).toEqual([D]);
+	});
+});

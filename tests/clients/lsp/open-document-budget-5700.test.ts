@@ -155,6 +155,15 @@ describe("#5700 open-document cap through the real client", () => {
 			expect(capRows.map((group) => group.count)).toEqual([1]);
 			expect(capRows[0]?.latestReasons[0]?.subject).toBe("marksman");
 
+			// An edit of the oldest open file makes it the most recent, so the next
+			// close takes doc-4, not doc-3.
+			fs.writeFileSync(files[3], "# edited\n");
+			await service.touchFile(files[3], "# edited\n", {
+				diagnostics: "document",
+				collectDiagnostics: true,
+				clientScope: "primary",
+				source: "dispatch",
+			});
 			// A later touch of a closed file opens it again and answers fresh.
 			const result = await service.touchFile(
 				files[0],
@@ -169,7 +178,15 @@ describe("#5700 open-document cap through the real client", () => {
 			expect(result?.confirmation).toBe("confirmed");
 			const after = await wire();
 			expect(after.at(-2)).toBe(`didOpen ${uri(files[0])}`);
-			expect(after.at(-1)).toBe(`didClose ${uri(files[3])}`);
+			expect(after.at(-1)).toBe(`didClose ${uri(files[4])}`);
+			expect(files.map((file) => client.isDocumentOpen(file))).toEqual([
+				true,
+				false,
+				false,
+				true,
+				false,
+				true,
+			]);
 			expect(
 				client.getAllDiagnostics().get(files[0].replace(/\\/g, "/"))?.closed,
 			).toBeUndefined();
