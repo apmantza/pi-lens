@@ -11,13 +11,25 @@ export function setPlatform(platform: NodeJS.Platform): void {
 	});
 }
 
-/** Run `body` under `platform`, restoring the real one even if it throws. */
+/**
+ * Run `body` under `platform`, restoring the real one even if it throws. A
+ * promise-returning `body` keeps the platform until the promise settles: a
+ * synchronous restore on return would let every `await` in the body resume
+ * under the host platform (#5715 F2).
+ */
 export function withPlatform<T>(platform: NodeJS.Platform, body: () => T): T {
 	const original = process.platform;
 	setPlatform(platform);
+	let result: T;
 	try {
-		return body();
-	} finally {
+		result = body();
+	} catch (error) {
 		setPlatform(original);
+		throw error;
 	}
+	if (result instanceof Promise) {
+		return result.finally(() => setPlatform(original)) as T;
+	}
+	setPlatform(original);
+	return result;
 }

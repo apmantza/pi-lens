@@ -88,7 +88,7 @@ const DEFERRED_COUNT = 145;
 // #5699: +1, instance-reaper `Stubborn` (a server that ignores EOF and
 // SIGTERM is environment, not a code choice). #5733: +1, instance-reaper
 // `Descendant` (a group member that outlives its leader is environment too).
-const NOT_CODE_CHOICE_COUNT = 267;
+const NOT_CODE_CHOICE_COUNT = 268;
 
 interface PinTest {
 	test: string;

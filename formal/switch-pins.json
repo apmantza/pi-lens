@@ -2757,6 +2757,17 @@
 							"title": "runs under Gate B while it holds a recorded blocker, naming the covering lane (#4509)"
 						}
 					]
+				},
+				"CarryByServer": {
+					"value": "TRUE",
+					"test": "tests/index-4484-unfixed-blocker-witness.test.ts",
+					"title": "retires a fixed ast-grep blocker while the primary does not answer (#5727, diagnostics-wait)",
+					"also": [
+						{
+							"test": "tests/index-4484-unfixed-blocker-witness.test.ts",
+							"title": "retires the auxiliary's fixed blocker and keeps the silent primary's (#5727)"
+						}
+					]
 				}
 			},
 			"notCodeChoice": [
@@ -2770,7 +2781,7 @@
 					]
 				},
 				{
-					"reason": "Environment: which linter reports the finding (line-bound LSP ids or helm-lint's ordinal ids, a collect-later runner or none, a runner with an edit-range gate or without, an unused value or none, a second occurrence of a finding's rule already in the bytes or none, and whether that occurrence's line has the finding's own text), whether a run reaches a verdict or skips without reading the bytes, whether a write can be aligned to the bytes the record is about, whether a primary whose gate sees only the edit answers for the range-gated runner, and the user's --no-delta flag; the code must be honest under every value, so the as-built configs set them both ways.",
+					"reason": "Environment: which linter reports the finding (line-bound LSP ids or helm-lint's ordinal ids, a collect-later runner or none, a runner with an edit-range gate or without, an unused value or none, a second occurrence of a finding's rule already in the bytes or none, and whether that occurrence's line has the finding's own text), whether a run reaches a verdict or skips without reading the bytes, whether a write can be aligned to the bytes the record is about, whether a primary whose gate sees only the edit answers for the range-gated runner, whether a runner's primary server is silent while its auxiliary answers, and the user's --no-delta flag; the code must be honest under every value, so the as-built configs set them both ways.",
 					"constants": [
 						"Ordinal",
 						"Deferred",
@@ -2782,7 +2793,8 @@
 						"MaySkip",
 						"MayUnalign",
 						"TwinSameText",
-						"GateB"
+						"GateB",
+						"PrimarySilent"
 					]
 				}
 			]

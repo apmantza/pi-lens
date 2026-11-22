@@ -1124,6 +1124,8 @@ interface GroupResult {
 	/** #4484 r2: runners and servers that reached no verdict in this group. */
 	inconclusiveRunnerIds: string[];
 	inconclusiveServerIds: string[];
+	/** #5727: per runner, the servers that answered although it had no verdict. */
+	answeredServerIds: [string, readonly string[]][];
 	/** #4484 round 3: the inconclusive runners still in flight (collect-later). */
 	collectLaterRunnerIds: string[];
 	/** #4484 round 6: runners whose verdict covers only the edit's ranges. */
@@ -1181,6 +1183,7 @@ async function runGroup(
 	const outOfEditScope: Diagnostic[] = [];
 	const inconclusiveRunnerIds: string[] = [];
 	const inconclusiveServerIds: string[] = [];
+	const answeredServerIds: GroupResult["answeredServerIds"] = [];
 	const collectLaterRunnerIds: string[] = [];
 	const editScopedRunnerIds: string[] = [];
 	const answeredRunnerIds: string[] = [];
@@ -1570,8 +1573,11 @@ async function runGroup(
 			d.runnerId ??= runnerId;
 			outOfEditScope.push(d);
 		}
-		if (reachedNoVerdict(result)) inconclusiveRunnerIds.push(runnerId);
-		else {
+		if (reachedNoVerdict(result)) {
+			inconclusiveRunnerIds.push(runnerId);
+			if (result.answeredServerIds?.length)
+				answeredServerIds.push([runnerId, result.answeredServerIds]);
+		} else {
 			answeredRunnerIds.push(runnerId);
 			if (result.coveredBy)
 				coveredRunners.push({
@@ -1608,6 +1614,7 @@ async function runGroup(
 		outOfEditScope,
 		inconclusiveRunnerIds,
 		inconclusiveServerIds,
+		answeredServerIds,
 		collectLaterRunnerIds,
 		editScopedRunnerIds,
 		answeredRunnerIds,
@@ -1790,6 +1797,7 @@ export async function dispatchForFile(
 	const outOfEditScope: Diagnostic[] = [];
 	const inconclusiveRunnerIds = new Set<string>();
 	const inconclusiveServerIds = new Set<string>();
+	const answeredServerIds = new Map<string, readonly string[]>();
 	const collectLaterRunnerIds = new Set<string>();
 	const editScopedRunnerIds: string[] = [];
 	const answeredRunnerIds = new Set<string>();
@@ -1801,6 +1809,7 @@ export async function dispatchForFile(
 		outOfEditScope: groupOutOfScope,
 		inconclusiveRunnerIds: groupRunnerIds,
 		inconclusiveServerIds: groupServerIds,
+		answeredServerIds: groupAnsweredServers,
 		collectLaterRunnerIds: groupCollectLater,
 		editScopedRunnerIds: groupEditScoped,
 		answeredRunnerIds: groupAnswered,
@@ -1810,6 +1819,10 @@ export async function dispatchForFile(
 		outOfEditScope.push(...groupOutOfScope);
 		for (const id of groupRunnerIds) inconclusiveRunnerIds.add(id);
 		for (const id of groupServerIds) inconclusiveServerIds.add(id);
+		for (const [runnerId, ids] of groupAnsweredServers)
+			answeredServerIds.set(runnerId, [
+				...new Set([...(answeredServerIds.get(runnerId) ?? []), ...ids]),
+			]);
 		for (const id of groupCollectLater) collectLaterRunnerIds.add(id);
 		editScopedRunnerIds.push(...groupEditScoped);
 		for (const id of groupAnswered) answeredRunnerIds.add(id);
@@ -2234,6 +2247,7 @@ export async function dispatchForFile(
 				runnerIds: [...inconclusiveRunnerIds],
 				serverIds: [...inconclusiveServerIds],
 				collectLaterRunnerIds: [...collectLaterRunnerIds],
+				...(answeredServerIds.size > 0 && { answeredServerIds }),
 			},
 		}),
 		verdict,
