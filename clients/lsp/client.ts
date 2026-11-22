@@ -1090,6 +1090,10 @@ function installCrashGuard(): void {
 	};
 	process.prependListener("uncaughtException", onUncaughtException);
 
+	// A non-LSP rejection goes on as an uncaught exception, as it would with
+	// no guard installed: a host crash handler (pi interactive) then runs its
+	// crash record and detached-child cleanup, which no exit listener repeats,
+	// and with none the guard above reports and exits (#5746 r5).
 	const onUnhandledRejection = (reason: unknown): void => {
 		if (isIgnorableLspRuntimeCrash(reason)) {
 			return;
@@ -1101,8 +1105,7 @@ function installCrashGuard(): void {
 		) {
 			return;
 		}
-		writeLspCrashStack(reason);
-		process.exit(1);
+		throw reason;
 	};
 	process.prependListener("unhandledRejection", onUnhandledRejection);
 }

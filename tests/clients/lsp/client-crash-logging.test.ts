@@ -55,6 +55,7 @@ describe("LSP client — crash exit is logged, not silently swallowed", () => {
 			| "duplicate"
 			| "preexisting"
 			| "ignorable"
+			| "host-handler-rejection"
 			| "other",
 	): Promise<{ code: number | null; stdout: string; stderr: string }> {
 		const launch = pathToFileURL(path.resolve("clients/lsp/launch.js")).href;
@@ -68,6 +69,10 @@ const { createLSPClient } = await import(${JSON.stringify(clientModule)});
 const lsp = await launchLSP(process.execPath, [${JSON.stringify(fixture)}]);
 if (${JSON.stringify(mode)} === "preexisting") {
   process.once("uncaughtException", () => { process.stdout.write("PREEXISTING_LISTENER"); setTimeout(() => process.exit(0), 50); });
+}
+if (${JSON.stringify(mode)} === "host-handler-rejection") {
+  // pi interactive's shape: a prepended crash handler that cleans up and exits.
+  process.prependListener("uncaughtException", (error) => { process.stdout.write("HOST_HANDLER(" + error.message + ")"); process.exit(3); });
 }
 await createLSPClient({ serverId: "probe", process: lsp, root: process.cwd() });
 let lsp2;
@@ -86,7 +91,7 @@ if (${JSON.stringify(mode)} === "ignorable") {
 } else if (${JSON.stringify(mode)} === "other") {
   process.once("uncaughtException", () => { process.stdout.write("OTHER_LISTENER"); setTimeout(() => process.exit(0), 50); });
   setTimeout(() => { throw new Error("PROBE delegated crash"); }, 50);
-} else if (${JSON.stringify(mode)} === "rejection") {
+} else if (${JSON.stringify(mode)} === "rejection" || ${JSON.stringify(mode)} === "host-handler-rejection") {
   Promise.reject(new Error("PROBE non-LSP rejection"));
 } else if (${JSON.stringify(mode)} === "hostile-rejection") {
   Promise.reject(Object.create(null));
@@ -258,6 +263,17 @@ if (${JSON.stringify(mode)} === "ignorable") {
 		expect(ignorable.stdout).toContain("EXIT_MARKER");
 		expect(other).toMatchObject({ code: 0 });
 		expect(other.stdout).toContain("OTHER_LISTENER");
+	}, 20_000);
+
+	// #5746 r5: with a host crash handler (pi interactive) and no host
+	// rejection listener, a non-LSP rejection must reach that handler, whose
+	// crash record and detached-child cleanup no exit listener repeats. r4
+	// exited 1 from the rejection guard and skipped it.
+	it("escalates a rejection to the host's uncaughtException handler", async () => {
+		const result = await runCrashGuardProbe("host-handler-rejection");
+		expect(result).toMatchObject({ code: 3 });
+		expect(result.stdout).toContain("HOST_HANDLER(PROBE non-LSP rejection)");
+		expect(result.stdout).toContain("EXIT_MARKER");
 	}, 20_000);
 
 	it("lets a pre-existing once listener own the crash decision", async () => {
