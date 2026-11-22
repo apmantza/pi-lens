@@ -596,6 +596,7 @@ describe("kill-by-pid ownership (#2042)", () => {
 			await import("../support/background-write-drains.js");
 		const events: string[] = [];
 		let releaseWrite: () => void = () => {};
+		let releaseRemove: () => void = () => {};
 		let writeCalled: () => void = () => {};
 		const writeStarted = new Promise<void>((resolve) => {
 			writeCalled = resolve;
@@ -611,8 +612,14 @@ describe("kill-by-pid ownership (#2042)", () => {
 					};
 				});
 			},
-			remove: async () => {
+			remove: () => {
 				events.push("remove");
+				return new Promise<void>((resolve) => {
+					releaseRemove = () => {
+						events.push("remove landed");
+						resolve();
+					};
+				});
 			},
 		});
 		try {
@@ -630,11 +637,23 @@ describe("kill-by-pid ownership (#2042)", () => {
 			await new Promise<void>((resolve) => setImmediate(resolve));
 			expect(drained).toBe(false);
 
+			// The write landed; the removal chained after it is still in flight.
 			releaseWrite();
-			await drain;
+			await new Promise<void>((resolve) => setImmediate(resolve));
 			expect(events).toEqual(["write", "write landed", "remove"]);
+			expect(drained).toBe(false);
+
+			releaseRemove();
+			await drain;
+			expect(events).toEqual([
+				"write",
+				"write landed",
+				"remove",
+				"remove landed",
+			]);
 		} finally {
 			releaseWrite();
+			releaseRemove();
 			// The ledger cell is a process singleton: a fresh registry module
 			// provides the production ledger again.
 			vi.resetModules();
