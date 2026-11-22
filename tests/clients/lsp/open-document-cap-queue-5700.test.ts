@@ -111,6 +111,40 @@ describe("#5700 open-document cap: the victim", () => {
 		expect([...state.openDocuments]).toEqual([key("a.ts"), key("c.ts")]);
 	});
 
+	// Recurrence: a close still in flight leaves its document in
+	// `openDocuments`, so an open that lands meanwhile counted it again and
+	// closed one document too many.
+	it("counts a close still in flight, so a burst of opens closes no more than the excess", async () => {
+		fs.writeFileSync(file("d.ts"), "// d.ts\n");
+		const state = createMockState({ root: tmpDir, openDocumentCap: 2 });
+		const close = gatedPromise<void>();
+		const order = recordWire(state, { didClose: close });
+		await open(state, "a.ts");
+		await open(state, "b.ts");
+		await open(state, "c.ts"); // queues the close of a.ts, held in flight
+		await waitFor(
+			() => order.length,
+			(n) => n === 4,
+		);
+		await open(state, "d.ts");
+		close.resolve();
+		await waitFor(
+			() => state.openDocuments.size,
+			(n) => n <= 2,
+		);
+		await new Promise((resolve) => setImmediate(resolve));
+
+		expect(order).toEqual([
+			"didOpen a.ts",
+			"didOpen b.ts",
+			"didOpen c.ts",
+			"didClose a.ts",
+			"didOpen d.ts",
+			"didClose b.ts",
+		]);
+		expect([...state.openDocuments]).toEqual([key("c.ts"), key("d.ts")]);
+	});
+
 	it("leaves a document alone while an edit waits behind its send in flight", async () => {
 		const state = createMockState({ root: tmpDir, openDocumentCap: 1 });
 		const change = gatedPromise<void>();

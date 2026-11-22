@@ -162,8 +162,59 @@ describe("LSP idle reset", () => {
 	// #5700 (B3) recurrence: a turn that edited cancelled the pending reset and
 	// nothing armed it again, so a session whose last turn wrote a file kept its
 	// whole fleet until the per-client timers (and never for a resident one).
+	// #5700 (B3): an edit turn cancelled the idle reset and nothing armed it
+	// again, so a session whose last turn wrote a file kept its fleet. The edit
+	// turn now restarts the window: the reset fires one full window after the
+	// LAST turn end, not after the earlier quiet turn's deadline.
 	it("re-arms the idle reset after a turn that edited a file (#5700)", async () => {
 		const env = setupTestEnvironment("pi-lens-idle-edit-turn-");
+		const runtime = new RuntimeCoordinator();
+		const cacheManager = new CacheManager(false);
+		const resetLSPService = vi.fn();
+		const filePath = path.join(env.tmpDir, "src/edited.ts");
+		fs.mkdirSync(path.dirname(filePath), { recursive: true });
+		fs.writeFileSync(filePath, "export const x = 1;\n");
+		const turnEnd = () =>
+			handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, {
+					ctxCwd: env.tmpDir,
+					resetLSPService,
+				}),
+			);
+
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		try {
+			const windowMs = getEffectiveLspIdleResetMs();
+			const half = Math.floor(windowMs / 2);
+			// A quiet turn arms the reset; half a window later an edit turn ends.
+			await turnEnd();
+			await vi.advanceTimersByTimeAsync(half);
+			cacheManager.addModifiedRange(
+				filePath,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+			);
+			await turnEnd();
+			expect(Object.keys(cacheManager.readTurnState(env.tmpDir).files)).toEqual(
+				[],
+			);
+
+			// The quiet turn's deadline passes: the edit turn restarted the window.
+			await vi.advanceTimersByTimeAsync(windowMs - half);
+			expect(resetLSPService).not.toHaveBeenCalled();
+			// One full window after the edit turn, the fleet is released once.
+			await vi.advanceTimersByTimeAsync(half);
+			expect(resetLSPService).toHaveBeenCalledTimes(1);
+		} finally {
+			cancelLSPIdleReset();
+			vi.useRealTimers();
+			env.cleanup();
+		}
+	});
+
+	it("arms the idle reset after an edit turn with no quiet turn before it (#5700)", async () => {
+		const env = setupTestEnvironment("pi-lens-idle-edit-only-");
 		const runtime = new RuntimeCoordinator();
 		const cacheManager = new CacheManager(false);
 		const resetLSPService = vi.fn();
@@ -173,13 +224,6 @@ describe("LSP idle reset", () => {
 
 		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 		try {
-			// A quiet turn arms the reset, then an edit turn ends the session's work.
-			await handleTurnEnd(
-				makeTurnEndDeps(runtime, cacheManager, {
-					ctxCwd: env.tmpDir,
-					resetLSPService,
-				}),
-			);
 			cacheManager.addModifiedRange(
 				filePath,
 				{ start: 1, end: 1 },
@@ -192,10 +236,6 @@ describe("LSP idle reset", () => {
 					resetLSPService,
 				}),
 			);
-			expect(Object.keys(cacheManager.readTurnState(env.tmpDir).files)).toEqual(
-				[],
-			);
-
 			await vi.advanceTimersByTimeAsync(getEffectiveLspIdleResetMs());
 			expect(resetLSPService).toHaveBeenCalledTimes(1);
 		} finally {
