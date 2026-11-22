@@ -65,7 +65,7 @@
 		"clients/lsp/service-notify-cpu-liveness.test.ts": 2,
 		"clients/lsp/service-notify-inflight-throttle-real-stream.test.ts": 2,
 		"clients/lsp/service-rename-file.test.ts": 2,
-		"clients/lsp/shutdown-live-wedged-process.test.ts": 2,
+		"clients/lsp/shutdown-live-wedged-process.test.ts": 3,
 		"clients/lsp/teardown-logging.test.ts": 3,
 		"clients/lsp/typescript-classic-repair.integration.test.ts": 2,
 		"clients/lsp/typescript-native-vitest.integration.test.ts": 1,
