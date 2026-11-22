@@ -854,6 +854,12 @@ export type DegradationKind =
 	 */
 	| "instance-registry-deregister-root-failed"
 	/**
+	 * `instance-registry-exit-settle-timeout`: #5745: a process about to exit
+	 * explicitly (the MCP `fresh` worker) waited `settleRegistryWritesBeforeExit`'s
+	 * 2 s bound for its queued registry writes and gave up; its entry may outlive it.
+	 */
+	| "instance-registry-exit-settle-timeout"
+	/**
 	 * `instance-registry-identity-fallback`: #3071: a registration-record write fell back to the process cwd because
 	 * the session's identity carried no `projectRoot` — `instance-registry.ts`
 	 * still records the child, just without the caller-supplied root.
@@ -898,12 +904,6 @@ export type DegradationKind =
 	 * `owned-child:<pid>`): a spawned command never creates its host's entry.
 	 */
 	| "instance-registry-registration-missing"
-	/**
-	 * `instance-registry-exit-settle-timeout`: #5745: a process about to exit
-	 * explicitly (the MCP `fresh` worker) waited `settleRegistryWritesBeforeExit`'s
-	 * 2 s bound for its queued registry writes and gave up; its entry may outlive it.
-	 */
-	| "instance-registry-exit-settle-timeout"
 	/**
 	 * `instance-registry-registration-superseded`: #3498: a registration made before `deregisterInstance` reached its
 	 * intent or its write after it, and dropped itself. Subject is the

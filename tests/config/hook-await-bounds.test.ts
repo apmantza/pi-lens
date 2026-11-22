@@ -2707,7 +2707,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// hook; each is a local file operation or the registry lock's own
 	// bounded wait, and none can take the hook's signal until #2523 AC4
 	// threads it.
-	"clients/instance-registry.ts": 37,
+	// 37 → 38 (#5745 r5): settleRegistryWritesBeforeExit awaits withDeadline,
+	// a 2 s bound this count does not tell from an unbounded wait. Only the
+	// MCP `fresh` worker calls it, just before its own process.exit; no hook
+	// awaits it.
+	"clients/instance-registry.ts": 38,
 	"clients/language-profile.ts": 3,
 	// 1 → 2 (#1634): `projectScan` now awaits the cheap project scan it used
 	// to return unawaited, to pass its rows through the finding policy before
