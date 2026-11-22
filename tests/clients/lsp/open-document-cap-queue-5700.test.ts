@@ -36,6 +36,7 @@ import {
 import {
 	getDegradationSummary,
 	resetDegradationLedger,
+	renderDegradationLines,
 } from "../../../clients/degradation-ledger.js";
 import { normalizeMapKey } from "../../../clients/path-utils.js";
 import {
@@ -169,10 +170,17 @@ describe("#5700 open-document cap: the victim", () => {
 		await waitFor(
 			() =>
 				getDegradationSummary()
-					.filter((group) => group.kind === "lsp-open-document-cap")
+					.filter(
+						(group) => group.kind === "lsp-open-document-cap-close-failed",
+					)
 					.flatMap((group) => group.latestReasons.map((r) => r.subject)),
 			(subjects) => subjects.includes(`${state.serverId}:close-failed`),
 		);
+		expect(renderDegradationLines()).toEqual([
+			"Degradations:",
+			"  lsp-open-document-cap: 1",
+			`  ⚠ lsp-open-document-cap-close-failed: 1 — ${state.serverId}:close-failed: a didClose past the cap failed; the document stays open (count: 1)`,
+		]);
 
 		expect(order).toEqual(["didOpen a.ts", "didOpen b.ts"]);
 		expect(state.openDocuments.has(key("a.ts"))).toBe(true);

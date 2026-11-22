@@ -6233,7 +6233,7 @@ function recordCapCloseFailure(
 			metadata: { serverId: state.serverId, reason: String(err) },
 		},
 		{
-			ledgerKind: "lsp-open-document-cap",
+			ledgerKind: "lsp-open-document-cap-close-failed",
 			risingEdgePer: "identity",
 			reason: "a didClose past the cap failed; the document stays open",
 		},

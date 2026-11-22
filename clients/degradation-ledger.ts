@@ -1272,6 +1272,8 @@ export type DegradationKind =
 	 * open; the next open past the cap retries it).
 	 */
 	| "lsp-open-document-cap"
+	/** `lsp-open-document-cap-close-failed`: #5737: a cap eviction's `didClose` failed, leaving the document open. */
+	| "lsp-open-document-cap-close-failed"
 	/**
 	 * `lsp-probe-finding-policy`: #3071: `tools/lsp-diagnostics.ts`'s probe-disposition filter threw while
 	 * applying policy to a batch of findings; the batch is returned unfiltered
