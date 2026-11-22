@@ -6,7 +6,10 @@ export function readPeerRange(
 	packageName: string,
 ): string;
 
+export function readFloorEnv(env: Record<string, string | undefined>): string;
+
 export function isAcceptableLatestHost(
 	version: unknown,
 	peerRange: string,
+	floor: string,
 ): boolean;

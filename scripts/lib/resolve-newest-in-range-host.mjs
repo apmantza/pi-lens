@@ -47,20 +47,43 @@ export function readPeerRange(pkg, packageName) {
 }
 
 /**
+ * Read the supported-window floor out of an env-like object. The value is
+ * install-smoke.yml's `PI_HOST_FLOOR_VERSION`, the one place the floor is
+ * stated; GitHub exports workflow-level env to every step, so the resolver
+ * reads it from there rather than carrying a second literal. Required and
+ * exact: without a floor the lane cannot tell a supported host from an old one
+ * (#5749 review F1), so an unset or non-semver value throws.
+ *
+ * @param {Record<string, string | undefined>} env
+ * @returns {string}
+ */
+export function readFloorEnv(env) {
+	const floor = env?.PI_HOST_FLOOR_VERSION;
+	if (typeof floor !== "string" || semver.valid(floor) !== floor) {
+		throw new Error(
+			`PI_HOST_FLOOR_VERSION must be an exact version (install-smoke.yml's workflow env), got ${JSON.stringify(floor ?? null)}`,
+		);
+	}
+	return floor;
+}
+
+/**
  * Whether `version`, the registry's `latest` dist-tag, is a host this lane may
- * install: a valid, stable (non-prerelease) version that satisfies the
- * declared peer range. Anything else is refused, never skipped over to an older
- * host: the caller turns a refusal into exit 4 (fail closed).
+ * install: a valid, stable (non-prerelease) version at or above the floor that
+ * satisfies the declared peer range. Anything else is refused, never skipped
+ * over to an older host: the caller turns a refusal into exit 4 (fail closed).
  *
  * @param {unknown} version
  * @param {string} peerRange
+ * @param {string} floor
  * @returns {boolean}
  */
-export function isAcceptableLatestHost(version, peerRange) {
+export function isAcceptableLatestHost(version, peerRange, floor) {
 	return (
 		typeof version === "string" &&
 		semver.valid(version) === version &&
 		semver.prerelease(version) === null &&
+		semver.gte(version, floor) &&
 		semver.satisfies(version, peerRange)
 	);
 }

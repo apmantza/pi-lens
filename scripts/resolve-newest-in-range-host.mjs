@@ -2,11 +2,12 @@
 /**
  * Resolve the host version install-smoke.yml's PR-gating "newest-in-range"
  * lane installs: the npm dist-tag `latest` of the package, which must be a
- * stable release that satisfies the range declared in this repo's package.json
- * `peerDependencies`. There is no hand-kept ceiling (#5749, maintainer
- * decision 2026-11-22: the upper end of the tested host range is always the
- * latest pi); the floor is install-smoke.yml's PI_HOST_FLOOR_VERSION, read by
- * the floor cell. See scripts/lib/resolve-newest-in-range-host.mjs for the
+ * stable release at or above the floor that satisfies the range declared in
+ * this repo's package.json `peerDependencies`. There is no hand-kept ceiling
+ * (#5749, maintainer decision 2026-11-22: the upper end of the tested host
+ * range is always the latest pi); the floor is install-smoke.yml's
+ * PI_HOST_FLOOR_VERSION, which the floor cell installs and this script reads
+ * from the env GitHub exports from the workflow (no second literal). See scripts/lib/resolve-newest-in-range-host.mjs for the
  * acceptance logic and why the peer range is read from package.json rather
  * than duplicated as a workflow input.
  *
@@ -23,18 +24,20 @@
  *
  * Exit codes:
  *   0  resolved a version
- *   2  infra failure — bad usage, unreadable package.json, or no declared
- *      peerDependencies range
+ *   2  infra failure — bad usage, unreadable package.json, no declared
+ *      peerDependencies range, or PI_HOST_FLOOR_VERSION unset or not an exact
+ *      version
  *   3  the registry was unreachable after retrying, or its answer carried no
  *      `latest` dist-tag (`::error::infra: …`)
- *   4  the `latest` dist-tag is a prerelease, or does not satisfy the
- *      declared peerDependencies range
+ *   4  the `latest` dist-tag is a prerelease, is below the floor, or does not
+ *      satisfy the declared peerDependencies range
  */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import { retryWithBackoff } from "./lib/retry.mjs";
 import {
 	isAcceptableLatestHost,
+	readFloorEnv,
 	readPeerRange,
 } from "./lib/resolve-newest-in-range-host.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
@@ -105,6 +108,14 @@ export async function main(argv, env) {
 		return;
 	}
 
+	let floor;
+	try {
+		floor = readFloorEnv(env);
+	} catch (err) {
+		fail(2, err instanceof Error ? err.message : String(err));
+		return;
+	}
+
 	const retried = await retryWithBackoff(
 		() => Promise.resolve(readLatestOnce(packageName)),
 		{ attempts: ATTEMPTS, backoffMs: backoffMsFrom(env) },
@@ -118,10 +129,10 @@ export async function main(argv, env) {
 	}
 
 	const resolved = retried.value;
-	if (!isAcceptableLatestHost(resolved, peerRange)) {
+	if (!isAcceptableLatestHost(resolved, peerRange, floor)) {
 		fail(
 			4,
-			`the "latest" dist-tag of ${packageName} is "${resolved}", which is not a stable release satisfying peerDependencies range "${peerRange}"`,
+			`the "latest" dist-tag of ${packageName} is "${resolved}", which is not a stable release at or above the floor ${floor} satisfying peerDependencies range "${peerRange}"`,
 		);
 		return;
 	}

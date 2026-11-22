@@ -45,12 +45,14 @@ afterEach(() => {
 
 // Pure acceptance logic — no live registry, no fs, no child_process (#5749).
 describe("isAcceptableLatestHost (#5749)", () => {
+	const FLOOR = "0.86.1";
+
 	// The wildcard peer range is this repo's real pi-coding-agent peer spec, so
 	// the lane's upper end is whatever the registry's `latest` is, with no
 	// ceiling in between.
 	it("accepts the newest stable release against the wildcard peer range", () => {
-		expect(isAcceptableLatestHost("1.6.0", "*")).toBe(true);
-		expect(isAcceptableLatestHost("9.9.9", "*")).toBe(true);
+		expect(isAcceptableLatestHost("1.6.0", "*", FLOOR)).toBe(true);
+		expect(isAcceptableLatestHost("9.9.9", "*", FLOOR)).toBe(true);
 	});
 
 	// Recurrence prevented (#5749): "no prereleases" is the acceptance, and a
@@ -59,15 +61,27 @@ describe("isAcceptableLatestHost (#5749)", () => {
 	// carries a prerelease comparator on the same version tuple, so only the
 	// second row reaches the explicit check.
 	it("refuses a prerelease even when the range admits prereleases", () => {
-		expect(isAcceptableLatestHost("1.7.0-beta.1", "*")).toBe(false);
-		expect(isAcceptableLatestHost("1.7.0-beta.1", ">=1.7.0-beta.0")).toBe(
-			false,
-		);
+		expect(isAcceptableLatestHost("1.7.0-beta.1", "*", FLOOR)).toBe(false);
+		expect(
+			isAcceptableLatestHost("1.7.0-beta.1", ">=1.7.0-beta.0", FLOOR),
+		).toBe(false);
+	});
+
+	// #5749 review F1: the boundary is inclusive, and a stable version below it
+	// is refused even though the peer range alone admits it.
+	it("refuses a version below the floor and accepts the floor itself", () => {
+		expect(isAcceptableLatestHost("0.1.0", "*", FLOOR)).toBe(false);
+		expect(isAcceptableLatestHost("0.86.0", "*", FLOOR)).toBe(false);
+		expect(isAcceptableLatestHost("0.86.1", "*", FLOOR)).toBe(true);
 	});
 
 	it("refuses a version outside the declared peer range", () => {
-		expect(isAcceptableLatestHost("1.6.0", "^1.5.0 || ^0.99.0")).toBe(true);
-		expect(isAcceptableLatestHost("2.0.0", "^1.5.0 || ^0.99.0")).toBe(false);
+		expect(isAcceptableLatestHost("1.6.0", "^1.5.0 || ^0.99.0", FLOOR)).toBe(
+			true,
+		);
+		expect(isAcceptableLatestHost("2.0.0", "^1.5.0 || ^0.99.0", FLOOR)).toBe(
+			false,
+		);
 	});
 
 	// Fail closed on what the gate does not recognize (principles §1): a value
@@ -75,7 +89,7 @@ describe("isAcceptableLatestHost (#5749)", () => {
 	it.each([undefined, null, 160, "", "v1.6.0", "1.6", "latest", " 1.6.0"])(
 		"refuses the unrecognized value %j",
 		(value) => {
-			expect(isAcceptableLatestHost(value, "*")).toBe(false);
+			expect(isAcceptableLatestHost(value, "*", FLOOR)).toBe(false);
 		},
 	);
 });
@@ -162,6 +176,9 @@ function runCli(
 			// backoff timing is not this test's subject; the retry COUNT and
 			// eventual outcome are.
 			RESOLVE_NEWEST_RETRY_BACKOFF_MS: "0,0,0",
+			// The workflow's own env value (install-smoke.yml's
+			// PI_HOST_FLOOR_VERSION), which GitHub exports to every step.
+			PI_HOST_FLOOR_VERSION: "0.86.1",
 			...extraEnv,
 		},
 		encoding: "utf-8",
@@ -247,6 +264,48 @@ describe("resolve-newest-in-range-host.mjs CLI (#2613, #5749)", () => {
 		expect(e.stdout).toBe("");
 		expect(e.stderr).toMatch(/peerDependencies range/);
 	});
+
+	// Recurrence prevented (#5749 review F1): a stable `latest` below the floor
+	// (a mis-tagged or republished old version) passed the stable-and-peer-range
+	// check, so the lane installed a host pi-lens does not support and printed it
+	// as the newest. The floor is the one value PI_HOST_FLOOR_VERSION, read from
+	// the env GitHub exports from the workflow, never a second literal here.
+	it("exits 4 naming the floor when the latest dist-tag is below it", () => {
+		const root = fixtureRoot("*");
+		const { binDir } = stubNpm(root, {
+			distTagsJson: JSON.stringify({ latest: "0.1.0" }),
+			versionsJson: JSON.stringify(["0.1.0", "0.86.1", "1.6.0"]),
+		});
+		const outputFile = path.join(root, "gh-output");
+		fs.writeFileSync(outputFile, "");
+		const e = runCliFailing(root, binDir, { GITHUB_OUTPUT: outputFile });
+		expect(e.status).toBe(4);
+		expect(e.stdout).toBe("");
+		expect(e.stderr).toMatch(/at or above the floor 0\.86\.1/);
+		expect(fs.readFileSync(outputFile, "utf-8")).toBe("");
+	});
+
+	it("accepts a latest dist-tag exactly at the floor", () => {
+		const root = fixtureRoot("*");
+		const { binDir } = stubNpm(root, {
+			distTagsJson: JSON.stringify({ latest: "0.86.1" }),
+		});
+		expect(runCli(root, binDir).trim()).toBe("0.86.1");
+	});
+
+	it.each(["", "latest", "0.86"])(
+		"exits 2 when PI_HOST_FLOOR_VERSION is %j, never resolving without a floor",
+		(floor) => {
+			const root = fixtureRoot("*");
+			const { binDir } = stubNpm(root, {
+				distTagsJson: JSON.stringify({ latest: "1.6.0" }),
+			});
+			const e = runCliFailing(root, binDir, { PI_HOST_FLOOR_VERSION: floor });
+			expect(e.status).toBe(2);
+			expect(e.stdout).toBe("");
+			expect(e.stderr).toMatch(/PI_HOST_FLOOR_VERSION/);
+		},
+	);
 
 	it("exits 2 when the package has no declared peerDependencies range", () => {
 		const root = fs.mkdtempSync(
