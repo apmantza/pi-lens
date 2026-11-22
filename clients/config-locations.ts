@@ -209,6 +209,34 @@ export function configSearchDirs(
 }
 
 /**
+ * Whether a canonical `.pi-lens.json` sits in the project chain of `startDir`:
+ * the layered project loader's own chain (`configSearchDirs` with
+ * `stopAtGitRoot`), so a file in a folder above the repo does not count.
+ *
+ * The ONE statement of the legacy rule every reader follows (#5740, the #5291
+ * decision): once a canonical file is in the chain, a legacy `pi-lens.json`
+ * contributes no value; a chain with none keeps reading the legacy files. The
+ * LSP loader is the documented exception and does not ask. A bare file probe per
+ * directory and no cache: the answer is the file system's now, so a reader
+ * asking it cannot disagree with a canonical file created a moment ago.
+ */
+export function holdsCanonicalProjectConfig(
+	startDir: string,
+	homeDir: string = os.homedir(),
+): boolean {
+	return configSearchDirs(startDir, homeDir, true).some((dir) => {
+		const candidate = path.join(dir, CANONICAL_PROJECT_CONFIG_FILE);
+		// A FILE, as project discovery stats it: a directory named `.pi-lens.json`
+		// is no canonical config, so it must not hide a valid legacy file.
+		return (
+			fs.existsSync(candidate) &&
+			fs.statSync(candidate, { throwIfNoEntry: false })?.isFile() === true &&
+			!isResolvedGlobalConfigPath(candidate)
+		);
+	});
+}
+
+/**
  * The machine-global pi-lens root is `~/.pi-lens/`, relocated by
  * `PI_LENS_HOME` — owned by `getGlobalPiLensDir()` in `file-utils.ts` and NOT
  * re-derived here: that root is machine STATE (tools, logs, registries),

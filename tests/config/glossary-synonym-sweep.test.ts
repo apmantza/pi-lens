@@ -1095,7 +1095,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/config-core/normalize.ts": 22,
 		// 26 -> 27 (#5291): `configSearchDirs` joins `.git` onto each walked dir to
 		// find the git root — the `node:path` host module, not a delivery lane.
-		"clients/config-locations.ts": 27,
+		// 27 -> 28 (#5740): `holdsCanonicalProjectConfig` joins the canonical
+		// basename onto each walked dir, the same host module.
+		"clients/config-locations.ts": 28,
 		"clients/config-resolve.ts": 8,
 		"clients/dead-code-client.ts": 5,
 		"clients/dead-code-logger.ts": 3,
@@ -1499,7 +1501,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 17 -> 25 (#5291): the layered read and the discovery stamps build and
 		// probe candidate files through `path.join` / `path.resolve` — the
 		// `node:path` host module, not a delivery lane.
-		"clients/project-lens-config.ts": 25,
+		// 25 -> 27 (#5740): `loadPiLensConfigInDir` reads the marker's `path` and
+		// takes its `path.basename` to tell a legacy name from the canonical one.
+		"clients/project-lens-config.ts": 27,
 		"clients/project-report.ts": 5,
 		"clients/project-snapshot.ts": 15,
 		// 18 -> 22 (#3871 r2, r3): ambient-environment containment uses four

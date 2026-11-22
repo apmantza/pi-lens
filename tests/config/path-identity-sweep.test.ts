@@ -133,7 +133,7 @@ const PYTHON_RELATIVE_LEVELS =
 	"a Python relative import climbs a COUNTED number of package levels (the leading dots), not to a marker: `from ..x import y` is `dots - 1` parents of the importing file's directory by package nesting, which the language defines on the spelled module path, so there is no ceiling or root to compare and no identity to take";
 
 const ANCHOR_PREFIX_COUNTED_CLIMB =
-	"clients/dispatch/rule-policy.ts anchorPrefix climbs a COUNTED number of segments: one dirname per segment of the config location's relativePath (its spelling below the directory that owns the file, such as `.pi-lens.json`), so the owning directory is a count fixed by that location, not a walk to a marker or a root; walkUpDirs stops on a marker or a root and cannot express the count, and the result is a spelled prefix for ignorePaths anchoring, with no identity taken";
+	"clients/dispatch/rule-policy.ts ignoreBaseDir climbs a COUNTED number of segments: one dirname per segment of the config location's relativePath (its spelling below the directory that owns the file, such as `.pi-lens.json`), so the owning directory is a count fixed by that location, not a walk to a marker or a root; walkUpDirs stops on a marker or a root and cannot express the count, and the result only names the declaring directory for ignorePaths anchoring; the identity comparisons on it are made by the seam's own predicates (isUnderDir, pathsEqual), not by this climb";
 
 interface Pin {
 	sites: number;
@@ -349,7 +349,7 @@ const PINS: Readonly<Record<string, Pin>> = {
 	}, // :415
 	"clients/dispatch/rule-policy.ts#hand-rolled-upward-walk": {
 		sites: 1,
-		identities: "70c171ce33765a1f",
+		identities: "1ae0a4ac3f69be4a",
 		reason: ANCHOR_PREFIX_COUNTED_CLIMB,
 	}, // :176
 };
