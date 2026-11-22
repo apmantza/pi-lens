@@ -37,6 +37,9 @@
 import * as fs from "node:fs";
 
 import { BoundedFifoMap } from "../../clients/bounded-cache.js";
+// A dependency leaf (no imports of its own), so loading it here, before any
+// test file's `vi.mock`, caches nothing a mock could need to replace.
+import { getProcessSingleton } from "../../clients/process-singletons.js";
 
 /**
  * Per-worker record cap (bounded observability, AGENTS.md shape 9): a runaway
@@ -45,8 +48,17 @@ import { BoundedFifoMap } from "../../clients/bounded-cache.js";
  */
 const MAX_VIOLATIONS = 20;
 
-/** The registry `clients/safe-spawn.ts` keeps on the process object. */
-const LIFETIME_STATE_KEY = Symbol.for("pi-lens.safe-spawn.lifetime-state");
+/**
+ * The registry `clients/safe-spawn.ts` keeps in the process-singleton
+ * container (`lifetimeState()`). The family, version and initializer must stay
+ * equal to production's: this guard is the cell's first creator in a worker, so
+ * production adopts the object wrapped here only while they match, and
+ * `tests/support/kill-guard-register-arm.test.ts` reds when they drift (shape
+ * 25, #5722 review F1: the guard kept wrapping the retired `process` slot and
+ * its register arm went dead without one test failing).
+ */
+const LIFETIME_FAMILY = "safe-spawn-lifetime";
+const LIFETIME_VERSION = 1;
 
 export interface KillGuardViolation {
 	/** "kill" = a signal was attempted; "register" = a pid entered the registry. */
@@ -167,16 +179,15 @@ export function installKillGuard(): void {
 		return originalKill(pid, signal as never);
 	}) as typeof process.kill;
 
-	// Seed the registry before `clients/safe-spawn.ts` is imported: its module
-	// scope does `process[KEY] ?? (process[KEY] = {...})`, so the object placed
-	// here is the one production writes to.
-	const host = process as typeof process & {
-		[LIFETIME_STATE_KEY]?: { pids: Set<number>; installed: boolean };
-	};
-	const state = (host[LIFETIME_STATE_KEY] ??= {
+	// Create the registry cell before `clients/safe-spawn.ts` first asks for it
+	// (`lifetimeState()` runs per spawn, never at module scope): production's
+	// `getProcessSingleton` then adopts the cell wrapped here. A test that calls
+	// `_resetProcessSingletonsForTests()` drops the cell and with it this arm
+	// for the rest of that file; the kill arm is unaffected.
+	const state = getProcessSingleton(LIFETIME_FAMILY, LIFETIME_VERSION, () => ({
 		pids: new Set<number>(),
 		installed: false,
-	});
+	}));
 	const originalAdd = state.pids.add.bind(state.pids);
 	state.pids.add = (pid: number) => {
 		if (!ownsPid(pid)) record("register", pid, "lifetime-registry");

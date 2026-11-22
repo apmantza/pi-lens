@@ -44,6 +44,7 @@ import { windowsExe } from "./process-snapshot.js";
 import { startSpawnUsageSampler } from "./resource-sampler.js";
 import { isToolInstallDisabled } from "./env-utils.js";
 import { DEFAULT_MAX_OUTPUT_BYTES } from "./spawn-output-cap.js";
+import { getProcessSingleton } from "./process-singletons.js";
 import { compareOrdinal } from "./string-utils.js";
 import {
 	type SpawnCooldownIdentity,
@@ -425,16 +426,13 @@ interface LifetimeCleanupState {
 
 // Vitest reloads modules inside a reused worker. Keep this registry on the
 // process so those module instances share one signal/exit listener set.
-const lifetimeStateKey = Symbol.for("pi-lens.safe-spawn.lifetime-state");
-const processWithLifetimeState = process as typeof process & {
-	[lifetimeStateKey]?: LifetimeCleanupState;
-};
-const lifetimeState =
-	processWithLifetimeState[lifetimeStateKey] ??
-	(processWithLifetimeState[lifetimeStateKey] = {
-		pids: new Set<number>(),
-		installed: false,
-	});
+function lifetimeState(): LifetimeCleanupState {
+	return getProcessSingleton<LifetimeCleanupState>(
+		"safe-spawn-lifetime",
+		1,
+		() => ({ pids: new Set<number>(), installed: false }),
+	);
+}
 
 /**
  * THE ownership predicate for every kill-by-raw-pid in this repo (#2042).
@@ -442,7 +440,7 @@ const lifetimeState =
  * A pid is signalable only when it is a LIVE DIRECT CHILD of this process.
  * `tests/clients/lsp/launch.test.ts` mocked `node:child_process` with a fake
  * child carrying the literal pid `2468`; `safeSpawnAsync` registered it in
- * `lifetimeState.pids`, the fake never emitted `close` so nothing removed it,
+ * `lifetimeState().pids`, the fake never emitted `close` so nothing removed it,
  * and at fork teardown `installLifetimeCleanup()` fired
  * `process.kill(-2468, "SIGKILL")`. On ~10 % of GitHub runners pid 2468 was
  * one of the job's own long-lived processes — that is the whole of #2042:
@@ -480,7 +478,7 @@ const lifetimeState =
  * the same question: a container or a hardened host can run Linux with no
  * `/proc` mounted, and there the per-pid read fails exactly the way a dead pid
  * does. Without this probe that silently refused every registration, so
- * `lifetimeState.pids` stayed empty and the host-exit tree kill stopped working
+ * `lifetimeState().pids` stayed empty and the host-exit tree kill stopped working
  * with no record anywhere.
  */
 const PROC_PPID_READABLE = ((): boolean => {
@@ -666,7 +664,7 @@ export function isOwnLiveChild(
 
 /**
  * Kill one registered pid's tree at host exit. Deliberately NOT re-checked
- * against `isOwnLiveChild` here: `lifetimeState.pids` has exactly one writer
+ * against `isOwnLiveChild` here: `lifetimeState().pids` has exactly one writer
  * (the registration below), that writer is now gated, and a second gate on
  * the same feeder would make BOTH mutation-inert — remove either one and the
  * other still blocks the kill, so neither would have a test that reds. The
@@ -705,14 +703,14 @@ function killPidTreeSync(pid: number): void {
 }
 
 function installLifetimeCleanup(): void {
-	if (lifetimeState.installed) return;
-	lifetimeState.installed = true;
+	if (lifetimeState().installed) return;
+	lifetimeState().installed = true;
 	process.once("exit", () => {
-		for (const pid of lifetimeState.pids) killPidTreeSync(pid);
+		for (const pid of lifetimeState().pids) killPidTreeSync(pid);
 	});
 	for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as NodeJS.Signals[]) {
 		process.once(signal, () => {
-			for (const pid of lifetimeState.pids) killPidTreeSync(pid);
+			for (const pid of lifetimeState().pids) killPidTreeSync(pid);
 			if (process.platform === "win32" && signal === "SIGHUP") {
 				// Windows emits SIGHUP when its console closes, but libuv cannot
 				// self-send it (process.kill(..., "SIGHUP") throws ENOSYS). The
@@ -2212,7 +2210,7 @@ export async function safeSpawnAsync(
 			// longer receive terminal signals directly, so the lifetime
 			// cleanup's signal forwarding IS their die-with-host path.
 			installLifetimeCleanup();
-			lifetimeState.pids.add(child.pid as number);
+			lifetimeState().pids.add(child.pid as number);
 		}
 
 		// #620: bracket this spawn's lifetime with a short-interval CPU/RSS poll
@@ -2659,7 +2657,7 @@ export async function safeSpawnAsync(
 			closed = true;
 			clearTimeout(timeoutId);
 			abortSignal?.removeEventListener("abort", onAbort);
-			if (child.pid) lifetimeState.pids.delete(child.pid);
+			if (child.pid) lifetimeState().pids.delete(child.pid);
 			void finalize(code, signal);
 		};
 
@@ -2823,7 +2821,7 @@ export async function safeSpawnAsync(
 			if (escalationTimer && !posixProcessGroup) {
 				clearTimeout(escalationTimer);
 			}
-			if (child.pid) lifetimeState.pids.delete(child.pid);
+			if (child.pid) lifetimeState().pids.delete(child.pid);
 			const resourceUsage = finishResourceUsage();
 			let failure: SpawnFailureKind = "spawn";
 			if (aborted) failure = "aborted";

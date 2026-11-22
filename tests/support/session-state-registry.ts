@@ -2117,7 +2117,7 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<
 		ownerKey:
 			"process-wide: the probe-home redirect decision is fixed by this process's cwd and environment",
 		reason:
-			"#2506: the globalThis-keyed probe-home-redirect RESOLUTION (the memoized decision plus the degradation event it produced), the same shape as process-singletons.ts's container just below — a PROCESS boundary, not a session one. getGlobalPiLensLogDir()'s redirect decision is fixed by cwd/env at process start and is memoized once, so a session_start reset would only hide the fact from every session after the first in the same probe process. The slot key is a module-scope Symbol.for constant, which the container scan does not count. #2516 round 2 moved getGlobalPiLensLogDir() and the whole redirect decision into this module: it is off file-utils.ts's import cycle, so its own bindings can never be observed mid-initialization the way a resolver living in file-utils.ts could.",
+			"#2506: the probe-home-redirect RESOLUTION (the memoized decision plus the degradation event it produced), one cell of process-singletons.ts's container (the `probe-home-resolution` family) — a PROCESS boundary, not a session one. getGlobalPiLensLogDir()'s redirect decision is fixed by cwd/env at process start and is memoized once, so a session_start reset would only hide the fact from every session after the first in the same probe process. #2516 round 2 moved getGlobalPiLensLogDir() and the whole redirect decision into this module: it is off file-utils.ts's import cycle, so its own bindings can never be observed mid-initialization the way a resolver living in file-utils.ts could.",
 	},
 	"process-bridge.ts": {
 		ownerKey:

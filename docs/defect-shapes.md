@@ -833,8 +833,24 @@ file-scoped worklist and receives no project-wide scanner output.
 25. **Module-scope uniqueness assumption:** process evaluation can create
     multiple copies; process-wide registries and latches use `getProcessSingleton`.
     Enforced by `tests/config/module-instance-coverage.test.ts` (partial: the
-    test-side duplicate-instance half; module-level registries without
-    `getProcessSingleton` are not censused).
+    test-side duplicate-instance half) and by
+    `tests/config/process-slot-sweep.test.ts` (every `globalThis`, `Symbol.for`,
+    `process` member write or `console` patch in `clients/`, `tools/`, `mcp/` and
+    `index.ts` outside the seam is a reasoned baseline row; shrink-only; partial:
+    a `process.env.<name>` write is admitted, and a module-level `let` latch
+    that guards a per-evaluation exit hook is not a slot). Census:
+    `PI_LENS_PRINT_PINS=1 npx vitest run tests/config/process-slot-sweep.test.ts`
+    prints one `ROW` per site (27 on master after the fold).
+    Consolidation verdict: folded onto `getProcessSingleton` for the four
+    hand-rolled slots that adopted any value under their key (spawn-timeout
+    cooldown, opaque baseline store, probe-home memo, safe-spawn lifetime
+    registry), which now share the seam's family version and its one bounded
+    reset record. The rest stay distributed, each with its reason in the sweep:
+    the cross-build bridges (the key is the API), the NDJSON logger (its own
+    legacy-adopting protocol), the background-write-drain registry (a test reset
+    must not drop a loaded copy's registration), class brands, platform reads and
+    console patches. The `__piLens*` flags in `handleSessionStart` are the one
+    live member left, sequenced behind the change that edits that file.
 
 30. **Load-time platform constant:** use a live platform read or an isolated
     fresh import for every platform branch test.

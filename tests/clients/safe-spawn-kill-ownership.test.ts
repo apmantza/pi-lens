@@ -29,16 +29,35 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
+import {
+	_resetProcessSingletonsForTests,
+	_seedProcessSingletonCellForTests,
+	getProcessSingleton,
+	getProcessSingletonResets,
+} from "../../clients/process-singletons.js";
 import { isOwnLiveChild } from "../../clients/safe-spawn.js";
 
 /** The registry `clients/safe-spawn.ts` shares across module instances. */
-const LIFETIME_STATE_KEY = Symbol.for("pi-lens.safe-spawn.lifetime-state");
+function lifetimeState(): { pids: Set<number>; installed: boolean } {
+	return getProcessSingleton("safe-spawn-lifetime", 1, () => ({
+		pids: new Set<number>(),
+		installed: false,
+	}));
+}
 
 function lifetimePids(): Set<number> {
-	const host = process as typeof process & {
-		[LIFETIME_STATE_KEY]?: { pids: Set<number>; installed: boolean };
-	};
-	return host[LIFETIME_STATE_KEY]?.pids ?? new Set<number>();
+	return lifetimeState().pids;
+}
+
+/** A real live child of this process (the ownership guard reads its /proc ppid). */
+async function spawnOwnedFixtureChild() {
+	const { spawn: realSpawn } =
+		await vi.importActual<typeof import("node:child_process")>(
+			"node:child_process",
+		);
+	return realSpawn(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], {
+		stdio: "ignore",
+	});
 }
 
 class FakeStream extends EventEmitter {
@@ -78,24 +97,11 @@ describe("lifetime signal cleanup (#3239)", () => {
 		const listenersBefore = new Map(
 			signalNames.map((signal) => [signal, process.listeners(signal)]),
 		);
-		const lifetimeState = process as typeof process & {
-			[LIFETIME_STATE_KEY]?: { pids: Set<number>; installed: boolean };
-		};
-		const state = lifetimeState[LIFETIME_STATE_KEY];
-		state?.pids.clear();
-		if (state) state.installed = false;
+		const state = lifetimeState();
+		state.pids.clear();
+		state.installed = false;
 		vi.resetModules();
-		const { spawn: realSpawn } =
-			await vi.importActual<typeof import("node:child_process")>(
-				"node:child_process",
-			);
-		const ownedChild = realSpawn(
-			process.execPath,
-			["-e", "setTimeout(() => {}, 5000)"],
-			{
-				stdio: "ignore",
-			},
-		);
+		const ownedChild = await spawnOwnedFixtureChild();
 		const ownedPid = ownedChild.pid;
 		if (ownedPid === undefined)
 			throw new Error("fixture child did not get a pid");
@@ -288,6 +294,92 @@ describe("kill-by-pid ownership (#2042)", () => {
 		// from the fix working (defect shape 7).
 		vi.doUnmock("node:fs");
 		vi.resetModules();
+	});
+
+	/**
+	 * Shape 25 (#2146): the lifetime registry lives in a process singleton, so a
+	 * second module evaluation shares the first one's pids and exit listeners and
+	 * a cell an older build shaped differently is discarded with one record,
+	 * where the hand-rolled `Symbol.for` slot it replaced threw `reading 'add'`
+	 * on the first lifetime-coupled spawn. The child is real (the ownership guard
+	 * reads its /proc ppid); the `child_process` double carries only its handle.
+	 */
+	describe("the lifetime registry is a process singleton (shape 25)", () => {
+		async function spawnCoupled(
+			ownedPid: number,
+		): Promise<() => Promise<void>> {
+			const child = new FakeChild(ownedPid);
+			let spawned!: () => void;
+			const hasSpawned = new Promise<void>((resolve) => {
+				spawned = resolve;
+			});
+			vi.doMock("node:child_process", () => ({
+				spawn: vi.fn(() => {
+					queueMicrotask(spawned);
+					return child;
+				}),
+				spawnSync: vi.fn(() => ({ status: 0, stdout: "", stderr: "" })),
+				execSync: vi.fn(() => ""),
+				execFileSync: vi.fn(() => ""),
+			}));
+			vi.resetModules();
+			const { safeSpawnAsync } = await import("../../clients/safe-spawn.js");
+			const pending = safeSpawnAsync("which", ["node"], {
+				lifetimeCoupled: true,
+				timeout: 50_000,
+			});
+			await hasSpawned;
+			return async () => {
+				child.emit("close", 0, null);
+				await pending;
+			};
+		}
+
+		async function withOwnedChild(
+			run: (ownedPid: number) => Promise<void>,
+		): Promise<void> {
+			const owned = await spawnOwnedFixtureChild();
+			if (owned.pid === undefined)
+				throw new Error("fixture child did not get a pid");
+			try {
+				await run(owned.pid);
+			} finally {
+				owned.kill("SIGKILL");
+				lifetimeState().pids.clear();
+				_resetProcessSingletonsForTests();
+			}
+		}
+
+		it("a second module evaluation shares the pids and the one exit listener", async () => {
+			await withOwnedChild(async (ownedPid) => {
+				const settleFirst = await spawnCoupled(ownedPid);
+				expect([...lifetimePids()]).toContain(ownedPid);
+				const listenersAfterFirst = process.listeners("exit").length;
+				const settleSecond = await spawnCoupled(ownedPid);
+				expect(process.listeners("exit")).toHaveLength(listenersAfterFirst);
+				expect(lifetimeState().installed).toBe(true);
+				await settleSecond();
+				await settleFirst();
+			});
+		});
+
+		it("discards a cell of an older version and registers the pid in a fresh one", async () => {
+			await withOwnedChild(async (ownedPid) => {
+				_seedProcessSingletonCellForTests("safe-spawn-lifetime", {
+					schema: "pi-lens.process-singletons",
+					version: 0,
+					value: { shapedByAnOlderBuild: true },
+				});
+				const settle = await spawnCoupled(ownedPid);
+				expect([...lifetimePids()]).toContain(ownedPid);
+				expect(
+					getProcessSingletonResets().filter(
+						(entry) => entry.family === "safe-spawn-lifetime",
+					),
+				).toHaveLength(1);
+				await settle();
+			});
+		});
 	});
 
 	it("refuses a malformed pid at every site", () => {

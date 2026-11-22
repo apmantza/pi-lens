@@ -60,6 +60,7 @@ import {
 	realpathOrResolve,
 } from "./path-utils.js";
 import { freshnessFromMtime } from "./freshness.js";
+import { getProcessSingleton } from "./process-singletons.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { createSingleFlight } from "./single-flight.js";
 import { truncatedByOutputCap } from "./spawn-output-cap.js";
@@ -729,19 +730,17 @@ function recordBaselineLoss(cause: keyof typeof BASELINE_LOSS_REASONS): void {
 	});
 }
 
-const globalStoreSymbol = Symbol.for("pi-lens:opaque-snapshot-store");
-
-interface GlobalSlot {
-	store?: OpaqueBaselineStore;
-}
-const globalSlot = globalThis as typeof globalThis & Record<symbol, GlobalSlot>;
-
+/**
+ * The one pending-baseline store of the process: `tool_call` records it in one
+ * module evaluation and `tool_result` takes it in another, so it lives in a
+ * process singleton rather than module scope.
+ */
 export function getOpaqueBaselineStore(): OpaqueBaselineStore {
-	const existing = globalSlot[globalStoreSymbol]?.store;
-	if (existing) return existing;
-	const created = new OpaqueBaselineStore();
-	globalSlot[globalStoreSymbol] = { store: created };
-	return created;
+	return getProcessSingleton(
+		"opaque-baseline-store",
+		1,
+		() => new OpaqueBaselineStore(),
+	);
 }
 
 const gitRepoMemo = new Map<string, boolean>();

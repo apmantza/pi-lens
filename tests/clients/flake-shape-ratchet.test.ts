@@ -1415,6 +1415,9 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// tree kill and the kill guard are tested against (a self-exiting mid
 	// process, a root forking during the kill, a reparented orphan); the
 	// guard's verdict reads the kernel's PPid, which no double has.
+	// 7 -> 8 in #5722 round 2: one real `safeSpawnAsync` child shows that the
+	// lifetime registry the guard wraps is the cell production registers in; a
+	// double carries no pid the ownership oracle can read.
 	"real-process-spawn:real-harness/child-exit.test.ts": {
 		detector: "real-process-spawn",
 		reason:

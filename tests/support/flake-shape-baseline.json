@@ -128,7 +128,7 @@
 		"packaging-pack-manifest.test.ts": 6,
 		"real-harness/bridge-reload-ts.test.ts": 1,
 		"real-harness/bridge-reload.test.ts": 1,
-		"real-harness/child-exit.test.ts": 7,
+		"real-harness/child-exit.test.ts": 8,
 		"real-harness/clean-verdict.test.ts": 1,
 		"real-harness/diagnostic-provenance.test.ts": 7,
 		"real-harness/fixture-shape.test.ts": 1,
