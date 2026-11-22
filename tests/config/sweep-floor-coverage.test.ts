@@ -181,6 +181,9 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 	"tests/clients/installer/opengrep-pack-refresh-4765.test.ts":
 		"refresh behavior cases; it lists the rule-pack cache directory once to assert no " +
 		"candidate file outlives a refresh, not a production population sweep",
+	"tests/clients/installer/archive-install.integration.test.ts":
+		"archive install behavior cases; its #5701 cases list the tools directory once to assert no " +
+		"partial download outlives a failed stream, not a production population sweep",
 	"tests/clients/instance-reaper-prune-concurrency.test.ts":
 		"concurrency cases, not a production population sweep",
 	"tests/clients/instance-reaper-backstop.test.ts":

@@ -1441,6 +1441,11 @@ export type DegradationKind =
 	 * was structurally always zero.
 	 */
 	| "madge-skip-visibility-unavailable"
+	/** `managed-tool-download`: #5701: a managed release, Maven, or archive
+	 * payload download failed after its bounded stream was started. The
+	 * installer records the tool id and typed download failure once per attempt.
+	 */
+	| "managed-tool-download"
 	/**
 	 * `managed-tool-install`: #5561: a managed pip-tool install threw after
 	 * its strategy ladder was exhausted. `clients/installer/index.ts` records
