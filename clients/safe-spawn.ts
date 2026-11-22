@@ -41,7 +41,12 @@ import {
 	sessionRepositoryJudge,
 	unadmittedSpawnRoot,
 } from "./session-repository.js";
-import { windowsExe } from "./process-snapshot.js";
+import {
+	OWNER_TAG_ENV,
+	formatOwnerTag,
+	ownProcessStartIfKnown,
+	windowsExe,
+} from "./process-snapshot.js";
 import { startSpawnUsageSampler } from "./resource-sampler.js";
 import { isToolInstallDisabled } from "./env-utils.js";
 import { DEFAULT_MAX_OUTPUT_BYTES } from "./spawn-output-cap.js";
@@ -1910,6 +1915,16 @@ export async function safeSpawnAsync(
 	const cooldown =
 		options?.cooldown ??
 		(options?.ignoreAmbientSignal ? undefined : spawnCooldownScope.getStore());
+	// #5703: every safe-spawn child carries the host incarnation that the
+	// shared orphan reaper can verify after this host crashes. This is derived
+	// once per call, before the child exists, and is not inherited from a
+	// possibly stale PI_LENS_OWNER supplied by a parent host.
+	const ownerStart =
+		process.platform === "win32" ? undefined : ownProcessStartIfKnown();
+	const ownerTag =
+		ownerStart === undefined
+			? undefined
+			: formatOwnerTag({ pid: process.pid, start: ownerStart });
 
 	const result = await new Promise<SpawnResult>((resolve) => {
 		// Check for early abort
@@ -2167,7 +2182,10 @@ export async function safeSpawnAsync(
 			resolve(trustRefusalResult(command, admission.executable));
 			return;
 		}
-		const spawnEnv = admission.env;
+		const spawnEnv = {
+			...admission.env,
+			...(ownerTag === undefined ? {} : { [OWNER_TAG_ENV]: ownerTag }),
+		};
 		// The cwd handed to the CHILD process doesn't need OUR validation —
 		// Windows resolves it natively, exactly as it did before #817 ever
 		// touched this file. A drive-relative cwd (`D:work`) without a
@@ -2346,6 +2364,24 @@ export async function safeSpawnAsync(
 			usageSampler = { stop: () => null };
 		}
 		const resourceLabel = options?.resourceLabel ?? command;
+		const registryChildPid = child.pid;
+		if (registryChildPid !== undefined) {
+			void import("./instance-registry.js")
+				.then(({ recordLspChild }) =>
+					recordLspChild({
+						pid: registryChildPid,
+						serverId: `safe-spawn:${resourceLabel}`,
+						command: spawnCmd,
+					}),
+				)
+				.catch(() => {});
+		}
+		const removeRegistryChild = (): void => {
+			if (registryChildPid === undefined) return;
+			void import("./instance-registry.js")
+				.then(({ removeLspChild }) => removeLspChild(registryChildPid))
+				.catch(() => {});
+		};
 
 		// #3375 round 2 (H3384-1). `killTree`'s promise is AWAITED by `finalize`
 		// from a `void finalize(...)` callback, FIRED AND FORGOTTEN by `onAbort`
@@ -2797,6 +2833,7 @@ export async function safeSpawnAsync(
 			// widening it to the whole wait.
 			resolved = true;
 			await waitForPipeIdle();
+			removeRegistryChild();
 			const resourceUsage = finishResourceUsage();
 
 			const outputInfo = {
@@ -2924,6 +2961,7 @@ export async function safeSpawnAsync(
 				clearTimeout(escalationTimer);
 			}
 			if (child.pid) lifetimeState().pids.delete(child.pid);
+			removeRegistryChild();
 			const resourceUsage = finishResourceUsage();
 			let failure: SpawnFailureKind = "spawn";
 			if (aborted) failure = "aborted";
