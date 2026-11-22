@@ -1273,6 +1273,12 @@
 					"constants": [
 						"QueuedClose"
 					]
+				},
+				{
+					"reason": "Deferred: no single as-built value yet. This family's `expect: pass` configs set it both ways (a pass config here is not an as-built claim), so the family must first name its as-built value before a pin can agree with it.",
+					"constants": [
+						"BudgetClose"
+					]
 				}
 			]
 		},

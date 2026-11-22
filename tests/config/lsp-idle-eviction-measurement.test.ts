@@ -8,7 +8,8 @@
  *    with no per-server evidence, so the eviction population was whatever a
  *    human remembered. The probe population is derived from `LSP_SERVERS`;
  *    this file is red if a registry server can go unmeasured without an
- *    admitted reason, or if a server the registry declares `transparent` sits
+ *    admitted reason, or if a server the registry evicts (any declaration but
+ *    `resident` since #5700) sits
  *    vetoed in the committed measurement.
  *  - a nightly step added after the docs diff (or omitted from the refresh
  *    PR's `add-paths`) regenerates a document that nothing compares, the
@@ -274,7 +275,7 @@ describe("committed idle-eviction measurement (#3645)", () => {
 		}
 	});
 
-	it("shows no server declared transparent that the measurement vetoes", () => {
+	it("shows no server the registry evicts that the measurement vetoes (#5700: any but resident)", () => {
 		const declared = new Map(LSP_SERVERS.map((s) => [s.id, s.idleEviction]));
 		const drift = idleEvictionDrift(
 			(rows ?? []).map((r) => ({
@@ -404,8 +405,8 @@ describe("nightly wiring of the idle-eviction document (#3645)", () => {
 			'--body-file "$RUNNER_TEMP/lsp-idle-eviction-drift.md"',
 		);
 		expect(notify.run).toContain("scripts/upsert-tracking-issue.mjs");
-		// Review round 1 F3: the issue closes on `clean` only (every transparent
-		// server eligible), never on the mere absence of drift.
+		// Review round 1 F3: the issue closes on `clean` only (every evicted
+		// server eligible, #5737), never on the mere absence of drift.
 		expect((notify.run ?? "").match(/--clean\b/g)).toHaveLength(1);
 		expect(notify.run).toMatch(
 			/elif \[ "\$STATE" = clean \]; then\n\s*node scripts\/upsert-tracking-issue\.mjs[^\n]*--clean --close-when-clean/,

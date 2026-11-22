@@ -1606,6 +1606,13 @@
       "spawnSync:ps via tests/support/process-tree.ts:87"
     ]
   },
+  "mcp/lsp-resident-budget-5700.smoke.test.ts": {
+    "reason": "#5700: drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts), and that child starts a real fake language server; the claim is what that server receives (didOpen/didClose) and when the MCP host releases it, which a mocked child_process cannot show. The ps route is the harness's teardown process-tree walk.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
   "mcp/module-report.smoke.test.ts": {
     "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
     "routes": [

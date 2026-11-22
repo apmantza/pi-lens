@@ -333,15 +333,15 @@ describe("session degradation ledger", () => {
 	});
 
 	// #3952 review (F4): both idle-eviction kinds are the POLICY answering, not
-	// a timer that failed. The decline fires for every non-`transparent` server
-	// on every acquisition (32 of the 49 built-ins), so a `⚠` per server would
+	// a timer that failed. The decline fires for every `resident` server on
+	// every acquisition (#5700; the five held indexers), so a `⚠` per server would
 	// mark a nominal session: a tally, like a routine log rotation. Driven
 	// through the ledger's own write path, so the render reads the real record.
 	it("renders both idle-eviction kinds informationally, with no warning marker", () => {
 		recordDegradationOnce({
 			kind: "lsp-idle-eviction-declined",
 			subject: "typos",
-			reason: "no idle-eviction timer: declared unmeasured",
+			reason: "no idle-eviction timer: declared resident",
 		});
 		recordDegradation({
 			kind: "lsp-idle-eviction",
