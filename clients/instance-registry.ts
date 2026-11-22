@@ -1085,6 +1085,11 @@ const EXIT_REMOVAL_VERSION = 1;
  *
  * An unconfirmed kill keeps the entry, with its children, for the next
  * session's reaper; the entry is that record.
+ *
+ * A non-zero exit code keeps it too (#5733 r4): an uncaught exception, pi's
+ * crash handler and a failed worker exit that way, and the next session's
+ * vanished-instance marker reads a dead pid's entry as the evidence that the
+ * process ended without shutdown. The children still end first.
  */
 function armExitRemoval(): void {
 	const state = getProcessSingleton(
@@ -1095,13 +1100,13 @@ function armExitRemoval(): void {
 	state.target = registryPath();
 	if (state.armed) return;
 	state.armed = true;
-	process.once("exit", () => {
-		if (state.target) removeOwnEntryAtExit(state.target);
+	process.once("exit", (code) => {
+		if (state.target) removeOwnEntryAtExit(state.target, code);
 	});
 }
 
-function removeOwnEntryAtExit(target: string): void {
-	if (!endHeldChildren() || !fs.existsSync(target)) return;
+function removeOwnEntryAtExit(target: string, code: number): void {
+	if (!endHeldChildren() || code !== 0 || !fs.existsSync(target)) return;
 	const selfStart = ownProcessStartIfKnown();
 	withInstanceRegistryLockSync(target, () => {
 		const next = withoutOwnEntry(readRegistrySync(target), selfStart);

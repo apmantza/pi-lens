@@ -25,7 +25,8 @@
  *   `process.exit` with its servers alive, and before the fix left its
  *   `instances.json` row behind with them. It reads the same `lsp.json`, so
  *   its server is the stubborn fixture too; that server and the worker's row
- *   are gone once it exits.
+ *   are gone once it exits. Its disabled `typos`, overridden to the fixture
+ *   as well, never starts (#5734).
  *
  * Linux only: the cases read process liveness and adopt the server for
  * cleanup through `/proc` (`tests/support/kill-guard.ts`). lane: unit (Linux).
@@ -71,18 +72,22 @@ afterEach(() => {
 	for (const cleanup of cleanups.splice(0)) cleanup();
 });
 
-/** A Cargo project whose `rust` server is the stubborn fixture. */
+/** A Cargo project whose `rust` server is the stubborn fixture. `typos` is
+ *  the fixture too, under its own pid file, and disabled: a `.rs` file
+ *  launches it unless the deny applies (#5734). */
 function stubbornRustProject() {
 	const env = setupTestEnvironment("lsp-host-exit-5699-");
 	cleanups.push(env.cleanup);
 	const home = path.join(env.tmpDir, "home");
 	fs.mkdirSync(home);
 	const pidFile = path.join(env.tmpDir, "server.pid");
+	const deniedPidFile = path.join(env.tmpDir, "denied.pid");
 	fs.writeFileSync(
 		path.join(home, "lsp.json"),
 		JSON.stringify({
 			serverOverrides: {
 				rust: { command: [process.execPath, STUBBORN_SERVER, pidFile] },
+				typos: { command: [process.execPath, STUBBORN_SERVER, deniedPidFile] },
 			},
 			disabledServers: ["ast-grep", "typos", "opengrep"],
 		}),
@@ -95,7 +100,7 @@ function stubbornRustProject() {
 	);
 	const file = path.join(project, "src", "main.rs");
 	fs.writeFileSync(file, "fn main() {}\n");
-	return { home, project, file, pidFile };
+	return { home, project, file, pidFile, deniedPidFile };
 }
 
 function startHost(
@@ -262,7 +267,15 @@ describe.runIf(process.platform === "linux")(
 			// installed. analyzeFileFresh settles on the worker's close, so the
 			// worker has exited, and its exit hook has run, by now.
 			const pids = readPids(ws.pidFile);
-			expect(pids).toBeDefined();
+			const denied = readPids(ws.deniedPidFile);
+			if (denied) servers.push(denied.server);
+			// #5734: the worker applies the whole config, the rust override and
+			// the typos deny. The deny is evidence only beside the override: a
+			// worker that read no config launches neither stub.
+			expect({
+				overrideLaunched: pids !== undefined,
+				deniedLaunched: denied !== undefined,
+			}).toEqual({ overrideLaunched: true, deniedLaunched: false });
 			const { server, host: worker } = pids as { server: number; host: number };
 			expect(realIsPidAlive(worker)).toBe(false);
 

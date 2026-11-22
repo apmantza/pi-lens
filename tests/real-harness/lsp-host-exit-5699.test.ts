@@ -23,6 +23,8 @@
  *   inside `session_shutdown`, after pi-lens's teardown ran and before any
  *   `exit` listener. The server survives that pi (the stated residual), and
  *   the next pi session's start reaps it from the row the quit kept.
+ * - crash: an uncaught exception before any language server starts (#5733
+ *   r4). pi's row stays, and the next session logs it as vanished.
  *
  * Linux only: the cases read process liveness and adopt the server for
  * cleanup through `/proc` (`tests/support/kill-guard.ts`).
@@ -53,6 +55,7 @@ const KILL_ON_SHUTDOWN = path.join(
 	FIXTURE,
 	"kill-on-shutdown-extension.mjs",
 );
+const CRASH = path.join(realHarnessFixtureRoot, FIXTURE, "crash-extension.mjs");
 const DEATH_WAIT_MS = 10_000;
 const REAP_WAIT_MS = 30_000;
 
@@ -255,6 +258,68 @@ describe.runIf(process.platform === "linux")(
 					expect(await survives(pids.server, REAP_WAIT_MS)).toBe(false);
 				},
 			);
+		}, 240_000);
+
+		// #5733 r4 F2: the exit hook also ran after an uncaught exception and
+		// removed the crashed pi's row, so the next session had no dead row to
+		// report as vanished. The crash comes before any language server starts:
+		// the LSP client's crash guard is not installed yet, so Node's default
+		// handler runs the exit listeners with code 1, as pi's interactive crash
+		// handler does with its process.exit(1).
+		it("keeps a crashed pi's row for the next session's vanished marker", async () => {
+			const ws = stubbornHome();
+			const host = await withRealPi(
+				{
+					fixture: FIXTURE,
+					script: "script.json",
+					home: ws.home,
+					project: ws.project,
+					env: ENV,
+					args: ARGS,
+					extensions: [CRASH],
+				},
+				async (pi) => {
+					// session_start registers pi without awaiting the write.
+					const registered = await vi.waitFor(
+						() => {
+							const [row] = registryRows(ws.home);
+							if (!row) throw new Error("pi's row is not written yet");
+							return row.pid;
+						},
+						{ timeout: 30_000, interval: 50 },
+					);
+					// The command returns before its timer throws, so pi answers.
+					await pi.prompt("/real-harness-crash");
+					expect(await survives(registered, DEATH_WAIT_MS)).toBe(false);
+					return registered;
+				},
+			);
+			expect(registryRows(ws.home).map((row) => row.pid)).toEqual([host]);
+
+			const log = path.join(ws.home, "sessionstart.log");
+			const marker = () =>
+				(fs.existsSync(log) ? fs.readFileSync(log, "utf-8") : "")
+					.split("\n")
+					.find((line) => line.includes(`previous instance pid ${host} `));
+			await withRealPi(
+				{
+					fixture: FIXTURE,
+					script: "script.json",
+					home: ws.home,
+					project: ws.project,
+					env: ENV,
+					args: ARGS,
+				},
+				async () => {
+					await vi.waitFor(
+						() => {
+							if (!marker()) throw new Error("no vanished marker yet");
+						},
+						{ timeout: REAP_WAIT_MS, interval: 100 },
+					);
+				},
+			);
+			expect(marker()).toMatch(/exited without shutdown$/);
 		}, 240_000);
 	},
 );
