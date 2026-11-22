@@ -527,6 +527,7 @@ describe("kill-guard ownership (#2042)", () => {
 			const registered = await waitFor(
 				() => [...pids],
 				(held) => held.length > 0,
+				{ timeoutMs: 3_000 },
 			);
 			expect((await pending).status).toBe(0);
 			expect({

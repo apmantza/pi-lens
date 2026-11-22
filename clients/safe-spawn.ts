@@ -440,7 +440,7 @@ function lifetimeState(): LifetimeCleanupState {
  * A pid is signalable only when it is a LIVE DIRECT CHILD of this process.
  * `tests/clients/lsp/launch.test.ts` mocked `node:child_process` with a fake
  * child carrying the literal pid `2468`; `safeSpawnAsync` registered it in
- * `lifetimeState.pids`, the fake never emitted `close` so nothing removed it,
+ * `lifetimeState().pids`, the fake never emitted `close` so nothing removed it,
  * and at fork teardown `installLifetimeCleanup()` fired
  * `process.kill(-2468, "SIGKILL")`. On ~10 % of GitHub runners pid 2468 was
  * one of the job's own long-lived processes — that is the whole of #2042:
@@ -478,7 +478,7 @@ function lifetimeState(): LifetimeCleanupState {
  * the same question: a container or a hardened host can run Linux with no
  * `/proc` mounted, and there the per-pid read fails exactly the way a dead pid
  * does. Without this probe that silently refused every registration, so
- * `lifetimeState.pids` stayed empty and the host-exit tree kill stopped working
+ * `lifetimeState().pids` stayed empty and the host-exit tree kill stopped working
  * with no record anywhere.
  */
 const PROC_PPID_READABLE = ((): boolean => {
@@ -664,7 +664,7 @@ export function isOwnLiveChild(
 
 /**
  * Kill one registered pid's tree at host exit. Deliberately NOT re-checked
- * against `isOwnLiveChild` here: `lifetimeState.pids` has exactly one writer
+ * against `isOwnLiveChild` here: `lifetimeState().pids` has exactly one writer
  * (the registration below), that writer is now gated, and a second gate on
  * the same feeder would make BOTH mutation-inert — remove either one and the
  * other still blocks the kill, so neither would have a test that reds. The

@@ -38,7 +38,7 @@ async function seam() {
 }
 
 // Recurrence (#4561, shuffle seed 202): the cooldown map is process-global
-// (`Symbol.for("pi-lens:spawn-timeout-cooldown")`), so `vi.resetModules()`
+// (the `spawn-timeout-cooldown` process-singleton family), so `vi.resetModules()`
 // cannot clear it: the cross-lane case and the autofix case both arm
 // `markdownlint-cli2` for every later case, and the seam-unit case asserts the
 // command is cool at entry. One reset per case, on the shared instance.
