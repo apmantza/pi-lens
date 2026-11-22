@@ -1093,3 +1093,31 @@ describe("instance-registry", () => {
 		});
 	});
 });
+
+// #5745 r4: the MCP fresh worker joins the registry tail before it exits, so
+// its exit hook can take the lock. The bound keeps a wedged registry write
+// from holding the worker open; the join itself keeps the exit from beating
+// a queued write.
+describe("settleRegistryMutations", () => {
+	it("answers false at the bound while a write is pending, true once it lands", async () => {
+		const { queueRegistryMutation, settleRegistryMutations } =
+			await import("../../clients/instance-registry-tail.js");
+		let release!: () => void;
+		const pending = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		vi.useFakeTimers();
+		try {
+			void queueRegistryMutation(() => pending);
+			const bounded = settleRegistryMutations(2_000);
+			await vi.advanceTimersByTimeAsync(2_000);
+			await expect(bounded).resolves.toBe(false);
+			const joined = settleRegistryMutations(2_000);
+			release();
+			await expect(joined).resolves.toBe(true);
+		} finally {
+			release();
+			vi.useRealTimers();
+		}
+	});
+});
