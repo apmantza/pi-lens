@@ -186,6 +186,34 @@ describe("a legacy pi-lens.json follows one rule in every reader (#5740)", () =>
 		expect(await answers()).toEqual(LEGACY_ONLY_ANSWERS);
 	});
 
+	// Recurrence (CodeRabbit on #5743): the chain probe counted any entry named
+	// .pi-lens.json, so a directory of that name hid a valid legacy file from the
+	// dispatch policy while the project loader (a file stat) still read it.
+	it("a directory named .pi-lens.json is not a canonical file", () => {
+		fs.mkdirSync(path.join(repo, ".pi-lens.json"), { recursive: true });
+		writeJson("repo/pi-lens.json", {
+			rules: { "kl-rule": { disable: ["no-legacy"] } },
+		});
+
+		expect(
+			Object.keys(loadProjectRulePolicy(repo).forFile(repo) ?? {}),
+		).toEqual(["kl-rule"]);
+		expect(Object.keys(loadPiLensProjectConfig(repo).rules)).toEqual([
+			"kl-rule",
+		]);
+	});
+
+	it("a canonical file beside the legacy file excludes it from the dispatch policy", () => {
+		writeJson("repo/.pi-lens.json", CANONICAL);
+		writeJson("repo/pi-lens.json", {
+			rules: { "kl-rule": { disable: ["no-legacy"] } },
+		});
+
+		expect(
+			Object.keys(loadProjectRulePolicy(repo).forFile(repo) ?? {}),
+		).toEqual([]);
+	});
+
 	it("the global file is not a project canonical file", () => {
 		// PI_LENS_CONFIG_PATH may name any file. Discovery refuses the global
 		// file as a project document (#2457), so it cannot hide a legacy one.
