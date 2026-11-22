@@ -1387,6 +1387,11 @@ describe("archive and maven strategies compare the registry pin", () => {
 
 		expect(degradationCount()).toBe(1);
 		expect(degradationSubjects()).toContain("spotbugs");
+		expect(
+			getDegradationSummary().some(
+				(group) => group.kind === "managed-tool-download",
+			),
+		).toBe(true);
 		const stamp = readState().spotbugs;
 		expect(stamp.failed).toBe(true);
 		expect(stamp.resolutionId).toBe(`${SPOTBUGS_PIN}-old`);

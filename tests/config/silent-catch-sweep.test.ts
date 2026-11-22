@@ -656,11 +656,17 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		identities: "077a81da84ea60c4",
 		reason: PRE_RULE,
 	}, // :63, :176
+	"clients/installer/download.ts": {
+		silent: 2,
+		identities: "aa070ad0a95be3d3",
+		reason:
+			"Both rejection callbacks call the typed download failure path, which removes the partial file and rejects the caller; the lexical sweep cannot follow that shared propagation helper.",
+	},
 	// #5561 r3 re-pins the identity, count unchanged: the npm and gem install
 	// catches (:6033, :6479) now pass `InstallLockLostError` to the shared helper.
 	"clients/installer/index.ts": {
-		silent: 54,
-		identities: "a19168c600a3e3e2",
+		silent: 55,
+		identities: "c9b7e2c8dc3fbe38",
 		reason: PRE_RULE,
 	}, // :202, :207, :217, :228, :241, :298, :2265, :2594, :2678, :2813, :2825, :2851, :3191, :3232, :3267, :3279, :3401, :3424, :3446, :3616, :3713, :3809, :3968, :3976, :4644, :4697, :4888, :4928, :5412, :5447, :5600, :5617, :5643, :5674, :5677, :5683, :5699, :5742, :5745, :5838, :5925, :6026, :6033, :6266, :6289, :6347, :6357, :6361, :6443, :6479, :6517, :6635, :6794, :6864
 	"clients/installer/managed-tool-refresh.ts": {
@@ -727,10 +733,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :500
 	"clients/log-cleanup.ts": {
-		silent: 6,
-		identities: "a96b760c3e0e1558",
+		silent: 4,
+		identities: "e7bbd284be93893b",
 		reason: PRE_RULE,
-	}, // :73, :117, :126, :160, :165, :199
+	}, // :93, :168, :177, :335 (6 -> 4, #5707 r2: the dead cleanupOldLogs left with its two handlers)
 	"clients/lsp-budget.ts": {
 		silent: 1,
 		identities: "288709348a380874",

@@ -11,6 +11,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import fc from "fast-check";
+import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { warmAnswerBinding } from "../../../clients/lsp/diagnostic-binding.js";
 import type { McpAnalyzeResult } from "../../../clients/mcp/analyze.js";
@@ -21,7 +22,9 @@ import {
 	createWarmIpcLineReader,
 	createWarmIpcRequestQueue,
 	diagnosticsIpcPathForCwd,
+	classifyIpcSocketName,
 	ipcPathForCwd,
+	probeIpcSocketListener,
 	readTurnEndStatus,
 	recordTurnEndOutcome,
 	requestWarmCodeActions,
@@ -1636,5 +1639,121 @@ describe("upgrade transition after the case-fold narrowing (#3255)", () => {
 		} finally {
 			fs.rmSync(shared, { force: true });
 		}
+	});
+});
+
+/**
+ * #5702: the retention sweep reaps stale `.sock` endpoints through this
+ * module's own rules — {@link classifyIpcSocketName} for which names it may
+ * touch and {@link probeIpcSocketListener} for whether anyone still serves
+ * one. A name the sweep cannot recognize is kept, never reaped.
+ */
+describe("classifyIpcSocketName (#5702)", () => {
+	it("classifies the two shapes the endpoint derivations write", () => {
+		expect(classifyIpcSocketName("pi-lens-mcp-0123456789abcdef.sock")).toEqual({
+			kind: "workspace",
+			hash: "0123456789abcdef",
+		});
+		expect(
+			classifyIpcSocketName(
+				`pi-lens-mcp-99001-diagnostics-fedcba9876543210.sock`,
+			),
+		).toEqual({
+			kind: "pid-scoped",
+			pid: 99001,
+			hash: "fedcba9876543210",
+		});
+	});
+
+	it("refuses everything else, cuts and cut-shape names included", () => {
+		// A sun_path cut that drops the .sock tail or truncates the hash is
+		// not a name the sweep can recognize.
+		expect(
+			classifyIpcSocketName("pi-lens-mcp-0123456789abcde"),
+		).toBeUndefined();
+		expect(
+			classifyIpcSocketName("pi-lens-mcp-0123456789abcdef"),
+		).toBeUndefined();
+		expect(
+			classifyIpcSocketName("pi-lens-mcp-0123456789abcdeff.sock"),
+		).toBeUndefined();
+		expect(
+			classifyIpcSocketName(
+				"pi-lens-mcp-notpid-diagnostics-0123456789abcdef.sock",
+			),
+		).toBeUndefined();
+		expect(classifyIpcSocketName("other.sock")).toBeUndefined();
+		expect(classifyIpcSocketName("")).toBeUndefined();
+	});
+});
+
+// The seeded names need a short sun_path; a dev box whose probe home is too
+// deep skips, the same guard the file's long-socket cases apply.
+const probeLacksRoom =
+	minTmpRootLength() +
+		1 +
+		"pi-lens-probe-live-XXXXXX".length +
+		1 +
+		"pi-lens-mcp-0123456789abcdef.sock".length >
+	104;
+
+describe.skipIf(probeLacksRoom)("probeIpcSocketListener (#5702)", () => {
+	// lane: Unit tests (a live listener on the ambient temp root, no child
+	// process: the server runs in this worker).
+	// The names below avoid every binding the file's earlier describes use:
+	// the #4589 detector joins same-name bindings into one identity, so a
+	// `server` here would credit this file's admitted `activeServer` row.
+	let probeListener: net.Server | undefined;
+
+	afterEach(async () => {
+		const probeServer = probeListener;
+		probeListener = undefined;
+		if (probeServer) {
+			await new Promise<void>((resolve) => probeServer.close(() => resolve()));
+		}
+	});
+
+	it("answers live for a socket file with a listening server behind it", async () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-probe-live-"));
+		try {
+			const bound = path.join(dir, "pi-lens-mcp-0123456789abcdef.sock");
+			probeListener = net.createServer(() => {});
+			await new Promise<void>((resolve) =>
+				probeListener?.listen(bound, resolve),
+			);
+			await expect(probeIpcSocketListener(bound)).resolves.toBe("live");
+		} finally {
+			removeTempDirSync(dir);
+		}
+	});
+
+	it("answers dead for a socket file no listener serves", async () => {
+		// Bind, rename the bound file aside, close: the close unlinks the
+		// server's own name and leaves the renamed socket file orphaned —
+		// the signal-death shape D3 measured.
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-probe-dead-"));
+		try {
+			const bindName = path.join(dir, "bind-tmp.sock");
+			const stale = path.join(dir, "pi-lens-mcp-0123456789abcdef.sock");
+			const staleBindServer = net.createServer(() => {});
+			await new Promise<void>((resolve) =>
+				staleBindServer.listen(bindName, resolve),
+			);
+			fs.renameSync(bindName, stale);
+			await new Promise<void>((resolve) =>
+				staleBindServer.close(() => resolve()),
+			);
+			await expect(probeIpcSocketListener(stale)).resolves.toBe("dead");
+		} finally {
+			removeTempDirSync(dir);
+		}
+	});
+
+	it("answers dead for a vanished path instead of treating absence as a listener", async () => {
+		const missing = path.join(
+			os.tmpdir(),
+			`pi-lens-probe-gone-${randomUUID()}.sock`,
+		);
+		await expect(probeIpcSocketListener(missing)).resolves.toBe("dead");
 	});
 });
