@@ -1471,7 +1471,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// argument so callers can pass the win32 dialect; the default and its
 		// annotation are the two senses.
 		// 41 -> 40 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
-		"clients/path-utils.ts": 40,
+		// 40 -> 42 (#2556): `isUnderDir`'s backslash-name arm resolves its two
+		// operands with `path.resolve`, the `node:path` module on a spelled
+		// value, never the retired map-key sense.
+		"clients/path-utils.ts": 42,
 		"clients/php-cs-fixer-config.ts": 4,
 		// 26 -> 24 (#4689 batch 3): the changed-file set is a PathKeyedMap, so two
 		// `path.resolve` calls are gone. 24 -> 22: the postMutation gate compares

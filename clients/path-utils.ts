@@ -1299,10 +1299,33 @@ export function homeRelativePath(
  * realpath, so it could only repeat the first.
  */
 export function isUnderDir(child: string, parent: string): boolean {
+	if (backslashIsNameChar(child, parent)) {
+		return (
+			isWithinForm(path.resolve(child), path.resolve(parent)) ||
+			isWithinIdentity(child, parent)
+		);
+	}
 	if (isWithinForm(normalizePathSpelling(child), normalizePathSpelling(parent)))
 		return true;
 	if (process.platform === "win32") return false;
 	return isWithinIdentity(child, parent);
+}
+
+/**
+ * A POSIX host reads a backslash in a non-Windows-shaped value as a file NAME
+ * character, so the folds below must not turn it into a separator: a sibling
+ * directory literally named `<root>\evil` is not `<root>/evil`. The value's
+ * SHAPE selects the fold, never the host (shapes 2 and 35, #4876 review r2 F1,
+ * which fixed `isWithinPathForm` and left this seam folding). A Windows-shaped
+ * value (drive letter, UNC) keeps the fold on every host.
+ */
+function backslashIsNameChar(child: string, parent: string): boolean {
+	return (
+		process.platform !== "win32" &&
+		(child.includes("\\") || parent.includes("\\")) &&
+		!isWindowsPath(child) &&
+		!isWindowsPath(parent)
+	);
 }
 
 /**
@@ -1312,6 +1335,9 @@ export function isUnderDir(child: string, parent: string): boolean {
  * must stay outside (a chart's template tree, #2556).
  */
 export function isWithinIdentity(child: string, parent: string): boolean {
+	if (backslashIsNameChar(child, parent)) {
+		return isWithinForm(realpathOrResolve(child), realpathOrResolve(parent));
+	}
 	return isWithinForm(normalizeFilePath(child), normalizeFilePath(parent));
 }
 
