@@ -368,7 +368,9 @@ describe("host-provided packages are not vendored (#1926)", () => {
 // treats even an optional peer conflict as fatal), while `pi install` runs
 // `--legacy-peer-deps` and shows the user nothing -- the range only ever cost
 // developers and CI. The window pi-lens actually supports is enforced where it
-// is measured: `PI_HOST_SUPPORTED_RANGE` in install-smoke.yml, below.
+// is measured: `PI_HOST_FLOOR_VERSION` in install-smoke.yml is its lower end,
+// and its upper end is always the newest stable pi, which the gating
+// newest-in-range lane resolves itself (#5749; no ceiling is declared).
 describe("host-provided peers are open; the supported window lives in install-smoke (#2682, #3805)", () => {
 	for (const name of [
 		"@earendil-works/pi-coding-agent",
@@ -385,8 +387,10 @@ describe("host-provided peers are open; the supported window lives in install-sm
 			"utf8",
 		),
 	) as { env?: Record<string, string> };
-	const window = workflow.env?.PI_HOST_SUPPORTED_RANGE ?? "";
 	const floor = workflow.env?.PI_HOST_FLOOR_VERSION ?? "";
+	// The window is open above (#5749): the floor is the only value the
+	// workflow declares, so the window is derived from it, never a second copy.
+	const window = `>=${floor}`;
 
 	// Certified hosts (release-QA witness, or maintainer certification recorded
 	// in the row). NOT derived from the lockfile: its pi version is only a
@@ -430,26 +434,14 @@ describe("host-provided peers are open; the supported window lives in install-sm
 		it(`admits the release-qa verified host ${version}`, () => {
 			expect(
 				semver.satisfies(version, window),
-				`PI_HOST_SUPPORTED_RANGE (${window}) must admit ${version}`,
+				`the window (${window}) must admit ${version}`,
 			).toBe(true);
 		});
 	}
 
-	it("starts exactly at the promised floor", () => {
-		expect(semver.satisfies(floor, window)).toBe(true);
-		expect(semver.satisfies(semver.inc(floor, "patch") ?? "", window)).toBe(
-			true,
-		);
-		expect(
-			semver.satisfies(
-				`0.${semver.minor(floor)}.${semver.patch(floor) - 1}`,
-				window,
-			),
-		).toBe(false);
-	});
-
-	it("keeps the next unverified host out (1.6.0 stays out)", () => {
-		expect(semver.satisfies("1.6.0", window)).toBe(false);
+	// The floor is the promise, so it is the one host that must carry a witness.
+	it("has a release-qa verified host at exactly the promised floor", () => {
+		expect(RELEASE_QA_VERIFIED_HOSTS).toContain(floor);
 	});
 
 	// Recurrence prevented (#4513): the ceiling moved from <1.2.0 to <1.4.0 while
@@ -482,8 +474,8 @@ describe("host-provided peers are open; the supported window lives in install-sm
 		expect(pinned).toBe(newest);
 	});
 
-	// Recurrence prevented (#4513): a dependency bump to pi 1.4 would put the
-	// test host past the window before release-qa has run on it.
+	// A dependency bump must not put the test host below the promised floor
+	// (the window has no ceiling since #5749, so the floor is its only edge).
 	it("keeps the locked dev host inside the supported window", () => {
 		const lock = JSON.parse(
 			fs.readFileSync(path.join(root, "package-lock.json"), "utf8"),
@@ -493,7 +485,7 @@ describe("host-provided peers are open; the supported window lives in install-sm
 			"";
 		expect(
 			semver.satisfies(locked, window),
-			`locked pi-coding-agent ${locked} vs PI_HOST_SUPPORTED_RANGE (${window})`,
+			`locked pi-coding-agent ${locked} vs the window (${window})`,
 		).toBe(true);
 	});
 
@@ -530,43 +522,36 @@ describe("host-provided peers are open; the supported window lives in install-sm
 	// moved past them. #4688's own sweep enumerated the three removed host
 	// versions (`0\.80\.10|>=0\.80|0\.84\.1|0\.85\.1`), so the class -- any minor
 	// below the new floor -- survived it (AGENTS.md shape 69). The paragraph now
-	// names the certified minor range, and this case reads that sentence against
-	// the workflow's own values: a rewording reds, which is the fail-closed
-	// behaviour the policy case above already has.
-	it("states in the baseline doc the certified minor range the workflow enforces", () => {
+	// names the certified minor line the window starts on (open above since
+	// #5749, so there is no upper end to state), and this case reads that
+	// sentence against the workflow's own value: a rewording reds, which is the
+	// fail-closed behaviour the policy case above already has.
+	it("states in the baseline doc the certified minor line the workflow enforces", () => {
 		const clause = baselineDoc.match(
-			/one verified host per minor line from (\d+\.\d+) onward;\s+(\d+\.\d+)[–-](\d+\.\d+)\s+are\s+in-window/,
+			/one verified host per minor line from (\d+\.\d+) onward;\s+(\d+\.\d+)\s+onward\s+are\s+in-window/,
 		);
 		expect(
 			clause,
 			"docs/release-qa-baseline.md 'P1 is one verified host per minor line …' clause",
 		).toBeTruthy();
-		const [from, low, high] = (clause as RegExpMatchArray).slice(1) as [
-			string,
+		const [from, low] = (clause as RegExpMatchArray).slice(1) as [
 			string,
 			string,
 		];
-		// The range must start on the floor's own minor line, derived from
-		// PI_HOST_FLOOR_VERSION, and end on the newest verified host's minor line,
-		// derived from this ratchet. Both ends are independent of the clause.
+		// The window must start on the floor's own minor line, derived from
+		// PI_HOST_FLOOR_VERSION, independent of the clause.
 		const floorMinorLine = `${semver.major(floor)}.${semver.minor(floor)}`;
-		const newest =
-			[...RELEASE_QA_VERIFIED_HOSTS].sort(semver.compare).at(-1) ?? "";
-		const newestMinorLine = `${semver.major(newest)}.${semver.minor(newest)}`;
 		expect(from, "docs/release-qa-baseline.md in-window start").toBe(
 			floorMinorLine,
 		);
 		expect(low, "docs/release-qa-baseline.md in-window range start").toBe(
 			floorMinorLine,
 		);
-		expect(high, "docs/release-qa-baseline.md in-window range end").toBe(
-			newestMinorLine,
-		);
 	});
 
 	// #4688 R2 (F1), the class sweep: the defect was an enumeration of three
 	// removed versions, so a claim naming any other pre-floor minor slipped by.
-	// Every `<x.y>[–<x.y>] are in-window` claim in the two files that declare the
+	// Every `<x.y> onward are in-window` claim in the two files that declare the
 	// window is read here, and the claim's low end must not sit below the floor.
 	it("claims no minor line below the floor is in-window", () => {
 		const files = [
@@ -586,13 +571,13 @@ describe("host-provided peers are open; the supported window lives in install-sm
 			],
 		] as const;
 		const claims = files.flatMap(([file, text]) =>
-			[
-				...text.matchAll(/(?<![\w.])(\d+\.\d+)[–-](\d+\.\d+) are in-window/g),
-			].map((match) => ({
-				file,
-				claim: match[0],
-				low: match[1] as string,
-			})),
+			[...text.matchAll(/(?<![\w.])(\d+\.\d+) onward are in-window/g)].map(
+				(match) => ({
+					file,
+					claim: match[0],
+					low: match[1] as string,
+				}),
+			),
 		);
 		// A sweep that reads no claim is not a passing sweep: both files must keep
 		// stating the in-window range, which is what gives the check below a
@@ -606,7 +591,7 @@ describe("host-provided peers are open; the supported window lives in install-sm
 			// so a wording it cannot parse ("0.85 through 1.3") reds, not passes.
 			expect(
 				text.match(/in-window/g)?.length,
-				`${file}: every "in-window" mention must read "<x.y>-<x.y> are in-window"`,
+				`${file}: every "in-window" mention must read "<x.y> onward are in-window"`,
 			).toBe(claims.filter((entry) => entry.file === file).length);
 		}
 		const floorMinorLine = `${semver.major(floor)}.${semver.minor(floor)}.0`;
@@ -665,7 +650,7 @@ describe("host-provided peers are open; the supported window lives in install-sm
 			.filter((version) => !semver.satisfies(version, window));
 		expect(
 			excluded,
-			`PI_HOST_SUPPORTED_RANGE (${window}) excludes listed host(s) ${excluded.join(", ")}`,
+			`the window (${window}) excludes listed host(s) ${excluded.join(", ")}`,
 		).toEqual([]);
 	});
 });
