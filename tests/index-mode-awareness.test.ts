@@ -215,6 +215,46 @@ describe("widget mounting is mode-derived (#1334 S2)", () => {
 		expect((await renderCleanAfterDelay()).join("\n")).toContain("✓ clean");
 	});
 
+	// Recurrence: PR #5725 r1 F1. The hide timer asks the host for a repaint
+	// from a detached timer callback; a throwing host repaint escaped it as an
+	// uncaught timer error, with no caller to contain it.
+	it("contains a throwing host repaint in the hide timer and records it once", async () => {
+		setGlobalConfig({ widget: { hideWhenClean: true } });
+		const ctx = await toggleTwice("tui");
+		const factory = mounts(ctx)[0]?.content as (
+			tui: { requestRender: () => void },
+			theme: { fg: (color: string, text: string) => string },
+		) => { render: (width: number) => string[] };
+		vi.useFakeTimers();
+		// Healthy while the store writes; throws once the timer repaints.
+		let hostBroken = false;
+		const requestRender = vi.fn(() => {
+			if (hostBroken) throw new Error("host repaint failed");
+		});
+		const component = factory({ requestRender }, { fg: (_c, text) => text });
+		setSessionLanguages(["jsts"]);
+		recordRunner("/repo/a.ts", "type-safety", "succeeded", 0);
+		recordDiagnostics("/repo/a.ts", []);
+		expect(component.render(120).join("\n")).toContain("✓ clean");
+		requestRender.mockClear();
+		hostBroken = true;
+
+		expect(() =>
+			vi.advanceTimersByTime(WIDGET_CLEAR_HIDE_DELAY_MS),
+		).not.toThrow();
+
+		expect(requestRender).toHaveBeenCalledTimes(1);
+		const groups = getDegradationSummary().filter(
+			(g) => g.kind === "widget-change-listener-failed",
+		);
+		expect(groups).toHaveLength(1);
+		expect(groups[0]?.count).toBe(1);
+		expect(groups[0]?.latestReasons[0]?.subject).toBe("widget-hide-timer");
+		// The timer stays cleared: a later render hides without a second timer.
+		expect(component.render(120)).toEqual([]);
+		expect(vi.getTimerCount()).toBeLessThanOrEqual(1);
+	});
+
 	it("mounts the widget on an older host with no mode field", async () => {
 		const ctx = await toggleTwice(null);
 

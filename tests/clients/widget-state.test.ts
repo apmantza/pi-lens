@@ -3152,6 +3152,20 @@ describe("renderWidget hideWhenClean", () => {
 		expect(renderWidget(120, theme, hide)).toEqual([]);
 	});
 
+	// Recurrence: PR #5725 r1 (CodeRabbit). A file with a completed snapshot
+	// and a failed formatter has no error or warning, so the gate read it as
+	// clean and hid the `fmt-failed` row the user needs.
+	it("keeps drawing a failed-formatter row after the hide delay", () => {
+		clean();
+		recordFormatter("/repo/a.ts", "biome", false, false);
+		expect(visibleFrame(renderWidget(120, theme, hide))).toContain("x a.ts");
+		vi.advanceTimersByTime(delay * 2);
+		expect(visibleFrame(renderWidget(120, theme, hide))).toContain("x a.ts");
+		expect(visibleFrame(renderWidget(60, theme, hide))).toContain(
+			"fmt-failed:biome",
+		);
+	});
+
 	it("arms no timer and keeps drawing when hideWhenClean is off", () => {
 		clean();
 		const before = vi.getTimerCount();

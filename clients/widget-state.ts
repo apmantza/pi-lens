@@ -2475,11 +2475,20 @@ function isHeaderClean(facts: WidgetSummary): boolean {
 
 /**
  * widget.hideWhenClean's gate: the header shows `✓ clean` and the frame draws
- * nothing else a user needs (no suppressed count, no starting server).
+ * nothing else a user needs (no suppressed count, no starting server, no
+ * failed-formatter row: `✓ clean` counts diagnostics, and a failed formatter
+ * leaves none).
  */
-function isWidgetClean(facts: WidgetSummary, spawningCount: number): boolean {
+function isWidgetClean(
+	facts: WidgetSummary,
+	spawningCount: number,
+	records: readonly FileRecord[],
+): boolean {
 	return (
-		isHeaderClean(facts) && facts.totalSuppressed === 0 && spawningCount === 0
+		isHeaderClean(facts) &&
+		facts.totalSuppressed === 0 &&
+		spawningCount === 0 &&
+		!records.some(hasFailedFormatter)
 	);
 }
 
@@ -2532,7 +2541,17 @@ function clearHideElapsed(clean: boolean): boolean {
 		clearSinceMs = now;
 		clearHideTimer = setTimeout(() => {
 			clearHideTimer = null;
-			requestRenderFn?.();
+			// A detached callback has no caller to contain a host throw; same
+			// bounded record as the store-change listener in `requestRender`.
+			try {
+				requestRenderFn?.();
+			} catch (err) {
+				recordDegradationOnce({
+					kind: "widget-change-listener-failed",
+					subject: "widget-hide-timer",
+					reason: `hide-timer repaint threw: ${err instanceof Error ? err.message : String(err)}`,
+				});
+			}
 		}, WIDGET_CLEAR_HIDE_DELAY_MS);
 		// Don't keep the process alive solely for this repaint.
 		clearHideTimer?.unref?.();
@@ -2638,7 +2657,7 @@ export function renderWidget(
 	// widget.hideWhenClean: hide once `✓ clean` has shown for the delay.
 	if (
 		opts?.hideWhenClean &&
-		clearHideElapsed(isWidgetClean(summaryFacts, spawning.length))
+		clearHideElapsed(isWidgetClean(summaryFacts, spawning.length, records))
 	) {
 		return [];
 	}

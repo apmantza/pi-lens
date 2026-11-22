@@ -2403,10 +2403,12 @@ export type DegradationKind =
 	| "web-tree-sitter-load-failed"
 	/**
 	 * `widget-change-listener-failed`: a store-change listener registered beside
-	 * the TUI render callback threw while a widget write was notifying it. The
-	 * write already committed and stays committed; the failure is bounded to one
-	 * record per subject per session so a persistently broken projection cannot
-	 * flood the ledger. See `requestRender` in `clients/widget-state.ts`.
+	 * the TUI render callback threw while a widget write was notifying it, or
+	 * (subject `widget-hide-timer`) the host repaint the hide timer asks for
+	 * threw from its detached callback. The write already committed and stays
+	 * committed; the failure is bounded to one record per subject per session so
+	 * a persistently broken projection cannot flood the ledger. See
+	 * `requestRender` and `clearHideElapsed` in `clients/widget-state.ts`.
 	 */
 	| "widget-change-listener-failed"
 	| "widget-disposition-reconcile-fallback"
