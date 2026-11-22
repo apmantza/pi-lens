@@ -316,4 +316,89 @@ describe("#5700 open-document cap through the real client", () => {
 		},
 		30_000,
 	);
+
+	/**
+	 * #5737 round 2 (PRRT_kwDORt8rec66iybI): a retained cap close advances the
+	 * pull generation, so a pull still in flight for the closed document fails
+	 * its write-time generation check and cannot replace the findings the close
+	 * kept. Recurrence: the close skipped the clear that bumps the generation, so
+	 * a late answer passed the check and stored over the kept rows. The second
+	 * pull is held 4 s and the cap closes the document before it lands.
+	 */
+	it("a pull answered after a retained cap close keeps the kept findings", async () => {
+		const trace = path.join(tmp, "pull-trace.log");
+		fs.writeFileSync(trace, "");
+		const pulled = {
+			id: "pullsrv",
+			name: "pullsrv",
+			extensions: [".md"],
+			idleEviction: "resident",
+			root: async () => tmp,
+			spawn: async () => ({
+				process: await spawnFakeLspServer({
+					cwd: tmp,
+					env: {
+						...process.env,
+						FAKE_LSP_TRACE_FILE: trace,
+						// The first pull answers at once; each later pull waits this long.
+						FAKE_LSP_DELAY_AFTER_FIRST_PULL_MS: "4000",
+					},
+				}),
+				source: "test",
+			}),
+		};
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".md") ? [pulled] : [],
+		);
+		const shared = path.join(tmp, "x-pull.md");
+		const aDocs = [1, 2, 3].map((i) => path.join(tmp, `a-pull-${i}.md`));
+		for (const file of [shared, ...aDocs]) {
+			fs.writeFileSync(file, `# ${file}\n`);
+		}
+		const service = new LSPService();
+		const touch = (file: string) =>
+			service.touchFile(file, fs.readFileSync(file, "utf8"), {
+				diagnostics: "document",
+				collectDiagnostics: true,
+				clientScope: "primary",
+				source: "dispatch",
+			});
+		const key = shared.replace(/\\/g, "/");
+		const sharedUri = pathToFileURL(shared).href;
+		const traceLines = () => fs.readFileSync(trace, "utf8").split("\n");
+		const pullsOfShared = () =>
+			traceLines().filter(
+				(line) => line === `recv textDocument/diagnostic ${sharedUri}`,
+			).length;
+		try {
+			await touch(shared);
+			const kept = (await service.getAllDiagnostics()).get(key);
+			expect(kept?.diags.length).toBeGreaterThan(0);
+			expect(kept?.closed).toBeUndefined();
+
+			// The second pull is on the server before the cap closes the shared file.
+			const late = touch(shared);
+			await vi.waitFor(
+				() => expect(pullsOfShared()).toBeGreaterThanOrEqual(2),
+				{ timeout: 10_000, interval: 20 },
+			);
+			const others = aDocs.map((file) => touch(file));
+			await vi.waitFor(
+				() =>
+					expect(traceLines()).toContain(
+						`recv textDocument/didClose ${sharedUri}`,
+					),
+				{ timeout: 10_000, interval: 20 },
+			);
+			await late;
+			await Promise.all(others);
+
+			const after = (await service.getAllDiagnostics()).get(key);
+			expect(after?.closed).toBe(true);
+			// The late answer was refused: the kept row still has the first pull's stamp.
+			expect(after?.ts).toBe(kept?.ts);
+		} finally {
+			await service.shutdown();
+		}
+	}, 30_000);
 });
