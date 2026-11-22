@@ -63,6 +63,31 @@ import {
 	spawnCooldownScope,
 } from "./spawn-abort-scope.js";
 import { noteSpawnTimeout } from "./spawn-timeout-cooldown.js";
+import { registerBackgroundWriteDrain } from "./background-write-drains.js";
+
+/**
+ * #5745 r7: owned-child ledger work still in flight: a row write waiting on its
+ * child's start read, and a removal chained after that write. Each starts off
+ * the registry tail, so the tail's settle does not join it. A session's
+ * teardown drain joins it through the drain registered below. Before that, a
+ * row landing after the drain found the registry gone, and its
+ * `instance-registry-registration-missing` ledger row re-created the removed
+ * home (CI shard 5, `pi-session-teardown`).
+ */
+const ownedChildLedgerWork = new Set<Promise<void>>();
+
+function trackOwnedChildLedger(work: Promise<void>): Promise<void> {
+	ownedChildLedgerWork.add(work);
+	void work.finally(() => ownedChildLedgerWork.delete(work));
+	return work;
+}
+
+// One drain per evaluation of this module. It resolves only when no ledger
+// work is left; a write that settles may queue its removal, so it loops.
+registerBackgroundWriteDrain(async () => {
+	while (ownedChildLedgerWork.size > 0) await Promise.all(ownedChildLedgerWork);
+	return undefined;
+});
 
 export interface SpawnResourceUsage {
 	sampleCount: number;
@@ -2388,16 +2413,18 @@ export async function safeSpawnAsync(
 		const registryChildRecorded =
 			registryChildPid === undefined
 				? Promise.resolve()
-				: readProcessStart(registryChildPid, { timeoutMs: 1_000 })
-						.then((processStart) =>
-							recordOwnedChild({
-								pid: registryChildPid,
-								serverId: `safe-spawn:${resourceLabel}`,
-								command: spawnCmd,
-								...(processStart === undefined ? {} : { processStart }),
-							}),
-						)
-						.catch((err) => noteOwnedChildLedgerFailure("record", err));
+				: trackOwnedChildLedger(
+						readProcessStart(registryChildPid, { timeoutMs: 1_000 })
+							.then((processStart) =>
+								recordOwnedChild({
+									pid: registryChildPid,
+									serverId: `safe-spawn:${resourceLabel}`,
+									command: spawnCmd,
+									...(processStart === undefined ? {} : { processStart }),
+								}),
+							)
+							.catch((err) => noteOwnedChildLedgerFailure("record", err)),
+					);
 		let registryChildRemoved = false;
 		const removeRegistryChild = (): void => {
 			if (registryChildPid === undefined || registryChildRemoved) return;
@@ -2405,9 +2432,11 @@ export async function safeSpawnAsync(
 			// #5745 r6 (CodeRabbit): after the record. A child that closes before
 			// its start read settles would otherwise queue this removal first,
 			// find no row, and leave the record to write a finished child's row.
-			void registryChildRecorded
-				.then(() => removeOwnedChild(registryChildPid))
-				.catch((err) => noteOwnedChildLedgerFailure("remove", err));
+			void trackOwnedChildLedger(
+				registryChildRecorded
+					.then(() => removeOwnedChild(registryChildPid))
+					.catch((err) => noteOwnedChildLedgerFailure("remove", err)),
+			);
 		};
 
 		// #3375 round 2 (H3384-1). `killTree`'s promise is AWAITED by `finalize`

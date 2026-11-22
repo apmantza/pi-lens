@@ -574,6 +574,76 @@ describe("kill-by-pid ownership (#2042)", () => {
 		}
 	});
 
+	// #5745 r7 (CI shard 5, pi-session-teardown): a row write still waiting on
+	// its child's start read was in no drain. It landed after the session's
+	// teardown removed the fixture root, and its registration-missing ledger
+	// row re-created the root. The harness's drain pass must wait for it.
+	it("the background-write drain waits for an owned child's ledger work", async () => {
+		const owned = await spawnOwnedFixtureChild();
+		if (owned.pid === undefined)
+			throw new Error("fixture child did not get a pid");
+		const child = new FakeChild(owned.pid);
+		vi.resetModules();
+		vi.doMock("node:child_process", () => ({
+			spawn: vi.fn(() => child),
+			spawnSync: vi.fn(() => ({ status: 0, stdout: "", stderr: "" })),
+			execSync: vi.fn(() => ""),
+			execFileSync: vi.fn(() => ""),
+		}));
+		const held = await import("../../clients/held-children.js");
+		const { safeSpawnAsync } = await import("../../clients/safe-spawn.js");
+		const { drainRegisteredBackgroundWritesForTests } =
+			await import("../support/background-write-drains.js");
+		const events: string[] = [];
+		let releaseWrite: () => void = () => {};
+		let writeCalled: () => void = () => {};
+		const writeStarted = new Promise<void>((resolve) => {
+			writeCalled = resolve;
+		});
+		held.provideOwnedChildLedger({
+			write: () => {
+				events.push("write");
+				writeCalled();
+				return new Promise<void>((resolve) => {
+					releaseWrite = () => {
+						events.push("write landed");
+						resolve();
+					};
+				});
+			},
+			remove: async () => {
+				events.push("remove");
+			},
+		});
+		try {
+			const pending = safeSpawnAsync(process.execPath, ["-e", "0"], {
+				timeout: 50_000,
+			});
+			await writeStarted;
+			child.emit("close", 0, null);
+			await pending;
+
+			let drained = false;
+			const drain = drainRegisteredBackgroundWritesForTests().then(() => {
+				drained = true;
+			});
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(drained).toBe(false);
+
+			releaseWrite();
+			await drain;
+			expect(events).toEqual(["write", "write landed", "remove"]);
+		} finally {
+			releaseWrite();
+			// The ledger cell is a process singleton: a fresh registry module
+			// provides the production ledger again.
+			vi.resetModules();
+			await import("../../clients/instance-registry.js");
+			owned.kill("SIGKILL");
+			lifetimeState().pids.clear();
+		}
+	});
+
 	// Everything below reads `/proc`, which only Linux has. The Windows and
 	// macOS arms of the same predicate are covered above WITHOUT a lane, by the
 	// fresh-import case that stubs the platform before module load.
