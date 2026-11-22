@@ -2999,14 +2999,21 @@ function dotnetToolCandidates(tool: string): string[] {
  * the session repository's bytes is dropped here until pi trusts the project.
  */
 function binExeVariants(dir: string, tool: string): string[] {
+	const bare = path.join(dir, tool);
 	const variants =
 		process.platform === "win32"
-			? [path.join(dir, `${tool}.exe`), path.join(dir, tool)]
-			: [path.join(dir, tool)];
+			? [path.join(dir, `${tool}.exe`), bare]
+			: [bare];
 	const admitted: string[] = [];
 	for (const candidate of variants) {
 		if (existsSync(candidate) && isUntrustedProjectPath(candidate)) {
 			recordProjectCommandRefusal(candidate);
+			// #5715: on win32, refusing `<dir>\<tool>.exe` must also withhold the
+			// extensionless `<dir>\<tool>` sibling so cmd.exe PATHEXT resolution
+			// cannot resolve `<dir>\<tool>` back to the refused `.exe`.
+			if (process.platform === "win32" && candidate !== bare) {
+				break;
+			}
 			continue;
 		}
 		admitted.push(candidate);
