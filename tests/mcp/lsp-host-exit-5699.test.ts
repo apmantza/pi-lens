@@ -16,7 +16,8 @@
  *
  * - stdin end and SIGTERM: the server is gone, and stdin end leaves no row
  *   for the host in `instances.json` (the row goes only after the kill is
- *   confirmed).
+ *   confirmed). Stdin end also ends it with the registry switched off
+ *   (`PI_LENS_INSTANCE_REGISTRY=0`), where no registry exit hook runs.
  * - SIGKILL: no code of the host runs, so the server survives that host
  *   (the stated residual); the next MCP host's start reaps it from the row
  *   the dead host left, and prunes the row.
@@ -96,7 +97,10 @@ function stubbornRustProject() {
 	return { home, project, file, pidFile };
 }
 
-function startHost(ws: ReturnType<typeof stubbornRustProject>): McpHarness {
+function startHost(
+	ws: ReturnType<typeof stubbornRustProject>,
+	env: Record<string, string> = {},
+): McpHarness {
 	const harness = new McpHarness({
 		cwd: ws.project,
 		env: {
@@ -104,6 +108,7 @@ function startHost(ws: ReturnType<typeof stubbornRustProject>): McpHarness {
 			PI_LENS_TEST_MODE: "0",
 			PI_LENS_DISABLE_LSP_INSTALL: "1",
 			PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS: "1000",
+			...env,
 		},
 	});
 	harnesses.push(harness);
@@ -211,6 +216,18 @@ describe.runIf(process.platform === "linux")(
 				serverSurvives: await survives(pids.server, DEATH_WAIT_MS),
 				hostRowLeft: registryRowPids(ws.home).includes(pids.host),
 			}).toEqual({ serverSurvives: false, hostRowLeft: false });
+		}, 120_000);
+
+		// The registry's exit hook also ends the held servers; with the registry
+		// switched off, the spawn seam's own exit handler is the only one left.
+		it("ends the server on stdin end with the instance registry switched off", async () => {
+			const ws = stubbornRustProject();
+			const harness = startHost(ws, { PI_LENS_INSTANCE_REGISTRY: "0" });
+			const pids = await launchServer(harness, ws);
+
+			await harness.closeInput();
+
+			expect(await survives(pids.server, DEATH_WAIT_MS)).toBe(false);
 		}, 120_000);
 
 		it("ends the server when the host is sent SIGTERM", async () => {
