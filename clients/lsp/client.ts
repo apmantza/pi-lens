@@ -1041,7 +1041,15 @@ const LSP_CRASH_CODES = new Set([
 	"ECONNRESET",
 ]);
 
-let crashGuardInstalled = false;
+interface CrashGuardState {
+	installed: boolean;
+}
+
+const crashGuardState = getProcessSingleton<CrashGuardState>(
+	"lsp-crash-guard",
+	1,
+	() => ({ installed: false }),
+);
 
 function isIgnorableLspRuntimeCrash(err: unknown): boolean {
 	if (!(err instanceof Error)) return false;
@@ -1057,8 +1065,8 @@ function isIgnorableLspRuntimeCrash(err: unknown): boolean {
 }
 
 function installCrashGuard(): void {
-	if (crashGuardInstalled) return;
-	crashGuardInstalled = true;
+	if (crashGuardState.installed) return;
+	crashGuardState.installed = true;
 
 	const onUncaughtException = (err: unknown): void => {
 		if (isIgnorableLspRuntimeCrash(err)) {
@@ -1074,7 +1082,7 @@ function installCrashGuard(): void {
 		writeLspCrashStack(err instanceof Error ? (err.stack ?? err) : err);
 		process.exit(1);
 	};
-	process.on("uncaughtException", onUncaughtException);
+	process.prependListener("uncaughtException", onUncaughtException);
 
 	const onUnhandledRejection = (reason: unknown): void => {
 		if (isIgnorableLspRuntimeCrash(reason)) {
@@ -1087,12 +1095,10 @@ function installCrashGuard(): void {
 		) {
 			return;
 		}
-		const failure =
-			reason instanceof Error ? reason : new Error(String(reason));
-		writeLspCrashStack(failure.stack ?? failure);
+		writeLspCrashStack(reason);
 		process.exit(1);
 	};
-	process.on("unhandledRejection", onUnhandledRejection);
+	process.prependListener("unhandledRejection", onUnhandledRejection);
 }
 
 // --- Client State + Module-level helpers ---

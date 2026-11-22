@@ -33,7 +33,15 @@ vi.mock("../../../clients/latency-logger.js", async (importActual) => ({
 
 describe("LSP client — crash exit is logged, not silently swallowed", () => {
 	async function runCrashGuardProbe(
-		mode: "crash" | "rejection" | "ignorable" | "other",
+		mode:
+			| "crash"
+			| "rejection"
+			| "large-rejection"
+			| "hostile-rejection"
+			| "duplicate"
+			| "preexisting"
+			| "ignorable"
+			| "other",
 	): Promise<{ code: number | null; stdout: string; stderr: string }> {
 		const launch = pathToFileURL(path.resolve("clients/lsp/launch.js")).href;
 		const clientModule = pathToFileURL(
@@ -44,8 +52,20 @@ describe("LSP client — crash exit is logged, not silently swallowed", () => {
 const { launchLSP } = await import(${JSON.stringify(launch)});
 const { createLSPClient } = await import(${JSON.stringify(clientModule)});
 const lsp = await launchLSP(process.execPath, [${JSON.stringify(fixture)}]);
+if (${JSON.stringify(mode)} === "preexisting") {
+  process.once("uncaughtException", () => { process.stdout.write("PREEXISTING_LISTENER"); setTimeout(() => process.exit(0), 50); });
+}
 await createLSPClient({ serverId: "probe", process: lsp, root: process.cwd() });
-process.once("exit", () => { try { lsp.process.kill("SIGKILL"); } catch {} process.stdout.write("EXIT_MARKER"); });
+let lsp2;
+if (${JSON.stringify(mode)} === "duplicate") {
+  const second = await import(${JSON.stringify(clientModule)} + "?reloaded");
+  lsp2 = await launchLSP(process.execPath, [${JSON.stringify(fixture)}]);
+  await second.createLSPClient({ serverId: "probe-2", process: lsp2, root: process.cwd() });
+}
+process.once("exit", () => {
+  for (const child of [lsp, lsp2]) { try { child?.process.kill("SIGKILL"); } catch {} }
+  process.stdout.write("EXIT_MARKER");
+});
 if (${JSON.stringify(mode)} === "ignorable") {
   process.emit("uncaughtException", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
   setTimeout(() => process.exit(0), 50);
@@ -54,6 +74,12 @@ if (${JSON.stringify(mode)} === "ignorable") {
   setTimeout(() => { throw new Error("PROBE delegated crash"); }, 50);
 } else if (${JSON.stringify(mode)} === "rejection") {
   Promise.reject(new Error("PROBE non-LSP rejection"));
+} else if (${JSON.stringify(mode)} === "hostile-rejection") {
+  Promise.reject(Object.create(null));
+} else if (${JSON.stringify(mode)} === "large-rejection") {
+  const error = new Error("PROBE large rejection");
+  error.stack = "large-crash-stack:" + "x".repeat(1024 * 1024);
+  Promise.reject(error);
 } else {
   setTimeout(() => { throw new Error("PROBE non-LSP crash"); }, 50);
 }`;
@@ -166,6 +192,25 @@ if (${JSON.stringify(mode)} === "ignorable") {
 		expect(rejection.stderr).toContain("PROBE non-LSP rejection");
 	}, 20_000);
 
+	it("survives a re-evaluated client module and hostile rejection reason", async () => {
+		const duplicate = await runCrashGuardProbe("duplicate");
+		const hostile = await runCrashGuardProbe("hostile-rejection");
+		expect(duplicate).toMatchObject({ code: 1 });
+		expect(duplicate.stdout).toContain("EXIT_MARKER");
+		expect(hostile).toMatchObject({ code: 1 });
+		expect(hostile.stdout).toContain("EXIT_MARKER");
+		expect(hostile.stderr).toContain(
+			"[pi-lens] LSP crash guard received an unprintable failure",
+		);
+	}, 20_000);
+
+	it("flushes a large crash stack through a piped stderr", async () => {
+		const result = await runCrashGuardProbe("large-rejection");
+		expect(result).toMatchObject({ code: 1 });
+		expect(result.stderr).toContain("large-crash-stack:");
+		expect(result.stderr.length).toBeGreaterThan(1024 * 1024);
+	}, 20_000);
+
 	it("keeps ignorable stream failures and delegates to another listener", async () => {
 		const ignorable = await runCrashGuardProbe("ignorable");
 		const other = await runCrashGuardProbe("other");
@@ -173,6 +218,12 @@ if (${JSON.stringify(mode)} === "ignorable") {
 		expect(ignorable.stdout).toContain("EXIT_MARKER");
 		expect(other).toMatchObject({ code: 0 });
 		expect(other.stdout).toContain("OTHER_LISTENER");
+	}, 20_000);
+
+	it("lets a pre-existing once listener own the crash decision", async () => {
+		const result = await runCrashGuardProbe("preexisting");
+		expect(result).toMatchObject({ code: 0 });
+		expect(result.stdout).toContain("PREEXISTING_LISTENER");
 	}, 20_000);
 
 	it("closeDocument sends didClose and clears document lifecycle state", async () => {
