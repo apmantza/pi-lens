@@ -18,6 +18,11 @@
  *   for the host in `instances.json` (the row goes only after the kill is
  *   confirmed). Stdin end also ends it with the registry switched off
  *   (`PI_LENS_INSTANCE_REGISTRY=0`), where no registry exit hook runs.
+ * - crash after the server started (#5744): an uncaught exception from a
+ *   timer reaches the LSP crash guard, which exits 1 through the exit
+ *   listeners, so the server is gone and the crashed host's row stays for the
+ *   next start's vanished marker. Before #5744 the guard rethrew: Node exited
+ *   7, ran no exit listener, and the server outlived the host.
  * - SIGKILL: no code of the host runs, so the server survives that host
  *   (the stated residual); the next MCP host's start reaps it from the row
  *   the dead host left, and prunes the row.
@@ -44,6 +49,10 @@ import { McpHarness } from "./harness.js";
 
 const STUBBORN_SERVER = fileURLToPath(
 	new URL("../fixtures/stubborn-lsp-server.mjs", import.meta.url),
+);
+const CRASH_PRELOAD = new URL(
+	"../fixtures/mcp-crash-preload.mjs",
+	import.meta.url,
 );
 
 /** How long a server may take to die once its host is gone (a SIGKILL from
@@ -245,6 +254,28 @@ describe.runIf(process.platform === "linux")(
 			await exited(pids.host);
 
 			expect(await survives(pids.server, DEATH_WAIT_MS)).toBe(false);
+		}, 120_000);
+
+		it("ends the server and keeps the row when the host crashes after LSP start", async () => {
+			const ws = stubbornRustProject();
+			const exitFile = path.join(path.dirname(ws.home), "host-exit-code");
+			const harness = startHost(ws, {
+				NODE_OPTIONS: `--import=${CRASH_PRELOAD.href}`,
+				PI_LENS_TEST_CRASH_EXIT_FILE: exitFile,
+			});
+			const pids = await launchServer(harness, ws);
+			expect(registryRowPids(ws.home)).toContain(pids.host);
+
+			process.kill(pids.host, "SIGUSR2");
+			await exited(pids.host);
+
+			expect({
+				exitCode: fs.existsSync(exitFile)
+					? fs.readFileSync(exitFile, "utf-8")
+					: "no exit listener ran",
+				serverSurvives: await survives(pids.server, DEATH_WAIT_MS),
+				hostRowKept: registryRowPids(ws.home).includes(pids.host),
+			}).toEqual({ exitCode: "1", serverSurvives: false, hostRowKept: true });
 		}, 120_000);
 
 		it("ends the fresh worker's server and drops its row when the worker exits", async () => {

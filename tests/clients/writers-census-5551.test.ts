@@ -524,6 +524,11 @@ const WRITE_SITES: Record<string, SiteRow> = {
 		cls: "state",
 		why: "rotates and prunes pi-lens logs; the #5702 retention sweep unlinks aged entries (spill logs, session state, stale sockets) and removes orphaned project data directories recursively",
 	},
+	"clients/lsp/crash-output.ts": {
+		sites: 1,
+		cls: "no-write",
+		why: "writeSync to fd 2: the LSP crash guard's bounded stack report on stderr, never a file (#5744)",
+	},
 	"clients/lsp/edits.ts": {
 		sites: 9,
 		cls: "user-source",
