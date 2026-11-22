@@ -1314,7 +1314,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	 * and, since #5700, after an edit turn too. A later turn end re-arms it, so
 	 * it fires only after a whole idle window with no turn end.
 	 */
-	const armLspIdleReset = (why: string): void => {
+	const armLspIdleReset = (): void => {
 		// #713: subagent sessions use a shorter idle reset (nominally 60s) — a
 		// short-lived task agent holding a warm fleet for 4 minutes after its
 		// last turn is pure waste under fan-out. Classify ONCE here so every
@@ -1324,7 +1324,9 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		// AC6's derivation applies universally — see that function's doc for
 		// why the "shorter" path is not always literally 60s anymore.
 		const idleResetMs = getEffectiveLspIdleResetMs();
-		dbg(`turn_end: ${why}, scheduling LSP idle reset (${idleResetMs / 1000}s)`);
+		dbg(
+			`turn_end: ${files.length} modified file(s), scheduling LSP idle reset (${idleResetMs / 1000}s)`,
+		);
 		if (getFlag("no-lsp")) return;
 		const sessionGeneration = runtime.sessionGeneration;
 		scheduleLSPIdleReset(resetLSPService, idleResetMs, {
@@ -1416,7 +1418,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		if (getFlag("lens-guard") && !runtime.gitGuardHasBlockers) {
 			retireSettledGitGuardRecord(runtime, cacheManager, cwd, sessionId);
 		}
-		armLspIdleReset("no modified files");
+		armLspIdleReset();
 		resetFormatService();
 		// #3218 criterion 2: a retirement nobody has reported (a
 		// `lens_diagnostics` confirmation lands on exactly this turn) falls
@@ -1441,7 +1443,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// turn wrote a file kept its whole fleet. Re-arming replaces the pending
 	// timer and any rearm parked behind a workspace sweep (#1618), so a parked
 	// rearm cannot fire early against a session that went back to editing.
-	if (files.length > 0) armLspIdleReset(`${files.length} modified file(s)`);
+	if (files.length > 0) armLspIdleReset();
 
 	dbg(
 		`turn_end: ${files.length} file(s) modified, cycles: ${turnState.turnCycles}/${turnState.maxCycles}, access: ${access}, owner: ${gateOwnerLabel}`,

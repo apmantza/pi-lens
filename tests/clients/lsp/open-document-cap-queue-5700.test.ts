@@ -11,6 +11,8 @@
  *   never reach the server, and its caller is told they were sent.
  *   `formal/lsp-document-lifecycle` `MutBudgetCloseNoSkip` is the same
  *   defect in the model.
+ * - failed close: the close runs detached; a rejected didClose must leave a
+ *   record and the document open, not an unhandled rejection.
  * - settling publish: a publish still in its debounce window answers the
  *   bytes last sent. Closing the document then drops that answer, so the
  *   cache keeps the older finding and the wait on it never confirms.
@@ -31,6 +33,10 @@ import {
 	type LSPDiagnostic,
 	setupIncomingHandlers,
 } from "../../../clients/lsp/client.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../../clients/degradation-ledger.js";
 import { normalizeMapKey } from "../../../clients/path-utils.js";
 import {
 	gatedPromise,
@@ -143,6 +149,34 @@ describe("#5700 open-document cap: the victim", () => {
 			"didClose b.ts",
 		]);
 		expect([...state.openDocuments]).toEqual([key("c.ts"), key("d.ts")]);
+	});
+
+	// Recurrence: the close runs detached, so a rejected didClose became an
+	// unhandled rejection, or vanished with no record while the document it
+	// meant to close stayed open.
+	it("records a didClose that failed and keeps the document open for the next try", async () => {
+		const state = createMockState({ root: tmpDir, openDocumentCap: 1 });
+		const order = recordWire(state);
+		await open(state, "a.ts");
+		const send = vi.mocked(state.connection.sendNotification);
+		const recorded = send.getMockImplementation();
+		send.mockImplementation(async (method: unknown, params: unknown) => {
+			if (method === "textDocument/didClose") throw new Error("write EINVAL");
+			return recorded?.(method as never, params as never);
+		});
+		resetDegradationLedger();
+		await open(state, "b.ts");
+		await waitFor(
+			() =>
+				getDegradationSummary()
+					.filter((group) => group.kind === "lsp-open-document-cap")
+					.flatMap((group) => group.latestReasons.map((r) => r.subject)),
+			(subjects) => subjects.includes(`${state.serverId}:close-failed`),
+		);
+
+		expect(order).toEqual(["didOpen a.ts", "didOpen b.ts"]);
+		expect(state.openDocuments.has(key("a.ts"))).toBe(true);
+		resetDegradationLedger();
 	});
 
 	it("leaves a document alone while an edit waits behind its send in flight", async () => {

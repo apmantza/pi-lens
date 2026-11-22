@@ -1258,7 +1258,9 @@ export type DegradationKind =
 	 * ones with `didClose`. A closed document's last findings stay in the
 	 * client's cache, marked `closed`, and a later touch opens it again. Subject
 	 * is the server id, ONCE per server per session: the cap is the same every
-	 * time, so one row answers for every close.
+	 * time, so one row answers for every close. A close whose send failed is
+	 * counted under the subject `<server id>:close-failed` (the document stays
+	 * open; the next open past the cap retries it).
 	 */
 	| "lsp-open-document-cap"
 	/**

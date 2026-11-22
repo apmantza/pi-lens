@@ -6214,6 +6214,33 @@ function noteDocumentSent(state: LSPClientState, normalizedPath: string): void {
 }
 
 /**
+ * #5700: the cap's didClose failed for a reason other than a closed stream
+ * (`safeSendNotification` rethrows only those). The document stays open, so
+ * the next open past the cap retries it. The first failure per server is
+ * logged; the ledger counts the rest under `<server id>:close-failed`.
+ */
+function recordCapCloseFailure(
+	state: LSPClientState,
+	victim: string,
+	err: unknown,
+): void {
+	emitBounded(
+		"lsp_open_document_cap_close_failed",
+		`${state.serverId}:close-failed`,
+		{
+			filePath: victim,
+			durationMs: 0,
+			metadata: { serverId: state.serverId, reason: String(err) },
+		},
+		{
+			ledgerKind: "lsp-open-document-cap",
+			risingEdgePer: "identity",
+			reason: "a didClose past the cap failed; the document stays open",
+		},
+	);
+}
+
+/**
  * #5700: keep at most `openDocumentCap` documents open on the server. Runs
  * after an open lands and closes the least recently sent documents first.
  *
@@ -6243,17 +6270,7 @@ function enforceOpenDocumentCap(state: LSPClientState): void {
 		void enqueueDocumentNotify(state, victim, () =>
 			closeDocumentOnce(state, victim, victim, true),
 		)
-			.catch((err: unknown) => {
-				// A send that failed for a reason other than a closed stream; the
-				// document stays open and the next open past the cap retries it.
-				logLatency({
-					type: "phase",
-					phase: "lsp_open_document_cap_close_failed",
-					filePath: victim,
-					durationMs: 0,
-					metadata: { serverId: state.serverId, reason: String(err) },
-				});
-			})
+			.catch((err: unknown) => recordCapCloseFailure(state, victim, err))
 			.finally(() => {
 				state.budgetClosesQueued = Math.max(
 					0,
