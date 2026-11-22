@@ -1,4 +1,5 @@
 import { writeSync } from "node:fs";
+import { logExtension } from "../extension-log.js";
 
 /**
  * The LSP crash guard's last-resort crash report.
@@ -17,7 +18,17 @@ export function writeLspCrashStack(failure: unknown): void {
 			text = String(failure);
 		}
 	} catch {
-		text = "[pi-lens] LSP crash guard received an unprintable failure";
+		// none: the host is already terminating; preserve a bounded fallback
+		text = "[lsp-crash] unprintable failure";
+	}
+	try {
+		logExtension({
+			subsystem: "lsp-crash",
+			message: "crash guard terminating",
+		});
+	} catch {
+		// none: the crash report must not depend on the log sink
+		// The crash report must remain independent of the log sink.
 	}
 	try {
 		const output = Buffer.from(`${text}\n`);
@@ -27,6 +38,7 @@ export function writeLspCrashStack(failure: unknown): void {
 			try {
 				written = writeSync(2, output, offset, output.byteLength - offset);
 			} catch (writeFailure) {
+				// none: terminal stderr failure is non-recoverable
 				const code = (writeFailure as NodeJS.ErrnoException).code;
 				if (code === "EAGAIN" || code === "EWOULDBLOCK") continue;
 				break;
@@ -35,6 +47,7 @@ export function writeLspCrashStack(failure: unknown): void {
 			offset += written;
 		}
 	} catch {
+		// none: the host is already crashing; stderr failure cannot be surfaced
 		// The host is already crashing; a closed stderr must not replace the
 		// original failure with a second uncaught exception.
 	}

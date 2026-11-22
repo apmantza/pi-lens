@@ -199,9 +199,7 @@ if (${JSON.stringify(mode)} === "ignorable") {
 		expect(duplicate.stdout).toContain("EXIT_MARKER");
 		expect(hostile).toMatchObject({ code: 1 });
 		expect(hostile.stdout).toContain("EXIT_MARKER");
-		expect(hostile.stderr).toContain(
-			"[pi-lens] LSP crash guard received an unprintable failure",
-		);
+		expect(hostile.stderr).toContain("[lsp-crash] unprintable failure");
 	}, 20_000);
 
 	it("flushes a large crash stack through a piped stderr", async () => {
