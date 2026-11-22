@@ -218,6 +218,8 @@ const lspRunner: RunnerDefinition = {
 		// diagnostics means clean".
 		let unconfirmedServerIds: readonly string[] = [];
 		let deferredServerIds: readonly string[] = [];
+		// #5727: auxiliaries that answered these bytes on an inconclusive touch.
+		let answeredServerIds: readonly string[] = [];
 		// #5008: did the PRIMARY answer these bytes? A collecting touch says so by
 		// completing its confirmation policy (`confirmed`, or `partial` when only
 		// an auxiliary went missing) — the one owner of that question. Only that
@@ -353,6 +355,7 @@ const lspRunner: RunnerDefinition = {
 					]),
 				];
 				deferredServerIds = touched.deferredServerIds ?? [];
+				answeredServerIds = touched.answeredServerIds ?? [];
 				// #5051: the cascade's confirmed-touch display reads the same
 				// verdict through the same reader.
 				primaryAnswerStale = readBoundToCurrentDisk(touched) === false;
@@ -391,6 +394,9 @@ const lspRunner: RunnerDefinition = {
 						}
 					}
 					lspDiags = currentContentDiags;
+					// #5727: every row withheld, so no server's answer is about
+					// these bytes either.
+					if (!namesStaleContributor) answeredServerIds = [];
 				}
 			}
 		} catch (err) {
@@ -482,6 +488,10 @@ const lspRunner: RunnerDefinition = {
 					inconclusiveReason !== "primary-unavailable" && {
 						unconfirmedServerIds: [...inconclusiveServerIds],
 					}),
+				// #5727: the run has no verdict, but these servers answered clean.
+				...(answeredServerIds.length > 0 && {
+					answeredServerIds: [...answeredServerIds],
+				}),
 				...primaryUnavailable,
 			};
 		}
@@ -722,6 +732,9 @@ const lspRunner: RunnerDefinition = {
 			}),
 			...(deferredServerIds.length > 0 && {
 				deferredServerIds: [...deferredServerIds],
+			}),
+			...(answeredServerIds.length > 0 && {
+				answeredServerIds: [...answeredServerIds],
 			}),
 			...(outOfEditScope.length > 0 && { outOfEditScope }),
 			...(withheldNotice !== undefined && { withheldNotice }),

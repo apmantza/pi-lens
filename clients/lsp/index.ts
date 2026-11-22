@@ -7105,6 +7105,12 @@ export class LSPService {
 				if (verdict.disabledPrimaryServerIds) {
 					result.disabledPrimaryServerIds = verdict.disabledPrimaryServerIds;
 				}
+				// #5727: the auxiliaries whose answer is bound to these bytes (the
+				// merge's frozen set). This branch names no coverage gap, so "not
+				// named" is no evidence an auxiliary answered; only this list is.
+				if (auxCoveredAtMerge.size > 0) {
+					result.answeredServerIds = [...auxCoveredAtMerge];
+				}
 				if (verdict.primaryUnavailableCause) {
 					result.primaryUnavailableCause = verdict.primaryUnavailableCause;
 				}

@@ -137,6 +137,15 @@ export interface TouchFileResult {
 	 */
 	inconclusiveServerIds?: string[];
 	/**
+	 * #5727: on an inconclusive touch, the auxiliaries whose answer is bound to
+	 * these bytes (published for them, or a binding that matches them). Each
+	 * is that server's verdict on the file while the primary gave none. An
+	 * auxiliary that did not answer is not here; the inconclusive touch names
+	 * no coverage gap, so an id missing from both lists is not one that
+	 * answered. Absent on every other touch.
+	 */
+	answeredServerIds?: string[];
+	/**
 	 * #1549: which deadline produced the verdict — the notify write that never
 	 * landed, the diagnostics wait that lapsed, or both. Named so a forensic sweep
 	 * of `latency.log`/`cascade.log` reads the cause instead of inferring it from
