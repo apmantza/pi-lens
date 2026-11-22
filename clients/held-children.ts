@@ -29,6 +29,7 @@ export interface OwnedChildLedger {
 		pid: number;
 		serverId: string;
 		command: string;
+		processStart?: string;
 	}): Promise<void>;
 	remove(pid: number): Promise<void>;
 }
@@ -60,6 +61,7 @@ export function recordOwnedChild(entry: {
 	pid: number;
 	serverId: string;
 	command: string;
+	processStart?: string;
 }): Promise<void> {
 	return cell().owned?.write(entry) ?? Promise.resolve();
 }

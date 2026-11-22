@@ -49,6 +49,7 @@ import {
 	OWNER_TAG_ENV,
 	formatOwnerTag,
 	ownProcessStartIfKnown,
+	readProcessStart,
 	windowsExe,
 } from "./process-snapshot.js";
 import { startSpawnUsageSampler } from "./resource-sampler.js";
@@ -2369,16 +2370,39 @@ export async function safeSpawnAsync(
 		}
 		const resourceLabel = options?.resourceLabel ?? command;
 		const registryChildPid = child.pid;
-		if (registryChildPid !== undefined) {
-			void recordOwnedChild({
-				pid: registryChildPid,
-				serverId: `safe-spawn:${resourceLabel}`,
-				command: spawnCmd,
+		const noteOwnedChildLedgerFailure = (
+			operation: "record" | "remove",
+			err: unknown,
+		): void => {
+			recordDegradationOnce({
+				kind: "safe-spawn-owned-child-registry-failed",
+				subject: "owned-child-registry",
+				reason: `${operation} failed: ${String(err)}`,
 			});
+		};
+		if (registryChildPid !== undefined) {
+			void (
+				ownsChildPid
+					? readProcessStart(registryChildPid, { timeoutMs: 1_000 })
+					: Promise.resolve(undefined)
+			)
+				.then((processStart) =>
+					recordOwnedChild({
+						pid: registryChildPid,
+						serverId: `safe-spawn:${resourceLabel}`,
+						command: spawnCmd,
+						...(processStart === undefined ? {} : { processStart }),
+					}),
+				)
+				.catch((err) => noteOwnedChildLedgerFailure("record", err));
 		}
+		let registryChildRemoved = false;
 		const removeRegistryChild = (): void => {
-			if (registryChildPid === undefined) return;
-			void removeOwnedChild(registryChildPid);
+			if (registryChildPid === undefined || registryChildRemoved) return;
+			registryChildRemoved = true;
+			void Promise.resolve()
+				.then(() => removeOwnedChild(registryChildPid))
+				.catch((err) => noteOwnedChildLedgerFailure("remove", err));
 		};
 
 		// #3375 round 2 (H3384-1). `killTree`'s promise is AWAITED by `finalize`
@@ -2940,6 +2964,10 @@ export async function safeSpawnAsync(
 
 		child.on("exit", onChildSettle);
 		child.on("close", onChildSettle);
+		// An asynchronous spawn failure emits `error` before `close`, and the
+		// error callback resolves the public result immediately. Keep its row
+		// until `close` proves the child handle has terminated.
+		child.once("close", removeRegistryChild);
 
 		child.on("error", (err) => {
 			// Capture unconditionally — even when `close` already resolved, this
@@ -2959,7 +2987,6 @@ export async function safeSpawnAsync(
 				clearTimeout(escalationTimer);
 			}
 			if (child.pid) lifetimeState().pids.delete(child.pid);
-			removeRegistryChild();
 			const resourceUsage = finishResourceUsage();
 			let failure: SpawnFailureKind = "spawn";
 			if (aborted) failure = "aborted";

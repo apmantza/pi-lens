@@ -1,11 +1,4 @@
 {
-  "real-harness/runner-host-exit-5703.test.ts": {
-    "reason": "The regression requires a real pi host, its production safeSpawnAsync child, a host SIGKILL, and the next host's reaper; an in-process mock cannot prove the child survives one host and dies at the next session start.",
-    "routes": [
-      "spawn:pi via tests/support/real-pi-harness.ts:274",
-      "spawnSync:ps via tests/support/process-tree.ts:87"
-    ]
-  },
   "clients/ast-grep-antislop-error-floor.test.ts": {
     "reason": "starts real `ast-grep` child process(es) (spawnSync), called from the file itself (tests/clients/ast-grep-antislop-error-floor.test.ts:100), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
     "routes": [

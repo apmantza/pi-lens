@@ -791,6 +791,7 @@ export interface RecordLspChildInput {
 	serverId: string;
 	command: string;
 	marker?: string;
+	processStart?: string;
 	/** Session identity used if this child arrives before host registration. */
 	sessionIdentity?: {
 		projectRoot: string;
@@ -898,7 +899,9 @@ async function recordLspChildNow(
 	const now = new Date().toISOString();
 	const [selfStart, childStart] = await Promise.all([
 		ownProcessStart(startReadOptions()),
-		readProcessStart(entry.pid, startReadOptions()),
+		entry.processStart === undefined
+			? readProcessStart(entry.pid, startReadOptions())
+			: Promise.resolve(entry.processStart),
 	]);
 	const childEntry: LspChildEntry = {
 		pid: entry.pid,
