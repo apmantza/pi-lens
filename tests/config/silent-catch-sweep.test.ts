@@ -1137,11 +1137,13 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		identities: "d3c52ebe36413a9f",
 		reason: PRE_RULE,
 	}, // :393, :413, :438, :696, :761, :773, :840, :1066, :3342, :3348, :3354, :4720, :4547, :4668, :4701, :4922, :5055, :5375, :5416, :5671
+	// #5699: same 18 handlers; the `/proc` read's handler now reads the held
+	// store through `heldChildren()` (it moved onto the process singleton).
 	"clients/safe-spawn.ts": {
 		silent: 18,
-		identities: "e64267868c7a0d5b",
+		identities: "aa26ee5b6400d32a",
 		reason: PRE_RULE,
-	}, // :192, :201, :229, :465, :511, :603, :660, :674, :677, :1157, :1397, :1866, :1936, :1966, :2012, :2045, :2192, :2249
+	}, // :209, :218, :246, :499, :562, :708, :765, :779, :782, :1276, :1765, :2257, :2327, :2357, :2403, :2436, :2583, :2640
 	"clients/search-read-registration.ts": {
 		silent: 1,
 		identities: "a37a1b3a1638df7c",

@@ -23,6 +23,7 @@ import {
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { BoundedFifoMap } from "./bounded-cache.js";
+import { provideHeldChildrenLedger } from "./held-children.js";
 import { logLatency } from "./latency-logger.js";
 import {
 	incrementDegradationCount,
@@ -589,7 +590,7 @@ function sweepHeldOwnPids(): void {
  * orphaned).
  */
 export function holdOwnChildPid(
-	child: HeldChild & { readonly pid?: number },
+	child: HeldChild & { readonly pid?: number | undefined },
 	site: string,
 ): boolean {
 	const pid = child.pid;
@@ -628,12 +629,6 @@ export function releaseOwnChildPid(pid: number | undefined): void {
 	if (typeof pid === "number") heldChildren().delete(pid);
 }
 
-/** Whether any child is still held (#5699): a quitting host keeps its
- *  registry entry while one is, see `deregisterInstance`. */
-export function holdsChildren(): boolean {
-	return heldChildren().size > 0;
-}
-
 /**
  * SIGKILL every held child's process group now (#5699) and report whether
  * each one is confirmed gone: its group no longer exists, or the kernel
@@ -644,7 +639,7 @@ export function holdsChildren(): boolean {
  * Synchronous and spawn-free, so it is safe in an `exit` or signal handler.
  * Idempotent: a second call finds only what the first could not end.
  */
-export function endHeldChildren(): boolean {
+function endHeldChildren(): boolean {
 	const held = heldChildren();
 	let allEnded = true;
 	for (const [pid, child] of held.entriesArray()) {
@@ -670,6 +665,13 @@ function endHeldGroup(pid: number, child: HeldChild): boolean {
 		return errorCode(cause as Error) === "ESRCH";
 	}
 }
+
+// #5699: the registry asks these through `held-children.ts`; importing this
+// module there would close a module cycle.
+provideHeldChildrenLedger({
+	holds: () => heldChildren().size > 0,
+	end: endHeldChildren,
+});
 
 /** Once per session: a Linux host whose `/proc` cannot answer the question. */
 function recordProcUnavailable(site: string): void {

@@ -1262,7 +1262,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 8 -> 9 (#3498): the own-hold skip's degradation `subject`,
 		// `path.resolve(target)`, as its sibling records in this file spell it.
 		"clients/instance-registry-lock.ts": 9,
-		"clients/instance-registry.ts": 2,
+		// 2 -> 3 (#5699): writeRegistrySync creates the directory of the
+		// target it is handed, `path.dirname(target)`: the exit removal writes
+		// the registry path armed at the first write.
+		"clients/instance-registry.ts": 3,
 		"clients/jscpd-client.ts": 6,
 		"clients/json-cache-read.ts": 4,
 		"clients/knip-client.ts": 24,

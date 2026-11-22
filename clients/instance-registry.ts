@@ -65,7 +65,7 @@ import {
 } from "./process-snapshot.js";
 import { queueRegistryMutation } from "./instance-registry-tail.js";
 import { getProcessSingleton } from "./process-singletons.js";
-import { endHeldChildren, holdsChildren } from "./safe-spawn.js";
+import { endHeldChildren, holdsChildren } from "./held-children.js";
 import { getSubagentIdentity, isSubagentSession } from "./subagent-mode.js";
 
 export interface LspChildEntry {
