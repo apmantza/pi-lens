@@ -162,6 +162,19 @@ The #4509 fix switch, pinned TRUE:
    edit-scoped keep, which never shows an unplaced entry inside the edit,
    kept it after its fix for the session (`ConclusiveRetires`).
 
+The #5727 environment and fix switches. The fix switch is pinned TRUE:
+ - PrimarySilent (environment): the fast runner hosts two servers (the
+   `lsp` runner: a primary and the ast-grep auxiliary). On outcome
+   "psilent" its primary gives no answer while the auxiliary answers the
+   bytes: "b" and "u" are the primary's findings, unseen; "a" and "p" are
+   the auxiliary's, judged. The runner as a whole reaches no verdict, so
+   its lines stay owed;
+ - CarryByServer: the no-verdict carry keeps only the recorded blockers of
+   the silent primary; the auxiliary's answer judges its own
+   (`answeredServerIds`, carryRecordedBlockers). FALSE is the code before
+   #5727: it kept every recorded blocker of the runner, so a fixed "a"
+   pinned the commit gate (`ConclusiveRetires`).
+
 Invariants:
  - GateHonest: the commit gate is open only when no completed observation of
    the current bytes holds a blocker;
@@ -231,7 +244,9 @@ CONSTANTS
     EditScopedOwed,    \* round 6: that skip keeps the runner's owed lines outside the edit
     LaneVoids,         \* round 7 (O2): a covered skip with a silent lane is no verdict
     SettleCoverKeep,   \* round 7 (O1): a settled covered skip retires nothing
-    RecordedRuns       \* #4509: a runner holding a recorded blocker runs, never skips as covered
+    RecordedRuns,      \* #4509: a runner holding a recorded blocker runs, never skips as covered
+    PrimarySilent,     \* #5727: the primary may be silent while the auxiliary answers
+    CarryByServer      \* #5727: that run keeps only the silent primary's recorded blockers
 
 Fast == {"a", "b"}
 U == IF Unused THEN {"u"} ELSE {}
@@ -248,6 +263,16 @@ Outcomes == {"ok"} \cup (IF MayFail THEN {"fail"} ELSE {})
                    \cup (IF MaySkip THEN {"skip"} ELSE {})
                    \cup (IF GateB THEN {"cover"} ELSE {})
                    \cup (IF GateB /\ MayFail THEN {"silent"} ELSE {})
+                   \cup (IF PrimarySilent THEN {"psilent"} ELSE {})
+
+\* #5727: the silent primary's findings on outcome "psilent" (unseen), and
+\* the recorded blockers the no-verdict carry keeps for it.
+PF == {"b"} \cup U
+PH(o) == IF o = "psilent" THEN PF ELSE {}
+KP(o) ==
+    IF o = "psilent" /\ CarryInconclusive
+      THEN IF CarryByServer THEN PF ELSE Inline
+      ELSE {}
 
 \* The id the delta keys on, for finding f in observation obs at line offsets l.
 \* "u" is an LSP finding, so its id is line-bound whatever Ordinal says.
@@ -402,7 +427,9 @@ Covers(touched, al) == touched \cup Owing(al)
 Reach(edited) == edited \cup owe \cup (IF TwinSameText THEN Tw ELSE {})
 
 Write(bytes, shift, edited, o, al) ==
-    LET new == Seen(bytes, o)
+    LET ph == PH(o)
+        kp == KP(o)
+        new == Seen(bytes, o) \ ph
         blind == ~al /\ shift
         silent == o = "silent"
         fail == Failed(o) \/ (silent /\ LaneVoids)
@@ -424,15 +451,17 @@ Write(bytes, shift, edited, o, al) ==
         newIds == IF Delta /\ hasBase THEN ids \ base ELSE ids
         deltaSet == {f \in obs : Id(f, obs, l) \in newIds}
         delivered == IF ClearOnCurrent THEN obs \cup ub ELSE deltaSet \cup ub
-        current == delivered \cup Carried(new, touched, fail, l, blind, hid, ks)
+        current == delivered \cup Carried(new, touched, fail, l, blind, hid, ks \cup kp)
+        \* #5727: nothing showed the silent primary's findings gone.
+        stillOwed == OwedAfter(new, fail) \cup (owed \cap ph)
     IN /\ disk' = bytes /\ ln' = l
        /\ base' = ids /\ hasBase' = TRUE
        /\ obsF' = obs \cup ub /\ wobs' = obs \cup ub
-       /\ RecordVerb(current, Gone(new, fail) \ hid)
+       /\ RecordVerb(current, (Gone(new, fail) \ hid) \ ph)
        /\ toolClean' = (current = {})
-       /\ owed' = OwedAfter(new, fail) \cup delivered
-       /\ cleanOk' = (current = {} => OwedAfter(new, fail) \cup delivered = {})
-       /\ owe' = IF fail THEN owe \cup touched
+       /\ owed' = stillOwed \cup delivered
+       /\ cleanOk' = (current = {} => stillOwed \cup delivered = {})
+       /\ owe' = IF fail \/ ph # {} THEN owe \cup touched
                  ELSE IF cover /\ EditScopedOwed THEN owe \ edited ELSE {}
        /\ reported' = reported \cup delivered
        /\ lost' = IF blind THEN (rec \ current) \cap bytes \cap Lined ELSE {}
@@ -441,12 +470,16 @@ Write(bytes, shift, edited, o, al) ==
        \* #4509 (N3): an entry kept unmatched has no position afterwards when
        \* the write had no alignment or edited its line (P42); one the
        \* edit-scoped keep holds keeps having none.
-       /\ unpos' = IF fail /\ CarryInconclusive
+       /\ unpos' = IF (fail \/ ph # {}) /\ CarryInconclusive
                      THEN ((IF blind THEN rec ELSE unpos \cup (rec \cap edited))
-                             \cap Lined \cap current) \ delivered
+                             \cap Lined \cap current
+                             \cap (IF fail THEN Lined ELSE kp)) \ delivered
                      ELSE IF cover THEN unpos \cap ks \cap current
                      ELSE {}
-       /\ pinned' = pinned \cup (IF fail THEN {} ELSE (rec \cap ks) \ bytes)
+       \* #5727: a kept entry of the answering auxiliary that its bytes lack
+       \* is a pin as well.
+       /\ pinned' = pinned \cup (IF fail THEN {}
+                                 ELSE ((rec \cap (ks \cup kp)) \ ph) \ bytes)
        /\ adopted' = adopted \cup
                     (((delivered \cup StandIn(new, touched, fail, blind, hid))
                         \cap Tw \cap Gated) \ Reach(edited))
@@ -478,22 +511,23 @@ WriteStep ==
 OpaqueStep ==
     /\ nO < OpaqueWrites
     /\ \E bytes \in SUBSET disk, o \in Outcomes :
-        LET new == Seen(bytes, o)
+        LET ph == PH(o)
+            new == Seen(bytes, o) \ ph
             fail == Failed(o)
             touched == Covers((disk \ bytes) \cap Lined, TRUE)
             obs == Deliv(new, touched, fail)
             ub == UBlock(new, fail, ln)
-            keep == obs \cup ub \cup Carried(new, touched, fail, ln, FALSE, {}, {})
+            keep == obs \cup ub \cup Carried(new, touched, fail, ln, FALSE, {}, KP(o))
             clears == IF OpaqueKeep THEN keep = {} ELSE TRUE
         IN /\ disk' = bytes
            /\ base' = IdsOf(obs, ln) \cup IdsOf(USeen(new, fail), ln)
            /\ hasBase' = TRUE
            /\ obsF' = obs \cup ub
-           /\ IF clears THEN RecordVerb({}, Gone(new, fail))
+           /\ IF clears THEN RecordVerb({}, Gone(new, fail) \ ph)
                         ELSE UNCHANGED <<rec, noted, cleared, clearOk>>
            /\ unpos' = IF clears THEN {} ELSE unpos
-           /\ owed' = OwedAfter(new, fail)
-           /\ owe' = IF fail THEN owe \cup touched ELSE owe
+           /\ owed' = OwedAfter(new, fail) \cup (owed \cap ph)
+           /\ owe' = IF fail \/ ph # {} THEN owe \cup touched ELSE owe
            /\ dState' = IF Deferred THEN "flight" ELSE "idle"
     /\ nO' = nO + 1
     /\ claim' = FALSE
