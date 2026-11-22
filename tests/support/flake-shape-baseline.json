@@ -408,6 +408,7 @@
 		"clients/lsp/client-exit-cause-ledger.test.ts": 1,
 		"clients/lsp/client-internals.test.ts": 4,
 		"clients/lsp/client-retention-process-scope.test.ts": 1,
+		"clients/lsp/kill-process-tree-real-child.test.ts": 3,
 		"clients/lsp/refresh-and-sync-kind.test.ts": 3,
 		"clients/lsp/request-sender-5097.test.ts": 6,
 		"clients/lsp/service-document-drift.test.ts": 1,

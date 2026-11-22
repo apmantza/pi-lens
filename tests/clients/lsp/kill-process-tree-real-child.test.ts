@@ -1,4 +1,5 @@
 // flake-shape: real-process-spawn — a real, live direct child is the ONLY pid whose /proc PPid is this process, so the Linux ownership arm of `isOwnLiveChild` cannot be observed through any double; #3091 round 1 shipped a regression at exactly this site because every case that reached it stubbed the platform away.
+// flake-shape: ungoverned-wait-for — the #5733 F1 descendant is no child of this process: its start is visible only as the pid file it writes and its death only as its pid leaving /proc, neither exposes an awaitable, and each poll is bounded by its own timeout.
 /**
  * #2042 / PR #3091 F1 — the Linux ownership arm of `killProcessTree`, against a
  * real child.
@@ -278,33 +279,6 @@ describe.skipIf(process.platform !== "linux")(
 			expect(isOwnLiveChild(pid, "after-release")).toBe(false);
 		});
 
-		// #5733 F1: the ladder released the hold on the leader's exit, so a
-		// descendant that ignored SIGTERM outlived the shutdown AND the host,
-		// whose exit handler kills only held groups.
-		it("ends a group that outlives its SIGTERM-exited leader before releasing it (#5733 F1)", async () => {
-			resetDegradationLedger();
-			const { handle, descendant } = await launchGroupOutlivingItsLeader();
-			const pid = handle.pid;
-
-			await killProcessTree(handle.process, pid);
-
-			expect(handle.process.signalCode).toBe("SIGTERM");
-			await vi.waitFor(
-				() => {
-					if (!isGone(descendant)) throw new Error("descendant alive");
-				},
-				{ timeout: 3_000, interval: 20 },
-			);
-			expect(isOwnLiveChild(pid, "after-group-end")).toBe(false);
-			expect(outlivedLeaderRows()).toMatchObject([
-				{
-					kind: "held-group-outlived-leader",
-					count: 1,
-					latestReasons: [{ subject: "lsp-shutdown" }],
-				},
-			]);
-		});
-
 		it("keeps the hold through the fast window while the group outlives its leader (#5733 F1)", async () => {
 			resetDegradationLedger();
 			const { handle, descendant } = await launchGroupOutlivingItsLeader();
@@ -381,6 +355,40 @@ describe.skipIf(process.platform !== "linux")(
 		});
 	},
 );
+
+// A plain declaration with an in-body skip, not `describe.skipIf`: the body
+// lint reads a record back only from a declaration it can prove runs, and
+// this case reads `held-group-outlived-leader` back (#4597).
+describe("killProcessTree, a group that outlives its leader (#5733)", () => {
+	// #5733 F1: the ladder released the hold on the leader's exit, so a
+	// descendant that ignored SIGTERM outlived the shutdown AND the host,
+	// whose exit handler kills only held groups.
+	it("ends a group that outlives its SIGTERM-exited leader before releasing it (#5733 F1)", async (ctx) => {
+		// /proc and a real process group are the evidence; Linux only.
+		if (process.platform !== "linux") return ctx.skip("reads /proc");
+		resetDegradationLedger();
+		const { handle, descendant } = await launchGroupOutlivingItsLeader();
+		const pid = handle.pid;
+
+		await killProcessTree(handle.process, pid);
+
+		expect(handle.process.signalCode).toBe("SIGTERM");
+		await vi.waitFor(
+			() => {
+				if (!isGone(descendant)) throw new Error("descendant alive");
+			},
+			{ timeout: 3_000, interval: 20 },
+		);
+		expect(isOwnLiveChild(pid, "after-group-end")).toBe(false);
+		expect(outlivedLeaderRows()).toMatchObject([
+			{
+				kind: "held-group-outlived-leader",
+				count: 1,
+				latestReasons: [{ subject: "lsp-shutdown" }],
+			},
+		]);
+	});
+});
 
 // `HELD_OWN_PID_SWEEP_AT` in clients/safe-spawn.ts, restated: the issue's own
 // number, so a changed ceiling reds these cases instead of following it.

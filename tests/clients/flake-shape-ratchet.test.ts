@@ -2088,6 +2088,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the restart's spawn-gate window is between real server processes: one server's shutdown, the cache clock, and a restart that ends after the bounded tool_call hook returns expose no awaitable, so vi.waitFor joins them",
 	},
+	// 2026-11-22 (#5733 F1): a descendant in a language server's group is no
+	// child of the test, and only its pid file and /proc show its life.
+	"ungoverned-wait-for:clients/lsp/kill-process-tree-real-child.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"#5733 F1: the descendant that outlives its leader is no child of this process; its start shows only as the pid file it writes and its death only as its pid leaving /proc, neither exposes an awaitable, and each poll is bounded by its own timeout",
+	},
 	// 2026-10-23 (#4776 review H1): a formatter selection written after a trust
 	// change is observable only while a real detection is held open in its
 	// child process, and the child's start is visible only as the file it
