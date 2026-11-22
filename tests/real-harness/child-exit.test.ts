@@ -17,6 +17,7 @@ import {
 	killGuardReport,
 	takeKillGuardViolationsForTest,
 } from "../support/kill-guard.js";
+import { waitFor } from "../clients/interleaving-kit.js";
 import { getProcessSingleton } from "../../clients/process-singletons.js";
 import { safeSpawnAsync } from "../../clients/safe-spawn.js";
 import { isProcessAlive, killProcessTree } from "../support/process-tree.js";
@@ -523,9 +524,10 @@ describe("kill-guard ownership (#2042)", () => {
 				["-e", "setTimeout(() => {}, 1500)"],
 				{ lifetimeCoupled: true, timeout: 10_000 },
 			);
-			for (let i = 0; i < 200 && pids.size === 0; i++)
-				await new Promise((resolve) => setTimeout(resolve, 10));
-			const registered = [...pids];
+			const registered = await waitFor(
+				() => [...pids],
+				(held) => held.length > 0,
+			);
 			expect((await pending).status).toBe(0);
 			expect({
 				registered: registered.length,
