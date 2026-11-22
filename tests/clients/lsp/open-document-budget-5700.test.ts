@@ -1,3 +1,4 @@
+// flake-shape: ungoverned-wait-for — the second pull must be on the server before the cap closes the document, and only the server's own trace shows that; each poll is bounded by its own timeout.
 // flake-shape: real-process-spawn — the open-document cap is a wire claim (which didOpen/didClose a real server receives, in which order); a stubbed transport cannot show what the server holds
 /**
  * #5700 (B1) over the real wire: each client caps its open documents.

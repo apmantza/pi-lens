@@ -2090,6 +2090,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// change is observable only while a real detection is held open in its
 	// child process, and the child's start is visible only as the file it
 	// writes.
+	"ungoverned-wait-for:clients/lsp/open-document-budget-5700.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"#5737: the late pull must be on the server before the cap closes the document, and only the server's own trace shows that; the poll is bounded by its own timeout",
+	},
 	"ungoverned-wait-for:clients/lsp/request-sender-5097.test.ts": {
 		detector: "ungoverned-wait-for",
 		reason:
