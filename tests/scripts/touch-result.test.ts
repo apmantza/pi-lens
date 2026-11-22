@@ -66,6 +66,8 @@ async function workspace(options: {
 	missing?: string[];
 	/** #5727: fake servers that hold their first pull past the touch's wait. */
 	slow?: string[];
+	/** #5727: fake servers that never answer a pull. */
+	silent?: string[];
 	disabled: string[];
 }) {
 	const root = fs.realpathSync(setupTestEnvironment(PREFIX).tmpDir);
@@ -89,6 +91,13 @@ async function workspace(options: {
 					FAKE_LSP_DELAY_FIRST_PULL: "1",
 					FAKE_LSP_DELAY_AFTER_FIRST_PULL_MS: "20000",
 				},
+			},
+		]),
+		...(options.silent ?? []).map((id) => [
+			id,
+			{
+				command: [process.execPath, fakeServer],
+				env: { FAKE_LSP_HANG_METHODS: "textDocument/diagnostic" },
 			},
 		]),
 	]);
@@ -273,5 +282,33 @@ describe("the LSP scripts' reading of a touch (#4403)", () => {
 			inconclusiveServerIds: ["marksman"],
 			answeredServerIds: ["typos"],
 		});
+	}, 30_000);
+
+	// The other half: an auxiliary that was acquired but did not answer is not
+	// named, and the inconclusive touch names no coverage gap for it either, so
+	// only the answered list can say an auxiliary answered.
+	it("does not name an auxiliary that did not answer when no primary could start (#5727)", async () => {
+		const notes = await workspace({
+			file: "notes.md",
+			content: "# Notes\n",
+			missing: ["marksman"],
+			fake: [],
+			silent: ["typos"],
+			disabled: [],
+		});
+
+		const touched = await service!.touchFile(
+			notes.file,
+			notes.content,
+			rowTouch(["typos"]),
+		);
+
+		expect(touched).toMatchObject({
+			inconclusive: true,
+			inconclusiveReason: "primary-unavailable",
+		});
+		expect(service!.getAliveServerIds()).toContain("typos");
+		expect(touched).not.toHaveProperty("answeredServerIds");
+		expect(touched).not.toHaveProperty("unconfirmedServerIds");
 	}, 30_000);
 });

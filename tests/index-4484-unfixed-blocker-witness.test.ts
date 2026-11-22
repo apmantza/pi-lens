@@ -60,7 +60,7 @@ const boundary = vi.hoisted(() => {
 		/** The fake language server: error 2304 on each `BAD_CALL` line, and
 		 *  warning 6133 on each `unusedVar` line (round 2, row 16). */
 		diagnose: (content: string): unknown[] =>
-			content.split("\n").flatMap((line, i): unknown[] => {
+			content.split("\n").flatMap((line, i, lines): unknown[] => {
 				const range = {
 					start: { line: i, character: 0 },
 					end: { line: i, character: 8 },
@@ -95,12 +95,12 @@ const boundary = vi.hoisted(() => {
 						},
 					];
 				// #5727: the Python rule of the report, on a bare `json.loads(`
-				// call; a `try:` in the file is the fix, as the rule's own
+				// call; a `try:` on the line above is the fix, as the rule's own
 				// `inside: try_statement` exception would read it here.
 				if (
 					ag.diag &&
 					line.includes("json.loads(") &&
-					!content.includes("try:")
+					!(lines[i - 1] ?? "").trimEnd().endsWith("try:")
 				)
 					return [
 						{
@@ -207,13 +207,16 @@ const boundary = vi.hoisted(() => {
 		 * pins `answeredServerIds` on it): the auxiliary's rows, the primary
 		 * named, and the auxiliary in `answeredServerIds`. With `auxSilent`
 		 * the auxiliary did not answer either: no rows, and on an inconclusive
-		 * touch the service names no coverage gap.
+		 * touch the service names no coverage gap. With `stale`, the merged
+		 * binding says the answer is about other bytes (a second auxiliary's
+		 * view diverged from disk while ast-grep's answer covered these).
 		 */
 		primarySilent: undefined as
 			| undefined
 			| {
 					reason: "diagnostics-wait" | "primary-unavailable";
 					auxSilent?: boolean;
+					stale?: boolean;
 			  },
 		/** Pending held answers; `release(true)` fails the touch instead. */
 		held: [] as Array<(fail?: boolean) => void>,
@@ -231,7 +234,7 @@ const boundary = vi.hoisted(() => {
 		) => {
 			lsp.touches += 1;
 			if (lsp.primarySilent) {
-				const { reason, auxSilent } = lsp.primarySilent;
+				const { reason, auxSilent, stale } = lsp.primarySilent;
 				return {
 					diags: auxSilent
 						? []
@@ -245,7 +248,7 @@ const boundary = vi.hoisted(() => {
 						primaryUnavailableCause: "unstarted",
 					}),
 					...(!auxSilent && { answeredServerIds: ["ast-grep"] }),
-					binding: { boundToCurrentDisk: true },
+					binding: { boundToCurrentDisk: stale !== true },
 				};
 			}
 			if (lsp.auxGap) {
@@ -2766,6 +2769,46 @@ describe("#5727 witness: an auxiliary's answer judges its own recorded blocker",
 			/Still unfixed: 1 blocker reported earlier \(L2 python:undefined-name\)\./,
 		);
 		expect(w2).not.toContain(RULE);
+		expect(await s.commitBlocked()).toBe(true);
+		boundary.lsp.primarySilent = undefined;
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// One server, two findings, one fixed: its answer still holds the other,
+	// so only the fixed one retires.
+	it("retires the fixed one of two ast-grep blockers while the primary does not answer (#5727)", async () => {
+		const TWO =
+			"import json\n\n\ndef load(raw):\n    data = json.loads(raw)\n    return data\n\n\ndef load2(raw):\n    return json.loads(raw)\n";
+		const TWO_ONE_FIXED =
+			"import json\n\n\ndef load(raw):\n    try:\n        data = json.loads(raw)\n    except ValueError:\n        data = None\n    return data\n\n\ndef load2(raw):\n    return json.loads(raw)\n";
+		boundary.lsp.enabled = true;
+		boundary.ag.diag = true;
+		boundary.lsp.primarySilent = { reason: "diagnostics-wait" };
+		const s = await openSession("py-two", "src/py-two.py", PY_CLEAN);
+		expect(await s.write(TWO)).toContain("🔴 STOP — 2 issue(s)");
+		const w2 = await s.write(TWO_ONE_FIXED);
+		// The one still there is delivered at its moved line; the fixed one is
+		// not carried beside it.
+		expect(w2).toContain("🔴 STOP — 1 issue(s)");
+		expect(w2).toContain("L13: Call without try/except");
+		expect(w2).not.toMatch(/Still unfixed/);
+		expect(await s.commitBlocked()).toBe(true);
+		boundary.lsp.primarySilent = undefined;
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// A touch whose answer is about other bytes withholds every row, so it is
+	// no answer of the auxiliary either: a finding still there must not retire
+	// because its row was withheld.
+	it("keeps an ast-grep blocker when the touch's answer is about other bytes (#5727)", async () => {
+		boundary.lsp.enabled = true;
+		boundary.ag.diag = true;
+		boundary.lsp.primarySilent = { reason: "primary-unavailable" };
+		const s = await openSession("py-stale", "src/py-stale.py", PY_CLEAN);
+		expect(await s.write(PY_BAD)).toContain("🔴 STOP");
+		boundary.lsp.primarySilent = { reason: "primary-unavailable", stale: true };
+		const w2 = await s.write(PY_STILL_BARE);
+		expect(w2).toMatch(/Still unfixed: 1 blocker reported earlier/);
 		expect(await s.commitBlocked()).toBe(true);
 		boundary.lsp.primarySilent = undefined;
 		await fixAndDrain(s);
