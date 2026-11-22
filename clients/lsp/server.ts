@@ -7,7 +7,7 @@
  * - Platform-specific handling
  */
 
-import { existsSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { access, readFile, readdir, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -2999,21 +2999,47 @@ function dotnetToolCandidates(tool: string): string[] {
  * #4530 (#4776): these are toolchain dirs (`$GOPATH/bin`, `$CARGO_HOME/bin`),
  * and the launcher starts a named file without judging it, so an entry that is
  * the session repository's bytes is dropped here until pi trusts the project.
+ *
+ * #5715: on win32 the extensionless spelling is only ever a PATHEXT completion
+ * (cmd.exe runs `<dir>\<tool>.exe`, `.cmd`, `.bat`, ... for it), so judging the
+ * file by that spelling cannot see what runs. It is withheld from an untrusted
+ * project dir whatever sits beside it; no list of extensions is consulted to
+ * decide, only to name the refused sibling in the record.
  */
 function binExeVariants(dir: string, tool: string): string[] {
-	const variants =
-		process.platform === "win32"
-			? [path.join(dir, `${tool}.exe`), path.join(dir, tool)]
-			: [path.join(dir, tool)];
+	const win32 = process.platform === "win32";
+	const bare = path.join(dir, tool);
+	const variants = win32 ? [path.join(dir, `${tool}.exe`), bare] : [bare];
 	const admitted: string[] = [];
 	for (const candidate of variants) {
 		if (existsSync(candidate) && isUntrustedProjectPath(candidate)) {
 			recordProjectCommandRefusal(candidate);
 			continue;
 		}
+		if (win32 && candidate === bare && isUntrustedProjectPath(bare)) {
+			const sibling = pathextSibling(dir, tool);
+			if (sibling) recordProjectCommandRefusal(sibling);
+			continue;
+		}
 		admitted.push(candidate);
 	}
 	return admitted;
+}
+
+/** A file in `dir` named `<tool>` or `<tool>.<anything>`, case-insensitively. */
+function pathextSibling(dir: string, tool: string): string | undefined {
+	const wanted = tool.toLowerCase();
+	try {
+		const name = readdirSync(dir).find((entry) => {
+			const lower = entry.toLowerCase();
+			return lower === wanted || lower.startsWith(`${wanted}.`);
+		});
+		return name === undefined ? undefined : path.join(dir, name);
+	} catch {
+		// none: a missing or unreadable dir has no sibling to name; the
+		// candidate is withheld by the caller whatever this returns.
+		return undefined;
+	}
 }
 
 /**

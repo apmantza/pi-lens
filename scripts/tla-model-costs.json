@@ -10,7 +10,8 @@
 		"local-5488 (formal/ipc-endpoint-identity/README.md)",
 		"local-5501 (formal/disk-change-publisher: AsBuilt scaled by its local head/master ratio, 14.6 s / 6.0 s)",
 		"local-5616 (formal/opaque-baseline-slot: states re-recorded after the #5616 credit variables; new Script* seconds estimated from PerCallKeyed and PerCallNamedSibling)",
-		"local-5700 (formal/lsp-document-lifecycle: states re-recorded after the #5700 cap-close variables; every config ran in 0.6 s locally, so the new configs take the family's 1.3 s CI figure)"
+		"local-5700 (formal/lsp-document-lifecycle: states re-recorded after the #5700 cap-close variables; every config ran in 0.6 s locally, so the new configs take the family's 1.3 s CI figure)",
+		"local-5727 (formal/blocker-pending: CarryByServer and MutCarryByServer measured by check-tla-models.mjs in a full local pool)"
 	],
 	"note": "Per-config TLC seconds (median over the source runs), read from `ok|FAIL formal/<family>/<Model>.cfg: ... (Ns)` lines the checker prints. scripts/tla-model-costs.json packs the TLA+ shards with these; a config with no row costs the table's MAX so an unmeasured config can never quietly become the tail.",
 	"files": {
@@ -29,6 +30,7 @@
 		"formal/availability-latch/SgSweepGenGuard.cfg": 0.8,
 		"formal/availability-latch/SgSweepServed.cfg": 0.7,
 		"formal/availability-latch/SgSweepTrustStamp.cfg": 0.7,
+		"formal/blocker-pending/CarryByServer.cfg": 24.0,
 		"formal/blocker-pending/CarryGateB.cfg": 8.7,
 		"formal/blocker-pending/CarryGateBSettle.cfg": 4.2,
 		"formal/blocker-pending/CarryGateBTwin.cfg": 8.7,
@@ -44,6 +46,7 @@
 		"formal/blocker-pending/ClearOnCurrentOrdinal.cfg": 3.6,
 		"formal/blocker-pending/DeferredGateHonest.cfg": 7.2,
 		"formal/blocker-pending/DeferredInFlight.cfg": 3.1,
+		"formal/blocker-pending/MutCarryByServer.cfg": 4.0,
 		"formal/blocker-pending/MutDeferredInFlight.cfg": 2,
 		"formal/blocker-pending/MutDeltaClean.cfg": 2.9,
 		"formal/blocker-pending/MutDeltaClear.cfg": 1.5,
@@ -939,6 +942,7 @@
 		"formal/availability-latch/SgSweepGenGuard.cfg": 4259,
 		"formal/availability-latch/SgSweepServed.cfg": 254,
 		"formal/availability-latch/SgSweepTrustStamp.cfg": 233,
+		"formal/blocker-pending/CarryByServer.cfg": 9894,
 		"formal/blocker-pending/CarryGateB.cfg": 1928,
 		"formal/blocker-pending/CarryGateBSettle.cfg": 1366,
 		"formal/blocker-pending/CarryGateBTwin.cfg": 1351,
@@ -954,6 +958,7 @@
 		"formal/blocker-pending/ClearOnCurrentOrdinal.cfg": 830,
 		"formal/blocker-pending/DeferredGateHonest.cfg": 4184,
 		"formal/blocker-pending/DeferredInFlight.cfg": 184,
+		"formal/blocker-pending/MutCarryByServer.cfg": 151,
 		"formal/blocker-pending/MutDeferredInFlight.cfg": 150,
 		"formal/blocker-pending/MutDeltaClean.cfg": 21,
 		"formal/blocker-pending/MutDeltaClear.cfg": 21,

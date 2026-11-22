@@ -87,7 +87,7 @@ const FULLY_PINNED = [
 // #5700: +1, `BudgetClose` (lsp-document-lifecycle), whose pass configs set
 // it both ways until the rename-only configs name the cap close.
 const DEFERRED_COUNT = 146;
-const NOT_CODE_CHOICE_COUNT = 265;
+const NOT_CODE_CHOICE_COUNT = 266;
 
 interface PinTest {
 	test: string;

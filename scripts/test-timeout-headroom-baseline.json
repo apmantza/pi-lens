@@ -4,13 +4,6 @@
 	"ratio": 0.6,
 	"entries": [
 		{
-			"file": "tests/index-4913-cli-flag-timing.test.ts",
-			"test": "#4913: --no-lens reaches the lens decision pi makes after the factory > runs the dispatch and language-server seams when the flag is absent (control)",
-			"capStatus": "resolved",
-			"capMs": 5000,
-			"durationMs": 4810.314185
-		},
-		{
 			"file": "tests/scripts/bot-refresh-pr-body-lint.test.ts",
 			"test": "the LSP-docs refresh PR body passes the body lint (#5062) > with more flips than the fence cap, naming how many are not listed",
 			"capStatus": "resolved",
@@ -86,13 +79,6 @@
 			"capStatus": "resolved",
 			"capMs": 5000,
 			"durationMs": 3443.204863
-		},
-		{
-			"file": "tests/index-4698-mark-only-turn-gate.test.ts",
-			"test": "#4698: a mark-only turn clears the commit gate it marked > lets the commit through on the turn AFTER a mark that wrote no file",
-			"capStatus": "resolved",
-			"capMs": 5000,
-			"durationMs": 3324.91931
 		},
 		{
 			"file": "tests/scripts/astgrep-self-scan.test.ts",
