@@ -25,7 +25,7 @@ export interface HeldChildrenLedger {
 }
 
 export interface OwnedChildLedger {
-	record(entry: {
+	write(entry: {
 		pid: number;
 		serverId: string;
 		command: string;
@@ -61,7 +61,7 @@ export function recordOwnedChild(entry: {
 	serverId: string;
 	command: string;
 }): Promise<void> {
-	return cell().owned?.record(entry) ?? Promise.resolve();
+	return cell().owned?.write(entry) ?? Promise.resolve();
 }
 
 export function removeOwnedChild(pid: number): Promise<void> {

@@ -1310,6 +1310,7 @@ describe("selectTargetedTests — path-mirror pass", () => {
 			"tests/real-harness/negative.test.ts",
 			"tests/real-harness/provider-compatibility.test.ts",
 			"tests/real-harness/read-guard-moves.test.ts",
+			"tests/real-harness/runner-host-exit-5703.test.ts",
 			"tests/real-harness/scenario-1.test.ts",
 			"tests/real-harness/scenario-2.test.ts",
 			"tests/real-harness/scenario-3.test.ts",

@@ -886,7 +886,7 @@ export function recordLspChild(entry: RecordLspChildInput): Promise<void> {
 	return queueRegistryMutation(() => recordLspChildNow(entry, generation));
 }
 
-provideOwnedChildLedger({ record: recordLspChild, remove: removeLspChild });
+provideOwnedChildLedger({ write: recordLspChild, remove: removeLspChild });
 
 async function recordLspChildNow(
 	entry: RecordLspChildInput,
