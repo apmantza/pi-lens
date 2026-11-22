@@ -52,7 +52,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as v8 from "node:v8";
 import { getGlobalPiLensLogDir } from "./probe-home-state.js";
-import { getMaxLogSizeMB } from "./log-cleanup.js";
+import { getMaxLogSizeMB } from "./log-rotation-limits.js";
 import { createNdjsonLogger, type NdjsonLogger } from "./ndjson-logger.js";
 
 /** Read once at module load — see module docstring. Not re-read per call. */

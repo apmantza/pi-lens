@@ -66,14 +66,27 @@ function fromDisk(parsed: unknown): PersistedSessionState | undefined {
 	};
 }
 
-function sessionsDir(cwd: string): string {
+/**
+ * The project data directory's per-session state directory. Exported for the
+ * retention sweep (#5702): the store owns the location, so the sweep derives
+ * it here instead of re-deriving the `sessions/` join beside the owner.
+ */
+export function sessionsDir(cwd: string): string {
 	return path.join(getProjectDataDir(cwd), "sessions");
 }
 
-/** Session ids are pi uuids, but sanitize defensively before using as a filename. */
+/**
+ * The file name `sessionId`'s state is stored under. Session ids are pi
+ * uuids, but they are sanitized defensively before becoming a filename.
+ * Exported for the retention sweep, which exempts the live session's file by
+ * this name (#5707 CodeRabbit 7n).
+ */
+export function sessionStateFileName(sessionId: string): string {
+	return `${sessionId.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 200)}.json`;
+}
+
 function sessionFilePath(cwd: string, sessionId: string): string {
-	const safe = sessionId.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 200);
-	return path.join(sessionsDir(cwd), `${safe}.json`);
+	return path.join(sessionsDir(cwd), sessionStateFileName(sessionId));
 }
 
 /**
