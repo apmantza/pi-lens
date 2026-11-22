@@ -33,6 +33,7 @@ import {
 	registerPrimarySession,
 	releasePrimarySession,
 } from "../../clients/session-lifecycle.js";
+import { beginScope } from "../../clients/session-scope.js";
 import {
 	cancelLSPIdleReset,
 	getEffectiveLspIdleResetMs,
@@ -341,6 +342,60 @@ describe("LSP idle reset", () => {
 			cancelLSPIdleReset();
 			vi.useRealTimers();
 			emitWarning.mockRestore();
+			env.cleanup();
+		}
+	});
+
+	// #5737 (thread Q): the edit-turn arm ran for a secondary (subagent) session
+	// that the quiet-turn path already skipped. The idle timer is one module-level
+	// slot, so a secondary re-arm replaced the primary's pending timer and pushed
+	// its reset out by a whole window. The primary's reset must still fire one
+	// window after the primary's own turn end.
+	it("a secondary session's edit turn does not re-arm the primary's idle reset (#5737)", async () => {
+		const env = setupTestEnvironment("pi-lens-idle-secondary-edit-");
+		const runtime = new RuntimeCoordinator();
+		const cacheManager = new CacheManager(false);
+		const resetLSPService = vi.fn();
+		const filePath = path.join(env.tmpDir, "src/secondary-edit.ts");
+		fs.mkdirSync(path.dirname(filePath), { recursive: true });
+		fs.writeFileSync(filePath, "export const y = 2;\n");
+
+		registerPrimarySession({}, "primary-session", env.tmpDir);
+		runtime.setSessionLifecycle({ sessionId: "primary-session" });
+		const turnEnd = (overrides: Record<string, unknown> = {}) =>
+			handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, {
+					ctxCwd: env.tmpDir,
+					resetLSPService,
+					...overrides,
+				}),
+			);
+
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		try {
+			const windowMs = getEffectiveLspIdleResetMs();
+			const half = Math.floor(windowMs / 2);
+			// The primary's quiet turn arms the reset at T0.
+			await turnEnd();
+			await vi.advanceTimersByTimeAsync(half);
+			// A secondary subagent's edit turn ends half a window later.
+			cacheManager.addModifiedRange(
+				filePath,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+			);
+			await turnEnd({ sessionScope: beginScope({ role: "secondary" }) });
+
+			// The primary's reset is still due at T0 + one window, not later.
+			await vi.advanceTimersByTimeAsync(windowMs - half - 1);
+			expect(resetLSPService).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(1);
+			expect(resetLSPService).toHaveBeenCalledTimes(1);
+		} finally {
+			cancelLSPIdleReset();
+			releasePrimarySession();
+			vi.useRealTimers();
 			env.cleanup();
 		}
 	});

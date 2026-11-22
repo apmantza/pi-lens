@@ -1443,7 +1443,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// turn wrote a file kept its whole fleet. Re-arming replaces the pending
 	// timer and any rearm parked behind a workspace sweep (#1618), so a parked
 	// rearm cannot fire early against a session that went back to editing.
-	if (files.length > 0) armLspIdleReset();
+	// #5737 (thread Q): a secondary session re-arms nothing, as the quiet path does.
+	if (files.length > 0 && !isSecondarySession) armLspIdleReset();
 
 	dbg(
 		`turn_end: ${files.length} file(s) modified, cycles: ${turnState.turnCycles}/${turnState.maxCycles}, access: ${access}, owner: ${gateOwnerLabel}`,
