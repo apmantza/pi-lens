@@ -1,5 +1,5 @@
 {
-  "$comment": "PR-Synopsis risk tier paths, read from the default branch (a PR cannot lower its own tier). The App's default lists (greenfield src/tier.ts DEFAULT_CONFIG, 9c6c645) copied whole, since this file replaces them; gatePaths adds the governance census and ratchet tests, the ratchet baselines and the two TLA+ registries, which gate every later PR. The App scores one point per flag and 0-1 is light, so this flag alone does not move a PR off light. Globs: ** any depth, * within one segment.",
+  "$comment": "PR-Synopsis risk tier paths, read from the default branch (a PR cannot lower its own tier). The App's default lists (greenfield src/tier.ts DEFAULT_CONFIG, 9c6c645) copied whole, since this file replaces them; gatePaths adds the governance census and ratchet tests, the ratchet baselines and the two TLA+ registries, which gate every later PR. The App scores one point per flag and 0-1 is light, so this flag alone does not move a PR off light. Globs: ** any depth, * within one segment. bots (PR-Synopsis #43, maintainer 2026-11-22): qodo off (its trial ended and it never answers, so every run waited the full 15 minutes); greptile on, and its credit pause lasts until creditsResetDay (UTC day of month, when its 750 open-source credits refill). The App asks Greptile only on a review:final run of a heavy PR.",
   "tier": {
     "gatePaths": [
       "package.json", "package-lock.json", ".github/dependabot.yml", "tsconfig.json", "tsconfig.build.json", "tsconfig.dist.json",
@@ -14,5 +14,9 @@
       "clients/**", "tools/**", "mcp/**", "index.ts", "i18n.ts", "rules/**", "config/**", "skills/**", "scripts/**", ".husky/**", ".claude/**", "formal/**", "cases/**",
       "vitest*.config.ts", ".dependency-cruiser.cjs", "stryker*.mjs"
     ]
+  },
+  "bots": {
+    "qodo": { "enabled": false },
+    "greptile": { "enabled": true, "creditsResetDay": 30 }
   }
 }
