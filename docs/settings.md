@@ -51,7 +51,9 @@ For a single toggle, highest priority first:
    monorepo the closest config to the edited file wins for the three mutation
    controls. The per-tool switches are read once per session from the
    repository's `.pi-lens.json` files at your working directory, up to the git
-   root, so a package's own file does not switch a tool off or on.
+   root, so a package's own file does not switch a tool off or on. A repository
+   with no `.pi-lens.json` of its own still inherits the nearest one above it,
+   whole: the git-root limit applies to layered reads, not to that fallback.
 4. **Global `~/.pi-lens/config.json`**.
 5. **Built-in default**.
 

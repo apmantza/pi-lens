@@ -506,8 +506,10 @@ appears in the reported document list, and is named as the file behind any
 decision it made. The `tools` list is the exception: the runtime registers tools
 once per session, from the repository's own `.pi-lens.json` files at your `cwd`
 and the global config, so that list does not change with `path` and does not
-read a file above the git root, a legacy file beside a canonical one, or a
-nested package's file (#5739). The walk runs upward and is
+read a legacy file beside a canonical one or a nested package's file (#5739).
+It reads a file above the git root only when the repository has no
+`.pi-lens.json` of its own: the git-root limit applies to layered reads, not to
+the single-file fallback described under the config tiers. The walk runs upward and is
 **confined to `cwd`**: a `path` that resolves outside `cwd` — including a
 sibling package in the same monorepo — is rejected rather than answered from
 its own unrelated tree, because the per-file answer is only ever correct when

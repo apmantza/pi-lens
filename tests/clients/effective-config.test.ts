@@ -1476,6 +1476,21 @@ describe("effectiveConfig — tools answer from the runtime's project read (#573
 		expect(enabled(view, "symbol_search")).toBe(true);
 	});
 
+	// The git-root limit is a layered-read rule. A repo with no project file of
+	// its own still inherits the nearest one above it, whole, in the runtime
+	// (configuration.md "Config tiers"), and the view follows it.
+	it("reads the nearest file above the git root when the repo has none", async () => {
+		const { view } = await viewFor({
+			files: {
+				"work/.pi-lens.json": { tools: { symbol_search: { enabled: false } } },
+				"work/repo/.git/HEAD": "ref: refs/heads/main",
+			},
+			startDir: "work/repo",
+		});
+
+		expect(enabled(view, "symbol_search")).toBe(false);
+	});
+
 	it("ignores a legacy pi-lens.json beside a canonical file", async () => {
 		const { view } = await viewFor({
 			files: {
