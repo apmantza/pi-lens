@@ -2749,7 +2749,11 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// the shutdown ladder is done, plus a sweep that drops every pid whose
 	// process GROUP no longer exists), never by age, because age is exactly
 	// what evicted a long-lived server's verdict from the FIFO above.
-	"safe-spawn.ts": 4,
+	//
+	// #5699: back to 3. The held store moved onto the process singleton
+	// (`lifetimeState.held`), because it is also the host-exit ledger the
+	// once-per-process exit handler reads; the scan sees no container for it.
+	"safe-spawn.ts": 3,
 	"security-scan-client.ts": 1,
 	// #2146 moved the four registration fields onto the process singleton, so the
 	// scan sees no module-scope container here either.

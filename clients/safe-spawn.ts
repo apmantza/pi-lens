@@ -22,7 +22,7 @@ import {
 } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { BoundedFifoMap, BoundedSet } from "./bounded-cache.js";
+import { BoundedFifoMap } from "./bounded-cache.js";
 import { logLatency } from "./latency-logger.js";
 import {
 	incrementDegradationCount,
@@ -421,6 +421,14 @@ export interface SafeSpawnOptions {
 interface LifetimeCleanupState {
 	pids: Set<number>;
 	installed: boolean;
+	/** Long-lived children held for host exit (#5699); see `heldChildren`. */
+	held?: BoundedFifoMap<number, HeldChild>;
+}
+
+/** What the exit kill reads from a held child's handle (a `ChildProcess`). */
+export interface HeldChild {
+	readonly exitCode: number | null;
+	readonly signalCode: NodeJS.Signals | null;
 }
 
 // Vitest reloads modules inside a reused worker. Keep this registry on the
@@ -519,14 +527,31 @@ const verifiedOwnPids = new BoundedFifoMap<number, true>(VERIFIED_OWN_PID_CAP);
  *
  * The bound that remains, stated rather than implied: at most
  * `HELD_OWN_PID_SWEEP_AT` entries — the confirmed-dead sweep below runs before
- * every insert, and `BoundedSet`'s own FIFO overflow is the last resort for the
+ * every insert, and `BoundedFifoMap`'s own FIFO overflow is the last resort for the
  * case where every held group really is still alive. A crash-looping server cannot grow it without bound
  * because each sweep drops every pid whose process GROUP no longer exists,
  * which is exactly the condition under which the entry can never be needed
  * again.
  */
 const HELD_OWN_PID_SWEEP_AT = 256;
-const heldOwnPids = new BoundedSet<number>(HELD_OWN_PID_SWEEP_AT);
+
+/**
+ * #5699: the held store is also the host-exit ledger for these children. The
+ * exit and signal handlers (`installLifetimeCleanup`) SIGKILL every held
+ * process group, as they tree-kill `lifetimeState.pids`, so a server that
+ * ignores stdin EOF and SIGTERM ends with its host on every route where host
+ * code runs. It lives on the process singleton, not in module scope: the exit
+ * handler is installed once per process and must see the children of every
+ * evaluation of this module (#2146).
+ */
+function heldChildren(): BoundedFifoMap<number, HeldChild> {
+	// `??=`, not the singleton's initializer: the kill guard seeds the state
+	// object before this module loads (tests/support/kill-guard.ts).
+	lifetimeState.held ??= new BoundedFifoMap<number, HeldChild>(
+		HELD_OWN_PID_SWEEP_AT,
+	);
+	return lifetimeState.held;
+}
 
 /** A process group that no longer exists can never need another signal. */
 function groupIsGone(pid: number): boolean {
@@ -539,15 +564,16 @@ function groupIsGone(pid: number): boolean {
 }
 
 function sweepHeldOwnPids(): void {
-	if (heldOwnPids.size < HELD_OWN_PID_SWEEP_AT) return;
-	// Deleting the current entry mid-iteration is well-defined for a Set, so
+	const held = heldChildren();
+	if (held.size < HELD_OWN_PID_SWEEP_AT) return;
+	// Deleting the current entry mid-iteration is well-defined for a Map, so
 	// no snapshot copy is needed.
-	for (const pid of heldOwnPids) {
-		if (groupIsGone(pid)) heldOwnPids.delete(pid);
+	for (const pid of held.keys()) {
+		if (groupIsGone(pid)) held.delete(pid);
 	}
 	// No hand-rolled "drop the oldest" block (#2442 / #3091 round 4): the
 	// last-resort eviction, for the case where every held group is still alive
-	// at the ceiling, is `BoundedSet.add`'s own FIFO overflow; the caller
+	// at the ceiling, is `BoundedFifoMap.set`'s own FIFO overflow; the caller
 	// records it (#3096).
 }
 
@@ -563,17 +589,25 @@ function sweepHeldOwnPids(): void {
  * orphaned).
  */
 export function holdOwnChildPid(
-	pid: number | undefined,
+	child: HeldChild & { readonly pid?: number },
 	site: string,
 ): boolean {
+	const pid = child.pid;
 	const owned = isOwnLiveChild(pid, site);
-	if (!owned || !PROC_PPID_READABLE || typeof pid !== "number") return owned;
+	// #5699: every POSIX host holds, macOS too (the exit kill needs the
+	// entry). Windows holds nothing: libuv's job object ends the direct child
+	// with the host (#5694), and a held pid there would put a `taskkill` spawn
+	// in the exit handler.
+	if (!owned || process.platform === "win32" || typeof pid !== "number")
+		return owned;
 	// Exactly one home: the verification above filed the verdict in the
 	// age-bounded FIFO, and leaving a copy there would make BOTH the held set
 	// and its release mutation-inert — the FIFO copy would answer for them.
 	verifiedOwnPids.delete(pid);
 	sweepHeldOwnPids();
-	const evicted = heldOwnPids.add(pid);
+	const evicted = heldChildren()
+		.set(pid, child)
+		.map(([dropped]) => dropped);
 	if (evicted.length > 0) {
 		incrementDegradationCount({
 			kind: "held-own-pid-evicted",
@@ -582,6 +616,7 @@ export function holdOwnChildPid(
 			metadata: { evicted: evicted.length },
 		});
 	}
+	installLifetimeCleanup();
 	return true;
 }
 
@@ -590,7 +625,50 @@ export function holdOwnChildPid(
  * shutdown ladder. Idempotent.
  */
 export function releaseOwnChildPid(pid: number | undefined): void {
-	if (typeof pid === "number") heldOwnPids.delete(pid);
+	if (typeof pid === "number") heldChildren().delete(pid);
+}
+
+/** Whether any child is still held (#5699): a quitting host keeps its
+ *  registry entry while one is, see `deregisterInstance`. */
+export function holdsChildren(): boolean {
+	return heldChildren().size > 0;
+}
+
+/**
+ * SIGKILL every held child's process group now (#5699) and report whether
+ * each one is confirmed gone: its group no longer exists, or the kernel
+ * accepted the SIGKILL for it. A confirmed child leaves the store. One whose
+ * kill was refused (ownership no longer provable, EPERM) stays, and the
+ * caller keeps the record the next session's reaper reads.
+ *
+ * Synchronous and spawn-free, so it is safe in an `exit` or signal handler.
+ * Idempotent: a second call finds only what the first could not end.
+ */
+export function endHeldChildren(): boolean {
+	const held = heldChildren();
+	let allEnded = true;
+	for (const [pid, child] of held.entriesArray()) {
+		if (endHeldGroup(pid, child)) held.delete(pid);
+		else allEnded = false;
+	}
+	return allEnded;
+}
+
+function endHeldGroup(pid: number, child: HeldChild): boolean {
+	if (groupIsGone(pid)) return true;
+	// Where `/proc` cannot answer, a leader that has exited may have had its
+	// pid recycled, so the handle arm refuses the group signal there. On Linux
+	// the kernel answers, and a group outliving its leader still gets the
+	// signal (#2026).
+	if (!isOwnLiveChild(pid, "lsp-host-exit", child)) return false;
+	try {
+		process.kill(-pid, "SIGKILL");
+		return true;
+	} catch (cause) {
+		// none: the answer is the record. A refused kill reports unconfirmed,
+		// and the caller keeps the registry row the next session's reaper reads.
+		return errorCode(cause as Error) === "ESRCH";
+	}
 }
 
 /** Once per session: a Linux host whose `/proc` cannot answer the question. */
@@ -633,7 +711,7 @@ export function isOwnLiveChild(
 		// grandchild after the direct child has died. Ownership verified while
 		// the leader was alive is what answers that; a pid this process never
 		// owned is still refused.
-		return heldOwnPids.has(pid) || verifiedOwnPids.has(pid);
+		return heldChildren().has(pid) || verifiedOwnPids.has(pid);
 	}
 	const parent = /^PPid:\s*(\d+)$/m.exec(status);
 	if (!parent) return true;
@@ -650,7 +728,7 @@ export function isOwnLiveChild(
 		// which outlives `releaseOwnChildPid` (the FIFO copy would keep
 		// answering for a pid this process has explicitly stopped claiming) and
 		// makes the held store's own tests unable to fail.
-		if (!heldOwnPids.has(pid)) verifiedOwnPids.set(pid, true);
+		if (!heldChildren().has(pid)) verifiedOwnPids.set(pid, true);
 		return true;
 	}
 	// Alive AND someone else's: the dangerous case, and the only one worth a
@@ -709,10 +787,12 @@ function installLifetimeCleanup(): void {
 	lifetimeState.installed = true;
 	process.once("exit", () => {
 		for (const pid of lifetimeState.pids) killPidTreeSync(pid);
+		endHeldChildren();
 	});
 	for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as NodeJS.Signals[]) {
 		process.once(signal, () => {
 			for (const pid of lifetimeState.pids) killPidTreeSync(pid);
+			endHeldChildren();
 			if (process.platform === "win32" && signal === "SIGHUP") {
 				// Windows emits SIGHUP when its console closes, but libuv cannot
 				// self-send it (process.kill(..., "SIGHUP") throws ENOSYS). The

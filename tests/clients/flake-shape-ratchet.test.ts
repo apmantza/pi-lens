@@ -1448,6 +1448,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the first request after a real pi restart on a persisted session must advertise the lazy-tool roster pi restored and pi-lens planned; no in-process double runs the host's restore",
 	},
+	// 2026-11-20 (#5699): which processes outlive a real pi quit, and whether
+	// the next session reaps what a killed quit left, is visible only across
+	// real pi processes and a real language server in its own process group.
+	"real-process-spawn:real-harness/lsp-host-exit-5699.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"#5699: a language server that ignores EOF and SIGTERM must be gone after a real pi quit, and a quit killed before its exit hook must leave the row the next real pi session reaps; pi's quit path, its exit listeners and the next start's reaper run only in real pi processes",
+	},
 	"real-process-spawn:real-harness/negative.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -2124,6 +2132,18 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// 2026-11-01 (#5146): the fast POSIX shutdown returns before its ast-grep
 	// child exits, and that exit exposes no awaitable, so the shared session
 	// teardown polls /proc.
+	// 2026-11-20 (#5699): a host's language server is nobody's child once the
+	// host is gone, and only its pid file and its pid's death show its life.
+	"ungoverned-wait-for:mcp/lsp-host-exit-5699.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"#5699: the server's start shows only as the pid file it writes and its death, after its MCP host ends, only as its pid going away; neither exposes an awaitable, and each poll is bounded by its own timeout",
+	},
+	"ungoverned-wait-for:real-harness/lsp-host-exit-5699.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"#5699: the server's start shows only as the pid file it writes, its death after pi quits only as its pid going away, and the settle's heartbeat only as the row it rewrites; none exposes an awaitable, and each poll is bounded by its own timeout",
+	},
 	"ungoverned-wait-for:support/mock-session-teardown.ts": {
 		detector: "ungoverned-wait-for",
 		reason:

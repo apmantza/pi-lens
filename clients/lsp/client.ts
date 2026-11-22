@@ -6487,26 +6487,10 @@ async function clientShutdownOnce(
 						: "graceful",
 			},
 		});
-		// #449/#472: deregister this LSP child from the instance registry. Fire-
-		// and-forget (async fs, no spawn) — must not add latency/risk to shutdown,
-		// including the `processExiting` path where the event loop is closing
-		// (#234 forbids spawning here, but a plain fs write/rename is fine; even
-		// so, we don't await it to keep this teardown path as fast as before).
-		// #1724: pass this spawn's marker so removeLspChild can guard against a
-		// pid-recycling window (a NEW child claiming this exact pid before this
-		// fire-and-forget write lands) rather than removing whichever child
-		// currently sits at this pid.
-		void removeLspChild(pid, extractSpawnMarker(state.lspProcess.args)).catch(
-			(err) => {
-				logLatency({
-					type: "phase",
-					phase: "lsp_registry_write_failed",
-					filePath: "",
-					durationMs: 0,
-					metadata: { op: "remove", pid, error: String(err) },
-				});
-			},
-		);
+		// #5699: the child's registry entry is not removed here. It leaves when
+		// the leader is observed dead (createLSPClient's exit listener), so a
+		// host killed before the kill below lands keeps the record its reaper
+		// reads.
 		// On Windows, killing the direct child first can orphan grandchildren before
 		// taskkill can traverse the tree. Kill the full tree first and wait briefly.
 		// Safe and idempotent on an already-exited child: killProcessTree returns
@@ -7311,8 +7295,8 @@ export async function createLSPClient(options: {
 	// #449/#472: register this LSP child in the cross-process instance registry
 	// as soon as we have a live pid — BEFORE `initialize` completes, not after.
 	// Registering early means a child that dies/hangs during initialize (the
-	// catch block below kills it) is still deregistered by that same path via
-	// removeLspChild, and a process that crashes mid-initialize is still
+	// catch block below kills it) is still deregistered, on its observed exit,
+	// and a process that crashes mid-initialize is still
 	// visible to the orphan reaper rather than silently untracked. Fire-and-
 	// forget: registry I/O must never block or fail LSP startup.
 	void recordLspChild({
@@ -7337,6 +7321,30 @@ export async function createLSPClient(options: {
 			metadata: { op: "record", pid: lspProcess.pid, error: String(err) },
 		});
 	});
+	// #5699: the entry leaves when the leader is observed dead, never when a
+	// teardown starts. A host killed between the two then keeps the record the
+	// next session's reaper reads. #1724: the spawn's marker guards the
+	// pid-recycling window, so a NEW child that claimed this pid stays listed.
+	const forgetChild = (): void => {
+		void removeLspChild(
+			lspProcess.pid,
+			extractSpawnMarker(lspProcess.args),
+		).catch((err) => {
+			logLatency({
+				type: "phase",
+				phase: "lsp_registry_write_failed",
+				filePath: "",
+				durationMs: 0,
+				metadata: { op: "remove", pid: lspProcess.pid, error: String(err) },
+			});
+		});
+	};
+	if (
+		lspProcess.process.exitCode != null ||
+		lspProcess.process.signalCode != null
+	)
+		forgetChild();
+	else lspProcess.process.on("exit", forgetChild);
 
 	const startupState: {
 		exitCode: number | null;
@@ -7596,23 +7604,8 @@ export async function createLSPClient(options: {
 		// Hard-kill the hung process so it doesn't become a zombie.
 		// SIGTERM alone is unreliable on Windows for cmd.exe/PowerShell trees.
 		const pid = lspProcess.pid;
+		// The registry entry recorded above leaves on the observed exit (#5699).
 		void killProcessTree(lspProcess.process, pid);
-		// A child registered above (recordLspChild) but never reaching a healthy
-		// createLSPClient return must still be deregistered here — otherwise the
-		// registry keeps a stale entry for a process we just killed.
-		void removeLspChild(pid, extractSpawnMarker(lspProcess.args)).catch(
-			(err) => {
-				// best-effort — a stale registry entry is harmless (the reaper's
-				// liveness check will find it dead on the next sweep regardless)
-				logLatency({
-					type: "phase",
-					phase: "lsp_registry_write_failed",
-					filePath: "",
-					durationMs: 0,
-					metadata: { op: "remove", pid, error: String(err) },
-				});
-			},
-		);
 		setTimeout(() => {
 			// #1114: gate on the process's own observed `exitCode`/`signalCode`,
 			// not `.killed` — `killProcessTree` above signals the POSIX process
