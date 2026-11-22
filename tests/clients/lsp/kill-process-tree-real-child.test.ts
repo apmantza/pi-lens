@@ -297,7 +297,11 @@ describe.skipIf(process.platform !== "linux")(
 			);
 			expect(isOwnLiveChild(pid, "after-group-end")).toBe(false);
 			expect(outlivedLeaderRows()).toMatchObject([
-				{ count: 1, latestReasons: [{ subject: "lsp-shutdown" }] },
+				{
+					kind: "held-group-outlived-leader",
+					count: 1,
+					latestReasons: [{ subject: "lsp-shutdown" }],
+				},
 			]);
 		});
 
