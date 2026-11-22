@@ -184,12 +184,12 @@ export function buildIdleEvictionDriftBody(findings, options = {}) {
 /**
  * What the tracking issue should do. `drift`: at least one server the registry
  * evicts (any policy but `resident`, #5700) is vetoed. `clean`: no such veto,
- * and EVERY transparent server has an
- * `eligible` row this run. `unknown`: anything else (a transparent server that
- * is unavailable, budget-exhausted, client-died, not-evicted, no-baseline, or
- * absent from a filtered run): no evidence either way, so the issue is left
- * as it is. Closing on the absence of drift would close it exactly when the
- * measurement could not see (review round 1 F3).
+ * and EVERY evicted server (`transparent` or `unmeasured`, #5737) has an
+ * `eligible` row this run. `unknown`: anything else (an evicted server that
+ * is unavailable, inconclusive, budget-exhausted, client-died, not-evicted,
+ * no-baseline, or absent from a filtered run): no evidence either way, so the
+ * issue is left as it is. Closing on the absence of drift would close it
+ * exactly when the measurement could not see (review round 1 F3).
  *
  * @returns {"drift" | "clean" | "unknown"}
  */
@@ -200,7 +200,9 @@ export function driftIssueState(rows, declared) {
 		if (policy === "resident") continue;
 		const row = byId.get(serverId);
 		if (row?.result === "vetoed") return "drift";
-		if (policy === "transparent" && row?.result !== "eligible") clean = false;
+		// #5737 (thread X): `unmeasured` is evicted like `transparent`, so it too
+		// needs an eligible row before the issue may close.
+		if (row?.result !== "eligible") clean = false;
 	}
 	return clean ? "clean" : "unknown";
 }

@@ -405,8 +405,8 @@ describe("nightly wiring of the idle-eviction document (#3645)", () => {
 			'--body-file "$RUNNER_TEMP/lsp-idle-eviction-drift.md"',
 		);
 		expect(notify.run).toContain("scripts/upsert-tracking-issue.mjs");
-		// Review round 1 F3: the issue closes on `clean` only (every transparent
-		// server eligible), never on the mere absence of drift.
+		// Review round 1 F3: the issue closes on `clean` only (every evicted
+		// server eligible, #5737), never on the mere absence of drift.
 		expect((notify.run ?? "").match(/--clean\b/g)).toHaveLength(1);
 		expect(notify.run).toMatch(
 			/elif \[ "\$STATE" = clean \]; then\n\s*node scripts\/upsert-tracking-issue\.mjs[^\n]*--clean --close-when-clean/,

@@ -7,8 +7,8 @@
  *    the document carries only stable columns, so two runs that differ only in
  *    timings and memory must render the same text (review round 1 F1);
  *  - a tracking issue that auto-closes because the measurement could not see
- *    (review round 1 F3): it closes only when every transparent server is
- *    eligible;
+ *    (review round 1 F3): it closes only when every evicted server (any policy
+ *    but resident, #5737) is eligible this run;
  *  - a coverage gap read as a clean zero: an unmeasured figure renders `n/a`,
  *    never `0`, and the header counts what was not measured;
  *  - a registry that evicts a server the measurement vetoes (the only `drift`),
@@ -348,14 +348,37 @@ describe("driftIssueState", () => {
 	]);
 	const state = (rows: IdleEvictionRow[]) => driftIssueState(rows, transparent);
 
-	it("is clean only when every transparent server is eligible, whatever the others' evidence", () => {
+	it("is clean only when every evicted server (transparent or unmeasured) is eligible", () => {
 		expect(
 			state([
 				row("alpha", "eligible"),
 				row("bravo", "eligible"),
-				row("charlie", "unavailable", "tool-unavailable"),
+				row("charlie", "eligible"),
 			]),
 		).toBe("clean");
+	});
+
+	// #5737 (thread X): an unmeasured server is evicted too, so unavailable
+	// evidence for it is no evidence either way, and the issue is left alone.
+	// Recurrence: the rule read only `transparent`, so an unmeasured server that
+	// the nightly could not start (`server-not-started`) let the issue close.
+	it("is unknown, never clean, when an unmeasured server is unavailable (#5737)", () => {
+		expect(
+			state([
+				row("alpha", "eligible"),
+				row("bravo", "eligible"),
+				row("charlie", "unavailable", "server-not-started"),
+			]),
+		).toBe("unknown");
+	});
+
+	// #5737 (thread X): the nightly writes no row for a server it did not reach.
+	// Recurrence: an unmeasured server absent from the run closed the issue as
+	// `clean`, the same closing on absence of evidence that F3 forbids.
+	it("is unknown, never clean, when an unmeasured server has no row this run (#5737)", () => {
+		expect(state([row("alpha", "eligible"), row("bravo", "eligible")])).toBe(
+			"unknown",
+		);
 	});
 
 	// #5700: an `unmeasured` server is evicted too, so its veto is drift.
