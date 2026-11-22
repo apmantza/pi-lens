@@ -81,13 +81,6 @@
 			"durationMs": 3443.204863
 		},
 		{
-			"file": "tests/index-4698-mark-only-turn-gate.test.ts",
-			"test": "#4698: a mark-only turn clears the commit gate it marked > lets the commit through on the turn AFTER a mark that wrote no file",
-			"capStatus": "resolved",
-			"capMs": 5000,
-			"durationMs": 3324.91931
-		},
-		{
 			"file": "tests/scripts/astgrep-self-scan.test.ts",
 			"test": "pi-lens self-scan (#1718) > every self-scan baseline row has a live finding",
 			"capStatus": "resolved",
