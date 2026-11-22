@@ -18,6 +18,7 @@
  */
 
 import * as path from "node:path";
+import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { logLatency } from "../../../clients/latency-logger.js";
@@ -31,6 +32,50 @@ vi.mock("../../../clients/latency-logger.js", async (importActual) => ({
 }));
 
 describe("LSP client — crash exit is logged, not silently swallowed", () => {
+	async function runCrashGuardProbe(
+		mode: "crash" | "rejection" | "ignorable" | "other",
+	): Promise<{ code: number | null; stdout: string; stderr: string }> {
+		const launch = pathToFileURL(path.resolve("clients/lsp/launch.js")).href;
+		const clientModule = pathToFileURL(
+			path.resolve("clients/lsp/client.js"),
+		).href;
+		const fixture = path.resolve("tests/fixtures/stubborn-lsp-server.mjs");
+		const source = `
+const { launchLSP } = await import(${JSON.stringify(launch)});
+const { createLSPClient } = await import(${JSON.stringify(clientModule)});
+const lsp = await launchLSP(process.execPath, [${JSON.stringify(fixture)}]);
+await createLSPClient({ serverId: "probe", process: lsp, root: process.cwd() });
+process.once("exit", () => { try { lsp.process.kill("SIGKILL"); } catch {} process.stdout.write("EXIT_MARKER"); });
+if (${JSON.stringify(mode)} === "ignorable") {
+  process.emit("uncaughtException", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+  setTimeout(() => process.exit(0), 50);
+} else if (${JSON.stringify(mode)} === "other") {
+  process.once("uncaughtException", () => { process.stdout.write("OTHER_LISTENER"); setTimeout(() => process.exit(0), 50); });
+  setTimeout(() => { throw new Error("PROBE delegated crash"); }, 50);
+} else if (${JSON.stringify(mode)} === "rejection") {
+  Promise.reject(new Error("PROBE non-LSP rejection"));
+} else {
+  setTimeout(() => { throw new Error("PROBE non-LSP crash"); }, 50);
+}`;
+		return await new Promise((resolve, reject) => {
+			const child = spawn(
+				process.execPath,
+				["--input-type=module", "-e", source],
+				{
+					cwd: process.cwd(),
+					stdio: ["ignore", "pipe", "pipe"],
+				},
+			);
+			let stdout = "";
+			let stderr = "";
+			child.stdout.setEncoding("utf8");
+			child.stderr.setEncoding("utf8");
+			child.stdout.on("data", (chunk: string) => (stdout += chunk));
+			child.stderr.on("data", (chunk: string) => (stderr += chunk));
+			child.once("error", reject);
+			child.once("exit", (code) => resolve({ code, stdout, stderr }));
+		});
+	}
 	let client:
 		| Awaited<
 				ReturnType<
@@ -109,6 +154,26 @@ describe("LSP client — crash exit is logged, not silently swallowed", () => {
 		);
 		expect(hit).toBeUndefined();
 	}, 10_000);
+
+	it("completes the exit transition for non-LSP process failures", async () => {
+		const crash = await runCrashGuardProbe("crash");
+		const rejection = await runCrashGuardProbe("rejection");
+		expect(crash).toMatchObject({ code: 1 });
+		expect(crash.stdout).toContain("EXIT_MARKER");
+		expect(crash.stderr).toContain("PROBE non-LSP crash");
+		expect(rejection).toMatchObject({ code: 1 });
+		expect(rejection.stdout).toContain("EXIT_MARKER");
+		expect(rejection.stderr).toContain("PROBE non-LSP rejection");
+	}, 20_000);
+
+	it("keeps ignorable stream failures and delegates to another listener", async () => {
+		const ignorable = await runCrashGuardProbe("ignorable");
+		const other = await runCrashGuardProbe("other");
+		expect(ignorable).toMatchObject({ code: 0, stderr: "" });
+		expect(ignorable.stdout).toContain("EXIT_MARKER");
+		expect(other).toMatchObject({ code: 0 });
+		expect(other.stdout).toContain("OTHER_LISTENER");
+	}, 20_000);
 
 	it("closeDocument sends didClose and clears document lifecycle state", async () => {
 		const { createLSPClient } = await import("../../../clients/lsp/client.js");

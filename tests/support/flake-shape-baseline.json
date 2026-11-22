@@ -37,7 +37,7 @@
 		"clients/instance-registry-lock.test.ts": 2,
 		"clients/instance-registry-race.test.ts": 1,
 		"clients/knip-cache-consumer-staleness.test.ts": 2,
-		"clients/lsp/client-crash-logging.test.ts": 4,
+		"clients/lsp/client-crash-logging.test.ts": 5,
 		"clients/lsp/client-exit-cause-ledger.test.ts": 4,
 		"clients/lsp/client-retention-process-scope.test.ts": 3,
 		"clients/lsp/code-action-unanswered-5258.test.ts": 4,

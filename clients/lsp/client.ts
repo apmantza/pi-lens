@@ -1052,19 +1052,41 @@ function installCrashGuard(): void {
 	if (crashGuardInstalled) return;
 	crashGuardInstalled = true;
 
-	process.on("uncaughtException", (err) => {
+	const onUncaughtException = (err: unknown): void => {
 		if (isIgnorableLspRuntimeCrash(err)) {
 			return;
 		}
-		throw err;
-	});
+		if (
+			process
+				.listeners("uncaughtException")
+				.some((listener) => listener !== onUncaughtException)
+		) {
+			return;
+		}
+		process.stderr.write(
+			`${err instanceof Error ? (err.stack ?? err) : err}\n`,
+		);
+		process.exit(1);
+	};
+	process.on("uncaughtException", onUncaughtException);
 
-	process.on("unhandledRejection", (reason) => {
+	const onUnhandledRejection = (reason: unknown): void => {
 		if (isIgnorableLspRuntimeCrash(reason)) {
 			return;
 		}
-		throw reason instanceof Error ? reason : new Error(String(reason));
-	});
+		if (
+			process
+				.listeners("unhandledRejection")
+				.some((listener) => listener !== onUnhandledRejection)
+		) {
+			return;
+		}
+		const failure =
+			reason instanceof Error ? reason : new Error(String(reason));
+		process.stderr.write(`${failure.stack ?? failure}\n`);
+		process.exit(1);
+	};
+	process.on("unhandledRejection", onUnhandledRejection);
 }
 
 // --- Client State + Module-level helpers ---
