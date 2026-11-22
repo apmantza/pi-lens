@@ -10444,7 +10444,9 @@ export class LSPService {
 						...attributed,
 					]);
 					existing.ts = Math.max(existing.ts, entry.ts);
-					if (entry.closed) existing.closed = true;
+					// #5700 F1: one open contributor makes the aggregate open. `closed`
+					// is set at creation and only cleared here, so it never comes back.
+					if (!entry.closed) delete existing.closed;
 				} else {
 					all.set(filePath, {
 						diags: attributed,

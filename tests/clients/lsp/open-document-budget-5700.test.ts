@@ -194,4 +194,126 @@ describe("#5700 open-document cap through the real client", () => {
 			await service.shutdown();
 		}
 	}, 30_000);
+
+	function markdownServer(id: string) {
+		return {
+			id,
+			name: id,
+			extensions: [".md"],
+			idleEviction: "resident",
+			root: async () => tmp,
+			spawn: async () => ({
+				process: await spawnFakeLspServer({
+					cwd: tmp,
+					env: {
+						...process.env,
+						FAKE_LSP_NO_DIAGNOSTIC_PROVIDER: "1",
+						FAKE_LSP_PUSH_DIAGNOSTIC: "1",
+					},
+				}),
+				source: "test",
+			}),
+		};
+	}
+
+	/**
+	 * #5700 F1 (PR #5737 review): `LSPService.getAllDiagnostics` merges one
+	 * file's rows across contributing clients. The aggregate is closed only when
+	 * EVERY contributing row is closed. Recurrence: the merge set `closed` when
+	 * any one contributor was closed, so a fresh row from a second, open server
+	 * reached lsp_navigation labelled as a cap-closed last finding. Both creation
+	 * orders are driven, because the merge and the first-row creation each read
+	 * `closed` on their own path.
+	 */
+	it.each([
+		["closed contributor first", ["marksman-a", "marksman-b"]],
+		["open contributor first", ["marksman-b", "marksman-a"]],
+	] as const)(
+		"aggregate is closed only when every contributor is closed (%s)",
+		async (_order, order) => {
+			const servers = {
+				"marksman-a": markdownServer("marksman-a"),
+				"marksman-b": markdownServer("marksman-b"),
+			};
+			// The shared file's server order. A `didChange` clears a row the fake
+			// server does not republish, so the second server opens the file alone
+			// (primary scope, rotated order) and the first keeps its findings.
+			let sharedOrder: ReadonlyArray<keyof typeof servers> = order;
+			getServersForFileWithConfig.mockImplementation((fp: string) => {
+				const name = path.basename(fp);
+				if (name.startsWith("x-")) return sharedOrder.map((id) => servers[id]);
+				if (name.startsWith("a-")) return [servers["marksman-a"]];
+				if (name.startsWith("b-")) return [servers["marksman-b"]];
+				return [];
+			});
+			const shared = path.join(tmp, "x-shared.md");
+			const aDocs = [1, 2, 3].map((i) => path.join(tmp, `a-${i}.md`));
+			const bDocs = [1, 2, 3].map((i) => path.join(tmp, `b-${i}.md`));
+			for (const file of [shared, ...aDocs, ...bDocs]) {
+				fs.writeFileSync(file, `# ${file}\n`);
+			}
+			const service = new LSPService();
+			const touch = (file: string, clientScope: "primary" | "all") =>
+				service.touchFile(file, fs.readFileSync(file, "utf8"), {
+					diagnostics: "document",
+					collectDiagnostics: true,
+					clientScope,
+					source: "dispatch",
+				});
+			const key = shared.replace(/\\/g, "/");
+			const liveClients = () =>
+				[
+					...(
+						service as unknown as {
+							state: { clients: Map<string, LiveClient> };
+						}
+					).state.clients.entries(),
+				].map(([clientKey, client]) => ({
+					serverId: clientKey.split(":")[0],
+					client,
+				}));
+			const settle = async () => {
+				// Barrier: each server answers after reading every earlier message.
+				for (const { client } of liveClients()) {
+					expect(await client.pingLiveness()).toBe(true);
+				}
+			};
+			const rowsById = () =>
+				new Map(
+					liveClients().map(({ serverId, client }) => [
+						serverId,
+						client.getAllDiagnostics().get(key),
+					]),
+				);
+			try {
+				await touch(shared, "primary");
+				expect(liveClients().map((c) => c.serverId)).toEqual([order[0]]);
+				sharedOrder = [order[1], order[0]];
+				await touch(shared, "primary");
+				expect(liveClients().map((c) => c.serverId)).toEqual([...order]);
+
+				// Three more documents put marksman-a past the cap of 3. The shared
+				// file is its least recently sent document, so it closes there.
+				for (const file of aDocs) await touch(file, "primary");
+				await settle();
+				const first = rowsById();
+				expect(first.get("marksman-a")?.closed).toBe(true);
+				expect(first.get("marksman-b")?.closed).toBeUndefined();
+				expect(first.get("marksman-b")?.diags.length).toBeGreaterThan(0);
+				// marksman-b still holds the file open, so the aggregate is not closed.
+				expect((await service.getAllDiagnostics()).get(key)?.closed).toBe(
+					undefined,
+				);
+
+				// Now marksman-b closes it too: every contributor is closed.
+				for (const file of bDocs) await touch(file, "primary");
+				await settle();
+				expect(rowsById().get("marksman-b")?.closed).toBe(true);
+				expect((await service.getAllDiagnostics()).get(key)?.closed).toBe(true);
+			} finally {
+				await service.shutdown();
+			}
+		},
+		30_000,
+	);
 });
