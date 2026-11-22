@@ -1060,7 +1060,9 @@
 						"PidReuse",
 						"OtherProcs",
 						"LateRecord",
-						"ScanFail"
+						"ScanFail",
+						"Stubborn",
+						"Descendant"
 					]
 				}
 			],

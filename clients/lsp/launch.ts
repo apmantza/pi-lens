@@ -941,7 +941,9 @@ function trySpawn(
 	// leader can already be dead, `/proc` is gone, and the group signal that
 	// reaps surviving grandchildren (#2026) is refused. The verdict is released
 	// by `killProcessTree` when the shutdown ladder is done with the pid.
-	holdOwnChildPid(proc.pid, "lsp-spawn");
+	// #5699: the held child is also on the host-exit ledger, whose exit and
+	// signal handlers SIGKILL its group, so it never outlives the host.
+	holdOwnChildPid(proc, "lsp-spawn");
 
 	return { proc, plan };
 }

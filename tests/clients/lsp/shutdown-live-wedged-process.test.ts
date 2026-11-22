@@ -159,4 +159,39 @@ describe("clientShutdown against a real wedged child process (#1620)", () => {
 		removeSpy.mockRestore();
 		void removeLspChild;
 	}, 15_000);
+
+	// #5699: the child's registry entry now leaves on its observed exit, not at
+	// teardown start, so the record of a failed removal moved with it. A
+	// removal that fails there must still write it (the teardown path that
+	// wrote it before no longer removes anything).
+	it("records a failed registry removal on the child's observed exit", async () => {
+		const { createLSPClient } = await import("../../../clients/lsp/client.js");
+		const removeSpy = vi
+			.spyOn(
+				await import("../../../clients/instance-registry.js"),
+				"removeLspChild",
+			)
+			.mockRejectedValue(new Error("registry write refused"));
+
+		const proc = await spawnFakeLspServer({ cwd: process.cwd() });
+		client = await createLSPClient({
+			serverId: "registry-remove-fails",
+			process: proc,
+			root: process.cwd(),
+		});
+		const pid = proc.pid;
+		await client.shutdown();
+		client = undefined;
+		removeSpy.mockRestore();
+
+		const failure = vi
+			.mocked(logLatency)
+			.mock.calls.map(([entry]) => entry)
+			.find((entry) => entry?.phase === "lsp_registry_write_failed");
+		expect(failure?.metadata).toMatchObject({
+			op: "remove",
+			pid,
+			error: "Error: registry write refused",
+		});
+	}, 15_000);
 });

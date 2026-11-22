@@ -208,6 +208,7 @@
 		"tests/fixtures/cargo-workspace-modules/synthetic-workspace/crates/normal-with-deps": null,
 		"tests/fixtures/cargo-workspace-modules/synthetic-workspace/crates/toolsmoke": null,
 		"tests/fixtures/lsp-cascade/rust": null,
+		"tests/fixtures/real-harness/lsp-host-exit/project": null,
 		"tests/fixtures/runner-output-clean/rust-clippy": null,
 		"tests/fixtures/tool-smoke/rust": null
 	}

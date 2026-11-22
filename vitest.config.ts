@@ -542,6 +542,10 @@ export const realHarnessInclude = [
 	// ledger record, including the second edit and the pi-owned path exemptions.
 	"tests/real-harness/outside-root.test.ts",
 	"tests/real-harness/scenario-2.test.ts",
+	// #5699: a pi quit must end a language server that ignores EOF and
+	// SIGTERM, and a quit that cannot confirm it keeps the row the next
+	// session reaps: real pi children, a stubborn server, a second session.
+	"tests/real-harness/lsp-host-exit-5699.test.ts",
 ];
 
 // #1920: files that assert REAL wall-clock elapsed-time budgets (Date.now()
@@ -931,14 +935,19 @@ export const wallClockBudgetInclude = [
 	// #5553: real `sed`, ast-grep, git and fake-LSP children behind a real pi
 	// session; the gate reads the writers' baselines (flake-shape admission).
 	"tests/index-5553-writer-baselines.test.ts",
-	// #5700: the MCP child's language server is released on its own idle timer;
-	// the read polls the server's trace on a real-clock deadline (shape 86,
-	// flake-shape admission).
-	"tests/mcp/lsp-resident-budget-5700.smoke.test.ts",
 	// #5150 R2: the parity smoke polls the real MCP child's background
 	// review-graph build on a scaled real-clock deadline (shape 86) before
 	// comparing the two surfaces' text (flake-shape admission); serializing it
 	// removes the contention that makes that race likely.
+	// #5699: a real MCP child launches a rust server that ignores EOF and
+	// SIGTERM; the host ends by stdin end, SIGTERM and SIGKILL, and a second
+	// MCP child's start reaps what the SIGKILLed one left. The deaths are
+	// polled on real time (flake-shape admission), so it runs serialized.
+	"tests/mcp/lsp-host-exit-5699.test.ts",
+	// #5700: the MCP child's language server is released on its own idle timer;
+	// the read polls the server's trace on a real-clock deadline (shape 86,
+	// flake-shape admission).
+	"tests/mcp/lsp-resident-budget-5700.smoke.test.ts",
 	"tests/mcp/project-report-text-parity.smoke.test.ts",
 	"tests/mcp/session-end.smoke.test.ts",
 	// #5159: the stale-cell smoke bumps the stamp file's mtime and settles

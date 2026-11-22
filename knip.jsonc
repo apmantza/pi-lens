@@ -71,6 +71,10 @@
 		// (real spawned MCP child), so the lane coverage gate (#2837)
 		// requires it as a knip entry.
 		"tests/mcp/stale-json-advisory.smoke.test.ts",
+		// #5699: the MCP host-exit cases are a serialized wall-clock lane
+		// member (real spawned MCP children), so the lane coverage gate
+		// (#2837) requires it as a knip entry.
+		"tests/mcp/lsp-host-exit-5699.test.ts",
 		"tests/clients/*.test.ts",
 		"tests/clients/**/*.test.ts",
 		// #2050: the top-level real-host witnesses (a real linked worktree, a

@@ -705,6 +705,15 @@ export type DegradationKind =
 	 */
 	| "grammar-blocked"
 	/**
+	 * `held-group-outlived-leader`: #5733: a held LSP process group was still
+	 * present when its shutdown ladder ended, after its leader was seen to
+	 * exit: a descendant ignored the ladder's SIGTERM. `releaseOwnChildPid`
+	 * SIGKILLs the group and keeps the hold until that kill is confirmed.
+	 * Counted; subject is the fixed site `lsp-shutdown`, the group id is in the
+	 * reason. Informational: the kill is the ladder working, so a tally.
+	 */
+	| "held-group-outlived-leader"
+	/**
 	 * `held-own-pid-evicted`: #3096: `holdOwnChildPid` found the held-pid set full of still-live
 	 * groups and `BoundedSet.add` dropped the oldest, usually the longest-lived
 	 * LSP leader, so a group kill after that leader dies is refused. Counted;
@@ -3010,6 +3019,9 @@ const INFORMATIONAL_DEGRADATION_KINDS: ReadonlySet<string> = new Set([
 	// #5700: the open-document cap closing a cold document is the resident
 	// budget working; the server reopens it on the next touch.
 	"lsp-open-document-cap",
+	// #5733: a group that outlived its leader at shutdown was SIGKILLed; the
+	// ladder ending it is the design working.
+	"held-group-outlived-leader",
 ]);
 
 export function renderDegradationLines(

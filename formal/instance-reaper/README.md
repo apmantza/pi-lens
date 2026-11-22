@@ -48,6 +48,28 @@ orphaned. Every config states its expected verdict on its first line (see
 `retain` (keep records until verified gone) is an alternative the model
 rejects: `FixRetainNoTag` still leaks.
 
+`ledger` is the host-exit ledger (#5699). A quitting host keeps its entry
+while it holds LSP children, SIGKILLs every held child in its exit handler,
+and only then drops the entry (`deregisterInstance({ processExiting })`,
+`endHeldChildren` in `clients/safe-spawn.ts`). The environment constant
+`Stubborn` turns on the children it matters for: they ignore EOF and SIGTERM
+and name no managed binary, so the backstop never accepts them. With
+`Stubborn` a quit is two steps (`QuitBegin`, `QuitEnd`) and the host may be
+killed between them; without it the quit stays the one atomic `Exit`, so
+every older config explores the same states as before.
+
+`confirm` is the #5733 fix to that ledger: a held group is released only
+once it is confirmed ended (`releaseOwnChildPid`), never on its leader's
+exit. The environment constant `Descendant` turns on `LeaderExit`: the
+leader honours SIGTERM while a descendant in its group ignores it, so the
+group lives on with no identity a record or the backstop can match, and the
+reaper, which signals only a live leader pid, cannot reach it. With
+`confirm` the ladder's end SIGKILLs it (`GroupEnd`) and the exit kill
+reaches it until then. A host SIGKILLed between the leader's exit and that
+end still leaks it (`PosixDescendantCrash`, the accepted residual). With
+`Descendant = FALSE` neither action is enabled, so the older configs keep
+their states.
+
 ## Invariants
 
 - `NoWrongKill`: every kill lands on an orphan, meaning an LSP child whose
@@ -55,7 +77,7 @@ rejects: `FixRetainNoTag` still leaks.
   instance's child, or an unrelated process.
 - `OrphanReachable` (the leak bound): every orphan still has a path to a kill.
   Either an entry lists it under its identity, or the backstop's own test
-  accepts it.
+  accepts it, which includes the managed-binary name (#5699).
 
 ## Where the code differs from the model
 
@@ -124,7 +146,12 @@ The flipped configs (`ReuseToctou`, `RecheckOnly`, `RecheckOnlyNodeCmd`,
 `PosixFootprint`, `PosixScanFail`, `PosixLateRecord`, `PosixStaleMcp`,
 `PosixSamePid`, `WindowsPpidReuse`) model the fixed code. Each one's comment
 says what it violated before the fix, when it ran with `FixParts = {}` (or
-`{"recheck"}` for the two `RecheckOnly` configs).
+`{"recheck"}` for the two `RecheckOnly` configs). `PosixQuitLedger` models
+the exit ledger; `PosixQuitStubborn` is the same scenario without `ledger`,
+the code before #5699, and its trace is the audit's probe: a quit removes
+the entry, then the host is killed before its children are. `PosixDescendantHeld` is
+the ledger before #5733 (`FixParts` without `confirm`); `PosixDescendantConfirm`
+is the same scenario with it.
 
 `node scripts/check-tla-models.mjs`, TLC 1.7.4, on a shared 4-core box at
 load 20-26. The 27 configs took 479 s of wall time there; the whole
@@ -151,6 +178,11 @@ load 20-26. The 27 configs took 479 s of wall time there; the whole
 | `NoReuseNoPpid` | violated NoWrongKill | violated NoWrongKill | 3.7 s |
 | `PosixFootprint` | pass | pass | 4.4 s |
 | `PosixLateRecord` | pass | pass | 4.1 s |
+| `PosixDescendantConfirm` | pass | pass | 1 s (#5733, local) |
+| `PosixDescendantCrash` | violated OrphanReachable | violated OrphanReachable | 1 s (#5733, local) |
+| `PosixDescendantHeld` | violated OrphanReachable | violated OrphanReachable | 1 s (#5733, local) |
+| `PosixQuitLedger` | pass | pass | 1 s (#5699, local) |
+| `PosixQuitStubborn` | violated OrphanReachable | violated OrphanReachable | 1 s (#5699, local) |
 | `PosixNoFault` | pass | pass | 4.5 s |
 | `PosixSamePid` | pass | pass | 6.2 s |
 | `PosixScanFail` | pass | pass | 4.5 s |

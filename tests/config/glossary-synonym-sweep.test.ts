@@ -468,7 +468,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/live-bus-emitter.ts": 4,
 		"clients/lsp/cascade-tier.ts": 1,
 		"clients/lsp/client-registry.ts": 4,
-		"clients/lsp/client.ts": 13,
+		"clients/lsp/client.ts": 12,
 		"clients/lsp/index.ts": 24,
 		"clients/lsp/launch.ts": 1,
 		"clients/lsp/server.ts": 13,
@@ -1095,7 +1095,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/config-core/normalize.ts": 22,
 		// 26 -> 27 (#5291): `configSearchDirs` joins `.git` onto each walked dir to
 		// find the git root — the `node:path` host module, not a delivery lane.
-		"clients/config-locations.ts": 27,
+		// 27 -> 28 (#5740): `holdsCanonicalProjectConfig` joins the canonical
+		// basename onto each walked dir, the same host module.
+		"clients/config-locations.ts": 28,
 		"clients/config-resolve.ts": 8,
 		"clients/dead-code-client.ts": 5,
 		"clients/dead-code-logger.ts": 3,
@@ -1268,7 +1270,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 8 -> 9 (#3498): the own-hold skip's degradation `subject`,
 		// `path.resolve(target)`, as its sibling records in this file spell it.
 		"clients/instance-registry-lock.ts": 9,
-		"clients/instance-registry.ts": 2,
+		// 2 -> 3 (#5699): writeRegistrySync creates the directory of the
+		// target it is handed, `path.dirname(target)`: the exit removal writes
+		// the registry path armed at the first write.
+		"clients/instance-registry.ts": 3,
 		"clients/jscpd-client.ts": 6,
 		"clients/json-cache-read.ts": 4,
 		"clients/knip-client.ts": 24,
@@ -1499,7 +1504,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 17 -> 25 (#5291): the layered read and the discovery stamps build and
 		// probe candidate files through `path.join` / `path.resolve` — the
 		// `node:path` host module, not a delivery lane.
-		"clients/project-lens-config.ts": 25,
+		// 25 -> 27 (#5740): `loadPiLensConfigInDir` reads the marker's `path` and
+		// takes its `path.basename` to tell a legacy name from the canonical one.
+		"clients/project-lens-config.ts": 27,
 		"clients/project-report.ts": 5,
 		"clients/project-snapshot.ts": 15,
 		// 18 -> 22 (#3871 r2, r3): ambient-environment containment uses four
