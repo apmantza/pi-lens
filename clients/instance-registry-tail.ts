@@ -71,29 +71,3 @@ export function queueRegistryMutation(op: () => Promise<void>): Promise<void> {
 export function _settleRegistryMutationsForTests(): Promise<void> {
 	return queueRegistryMutation(async () => {});
 }
-
-/**
- * Resolve `true` once every registry mutation queued so far has landed, or
- * `false` after `boundMs`. For a process about to exit on its own: its exit
- * hook removes its entry with a sync lock that refuses to run while one of
- * this process's own async registry ops holds the lock, and a runner child's
- * row removal (#5703) is often still queued when the work that spawned it
- * returns (#5745 r4).
- */
-export async function settleRegistryMutations(
-	boundMs: number,
-): Promise<boolean> {
-	let timer: NodeJS.Timeout | undefined;
-	const gaveUp = new Promise<false>((resolve) => {
-		timer = setTimeout(() => resolve(false), boundMs);
-		timer.unref();
-	});
-	try {
-		return await Promise.race([
-			queueRegistryMutation(async () => {}).then(() => true),
-			gaveUp,
-		]);
-	} finally {
-		clearTimeout(timer);
-	}
-}

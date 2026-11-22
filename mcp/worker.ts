@@ -15,7 +15,8 @@ import { setProjectTrustState } from "../clients/project-trust.js";
 import { logExtension } from "../clients/extension-log.js";
 import { analyzeFile } from "../clients/mcp/analyze.js";
 import { initLSPConfig } from "../clients/lsp/config.js";
-import { settleRegistryMutations } from "../clients/instance-registry-tail.js";
+import { withDeadline } from "../clients/deadline-utils.js";
+import { queueRegistryMutation } from "../clients/instance-registry-tail.js";
 
 /** Four lock waits (`LOCK_WAIT_MS`, 500 ms) of queued registry writes. */
 const REGISTRY_SETTLE_MS = 2_000;
@@ -74,8 +75,14 @@ async function main(): Promise<void> {
 
 	const result = await analyzeFile(file, cwd, { flags });
 	// #5745 r4: let the runner rows' queued registry writes land, so the exit
-	// hook can take the lock and remove this worker's entry.
-	if (!(await settleRegistryMutations(REGISTRY_SETTLE_MS)))
+	// hook can take the lock and remove this worker's entry. Its sync removal
+	// does not run while this process's own async registry op holds the lock.
+	// A no-op queued on the tail lands after every write queued before it.
+	const settled = await withDeadline(
+		queueRegistryMutation(async () => {}).then(() => true),
+		{ ms: REGISTRY_SETTLE_MS, onTimeout: "undefined" },
+	);
+	if (settled !== true)
 		process.stderr.write(
 			`worker: registry writes still pending after ${REGISTRY_SETTLE_MS}ms; this worker's instances.json entry may outlive it\n`,
 		);

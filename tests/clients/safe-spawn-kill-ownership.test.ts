@@ -24,6 +24,9 @@
 // flake-shape: ungoverned-wait-for — where /proc is absent the owned-child row's start read is a process-table query on the child_process double, and its settle exposes no awaitable; the wait ends on the degradation row the case asserts, bounded by vi.waitFor's timeout (#5745 r4)
 // flake-shape: real-process-spawn — the kill-ownership cases need a real live child of this process: the ownership guard reads its /proc ppid, which no double carries; the mock beside it on the same module would otherwise hide that spawn (#5064)
 import { EventEmitter } from "node:events";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -38,6 +41,7 @@ import {
 } from "../../clients/process-singletons.js";
 import { _settleRegistryMutationsForTests } from "../../clients/instance-registry-tail.js";
 import { isOwnLiveChild } from "../../clients/safe-spawn.js";
+import { removeTempDirSync } from "./test-utils.js";
 
 /** The registry `clients/safe-spawn.ts` shares across module instances. */
 function lifetimeState(): { pids: Set<number>; installed: boolean } {
@@ -588,10 +592,16 @@ describe("kill-by-pid ownership (#2042)", () => {
 					execSync: vi.fn(() => ""),
 					execFileSync: vi.fn(() => ""),
 				}));
+				// This case writes the real registry: pin it to its own home.
+				const home = fs.mkdtempSync(
+					path.join(os.tmpdir(), "pi-lens-owned-child-row-"),
+				);
+				const previousHome = process.env.PI_LENS_HOME;
+				process.env.PI_LENS_HOME = home;
 				const registry = await import("../../clients/instance-registry.js");
 				const { safeSpawnAsync } = await import("../../clients/safe-spawn.js");
-				await registry.registerInstance(process.cwd());
 				try {
+					await registry.registerInstance(process.cwd());
 					const pending = safeSpawnAsync("which", ["node"], {
 						timeout: 50_000,
 					});
@@ -611,6 +621,9 @@ describe("kill-by-pid ownership (#2042)", () => {
 				} finally {
 					registry.deregisterInstance();
 					await _settleRegistryMutationsForTests();
+					if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+					else process.env.PI_LENS_HOME = previousHome;
+					removeTempDirSync(home);
 				}
 			});
 
