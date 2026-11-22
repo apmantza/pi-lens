@@ -17,5 +17,10 @@
 	"json": "Nightly measurement (#3989): eligible, respawn ok and findings preserved on 2 consecutive runs, idle RSS 67 MB, cold start 1116 ms.",
 	"python-jedi": "Nightly measurement (#3989): eligible, respawn ok and findings preserved on 2 consecutive runs, idle RSS 51 MB, cold start 1796 ms.",
 	"docker-official": "Nightly measurement (#3989): eligible, respawn ok and findings preserved on 2 consecutive runs, idle RSS 62 MB, cold start 957 ms.",
-	"zizmor": "Nightly measurement (#3989): eligible, respawn ok and findings preserved on 2 consecutive runs, idle RSS 55 MB, cold start 1683 ms."
+	"zizmor": "Nightly measurement (#3989): eligible, respawn ok and findings preserved on 2 consecutive runs, idle RSS 55 MB, cold start 1683 ms.",
+	"expert": "#3952 HOLD_INDEXER class: a project indexer whose re-index cost after an idle release is unmeasured (held from promotion by the maintainer, 2026-10-06); #5700 keeps it resident rather than evicting it by the new default.",
+	"kotlin": "#3952 HOLD_INDEXER class: a project indexer whose re-index cost after an idle release is unmeasured (held from promotion by the maintainer, 2026-10-06); #5700 keeps it resident rather than evicting it by the new default.",
+	"powershell": "#3952 HOLD_INDEXER class: a project indexer whose re-index cost after an idle release is unmeasured (held from promotion by the maintainer, 2026-10-06); #5700 keeps it resident rather than evicting it by the new default.",
+	"rust": "#3952 HOLD_INDEXER class: a project indexer whose re-index cost after an idle release is unmeasured (held from promotion by the maintainer, 2026-10-06); #5700 keeps it resident rather than evicting it by the new default.",
+	"svelte": "#3952 HOLD_INDEXER class: a project indexer whose re-index cost after an idle release is unmeasured (held from promotion by the maintainer, 2026-10-06); #5700 keeps it resident rather than evicting it by the new default."
 }

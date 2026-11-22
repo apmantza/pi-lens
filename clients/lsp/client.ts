@@ -517,7 +517,14 @@ export interface LSPClientInfo {
 	 *  version-bearing publish set it). */
 	getAllDiagnostics(): Map<
 		string,
-		{ diags: LSPDiagnostic[]; ts: number; binding?: StoredDiagnosticBinding }
+		{
+			diags: LSPDiagnostic[];
+			ts: number;
+			binding?: StoredDiagnosticBinding;
+			/** #5700: the open-document cap closed the document; these are its
+			 *  last findings, which its server no longer re-checks. */
+			closed?: true;
+		}
 	>;
 	pruneDiagnostics(
 		predicate: (
@@ -1448,6 +1455,15 @@ export interface LSPClientState {
 	fenceSkipRecorded?: boolean;
 	/** Paths explicitly closed during this client lifetime; late publishes are dropped. */
 	readonly closedDocuments?: Set<string>;
+	/**
+	 * #5700: the registry's open-document cap for this client
+	 * (`getLspOpenDocumentCap`). Absent: no cap (a client built outside the
+	 * registry). `openDocuments` keeps send order, least recent first.
+	 */
+	readonly openDocumentCap?: number;
+	/** #5700: cap closes queued and not yet run, so a second open landing
+	 *  before they drain does not close more than the excess. */
+	budgetClosesQueued?: number;
 	/** Original URI spelling for each open document; path keys are normalized. */
 	readonly openDocumentUris?: Map<string, string>;
 	readonly pendingOpens: Set<string>;
@@ -5626,6 +5642,7 @@ async function handleNotifyOpenOnce(
 	) {
 		const version = (state.documentVersions.get(normalizedPath) ?? 0) + 1;
 		state.documentVersions.set(normalizedPath, version);
+		noteDocumentSent(state, normalizedPath);
 		// preserveDiagnostics: skip cache clear for format-only resyncs so
 		// waitForDiagnostics fast-paths instead of waiting up to 5s for TypeScript
 		// to re-publish what it already knows (formatting doesn't change semantics).
@@ -5788,6 +5805,7 @@ async function handleNotifyOpenOnce(
 	state.openDocuments.add(normalizedPath);
 	state.closedDocuments?.delete(normalizedPath);
 	state.openDocumentUris?.set(normalizedPath, uri);
+	enforceOpenDocumentCap(state);
 	if (saved && openSent) await sendDidSave(state, normalizedPath, uri, content);
 	// Telemetry is deliberately detached after didOpen succeeds.
 	// #1412 H1: routed through runReadOnlyServerCommand, NOT runServerCommand —
@@ -6117,6 +6135,7 @@ async function handleNotifyChangeOnce(
 		// handler dropped every later answer for the path.
 		state.closedDocuments?.delete(normalizedPath);
 		state.openDocumentUris?.set(normalizedPath, uri);
+		enforceOpenDocumentCap(state);
 		if (saved && fallbackOpenSent)
 			await sendDidSave(state, normalizedPath, uri, content);
 		return fallbackOpenSent;
@@ -6124,6 +6143,7 @@ async function handleNotifyChangeOnce(
 
 	const version = (state.documentVersions.get(normalizedPath) ?? 0) + 1;
 	state.documentVersions.set(normalizedPath, version);
+	noteDocumentSent(state, normalizedPath);
 	// Clear stale diagnostics before sending new content so waitForDiagnostics
 	// doesn't return immediately with the previous edit's results.
 	clearDiagnosticsForPath(state, normalizedPath);
@@ -6206,6 +6226,87 @@ async function closedAndGone(
 }
 
 /**
+ * #5700: a document just went on the wire again; it becomes the most recent.
+ * `openDocuments` keeps send order, so its head is the least recent document.
+ */
+function noteDocumentSent(state: LSPClientState, normalizedPath: string): void {
+	if (state.openDocuments.delete(normalizedPath))
+		state.openDocuments.add(normalizedPath);
+}
+
+/**
+ * #5700: the cap's didClose failed for a reason other than a closed stream
+ * (`safeSendNotification` rethrows only those). The document stays open, so
+ * the next open past the cap retries it. The first failure per server is
+ * logged; the ledger counts the rest under `<server id>:close-failed`.
+ */
+function recordCapCloseFailure(
+	state: LSPClientState,
+	victim: string,
+	err: unknown,
+): void {
+	emitBounded(
+		"lsp_open_document_cap_close_failed",
+		`${state.serverId}:close-failed`,
+		{
+			filePath: victim,
+			durationMs: 0,
+			metadata: { serverId: state.serverId, reason: String(err) },
+		},
+		{
+			ledgerKind: "lsp-open-document-cap-close-failed",
+			risingEdgePer: "identity",
+			reason: "a didClose past the cap failed; the document stays open",
+		},
+	);
+}
+
+/**
+ * #5700: keep at most `openDocumentCap` documents open on the server. Runs
+ * after an open lands and closes the least recently sent documents first.
+ *
+ * A document with a live notify queue (the one just opened, a queued touch,
+ * a close already queued) or a publish still settling is skipped: a queued
+ * close supersedes an unsent touch, and a settling publish is a wait in
+ * progress. The close is an ordinary entry on the document's own queue, not
+ * the rename close (which refuses later touches), so a touch that arrives
+ * after it opens the document again. The closed document's last findings stay
+ * in the cache, marked `closed` by `getAllDiagnostics`; publishes for it are
+ * dropped until it is open again.
+ */
+function enforceOpenDocumentCap(state: LSPClientState): void {
+	const cap = state.openDocumentCap;
+	if (cap === undefined) return;
+	let excess = state.openDocuments.size - (state.budgetClosesQueued ?? 0) - cap;
+	if (excess <= 0) return;
+	for (const victim of state.openDocuments) {
+		if (excess <= 0) break;
+		if (
+			state.notifyChangeQueues.has(victim) ||
+			state.pendingDiagnostics.has(victim)
+		)
+			continue;
+		excess -= 1;
+		state.budgetClosesQueued = (state.budgetClosesQueued ?? 0) + 1;
+		void enqueueDocumentNotify(state, victim, () =>
+			closeDocumentOnce(state, victim, victim, true),
+		)
+			.catch((err: unknown) => recordCapCloseFailure(state, victim, err))
+			.finally(() => {
+				state.budgetClosesQueued = Math.max(
+					0,
+					(state.budgetClosesQueued ?? 1) - 1,
+				);
+			});
+		recordDegradationOnce({
+			kind: "lsp-open-document-cap",
+			subject: state.serverId,
+			reason: `closed the least recently sent documents past the cap of ${cap}; their last findings stay readable, marked closed, until the next touch opens them again`,
+		});
+	}
+}
+
+/**
  * Close a document through the same lifecycle path exposed by the client.
  *
  * #3477: an entry on the path's notify queue, so it waits for a send in flight
@@ -6232,6 +6333,12 @@ async function closeDocumentOnce(
 	state: LSPClientState,
 	filePath: string,
 	normalizedPath: string,
+	/**
+	 * #5700: the open-document cap's close. The server forgets the document,
+	 * but its last findings stay in the cache (marked `closed`); a rename's
+	 * close clears them, because the file is gone.
+	 */
+	retainFindings = false,
 ): Promise<void> {
 	if (!isClientAlive(state)) return;
 	if (!state.openDocuments.has(normalizedPath)) {
@@ -6289,7 +6396,19 @@ async function closeDocumentOnce(
 	// Keep the hash/version binding only while the document is open; the full
 	// text is needed for the next edit, never after didClose (#2065).
 	state.documentContentHashes.delete(normalizedPath);
-	clearDiagnosticsForPath(state, normalizedPath);
+	if (!retainFindings) clearDiagnosticsForPath(state, normalizedPath);
+	// #5737 round 2: a retained close keeps its findings but still advances the
+	// pull generation, so a pull in flight for this document cannot write over them.
+	else {
+		const pending = state.pendingDiagnostics?.get(normalizedPath);
+		if (pending) {
+			clearTimeout(pending);
+			// The receipt is dropped with the close, but still counts as answered.
+			countPublication(state, normalizedPath);
+		}
+		state.pendingDiagnostics?.delete(normalizedPath);
+		bumpPullGeneration(state, normalizedPath);
+	}
 	// #2065 fix round 2 (reverts fix round 1 F4): `pullGenerations` is the
 	// eighth per-path map in this family, but it is deliberately NOT cleared
 	// here — the same reasoning `clearDiagnosticsForPath` already documents
@@ -7295,6 +7414,8 @@ export async function createLSPClient(options: {
 	 *  notice can be its own echo, as a config-declared server's can. */
 	echoesOwnNotice?: boolean;
 	onDiagnosticsPublished?: (serverId: string) => void;
+	/** #5700: `LSPClientState.openDocumentCap`, from the registry. */
+	openDocumentCap?: number;
 }): Promise<LSPClientInfo> {
 	installCrashGuard();
 
@@ -7535,6 +7656,9 @@ export async function createLSPClient(options: {
 		rulesGeneration: 0,
 		diagnosticFences: new Map(),
 		closedDocuments: new Set(),
+		...(options.openDocumentCap !== undefined && {
+			openDocumentCap: options.openDocumentCap,
+		}),
 		openDocumentUris: new Map(),
 		pendingOpens: new Set(),
 		projectIdentityProbedFiles: new Set(),
@@ -7854,6 +7978,7 @@ export async function createLSPClient(options: {
 					diags: LSPDiagnostic[];
 					ts: number;
 					binding?: StoredDiagnosticBinding;
+					closed?: true;
 				}
 			>();
 			const keys = new Set([
@@ -7865,6 +7990,9 @@ export async function createLSPClient(options: {
 					diags: getMergedDiagnosticsForPath(state, key),
 					ts: diagnosticsPublishedAtForPath(state, key) ?? 0,
 					binding: state.diagnosticBindings.get(key),
+					// #5700: the open-document cap closed it; the server no longer
+					// re-checks it, so these are its last findings, not live ones.
+					...(state.closedDocuments?.has(key) && { closed: true }),
 				});
 			}
 			return result;

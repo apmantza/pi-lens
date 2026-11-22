@@ -2,7 +2,8 @@
  * #3622 recurrence guard: idle eviction used a hand-maintained key-prefix
  * spelling list, so a newly registered server could silently stay resident.
  * The registry now declares the policy and this checked table explains every
- * measured opt-in; unmeasured remains resident until evidence exists.
+ * declaration but `unmeasured`. Since #5700 every server not declared
+ * `resident` is evicted on idle; `resident` is the opt-out and needs a reason.
  */
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
@@ -27,8 +28,8 @@ const reasons = JSON.parse(
 /**
  * #3952 decision classes over the whole registry. A change to any row's
  * `idleEviction` has to move an id between these lists in the same PR, so the
- * excluded default (`unmeasured`, resident) and the held/unsupported population
- * cannot drift silently.
+ * default (`unmeasured`, evicted since #5700), the held indexers (`resident`)
+ * and the unsupported population cannot drift silently.
  */
 const TRANSPARENT_IDS = [
 	"typescript",
@@ -143,11 +144,12 @@ describe("LSP idle-eviction registry (#3622)", () => {
 		for (const id of TRANSPARENT_IDS) {
 			expect(declared.get(id), `${id} is transparent`).toBe("transparent");
 		}
-		for (const id of [
-			...NEXT_PHASE_ELIGIBLE_IDS,
-			...HOLD_INDEXER_IDS,
-			...UNPROVEN_IDS,
-		]) {
+		// #5700: the held indexers are the registry's only opt-out from the
+		// evict-unless-resident default.
+		for (const id of HOLD_INDEXER_IDS) {
+			expect(declared.get(id), `${id} is resident`).toBe("resident");
+		}
+		for (const id of [...NEXT_PHASE_ELIGIBLE_IDS, ...UNPROVEN_IDS]) {
 			expect(declared.get(id), `${id} stays unmeasured`).toBe("unmeasured");
 		}
 	});

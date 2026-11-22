@@ -684,6 +684,10 @@ export const wallClockBudgetInclude = [
 	"tests/clients/lsp/lean-real-smoke.test.ts",
 	"tests/clients/lsp/liveness-probe-capability-gate.test.ts",
 	"tests/clients/lsp/navigation-timeout.integration.test.ts",
+	// #5700: one real fake-server child through the real LSPService; the
+	// open-document cap is read off the server's trace of didOpen/didClose
+	// (flake-shape admission).
+	"tests/clients/lsp/open-document-budget-5700.test.ts",
 	// #4786: a real `createLSPClient` over stdio fake-server children that publish
 	// a finding then an unversioned empty; waits on real handshakes and debounce
 	// windows, the same #1022/#2332 contention class as its siblings.
@@ -940,6 +944,10 @@ export const wallClockBudgetInclude = [
 	// MCP child's start reaps what the SIGKILLed one left. The deaths are
 	// polled on real time (flake-shape admission), so it runs serialized.
 	"tests/mcp/lsp-host-exit-5699.test.ts",
+	// #5700: the MCP child's language server is released on its own idle timer;
+	// the read polls the server's trace on a real-clock deadline (shape 86,
+	// flake-shape admission).
+	"tests/mcp/lsp-resident-budget-5700.smoke.test.ts",
 	"tests/mcp/project-report-text-parity.smoke.test.ts",
 	"tests/mcp/session-end.smoke.test.ts",
 	// #5159: the stale-cell smoke bumps the stamp file's mtime and settles

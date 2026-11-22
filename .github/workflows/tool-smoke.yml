@@ -1181,9 +1181,10 @@ jobs:
       # #3645: make a server the registry evicts but the measurement vetoes
       # ACTIONABLE (the #594 shape: a finding only in a step log or a doc diff
       # has nobody reading it). One persistent tracking issue, refreshed while
-      # the drift lasts and closed only when EVERY transparent server measured
-      # eligible (state `clean`); a transparent server that was unavailable,
-      # timed out or had no baseline is `unknown`, and a missing state file (the
+      # the drift lasts and closed only when EVERY evicted server (any policy but
+      # resident, #5737) measured eligible (state `clean`); an evicted server that
+      # was unavailable, inconclusive, timed out, had no baseline or no row is
+      # `unknown`, and a missing state file (the
       # measurement crashed or never ran) is not "clean" either, so both leave
       # the issue as it is. Scoped like the other
       # tracking-issue writers: a branch dispatch must not touch issues.
