@@ -85,7 +85,9 @@ const FULLY_PINNED = [
  * `DEFERRED_COUNT` as pins land, and a reviewer judges every rise of either.
  */
 const DEFERRED_COUNT = 145;
-const NOT_CODE_CHOICE_COUNT = 265;
+// #5699: +1, instance-reaper `Stubborn` (a server that ignores EOF and
+// SIGTERM is environment, not a code choice).
+const NOT_CODE_CHOICE_COUNT = 266;
 
 interface PinTest {
 	test: string;
