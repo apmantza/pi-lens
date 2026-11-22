@@ -173,7 +173,7 @@ describe("a legacy pi-lens.json follows one rule in every reader (#5740)", () =>
 		expect(await answers()).toEqual(LEGACY_ONLY_ANSWERS);
 	});
 
-	it("a canonical file above the git root is not in the chain: the repo's legacy files still load", async () => {
+	it("a canonical file above the git root is not in the chain", async () => {
 		// The project chain ends at the git root (#5291), so a folder above the
 		// repo cannot hide the repo's own legacy files.
 		repo = path.join(home, "work", "repo");
@@ -186,7 +186,7 @@ describe("a legacy pi-lens.json follows one rule in every reader (#5740)", () =>
 		expect(await answers()).toEqual(LEGACY_ONLY_ANSWERS);
 	});
 
-	it("a global config file named .pi-lens.json inside the repo is not a project canonical file", () => {
+	it("the global file is not a project canonical file", () => {
 		// PI_LENS_CONFIG_PATH may name any file. Discovery refuses the global
 		// file as a project document (#2457), so it cannot hide a legacy one.
 		setConfigPath(path.join(repo, ".pi-lens.json"));
@@ -204,7 +204,7 @@ describe("a legacy pi-lens.json follows one rule in every reader (#5740)", () =>
 		expect(flag.value).toBe(true);
 	});
 
-	it("a canonical file ABOVE a nested legacy file counts as in the chain", async () => {
+	it("a canonical file above a nested legacy file is in the chain", async () => {
 		// Canonical only at the repo root; the legacy file is two levels down.
 		writeJson("repo/.pi-lens.json", CANONICAL);
 		writeJson("repo/pkg/sub/pi-lens.json", {

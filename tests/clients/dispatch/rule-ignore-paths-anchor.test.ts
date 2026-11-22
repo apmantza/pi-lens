@@ -136,7 +136,7 @@ describe("rules.<id>.ignorePaths anchor does not move with the session root (#57
 	});
 
 	it.skipIf(process.platform === "win32")(
-		"keeps the session root as the base when a link at the root itself puts the climb elsewhere",
+		"keeps the root as the base when a link at the root misplaces the climb",
 		() => {
 			writeJson(path.join(repo, ".pi-lens.json"), {
 				rules: { "no-eval": { ignorePaths: ["/gen/**"] } },
