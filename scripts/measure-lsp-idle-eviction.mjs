@@ -24,8 +24,8 @@
  * `--drift-body` writes the tracking-issue body when a server is in hard drift
  * and removes the file otherwise; `--drift-state` writes `drift`, `clean` or
  * `unknown`. The nightly's notify step files or refreshes the single tracking
- * issue on `drift`, closes it only on `clean` (every transparent server
- * eligible), and leaves it alone on `unknown`
+ * issue on `drift`, closes it only on `clean` (every evicted server, any
+ * policy but resident, eligible this run, #5737), and leaves it alone on `unknown`
  * (scripts/upsert-tracking-issue.mjs).
  *
  * Exit code: 1 only for drift (a server the registry declares `transparent`
@@ -296,7 +296,7 @@ if (driftBodyPath) {
 	else fs.rmSync(driftBodyPath, { force: true });
 }
 // drift | clean | unknown: the tracking issue closes only on `clean` (every
-// transparent server eligible), never on the mere absence of drift.
+// evicted server eligible, #5737), never on the mere absence of drift.
 if (driftStatePath)
 	fs.writeFileSync(driftStatePath, driftIssueState(rows, declared));
 if (process.env.GITHUB_STEP_SUMMARY) {

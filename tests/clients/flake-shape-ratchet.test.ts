@@ -1037,6 +1037,12 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
 	},
+	// 2026-11-22 (#5700): the open-document cap is a wire claim.
+	"real-process-spawn:clients/lsp/open-document-budget-5700.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"#5700: which didOpen and didClose a real server receives, and in which order, is the subject; a stubbed transport cannot show what the server holds open.",
+	},
 	"real-process-spawn:clients/lsp/opengrep-late-empty-4786.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -2109,6 +2115,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// change is observable only while a real detection is held open in its
 	// child process, and the child's start is visible only as the file it
 	// writes.
+	"ungoverned-wait-for:clients/lsp/open-document-budget-5700.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"#5737: the late pull must be on the server before the cap closes the document, and only the server's own trace shows that; the poll is bounded by its own timeout",
+	},
 	"ungoverned-wait-for:clients/lsp/request-sender-5097.test.ts": {
 		detector: "ungoverned-wait-for",
 		reason:
@@ -2171,6 +2182,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "ungoverned-wait-for",
 		reason:
 			"#5699: the server's start shows only as the pid file it writes and its death, after its MCP host ends, only as its pid going away; neither exposes an awaitable, and each poll is bounded by its own timeout",
+	},
+	// 2026-11-22 (#5700): the MCP child releases an idle server on its own
+	// registry timer; only the server's trace shows the shutdown.
+	"ungoverned-wait-for:mcp/lsp-resident-budget-5700.smoke.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"#5700: the idle release lands on the language server's own registry timer inside the MCP child, which exposes no awaitable; the poll reads the server's trace for its shutdown and is bounded by its own timeout",
 	},
 	"ungoverned-wait-for:real-harness/lsp-host-exit-5699.test.ts": {
 		detector: "ungoverned-wait-for",
