@@ -1,5 +1,6 @@
 // #5703: use the production safeSpawnAsync seam from a real pi extension.
 import { safeSpawnAsync } from "../../../clients/safe-spawn.js";
+import "../../../clients/instance-registry.js";
 
 export default function runnerHostExit5703(pi) {
 	pi.registerCommand("real-harness-runner-5703", {

@@ -65,7 +65,11 @@ import {
 } from "./process-snapshot.js";
 import { queueRegistryMutation } from "./instance-registry-tail.js";
 import { getProcessSingleton } from "./process-singletons.js";
-import { endHeldChildren, holdsChildren } from "./held-children.js";
+import {
+	endHeldChildren,
+	holdsChildren,
+	provideOwnedChildLedger,
+} from "./held-children.js";
 import { getSubagentIdentity, isSubagentSession } from "./subagent-mode.js";
 
 export interface LspChildEntry {
@@ -881,6 +885,8 @@ export function recordLspChild(entry: RecordLspChildInput): Promise<void> {
 	const generation = registrationGeneration().capture();
 	return queueRegistryMutation(() => recordLspChildNow(entry, generation));
 }
+
+provideOwnedChildLedger({ record: recordLspChild, remove: removeLspChild });
 
 async function recordLspChildNow(
 	entry: RecordLspChildInput,

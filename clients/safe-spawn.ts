@@ -23,7 +23,11 @@ import {
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { BoundedFifoMap } from "./bounded-cache.js";
-import { provideHeldChildrenLedger } from "./held-children.js";
+import {
+	provideHeldChildrenLedger,
+	recordOwnedChild,
+	removeOwnedChild,
+} from "./held-children.js";
 import { logLatency } from "./latency-logger.js";
 import {
 	incrementDegradationCount,
@@ -2366,21 +2370,15 @@ export async function safeSpawnAsync(
 		const resourceLabel = options?.resourceLabel ?? command;
 		const registryChildPid = child.pid;
 		if (registryChildPid !== undefined) {
-			void import("./instance-registry.js")
-				.then(({ recordLspChild }) =>
-					recordLspChild({
-						pid: registryChildPid,
-						serverId: `safe-spawn:${resourceLabel}`,
-						command: spawnCmd,
-					}),
-				)
-				.catch(() => {});
+			void recordOwnedChild({
+				pid: registryChildPid,
+				serverId: `safe-spawn:${resourceLabel}`,
+				command: spawnCmd,
+			});
 		}
 		const removeRegistryChild = (): void => {
 			if (registryChildPid === undefined) return;
-			void import("./instance-registry.js")
-				.then(({ removeLspChild }) => removeLspChild(registryChildPid))
-				.catch(() => {});
+			void removeOwnedChild(registryChildPid);
 		};
 
 		// #3375 round 2 (H3384-1). `killTree`'s promise is AWAITED by `finalize`

@@ -953,9 +953,6 @@ export const wallClockBudgetInclude = [
 	// (#4218/#4230) are NOT listed here: they belong to the serialized
 	// real-harness project (realHarnessInclude, maxWorkers 1). Listing a file in
 	// both include lists made vitest collect and run it once per project.
-	// #5703: a real host SIGKILL and next-host reap are the lifecycle subject;
-	// keep this witness in the serialized wall-clock lane.
-	"tests/real-harness/runner-host-exit-5703.test.ts",
 	// #3870: every detector test drives the analyzer's real CLI entry point
 	// (a real node subprocess) over redacted fixture logs (flake-shape admission).
 	"tests/scripts/analyze-pi-lens-logs-detectors.test.ts",
