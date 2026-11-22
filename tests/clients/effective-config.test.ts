@@ -1425,3 +1425,134 @@ describe("effectiveConfig — a file outside cwd is rejected, not silently resol
 		expect(view.file && "error" in view.file).toBe(false);
 	});
 });
+
+/**
+ * `tools.<name>.enabled` answers from the runtime's own resolution (#5739).
+ *
+ * Recurrence this guards: the view fed the wide resolution it takes at the
+ * queried file's directory (past the git root, legacy merged) to
+ * `resolveLensToolEnabled`, while the runtime registers tools once per session
+ * from the layered project loader at the session root. `effective_config`
+ * then reported a tool disabled that the session still registered, and the
+ * answer changed with the `path` argument.
+ */
+describe("effectiveConfig — tools answer from the runtime's project read (#5739)", () => {
+	const enabled = (view: EffectiveConfigView, name: string) =>
+		view.tools.find((tool) => tool.name === name)?.enabled;
+	const GIT = { "repo/.git/HEAD": "ref: refs/heads/main" };
+
+	it("ignores a package's .pi-lens.json below the session root, with or without a path", async () => {
+		const files = {
+			...GIT,
+			"repo/.pi-lens.json": { autofix: { enabled: true } },
+			"repo/pkg/.pi-lens.json": {
+				tools: { module_report: { enabled: false } },
+			},
+		};
+		const bare = await viewFor({ files, startDir: "repo" });
+		const withPath = await viewFor(
+			{ files, startDir: "repo" },
+			{ file: path.join("pkg", "a.ts") },
+		);
+
+		expect(enabled(bare.view, "module_report")).toBe(true);
+		expect(enabled(withPath.view, "module_report")).toBe(true);
+		// The nested document still shows in the wide resolution's document list.
+		expect(
+			withPath.view.documents.some((d) => d.file.endsWith("pkg/.pi-lens.json")),
+		).toBe(true);
+	});
+
+	it("ignores a .pi-lens.json above the git root", async () => {
+		const { view } = await viewFor({
+			files: {
+				"work/.pi-lens.json": { tools: { symbol_search: { enabled: false } } },
+				"work/repo/.git/HEAD": "ref: refs/heads/main",
+				"work/repo/.pi-lens.json": { autofix: { enabled: true } },
+			},
+			startDir: "work/repo",
+		});
+
+		expect(enabled(view, "symbol_search")).toBe(true);
+	});
+
+	it("ignores a legacy pi-lens.json beside a canonical file", async () => {
+		const { view } = await viewFor({
+			files: {
+				...GIT,
+				"repo/.pi-lens.json": { autofix: { enabled: true } },
+				"repo/pi-lens.json": { tools: { module_report: { enabled: false } } },
+			},
+			startDir: "repo",
+		});
+
+		expect(enabled(view, "module_report")).toBe(true);
+	});
+
+	it("still reads a legacy-only chain, as the runtime does", async () => {
+		const { view } = await viewFor({
+			files: {
+				...GIT,
+				"repo/pi-lens.json": { tools: { module_report: { enabled: false } } },
+			},
+			startDir: "repo",
+		});
+
+		expect(enabled(view, "module_report")).toBe(false);
+	});
+
+	it("reads the repository's own file and the global tier, project first", async () => {
+		const { view } = await viewFor({
+			files: {
+				...GIT,
+				".pi-lens/config.json": {
+					tools: {
+						module_report: { enabled: false },
+						symbol_search: { enabled: false },
+					},
+				},
+				"repo/.pi-lens.json": { tools: { symbol_search: { enabled: true } } },
+			},
+			startDir: "repo",
+		});
+
+		expect(enabled(view, "module_report")).toBe(false);
+		expect(enabled(view, "symbol_search")).toBe(true);
+	});
+
+	it("drops the tools.<name>.enabled provenance entries the answer no longer uses", async () => {
+		const { view } = await viewFor(
+			{
+				files: {
+					...GIT,
+					"repo/.pi-lens.json": { autofix: { enabled: true } },
+					"repo/pkg/.pi-lens.json": {
+						tools: { module_report: { enabled: false } },
+					},
+				},
+				startDir: "repo",
+			},
+			{ file: path.join("pkg", "a.ts") },
+		);
+
+		expect(view.provenance.map((entry) => entry.key)).not.toContain(
+			"/tools/module_report/enabled",
+		);
+		// The rest of the nested document's leaves stay attributed.
+		expect(view.provenance.length).toBeGreaterThan(0);
+	});
+
+	it("asking fires no notice for a legacy document the project read sees", async () => {
+		logSink.messages.length = 0;
+		await viewFor({
+			files: {
+				...GIT,
+				"repo/.pi-lens.json": { autofix: { enabled: true } },
+				"repo/pi-lens.json": { tools: { module_report: { enabled: false } } },
+			},
+			startDir: "repo",
+		});
+
+		expect(logSink.messages).toEqual([]);
+	});
+});

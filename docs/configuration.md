@@ -380,7 +380,9 @@ does. A `select` that is not an array is ignored, and the farther list stands.
 `ignorePaths` entries follow the same gitignore rules as the `ignore` field. Each entry is
 relative to the directory of the file that declares it: a global entry, and an entry in the
 workspace root's own file, match against the workspace root, and an entry in `pkg/.pi-lens.json`
-matches under `pkg/`:
+matches under `pkg/`. An entry in a file above the workspace root matches under that file's own
+directory, so `/gen/**` in `repo/.pi-lens.json` skips `repo/gen` whether you start pi in `repo` or in
+`repo/pkg` (#5738):
 
 ```jsonc
 // pkg/.pi-lens.json — carves out pkg/legacy/** except pkg/legacy/keep.ts; nothing at the root
@@ -434,12 +436,17 @@ these dates instantiate.
 A `.pi-lens.json` that mixes both spellings is fine while you migrate: the
 canonical key wins, and the keys you have not moved yet keep working.
 
-For project settings the same rule reaches across directories (#5291): a legacy
-`pi-lens.json` still supplies its values whole while it is the only config
-file in the chain from your working directory upward, and once a canonical
-`.pi-lens.json` sits anywhere in that chain the legacy file only produces its
-migration notices — its fields are not merged in, and the canonical files
-layer per field as above. Move the settings; the notices name the file.
+For project settings the same rule reaches across directories (#5291, #5740): a
+legacy `pi-lens.json` still supplies its values whole while it is the only config
+file in the chain from your working directory up to the git root, and once a
+canonical `.pi-lens.json` sits anywhere in that chain the legacy file only
+produces its migration notices — its fields are not merged in, and the
+canonical files layer per field as above. Every reader follows it: the project
+settings, the rule policy (`rules`, `dispatch.disabledRunners`), the per-folder
+`autofix` and `format` switches, the nested `ignore` lists and
+`effective_config`. The one exception is the language-server section, which
+keeps reading legacy `lsp` values until the deprecation window closes. Move the
+settings; the notices name the file.
 
 Only keys pi-lens actually recognizes get "move it to …" advice. A key in a
 legacy file that is not a pi-lens setting at all — a typo, or a leftover from
@@ -493,9 +500,14 @@ dispatch. That is the answer to "why is this running" and to "why is this *not*
 running", without reading a log.
 
 Naming a file (the `path` argument) resolves the configuration **at that file's own directory**,
-which is where the runtime decides from — so a nested `repo/sub/.pi-lens.json`
-layer contributes to the answer, appears in the reported document list, and is
-named as the file behind any decision it made. The walk runs upward and is
+which is where the runtime decides the language-server and rule-policy answers
+from — so a nested `repo/sub/.pi-lens.json` layer contributes to those answers,
+appears in the reported document list, and is named as the file behind any
+decision it made. The `tools` list is the exception: the runtime registers tools
+once per session, from the repository's own `.pi-lens.json` files at your `cwd`
+and the global config, so that list does not change with `path` and does not
+read a file above the git root, a legacy file beside a canonical one, or a
+nested package's file (#5739). The walk runs upward and is
 **confined to `cwd`**: a `path` that resolves outside `cwd` — including a
 sibling package in the same monorepo — is rejected rather than answered from
 its own unrelated tree, because the per-file answer is only ever correct when

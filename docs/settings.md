@@ -48,7 +48,10 @@ For a single toggle, highest priority first:
    project-scoped keys only: the three mutation controls (`format.enabled`,
    `autofix.enabled`, `actionableWarnings.autoFix.enabled`) and the per-tool
    switches `tools.<name>.enabled` (`tools.lazy` itself stays global-only). In a
-   monorepo the closest config to the edited file wins.
+   monorepo the closest config to the edited file wins for the three mutation
+   controls. The per-tool switches are read once per session from the
+   repository's `.pi-lens.json` files at your working directory, up to the git
+   root, so a package's own file does not switch a tool off or on.
 4. **Global `~/.pi-lens/config.json`**.
 5. **Built-in default**.
 

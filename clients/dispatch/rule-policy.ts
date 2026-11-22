@@ -28,6 +28,7 @@ import {
 	resolveOnePiLensConfigDocument,
 	resolvePiLensConfig,
 } from "../config-resolve.js";
+import { holdsCanonicalProjectConfig } from "../config-locations.js";
 import { getPiLensGlobalConfigPath } from "../lens-config.js";
 import {
 	getGlobalPiLensDir,
@@ -73,7 +74,11 @@ interface RulePolicyEntry {
  */
 export type RulePolicyMap = Record<string, RulePolicyEntry | undefined>;
 
-/** The global+project resolution a dispatch policy key is read from. */
+/**
+ * The global+project resolution a dispatch policy key is read from. A legacy
+ * `pi-lens.json` stays out of it once a canonical `.pi-lens.json` is in the
+ * chain, as it does for the layered project loader (#5740, #5291).
+ */
 export function resolveDispatchPolicyConfig(
 	root: string,
 ): PiLensConfigResolution {
@@ -81,6 +86,7 @@ export function resolveDispatchPolicyConfig(
 		cwd: root,
 		globalDir: getGlobalPiLensDir(),
 		globalConfigPath: getPiLensGlobalConfigPath(),
+		excludeLegacyProjectDocuments: holdsCanonicalProjectConfig(root),
 	});
 }
 

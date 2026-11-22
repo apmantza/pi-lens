@@ -136,6 +136,30 @@ describe("rules.<id>.ignorePaths anchor does not move with the session root (#57
 	});
 
 	it.skipIf(process.platform === "win32")(
+		"keeps the session root as the base when a link at the root itself puts the climb elsewhere",
+		() => {
+			writeJson(path.join(repo, ".pi-lens.json"), {
+				rules: { "no-eval": { ignorePaths: ["/gen/**"] } },
+			});
+			// The session root IS a link to `repo/pkg`: a lexical climb from it lands
+			// beside the link, not at `repo`, so the entry keeps its pre-#5738 base.
+			const session = path.join(tmpDir, "pkg-link");
+			fs.symlinkSync(pkg, session, "dir");
+			const files = [
+				path.join(session, "gen", "a.ts"),
+				path.join(session, "src", "c.ts"),
+			];
+			const kept = applyRulePolicy(
+				files.map(finding),
+				loadProjectRulePolicy(session),
+				{ root: session, filePath: session },
+			).map((d) => d.filePath);
+
+			expect(kept).toEqual([path.join(session, "src", "c.ts")]);
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
 		"anchors the entry at the declaring directory when the session root is spelled through a symlink above it",
 		() => {
 			writeJson(path.join(repo, ".pi-lens.json"), {
