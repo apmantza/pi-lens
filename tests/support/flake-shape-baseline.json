@@ -428,6 +428,7 @@
 		"clients/runtime-session-warmup-prewarm.test.ts": 6,
 		"clients/runtime-session-warmup-supersession.test.ts": 1,
 		"clients/runtime-session.test.ts": 15,
+		"clients/safe-spawn-kill-ownership.test.ts": 1,
 		"clients/session-repository-trust-4530.test.ts": 1,
 		"clients/startup-overhead.test.ts": 1,
 		"clients/widget-state.test.ts": 2,

@@ -2135,6 +2135,12 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the deferred sweep runs on a setImmediate the hook does not await; the wiring pin joins its effect with vi.waitFor and the phase-record case ticks the real queue",
 	},
+	// #5745 r4: the owned-child ledger record read-back runs on every lane.
+	"ungoverned-wait-for:clients/safe-spawn-kill-ownership.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"where /proc is absent the row's start read is a process-table query on the child_process double whose settle has no awaitable; the wait ends on the asserted degradation row",
+	},
 	"ungoverned-wait-for:clients/session-repository-trust-4530.test.ts": {
 		detector: "ungoverned-wait-for",
 		reason:

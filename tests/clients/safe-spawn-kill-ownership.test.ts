@@ -21,6 +21,7 @@
  * `process.kill` is mocked in every case that could reach it, so a regression
  * here can never deliver a real signal to the runner.
  */
+// flake-shape: ungoverned-wait-for — where /proc is absent the owned-child row's start read is a process-table query on the child_process double, and its settle exposes no awaitable; the wait ends on the degradation row the case asserts, bounded by vi.waitFor's timeout (#5745 r4)
 // flake-shape: real-process-spawn — the kill-ownership cases need a real live child of this process: the ownership guard reads its /proc ppid, which no double carries; the mock beside it on the same module would otherwise hide that spawn (#5064)
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -441,6 +442,66 @@ describe("kill-by-pid ownership (#2042)", () => {
 		}
 	});
 
+	// #5745 r3 F1: a rejected ledger write once escaped as an unhandled
+	// rejection and killed the host. Both rejections now land in one
+	// degradation row per session, and the spawn still settles.
+	it("a rejecting owned-child ledger records one degradation and the spawn settles", async () => {
+		const owned = await spawnOwnedFixtureChild();
+		if (owned.pid === undefined)
+			throw new Error("fixture child did not get a pid");
+		const child = new FakeChild(owned.pid);
+		vi.doMock("node:child_process", () => ({
+			spawn: vi.fn(() => child),
+			spawnSync: vi.fn(() => ({ status: 0, stdout: "", stderr: "" })),
+			execSync: vi.fn(() => ""),
+			execFileSync: vi.fn(() => ""),
+		}));
+		const held = await import("../../clients/held-children.js");
+		const registry = await import("../../clients/instance-registry.js");
+		const { safeSpawnAsync } = await import("../../clients/safe-spawn.js");
+		const { getDegradationSummary: freshSummary } =
+			await import("../../clients/degradation-ledger.js");
+		held.provideOwnedChildLedger({
+			write: async () => {
+				throw new Error("REGISTRY_WRITE_FAILED");
+			},
+			remove: async () => {
+				throw new Error("REGISTRY_REMOVE_FAILED");
+			},
+		});
+		try {
+			const pending = safeSpawnAsync(process.execPath, ["-e", "0"], {
+				timeout: 50_000,
+			});
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			child.emit("close", 0, null);
+			await pending;
+			// Where `/proc` is absent the start read is a process-table query on
+			// the same double, which the close above also settles.
+			const group = await vi.waitFor(() => {
+				const found = freshSummary().find((entry) =>
+					entry.latestReasons.some(
+						(reason) => reason.subject === "owned-child-registry",
+					),
+				);
+				if (!found) throw new Error("no owned-child registry record yet");
+				return found;
+			});
+			expect(group?.kind).toBe("safe-spawn-owned-child-registry-failed");
+			expect(group?.count).toBe(1);
+			expect(group?.latestReasons.map((entry) => entry.reason)).toEqual([
+				"record failed: Error: REGISTRY_WRITE_FAILED",
+			]);
+		} finally {
+			held.provideOwnedChildLedger({
+				write: registry.recordLspChild,
+				remove: registry.removeLspChild,
+			});
+			owned.kill("SIGKILL");
+			lifetimeState().pids.clear();
+		}
+	});
+
 	// Everything below reads `/proc`, which only Linux has. The Windows and
 	// macOS arms of the same predicate are covered above WITHOUT a lane, by the
 	// fresh-import case that stubs the platform before module load.
@@ -513,61 +574,6 @@ describe("kill-by-pid ownership (#2042)", () => {
 				);
 				expect(after?.count).toBe(2);
 				expect(after?.latestReasons).toHaveLength(1);
-			});
-
-			// #5745 r3 F1: a rejected ledger write once escaped as an unhandled
-			// rejection and killed the host. Both rejections now land in one
-			// degradation row per session, and the spawn still settles.
-			it("a rejecting owned-child ledger records one degradation and the spawn settles", async () => {
-				const owned = await spawnOwnedFixtureChild();
-				if (owned.pid === undefined)
-					throw new Error("fixture child did not get a pid");
-				const child = new FakeChild(owned.pid);
-				vi.doMock("node:child_process", () => ({
-					spawn: vi.fn(() => child),
-					spawnSync: vi.fn(() => ({ status: 0, stdout: "", stderr: "" })),
-					execSync: vi.fn(() => ""),
-					execFileSync: vi.fn(() => ""),
-				}));
-				const held = await import("../../clients/held-children.js");
-				const registry = await import("../../clients/instance-registry.js");
-				const { safeSpawnAsync } = await import("../../clients/safe-spawn.js");
-				const { getDegradationSummary: freshSummary } =
-					await import("../../clients/degradation-ledger.js");
-				held.provideOwnedChildLedger({
-					write: async () => {
-						throw new Error("REGISTRY_WRITE_FAILED");
-					},
-					remove: async () => {
-						throw new Error("REGISTRY_REMOVE_FAILED");
-					},
-				});
-				try {
-					const pending = safeSpawnAsync("which", ["node"], {
-						timeout: 50_000,
-					});
-					await new Promise<void>((resolve) => setImmediate(resolve));
-					child.emit("close", 0, null);
-					await pending;
-					await new Promise<void>((resolve) => setImmediate(resolve));
-					const group = freshSummary().find((entry) =>
-						entry.latestReasons.some(
-							(reason) => reason.subject === "owned-child-registry",
-						),
-					);
-					expect(group?.kind).toBe("safe-spawn-owned-child-registry-failed");
-					expect(group?.count).toBe(1);
-					expect(group?.latestReasons.map((entry) => entry.reason)).toEqual([
-						"record failed: Error: REGISTRY_WRITE_FAILED",
-					]);
-				} finally {
-					held.provideOwnedChildLedger({
-						write: registry.recordLspChild,
-						remove: registry.removeLspChild,
-					});
-					owned.kill("SIGKILL");
-					lifetimeState().pids.clear();
-				}
 			});
 
 			// #5745 r4: the owned-child row is what the next session's reaper kills
