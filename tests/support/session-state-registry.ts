@@ -1942,6 +1942,12 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<
 		reason:
 			"anchor index entries are keyed by file path and bounded to the tool call",
 	},
+	"held-children.ts": {
+		ownerKey:
+			"process-wide: the held-children ledger safe-spawn.ts provides at load (#5699)",
+		reason:
+			"one process singleton cell holding the provider of the held-children answers; the held LSP children it answers for belong to the process and its exit, not to a session, and the provider is a function pair, not session data",
+	},
 	"instance-registry-lock.ts": {
 		ownerKey:
 			"process-wide: the locks this process holds on the instance registry",
@@ -2543,6 +2549,9 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"go-client.ts": 1,
 	"hard-failure-summary.ts": 1,
 	"hashline-anchor.ts": 1,
+	// #5699: the provider cell rides getProcessSingleton, so the scan sees no
+	// module-scope container; the getProcessSingleton SIGNAL flags the file.
+	"held-children.ts": 0,
 	// #2442 review F2: the container regex now recognises BoundedFifoMap /
 	// BoundedLruCache, so this file's module-level bounded cache is counted.
 	// 12 -> 13 (#5657): `_probeCacheUpdatesPending` holds the `updateProbeCache`
