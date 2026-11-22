@@ -6378,7 +6378,16 @@ async function closeDocumentOnce(
 	if (!retainFindings) clearDiagnosticsForPath(state, normalizedPath);
 	// #5737 round 2: a retained close keeps its findings but still advances the
 	// pull generation, so a pull in flight for this document cannot write over them.
-	else bumpPullGeneration(state, normalizedPath);
+	else {
+		const pending = state.pendingDiagnostics?.get(normalizedPath);
+		if (pending) {
+			clearTimeout(pending);
+			// The receipt is dropped with the close, but still counts as answered.
+			countPublication(state, normalizedPath);
+		}
+		state.pendingDiagnostics?.delete(normalizedPath);
+		bumpPullGeneration(state, normalizedPath);
+	}
 	// #2065 fix round 2 (reverts fix round 1 F4): `pullGenerations` is the
 	// eighth per-path map in this family, but it is deliberately NOT cleared
 	// here — the same reasoning `clearDiagnosticsForPath` already documents

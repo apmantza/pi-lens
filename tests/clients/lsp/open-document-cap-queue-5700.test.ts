@@ -237,4 +237,58 @@ describe("#5700 open-document cap: the victim", () => {
 		expect(order).toEqual(["didOpen a.ts", "didOpen b.ts"]);
 		expect(state.pushDiagnostics.get(key("a.ts"))).toEqual([D]);
 	});
+
+	// Recurrence: a publish arriving while the retained cap close awaits didClose
+	// passes the not-yet-set closed-document guard, and its debounce timer can
+	// overwrite the findings that the close is required to retain.
+	it("cancels a publish timer armed while a retained cap close is in flight", async () => {
+		const state = createMockState({
+			root: tmpDir,
+			openDocumentCap: 1,
+			serverId: "typos",
+		});
+		const close = gatedPromise<void>();
+		const order = recordWire(state, { didClose: close });
+		setupIncomingHandlers(state, {});
+		type Publish = (params: {
+			uri: string;
+			version?: number;
+			diagnostics: LSPDiagnostic[];
+		}) => void;
+		const publish = (
+			vi.mocked(state.connection.onNotification).mock.calls as unknown as Array<
+				[string, Publish]
+			>
+		).find(([method]) => method === "textDocument/publishDiagnostics")?.[1];
+		expect(publish).toBeDefined();
+
+		await open(state, "a.ts");
+		publish!({
+			uri: pathToFileURL(file("a.ts")).href,
+			version: 1,
+			diagnostics: [D],
+		});
+		expect(state.pushDiagnostics.get(key("a.ts"))).toEqual([D]);
+
+		vi.useFakeTimers();
+		try {
+			const late: LSPDiagnostic = { ...D, message: "late publish" };
+			await open(state, "b.ts");
+			expect(order).toEqual(["didOpen a.ts", "didOpen b.ts", "didClose a.ts"]);
+			// The cap close is still awaiting didClose, so closedDocuments is not
+			// marked yet and this receipt reaches the real debounce handler.
+			publish!({
+				uri: pathToFileURL(file("a.ts")).href,
+				version: 2,
+				diagnostics: [late],
+			});
+			expect(state.pendingDiagnostics.has(key("a.ts"))).toBe(true);
+
+			close.resolve();
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(state.pushDiagnostics.get(key("a.ts"))).toEqual([D]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });
