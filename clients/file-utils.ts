@@ -600,8 +600,11 @@ export function createProjectDataDirRootProbe(
 		statusFor(dirName: string): ProjectDataDirRootStatus {
 			if (platform === "win32") return "unrecognized";
 			const readable = SLUG_NAME_RE.exec(dirName)?.[1];
-			// `default` is also the name of a root whose every character the
-			// fold strips, so no walk can find it.
+			// `default` is ambiguous: the writer gives it to a root whose every
+			// character the fold strips (no walk can find that root) and to a
+			// root literally named `default`. Both stay unrecognized, so neither
+			// is reaped (#5707 verify r3 F9, accepted: a kept directory leaks,
+			// a wrong delete loses data).
 			if (readable === undefined || readable === "default") {
 				return "unrecognized";
 			}
