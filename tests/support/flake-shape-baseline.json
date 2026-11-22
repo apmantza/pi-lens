@@ -193,7 +193,7 @@
 		"scripts/red-on-base.test.ts": 5,
 		"scripts/rekey-hook-await-exemptions.test.ts": 2,
 		"scripts/release-qa.test.ts": 6,
-		"scripts/resolve-newest-in-range-host.test.ts": 3,
+		"scripts/resolve-newest-in-range-host.test.ts": 2,
 		"scripts/rpc-load-check-spawn.test.ts": 1,
 		"scripts/rule-catalogs.test.ts": 2,
 		"scripts/rule-language-case.test.ts": 4,

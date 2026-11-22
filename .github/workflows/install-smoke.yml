@@ -152,22 +152,28 @@ env:
   # never drift apart between sites the way three independent hardcoded
   # literals eventually would.
   PI_HOST_FLOOR_VERSION: "0.86.1"
-  # Review S1: `peerDependencies["@earendil-works/pi-coding-agent"]` is `"*"`
-  # today -- unbounded on its own, which would make the "newest-in-range"
-  # PR-gating lane silently equal `@latest` (the "always latest" shape the
-  # maintainer explicitly routed to the ADVISORY nightly lane instead).
-  # scripts/resolve-newest-in-range-host.mjs intersects this repo-owned
-  # ceiling with the declared peer range, so the wildcard case stays bounded
-  # regardless of what that range says. Since #3805 pi-tui's peer is "*" too
-  # (pi's rule for host-provided peers, #2682), so this is the ONLY place the
-  # supported window is stated; tests/packaging.test.ts pins it against the
-  # release-qa verified hosts. BUMP BY HAND, together with that list, only
-  # after release-qa has run on the newer host. P1 is one verified host per
-  # minor line from 0.86 onward; 0.86-1.4 are in-window, and every minor line
-  # below 0.86 falls outside the window and needs no dedicated host. A pi below
-  # 0.86 emits no `context_with_system`, so pi-lens delivers no findings there
-  # since #4644 (#4688: the floor moved rather than reviving the old hosts).
-  PI_HOST_SUPPORTED_RANGE: ">=0.86.1 <1.6.0"
+  # The supported pi window has NO hand-kept ceiling (#5749, maintainer
+  # decision 2026-11-22): its lower end is the floor above, its upper end is
+  # always the newest stable pi, the npm dist-tag `latest` of
+  # @earendil-works/pi-coding-agent (never a prerelease). The "newest-in-range"
+  # PR-gating lane resolves that tag on every run
+  # (scripts/resolve-newest-in-range-host.mjs), so a pi release is exercised by
+  # a gating lane the next time this workflow runs, with nothing to bump. If
+  # the registry cannot answer, the lane fails closed; it never falls back to
+  # an older host. This reverses the #2613 review S1 routing, which capped the
+  # lane with a repo-owned `PI_HOST_SUPPORTED_RANGE` (the peer range is `"*"`,
+  # so without a ceiling the lane equals `@latest`) and left "always latest" to
+  # the advisory nightly: pi 1.6.0 shipped on 2026-11-20 and the gating lane
+  # kept resolving 1.5.2 under the `<1.6.0` ceiling. Since #3805 pi-tui's peer is "*"
+  # too (pi's rule for host-provided peers, #2682), so the window is stated
+  # here and in docs/release-qa-baseline.md only. release-qa verification is
+  # evidence about a host (the `Verified hosts` table, pinned by
+  # tests/packaging.test.ts), no longer a gate on the lane. P1 is one verified
+  # host per minor line from 0.86 onward; 0.86 onward are in-window, and every
+  # minor line below 0.86 falls outside the window and needs no dedicated host.
+  # A pi below 0.86 emits no `context_with_system`, so pi-lens delivers no
+  # findings there since #4644 (#4688: the floor moved rather than reviving the
+  # old hosts).
 
 jobs:
   # #4291: classify the diff once. `smoke` is true when a pull request touches
@@ -944,10 +950,11 @@ jobs:
   # This job makes the exercise deliberate: it overrides the
   # pi-coding-agent devDependency to two specific hosts before building --
   # the pinned floor (PI_HOST_FLOOR_VERSION, the oldest host we promise,
-  # #731) and the newest host the declared `peerDependencies` range admits
-  # (resolved at run time by scripts/resolve-newest-in-range-host.mjs, so a
-  # range bump like #2588 is exercised on the exact host it newly admits,
-  # by construction) -- then runs the SAME tarball-install + install-selftest
+  # #731) and the newest stable pi, the npm dist-tag `latest`, which must
+  # also satisfy the declared `peerDependencies` range (resolved at run time
+  # by scripts/resolve-newest-in-range-host.mjs, #5749: a new pi release, or a
+  # peer-range change like #2588, is exercised on the exact host it newly
+  # admits, by construction) -- then runs the SAME tarball-install + install-selftest
   # + build:dist sequence `smoke` runs. Both cells are BLOCKING (no
   # continue-on-error): a real regression in either is the PR's to fix,
   # unless the "Classify" step below finds the same failure already on
@@ -1145,6 +1152,14 @@ jobs:
   # this YAML). The notify step runs UNCONDITIONALLY (always()) because it
   # also CLOSES the tracker once a run installs cleanly again -- the
   # acceptance criterion this lane's first round missed.
+  #
+  # #5749: the gating "newest-in-range" lane above now resolves the same
+  # dist-tag, so this lane no longer tests a host the gate does not. It stays
+  # because it is the only WRITER of the drift tracker: a red scheduled
+  # `host-range-smoke` leg files no tracking issue (nothing in this workflow
+  # reads its result), while this lane files, refreshes and closes the one
+  # tracking issue and never reds the workflow. Folding the tracker into the gating lane is a separate
+  # change (its own permissions, notifier wiring and tests).
   host-latest-smoke:
     name: host latest nightly (advisory)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
