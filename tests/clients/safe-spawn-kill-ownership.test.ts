@@ -550,9 +550,12 @@ describe("kill-by-pid ownership (#2042)", () => {
 					child.emit("close", 0, null);
 					await pending;
 					await new Promise<void>((resolve) => setImmediate(resolve));
-					const group = freshSummary().find(
-						(entry) => entry.kind === "safe-spawn-owned-child-registry-failed",
+					const group = freshSummary().find((entry) =>
+						entry.latestReasons.some(
+							(reason) => reason.subject === "owned-child-registry",
+						),
 					);
+					expect(group?.kind).toBe("safe-spawn-owned-child-registry-failed");
 					expect(group?.count).toBe(1);
 					expect(group?.latestReasons.map((entry) => entry.reason)).toEqual([
 						"record failed: Error: REGISTRY_WRITE_FAILED",
