@@ -4773,7 +4773,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 			cancelLSPIdleReset();
 			// #449 slice 1: SYNC-only deregistration (no child spawns — see the
 			// processExiting note below); safe to call unconditionally here.
-			deregisterInstance();
+			// #5699: on a quit the entry outlives this call while LSP children
+			// are held; the exit hook removes it once their kills are confirmed.
+			deregisterInstance({ processExiting: shutdownReason === "quit" });
 			// #2467: no analyzer bootstrap may START loading from here on. A demand
 			// already in flight keeps its promise and still settles — the gate is
 			// checked only when no flight exists. Nothing is spawned, which is what

@@ -121,6 +121,7 @@ import {
 	startSituationalToolTelemetrySession,
 } from "../clients/situational-tool-telemetry.js";
 import { logExtension, flushExtensionLog } from "../clients/extension-log.js";
+import { sweepOrphans } from "../clients/instance-reaper.js";
 import { createLspNavigationTool } from "../tools/lsp-navigation.js";
 import { dispositionSuppressedLine } from "../clients/finding-delivery-gate.js";
 import { shouldInitializeSessionRoot } from "../clients/lsp/session-roots.js";
@@ -1928,4 +1929,9 @@ process.stdin.on("end", () => {
 });
 
 startIpcServer();
+// #5699: reap the servers of hosts that died without running their exit hook
+// (a SIGKILLed MCP or pi host), as pi's session start does. Before this an
+// MCP-only machine never ran the reaper, so their rows and servers stayed for
+// good. Fire and forget, and best-effort inside: it never delays the start.
+void sweepOrphans();
 console.error(`[pi-lens-mcp] ready (cwd=${DEFAULT_CWD})`);

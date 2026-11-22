@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 interface RoundResult {
-	/** Writers whose pid is absent from the final registry. */
+	/** Live writers whose pid is absent from the registry. */
 	missing: number[];
 	/** Writers whose bounded lock wait ran out (recorded, by design). */
 	timedOut: number[];
@@ -25,47 +25,80 @@ interface RoundResult {
 	unexplained: number[];
 }
 
+interface WriterReport {
+	pid: number;
+	lockTimedOut: boolean;
+}
+
+/** The writer's report line, read while the writer may still be alive. */
+function firstLine(
+	run: ReturnType<typeof execFileAsync>,
+): Promise<WriterReport> {
+	return new Promise((resolve, reject) => {
+		let out = "";
+		run.child.stdout?.on("data", (chunk: Buffer | string) => {
+			out += String(chunk);
+			const end = out.indexOf("\n");
+			if (end >= 0) resolve(JSON.parse(out.slice(0, end)) as WriterReport);
+		});
+		run.catch(reject);
+	});
+}
+
 async function raceRound(round: number, stallMs = 0): Promise<RoundResult> {
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-registry-race-"));
 	tempDirs.push(home);
 	const barrier = path.join(home, `barrier-${round}`);
-	const children = Array.from({ length: WRITERS }, (_, writer) =>
-		execFileAsync(
+	const release = path.join(home, `release-${round}`);
+	// #5733: an exiting process removes its own row (#5699), so only a writer
+	// still alive at the read can show a lost update. Even writers stay alive;
+	// odd ones exit at once, and their exit removal races the live writes.
+	const writers = Array.from({ length: WRITERS }, (_, writer) => {
+		const live = writer % 2 === 0;
+		const run = execFileAsync(
 			process.execPath,
-			[worker, home, barrier, `/race/${round}/${writer}`, String(stallMs)],
+			[
+				worker,
+				home,
+				barrier,
+				`/race/${round}/${writer}`,
+				String(stallMs),
+				live ? release : "",
+			],
 			{
 				cwd: process.cwd(),
 				env: { ...process.env, PI_LENS_HOME: home },
 				windowsHide: true,
 			},
-		),
-	);
+		);
+		return { live, run, report: firstLine(run) };
+	});
 	fs.writeFileSync(barrier, "go\n");
-	const reports = (await Promise.all(children)).map(
-		(child) =>
-			JSON.parse(child.stdout.trim().split("\n").pop() ?? "{}") as {
-				pid: number;
-				lockTimedOut: boolean;
-			},
-	);
-	const registered = new Set(
-		(
-			JSON.parse(
-				fs.readFileSync(path.join(home, "instances.json"), "utf8"),
-			) as { instances: Array<{ pid: number }> }
-		).instances.map((entry) => entry.pid),
-	);
-	const missing = reports
-		.filter((report) => !registered.has(report.pid))
-		.map((report) => report.pid);
-	const timedOut = reports
-		.filter((report) => report.lockTimedOut)
-		.map((report) => report.pid);
-	return {
-		missing,
-		timedOut,
-		unexplained: missing.filter((pid) => !timedOut.includes(pid)),
-	};
+	try {
+		const reports = await Promise.all(writers.map((w) => w.report));
+		await Promise.all(writers.filter((w) => !w.live).map((w) => w.run));
+		const registered = new Set(
+			(
+				JSON.parse(
+					fs.readFileSync(path.join(home, "instances.json"), "utf8"),
+				) as { instances: Array<{ pid: number }> }
+			).instances.map((entry) => entry.pid),
+		);
+		const missing = reports
+			.filter((report, i) => writers[i]?.live && !registered.has(report.pid))
+			.map((report) => report.pid);
+		const timedOut = reports
+			.filter((report) => report.lockTimedOut)
+			.map((report) => report.pid);
+		return {
+			missing,
+			timedOut,
+			unexplained: missing.filter((pid) => !timedOut.includes(pid)),
+		};
+	} finally {
+		fs.writeFileSync(release, "done\n");
+		await Promise.allSettled(writers.map((w) => w.run));
+	}
 }
 
 describe("instance registry cross-process writer exclusion", () => {

@@ -1,0 +1,18 @@
+[
+	[
+		{
+			"type": "toolCall",
+			"name": "lens_diagnostics",
+			"id": "d1",
+			"arguments": {
+				"source": "lsp",
+				"scope": "paths",
+				"paths": ["src/main.rs"],
+				"severity": "all",
+				"serverScope": "primary",
+				"waitMs": 500
+			}
+		}
+	],
+	[{ "type": "text", "text": "checked" }]
+]

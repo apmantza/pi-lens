@@ -1451,6 +1451,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the first request after a real pi restart on a persisted session must advertise the lazy-tool roster pi restored and pi-lens planned; no in-process double runs the host's restore",
 	},
+	// 2026-11-20 (#5699): which processes outlive a real pi quit, and whether
+	// the next session reaps what a killed quit left, is visible only across
+	// real pi processes and a real language server in its own process group.
+	"real-process-spawn:real-harness/lsp-host-exit-5699.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"#5699: a language server that ignores EOF and SIGTERM must be gone after a real pi quit, and a quit killed before its exit hook must leave the row the next real pi session reaps, and a crashed pi (#5733 r4) must leave the row the next real session logs as vanished; pi's quit and crash paths, its exit listeners and the next start's reaper and marker run only in real pi processes",
+	},
 	"real-process-spawn:real-harness/negative.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -2080,6 +2088,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the restart's spawn-gate window is between real server processes: one server's shutdown, the cache clock, and a restart that ends after the bounded tool_call hook returns expose no awaitable, so vi.waitFor joins them",
 	},
+	// 2026-11-22 (#5733 F1): a descendant in a language server's group is no
+	// child of the test, and only its pid file and /proc show its life.
+	"ungoverned-wait-for:clients/lsp/kill-process-tree-real-child.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"#5733 F1: the descendant that outlives its leader is no child of this process; its start shows only as the pid file it writes and its death only as its pid leaving /proc, neither exposes an awaitable, and each poll is bounded by its own timeout",
+	},
 	// 2026-10-23 (#4776 review H1): a formatter selection written after a trust
 	// change is observable only while a real detection is held open in its
 	// child process, and the child's start is visible only as the file it
@@ -2140,6 +2155,18 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// 2026-11-01 (#5146): the fast POSIX shutdown returns before its ast-grep
 	// child exits, and that exit exposes no awaitable, so the shared session
 	// teardown polls /proc.
+	// 2026-11-20 (#5699): a host's language server is nobody's child once the
+	// host is gone, and only its pid file and its pid's death show its life.
+	"ungoverned-wait-for:mcp/lsp-host-exit-5699.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"#5699: the server's start shows only as the pid file it writes and its death, after its MCP host ends, only as its pid going away; neither exposes an awaitable, and each poll is bounded by its own timeout",
+	},
+	"ungoverned-wait-for:real-harness/lsp-host-exit-5699.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"#5699: the server's start shows only as the pid file it writes, its death after pi quits only as its pid going away, the settle's heartbeat only as the row it rewrites, and the next session's vanished marker (#5733 r4) only as a sessionstart.log line; none exposes an awaitable, and each poll is bounded by its own timeout",
+	},
 	"ungoverned-wait-for:support/mock-session-teardown.ts": {
 		detector: "ungoverned-wait-for",
 		reason:

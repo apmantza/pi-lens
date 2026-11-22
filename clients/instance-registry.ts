@@ -65,6 +65,7 @@ import {
 } from "./process-snapshot.js";
 import { queueRegistryMutation } from "./instance-registry-tail.js";
 import { getProcessSingleton } from "./process-singletons.js";
+import { endHeldChildren, holdsChildren } from "./held-children.js";
 import { getSubagentIdentity, isSubagentSession } from "./subagent-mode.js";
 
 export interface LspChildEntry {
@@ -282,9 +283,9 @@ function recordCorruptRegistryRead(reasonCode: string): void {
 	});
 }
 
-function readRegistrySync(): RegistryFile {
+function readRegistrySync(target = registryPath()): RegistryFile {
 	try {
-		const raw = fs.readFileSync(registryPath(), "utf-8");
+		const raw = fs.readFileSync(target, "utf-8");
 		const parsed = JSON.parse(raw);
 		if (parsed && Array.isArray(parsed.instances)) {
 			return parsed as RegistryFile;
@@ -357,9 +358,8 @@ async function writeRegistryWithRetry(
 	});
 }
 
-function writeRegistrySync(file: RegistryFile): void {
-	const dir = getGlobalPiLensDir();
-	const target = registryPath();
+function writeRegistrySync(file: RegistryFile, target = registryPath()): void {
+	const dir = path.dirname(target);
 	try {
 		fs.mkdirSync(dir, { recursive: true });
 	} catch {
@@ -521,6 +521,7 @@ async function registerInstanceNow(
 	// it (still queued) and must not become the heartbeat's repair root.
 	if (!registrationIsCurrent(generation, normalizedRoot)) return;
 	rememberRegistrationRoot(projectRoot);
+	armExitRemoval();
 	const pid = process.pid;
 	const now = new Date().toISOString();
 	const identity = isSubagentSession() ? getSubagentIdentity() : undefined;
@@ -886,6 +887,7 @@ async function recordLspChildNow(
 	generation: GenerationHandle,
 ): Promise<void> {
 	if (!isInstanceRegistryEnabled()) return;
+	armExitRemoval();
 	const pid = process.pid;
 	const now = new Date().toISOString();
 	const [selfStart, childStart] = await Promise.all([
@@ -1031,11 +1033,20 @@ async function removeLspChildNow(
  * Remove this process's entry entirely. SYNC fs only — safe to call from
  * `session_shutdown` (#234: no child spawns permitted at teardown; this
  * function spawns nothing).
+ *
+ * `processExiting` (#5699): the host quits next. While it still holds LSP
+ * children the entry stays, because it is the only record of them a later
+ * session's reaper can read: their kill comes after this call, and the exit
+ * hook ({@link armExitRemoval}) removes the entry once every kill is
+ * confirmed. A host killed in between leaves the entry for the next sweep.
  */
-export function deregisterInstance(): void {
+export function deregisterInstance(
+	options: { processExiting?: boolean } = {},
+): void {
 	rememberRegistrationRoot(undefined);
 	registrationGeneration().bump();
 	if (!isInstanceRegistryEnabled()) return;
+	if (options.processExiting && holdsChildren()) return;
 	const selfStart = ownProcessStartIfKnown();
 	const removed = withInstanceRegistryLockSync(registryPath(), () => {
 		const next = withoutOwnEntry(readRegistrySync(), selfStart);
@@ -1055,6 +1066,53 @@ export function deregisterInstance(): void {
 			"the sync removal could not take the registry lock; queued behind the holder",
 	});
 	void queueRegistryMutation(deregisterInstanceAfterHolder);
+}
+
+const EXIT_REMOVAL_FAMILY = "instance-registry.exit-removal";
+/** Bump when the cell's shape changes. */
+const EXIT_REMOVAL_VERSION = 1;
+
+/**
+ * Remove this process's entry when the process exits (#5699), after its held
+ * LSP children are SIGKILLed and confirmed gone. Before this, a host that
+ * exited without `session_shutdown` (an MCP host, a worker) left its entry
+ * behind, and a pi quit removed it before its servers were killed.
+ *
+ * Armed by the first write of the entry. The path is the one written then,
+ * not `registryPath()` at exit: the environment may have moved since. One
+ * listener per process (a process singleton), whichever evaluation arms it.
+ * Spawn-free and synchronous: an `exit` listener gets no later turn.
+ *
+ * An unconfirmed kill keeps the entry, with its children, for the next
+ * session's reaper; the entry is that record.
+ *
+ * A non-zero exit code keeps it too (#5733 r4): an uncaught exception, pi's
+ * crash handler and a failed worker exit that way, and the next session's
+ * vanished-instance marker reads a dead pid's entry as the evidence that the
+ * process ended without shutdown. The children still end first.
+ */
+function armExitRemoval(): void {
+	const state = getProcessSingleton(
+		EXIT_REMOVAL_FAMILY,
+		EXIT_REMOVAL_VERSION,
+		() => ({ target: undefined as string | undefined, armed: false }),
+	);
+	state.target = registryPath();
+	if (state.armed) return;
+	state.armed = true;
+	process.once("exit", (code) => {
+		if (state.target) removeOwnEntryAtExit(state.target, code);
+	});
+}
+
+function removeOwnEntryAtExit(target: string, code: number): void {
+	if (!endHeldChildren() || code !== 0 || !fs.existsSync(target)) return;
+	const selfStart = ownProcessStartIfKnown();
+	withInstanceRegistryLockSync(target, () => {
+		const next = withoutOwnEntry(readRegistrySync(target), selfStart);
+		if (next) writeRegistrySync(next, target);
+		return true;
+	});
 }
 
 /**

@@ -468,7 +468,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/live-bus-emitter.ts": 4,
 		"clients/lsp/cascade-tier.ts": 1,
 		"clients/lsp/client-registry.ts": 4,
-		"clients/lsp/client.ts": 13,
+		"clients/lsp/client.ts": 12,
 		"clients/lsp/index.ts": 24,
 		"clients/lsp/launch.ts": 1,
 		"clients/lsp/server.ts": 13,
@@ -1270,7 +1270,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 8 -> 9 (#3498): the own-hold skip's degradation `subject`,
 		// `path.resolve(target)`, as its sibling records in this file spell it.
 		"clients/instance-registry-lock.ts": 9,
-		"clients/instance-registry.ts": 2,
+		// 2 -> 3 (#5699): writeRegistrySync creates the directory of the
+		// target it is handed, `path.dirname(target)`: the exit removal writes
+		// the registry path armed at the first write.
+		"clients/instance-registry.ts": 3,
 		"clients/jscpd-client.ts": 6,
 		"clients/json-cache-read.ts": 4,
 		"clients/knip-client.ts": 24,

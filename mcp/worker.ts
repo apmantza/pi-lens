@@ -14,6 +14,7 @@
 import { setProjectTrustState } from "../clients/project-trust.js";
 import { logExtension } from "../clients/extension-log.js";
 import { analyzeFile } from "../clients/mcp/analyze.js";
+import { initLSPConfig } from "../clients/lsp/config.js";
 
 function arg(name: string): string | undefined {
 	const prefix = `--${name}=`;
@@ -50,6 +51,21 @@ async function main(): Promise<void> {
 			process.stderr.write("worker: --flags must be valid JSON\n");
 			process.exit(2);
 		}
+	}
+
+	// #5699: the user's LSP config (`serverOverrides`, `disabledServers`), as
+	// the host loads it in `ensureReady`. Without it the worker ran the
+	// built-in servers, so a fresh analysis measured other servers than the
+	// warm one. A failed load keeps the defaults, as the host's does.
+	try {
+		await initLSPConfig(cwd);
+		// pi-lens-ignore: missing-error-propagation
+	} catch (err) {
+		logExtension({
+			subsystem: "lsp-config",
+			level: "warn",
+			message: `mcp-worker: initLSPConfig failed for ${cwd}: ${String(err)}`,
+		});
 	}
 
 	const result = await analyzeFile(file, cwd, { flags });

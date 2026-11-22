@@ -1599,6 +1599,13 @@
       "spawn:node via tests/mcp/harness.ts:98"
     ]
   },
+  "mcp/lsp-host-exit-5699.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): which processes outlive that host when it ends by stdin end, SIGTERM or SIGKILL, and whether the next host's start reaps them, is the subject, so a mocked child_process would test nothing. The `ps` read is the kill guard adopting the host's language server for cleanup (tests/support/kill-guard.ts).",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
   "mcp/module-report.smoke.test.ts": {
     "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
     "routes": [
