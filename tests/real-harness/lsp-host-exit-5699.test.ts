@@ -1,5 +1,5 @@
-// flake-shape: real-process-spawn — the subject is which processes outlive a real pi process when it quits: pi's own quit path (session_shutdown, then process.exit), the extension's exit listeners, a language server in its own process group, and the next session's start-time reaper, none of which an in-process tier runs.
-// flake-shape: ungoverned-wait-for — the server is pi's child and, once pi is gone, nobody's; its start shows only as the pid file it writes, its death only as its pid going away, and the settle's heartbeat only as the row it rewrites, none of which exposes an awaitable, and each poll is bounded by its own timeout.
+// flake-shape: real-process-spawn — the subject is which processes outlive a real pi process when it quits or crashes: pi's own quit path (session_shutdown, then process.exit), the extension's exit listeners, a language server in its own process group, and the next session's start-time reaper, none of which an in-process tier runs.
+// flake-shape: ungoverned-wait-for — the server is pi's child and, once pi is gone, nobody's; its start shows only as the pid file it writes, its death only as its pid going away, the settle's heartbeat only as the row it rewrites, and the next session's vanished marker only as a sessionstart.log line, none of which exposes an awaitable, and each poll is bounded by its own timeout.
 /**
  * #5699: a language server that ignores stdin EOF and SIGTERM must be gone
  * after a pi quit, and a quit that cannot confirm the death must leave the

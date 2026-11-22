@@ -1457,7 +1457,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"real-process-spawn:real-harness/lsp-host-exit-5699.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"#5699: a language server that ignores EOF and SIGTERM must be gone after a real pi quit, and a quit killed before its exit hook must leave the row the next real pi session reaps; pi's quit path, its exit listeners and the next start's reaper run only in real pi processes",
+			"#5699: a language server that ignores EOF and SIGTERM must be gone after a real pi quit, and a quit killed before its exit hook must leave the row the next real pi session reaps, and a crashed pi (#5733 r4) must leave the row the next real session logs as vanished; pi's quit and crash paths, its exit listeners and the next start's reaper and marker run only in real pi processes",
 	},
 	"real-process-spawn:real-harness/negative.test.ts": {
 		detector: "real-process-spawn",
@@ -2165,7 +2165,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"ungoverned-wait-for:real-harness/lsp-host-exit-5699.test.ts": {
 		detector: "ungoverned-wait-for",
 		reason:
-			"#5699: the server's start shows only as the pid file it writes, its death after pi quits only as its pid going away, and the settle's heartbeat only as the row it rewrites; none exposes an awaitable, and each poll is bounded by its own timeout",
+			"#5699: the server's start shows only as the pid file it writes, its death after pi quits only as its pid going away, the settle's heartbeat only as the row it rewrites, and the next session's vanished marker (#5733 r4) only as a sessionstart.log line; none exposes an awaitable, and each poll is bounded by its own timeout",
 	},
 	"ungoverned-wait-for:support/mock-session-teardown.ts": {
 		detector: "ungoverned-wait-for",
