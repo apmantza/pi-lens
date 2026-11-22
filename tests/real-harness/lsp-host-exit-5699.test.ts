@@ -215,7 +215,7 @@ describe.runIf(process.platform === "linux")(
 			}).toEqual({ serverSurvives: false, hostRowLeft: false });
 		}, 180_000);
 
-		it("keeps the row of a quit that cannot confirm the death, and the next session reaps the server", async () => {
+		it("keeps an unconfirmed quit's row for the next session to reap", async () => {
 			const ws = stubbornHome();
 			const pids = await withRealPi(
 				{
