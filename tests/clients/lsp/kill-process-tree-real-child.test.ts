@@ -77,7 +77,7 @@ async function launchGroupOutlivingItsLeader(): Promise<{
 	handle: LSPProcess;
 	descendant: number;
 }> {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "f1-5733-"));
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-f1-5733-"));
 	const pidFile = path.join(dir, "descendant.pid");
 	const handle = await launchLSP(
 		"/bin/sh",
