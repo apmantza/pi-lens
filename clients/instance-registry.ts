@@ -913,12 +913,36 @@ provideOwnedChildLedger({
 	remove: removeLspChild,
 });
 
+/**
+ * #5745 r6: whether the registry file exists. A write that only edits this
+ * process's existing entry (a spawned command's row, a child's removal) has
+ * nothing to do without it, and taking the lock would create the directory:
+ * a runner row's removal landed after a test removed its pinned home and
+ * re-created it (CI shard 1, tmp-fixture hygiene).
+ */
+function registryFileExists(): boolean {
+	return fs.existsSync(registryPath());
+}
+
+function noteDroppedOwnedRow(): void {
+	recordDegradationOnce({
+		kind: "instance-registry-registration-missing",
+		subject: `owned-child:${process.pid}`,
+		reason:
+			"dropping a spawned command's row: this process has no registry entry",
+	});
+}
+
 async function recordLspChildNow(
 	entry: RecordLspChildInput,
 	generation: GenerationHandle,
 	missingHost: MissingHostEntry,
 ): Promise<void> {
 	if (!isInstanceRegistryEnabled()) return;
+	if (missingHost === "drop" && !registryFileExists()) {
+		noteDroppedOwnedRow();
+		return;
+	}
 	armExitRemoval();
 	const pid = process.pid;
 	const now = new Date().toISOString();
@@ -943,12 +967,7 @@ async function recordLspChildNow(
 				isOwnEntry(inst, selfStart),
 			);
 			if (idx === -1 && missingHost === "drop") {
-				recordDegradationOnce({
-					kind: "instance-registry-registration-missing",
-					subject: `owned-child:${pid}`,
-					reason:
-						"dropping a spawned command's row: this process has no registry entry",
-				});
+				noteDroppedOwnedRow();
 				return undefined;
 			}
 			if (idx === -1) {
@@ -1048,7 +1067,7 @@ async function removeLspChildNow(
 	pid: number,
 	expectedMarker?: string,
 ): Promise<void> {
-	if (!isInstanceRegistryEnabled()) return;
+	if (!isInstanceRegistryEnabled() || !registryFileExists()) return;
 	const selfStart = await ownProcessStart(startReadOptions());
 	await withInstanceRegistryLock(registryPath(), async () => {
 		const file = await readRegistryAsync();

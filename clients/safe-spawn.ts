@@ -2384,23 +2384,28 @@ export async function safeSpawnAsync(
 				reason: `${operation} failed: ${String(err)}`,
 			});
 		};
-		if (registryChildPid !== undefined) {
-			void readProcessStart(registryChildPid, { timeoutMs: 1_000 })
-				.then((processStart) =>
-					recordOwnedChild({
-						pid: registryChildPid,
-						serverId: `safe-spawn:${resourceLabel}`,
-						command: spawnCmd,
-						...(processStart === undefined ? {} : { processStart }),
-					}),
-				)
-				.catch((err) => noteOwnedChildLedgerFailure("record", err));
-		}
+		// Settles once the row write has landed or failed; it never rejects.
+		const registryChildRecorded =
+			registryChildPid === undefined
+				? Promise.resolve()
+				: readProcessStart(registryChildPid, { timeoutMs: 1_000 })
+						.then((processStart) =>
+							recordOwnedChild({
+								pid: registryChildPid,
+								serverId: `safe-spawn:${resourceLabel}`,
+								command: spawnCmd,
+								...(processStart === undefined ? {} : { processStart }),
+							}),
+						)
+						.catch((err) => noteOwnedChildLedgerFailure("record", err));
 		let registryChildRemoved = false;
 		const removeRegistryChild = (): void => {
 			if (registryChildPid === undefined || registryChildRemoved) return;
 			registryChildRemoved = true;
-			void Promise.resolve()
+			// #5745 r6 (CodeRabbit): after the record. A child that closes before
+			// its start read settles would otherwise queue this removal first,
+			// find no row, and leave the record to write a finished child's row.
+			void registryChildRecorded
 				.then(() => removeOwnedChild(registryChildPid))
 				.catch((err) => noteOwnedChildLedgerFailure("remove", err));
 		};

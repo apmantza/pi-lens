@@ -535,6 +535,26 @@ describe("instance-registry", () => {
 		);
 	});
 
+	it("a spawned command's row and its removal never re-create a removed registry home", async () => {
+		// #5745 r6 (CI shard 1, tmp-fixture hygiene): a runner row's removal
+		// landed after index-lsp-config-root-eviction removed its pinned home,
+		// and the registry lock's directory create re-made pi-lens-2518-idx-home-*.
+		const { recordOwnedChild, removeOwnedChild } =
+			await import("../../clients/held-children.js");
+		await import("../../clients/instance-registry.js");
+		removeTempDirSync(dir);
+
+		await recordOwnedChild({
+			pid: 4243,
+			serverId: "safe-spawn:which",
+			command: "which",
+			processStart: "4243-start",
+		});
+		await removeOwnedChild(4243);
+
+		expect(fs.existsSync(dir)).toBe(false);
+	});
+
 	it("a spawned command's row joins this process's entry and never creates one", async () => {
 		// #5745 r5 (CI shard 1, index-4704): a `which` row that landed after
 		// the session deregistered re-created this pid's entry at the process
