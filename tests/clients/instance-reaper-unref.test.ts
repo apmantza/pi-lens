@@ -78,7 +78,10 @@ vi.mock("node:child_process", () => ({
 // empty table before any spawn; `node:child_process` is mocked above, so the
 // real table is never read.
 vi.unmock("../../clients/process-snapshot.js");
-vi.mock("../../clients/instance-registry.js", () => ({
+vi.mock("../../clients/instance-registry.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../clients/instance-registry.js")
+	>()),
 	isInstanceRegistryEnabled: () => h.state.enabled,
 	readInstanceRegistry: async () => h.state.registry,
 }));

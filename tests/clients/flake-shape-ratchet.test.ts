@@ -714,6 +714,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the spawned MCP child re-stats the real stamp file and builds its review graph in the background; a fake clock in this process cannot advance either, so the settle and the bounded poll of that build are real timers",
 	},
+	"raw-timer-wait:real-harness/runner-host-exit-5703.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the host and detached-child death/reap transitions are real process lifecycle observations; fake timers cannot reproduce them",
+	},
 	// 2026-09-15 (#2042 cheapest probe): the sample-tail file is written by the
 	// wrapper's own real setInterval loop in a separate process; a poll waits
 	// for that file's first write rather than a fixed sleep, and one case kills
@@ -1487,6 +1492,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"the read guard's branch admission after a real RPC clone, the nested-call ids pi mints, and the tool_execution_end pi's agent loop emits for a call a later extension blocked cannot be produced by an in-process double",
+	},
+	"real-process-spawn:real-harness/runner-host-exit-5703.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"#5703 requires a real pi host, its production safeSpawnAsync child, host SIGKILL, and the next host reaper; an in-process mock cannot prove survival across hosts",
 	},
 	"real-process-spawn:real-harness/scenario-1.test.ts": {
 		detector: "real-process-spawn",
