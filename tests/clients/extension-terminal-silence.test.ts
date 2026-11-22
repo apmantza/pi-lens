@@ -35,7 +35,13 @@ const SCANNED_FILES = ["index.ts", "i18n.ts"];
  * `clients/extension-log.ts` OWNS the console reroute — it is the one module
  * allowed to name console methods, because patching them is its job.
  */
-const ALLOWED_FILES = new Set(["clients/extension-log.ts"]);
+const ALLOWED_FILES = new Map([
+	["clients/extension-log.ts", "owns the extension's console reroute"],
+	[
+		"clients/lsp/crash-output.ts",
+		"owns the sole-listener LSP crash stack before process.exit",
+	],
+]);
 
 const CONSOLE_CALL =
 	/\bconsole\s*\.\s*(log|info|warn|error|debug|trace|dir|table)\s*\(/g;

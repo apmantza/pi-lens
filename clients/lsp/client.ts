@@ -100,6 +100,7 @@ import {
 } from "./workspace-diagnostics-cache.js";
 import { toPosix } from "../path-utils.js";
 import { LspRequestTimeoutError } from "./request-timeout-error.js";
+import { writeLspCrashStack } from "./crash-output.js";
 
 // Opt-in publishDiagnostics trace (PILENS_PUB_DEBUG=1) — read once, negligible
 // hot-path cost. Surfaces each server's publish behavior (version + count) to
@@ -1063,9 +1064,7 @@ function installCrashGuard(): void {
 		) {
 			return;
 		}
-		process.stderr.write(
-			`${err instanceof Error ? (err.stack ?? err) : err}\n`,
-		);
+		writeLspCrashStack(err instanceof Error ? (err.stack ?? err) : err);
 		process.exit(1);
 	};
 	process.on("uncaughtException", onUncaughtException);
@@ -1083,7 +1082,7 @@ function installCrashGuard(): void {
 		}
 		const failure =
 			reason instanceof Error ? reason : new Error(String(reason));
-		process.stderr.write(`${failure.stack ?? failure}\n`);
+		writeLspCrashStack(failure.stack ?? failure);
 		process.exit(1);
 	};
 	process.on("unhandledRejection", onUnhandledRejection);
