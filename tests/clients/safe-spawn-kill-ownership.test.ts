@@ -506,6 +506,74 @@ describe("kill-by-pid ownership (#2042)", () => {
 		}
 	});
 
+	// #5745 r6 (CodeRabbit): `close` queued the row's removal while the row's
+	// record was still pending behind the start read (a `ps` query on macOS).
+	// The removal found nothing, the record then wrote the finished child's
+	// row, and the spent removal never ran again. Probed on the old head with
+	// the start read held until after `close`: the row stayed in instances.json.
+	it("removes an owned child's row only after its record settles", async () => {
+		const owned = await spawnOwnedFixtureChild();
+		if (owned.pid === undefined)
+			throw new Error("fixture child did not get a pid");
+		const child = new FakeChild(owned.pid);
+		vi.resetModules();
+		vi.doMock("node:child_process", () => ({
+			spawn: vi.fn(() => child),
+			spawnSync: vi.fn(() => ({ status: 0, stdout: "", stderr: "" })),
+			execSync: vi.fn(() => ""),
+			execFileSync: vi.fn(() => ""),
+		}));
+		const held = await import("../../clients/held-children.js");
+		const { safeSpawnAsync } = await import("../../clients/safe-spawn.js");
+		const events: string[] = [];
+		let releaseWrite: () => void = () => {};
+		let writeCalled: () => void = () => {};
+		const writeStarted = new Promise<void>((resolve) => {
+			writeCalled = resolve;
+		});
+		held.provideOwnedChildLedger({
+			write: (entry) => {
+				events.push(`write ${entry.pid}`);
+				writeCalled();
+				return new Promise<void>((resolve) => {
+					releaseWrite = () => {
+						events.push(`write landed ${entry.pid}`);
+						resolve();
+					};
+				});
+			},
+			remove: async (pid) => {
+				events.push(`remove ${pid}`);
+			},
+		});
+		try {
+			const pending = safeSpawnAsync(process.execPath, ["-e", "0"], {
+				timeout: 50_000,
+			});
+			await writeStarted;
+			child.emit("close", 0, null);
+			await pending;
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(events).toEqual([`write ${owned.pid}`]);
+
+			releaseWrite();
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(events).toEqual([
+				`write ${owned.pid}`,
+				`write landed ${owned.pid}`,
+				`remove ${owned.pid}`,
+			]);
+		} finally {
+			releaseWrite();
+			// The ledger cell is a process singleton: a fresh registry module
+			// provides the production ledger again.
+			vi.resetModules();
+			await import("../../clients/instance-registry.js");
+			owned.kill("SIGKILL");
+			lifetimeState().pids.clear();
+		}
+	});
+
 	// Everything below reads `/proc`, which only Linux has. The Windows and
 	// macOS arms of the same predicate are covered above WITHOUT a lane, by the
 	// fresh-import case that stubs the platform before module load.
@@ -624,99 +692,6 @@ describe("kill-by-pid ownership (#2042)", () => {
 					if (previousHome === undefined) delete process.env.PI_LENS_HOME;
 					else process.env.PI_LENS_HOME = previousHome;
 					removeTempDirSync(home);
-				}
-			});
-
-			it("a child that closes before its start read settles leaves no owned-child row", async () => {
-				// #5745 r6 (CodeRabbit): `close` queued the row's removal before the
-				// start read let the record queue. The removal found nothing, the
-				// record then wrote the finished child's row, and the spent removal
-				// never ran again, so the row stayed until the host ended. Where the
-				// start read is a `ps` query (macOS) a fast child does this; here the
-				// read is held at its seam until the child has closed.
-				const owned = await spawnOwnedFixtureChild();
-				if (owned.pid === undefined)
-					throw new Error("fixture child did not get a pid");
-				const childPid = owned.pid;
-				const child = new FakeChild(childPid);
-				vi.resetModules();
-				vi.doMock("node:child_process", () => ({
-					spawn: vi.fn(() => child),
-					spawnSync: vi.fn(() => ({ status: 0, stdout: "", stderr: "" })),
-					execSync: vi.fn(() => ""),
-					execFileSync: vi.fn(() => ""),
-				}));
-				let releaseStartRead: () => void = () => {};
-				const startReadHeld = new Promise<void>((resolve) => {
-					releaseStartRead = resolve;
-				});
-				const heldReads: Promise<unknown>[] = [];
-				vi.doMock(
-					"../../clients/process-snapshot.js",
-					async (importOriginal) => {
-						const actual =
-							await importOriginal<
-								typeof import("../../clients/process-snapshot.js")
-							>();
-						return {
-							...actual,
-							readProcessStart: (
-								...args: Parameters<typeof actual.readProcessStart>
-							) => {
-								if (args[0] !== childPid)
-									return actual.readProcessStart(...args);
-								const read = startReadHeld.then(() =>
-									actual.readProcessStart(...args),
-								);
-								heldReads.push(read);
-								return read;
-							},
-						};
-					},
-				);
-				const home = fs.mkdtempSync(
-					path.join(os.tmpdir(), "pi-lens-owned-child-order-"),
-				);
-				const previousHome = process.env.PI_LENS_HOME;
-				process.env.PI_LENS_HOME = home;
-				const registry = await import("../../clients/instance-registry.js");
-				const { safeSpawnAsync } = await import("../../clients/safe-spawn.js");
-				try {
-					await registry.registerInstance(process.cwd());
-					const pending = safeSpawnAsync(process.execPath, ["-e", "0"], {
-						timeout: 50_000,
-					});
-					// One macrotask reaches the spawn and its held start read.
-					await new Promise<void>((resolve) => setImmediate(resolve));
-					expect(heldReads).toHaveLength(1);
-					child.emit("close", 0, null);
-					await pending;
-					await new Promise<void>((resolve) => setImmediate(resolve));
-					await _settleRegistryMutationsForTests();
-					releaseStartRead();
-					await Promise.all(heldReads);
-					// The record lands on the tail, then the removal queued behind it.
-					for (let round = 0; round < 3; round++) {
-						await new Promise<void>((resolve) => setImmediate(resolve));
-						await _settleRegistryMutationsForTests();
-					}
-					const own = (await registry.readInstanceRegistry()).find(
-						(entry) => entry.pid === process.pid,
-					);
-					expect(own).toBeDefined();
-					expect(own?.lspChildren.map((row) => row.pid)).not.toContain(
-						childPid,
-					);
-				} finally {
-					releaseStartRead();
-					vi.doUnmock("../../clients/process-snapshot.js");
-					registry.deregisterInstance();
-					await _settleRegistryMutationsForTests();
-					if (previousHome === undefined) delete process.env.PI_LENS_HOME;
-					else process.env.PI_LENS_HOME = previousHome;
-					removeTempDirSync(home);
-					owned.kill("SIGKILL");
-					lifetimeState().pids.clear();
 				}
 			});
 
