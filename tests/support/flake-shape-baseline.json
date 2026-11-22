@@ -302,7 +302,7 @@
 		"clients/loop-block-stall-discrimination.test.ts": 1,
 		"clients/lsp/aggregation.test.ts": 13,
 		"clients/lsp/clangd-lazy-indexing.test.ts": 1,
-		"clients/lsp/client-crash-logging.test.ts": 1,
+		"clients/lsp/client-crash-logging.test.ts": 2,
 		"clients/lsp/client-exit-cause-ledger.test.ts": 1,
 		"clients/lsp/client-internals.test.ts": 18,
 		"clients/lsp/document-drift.test.ts": 1,

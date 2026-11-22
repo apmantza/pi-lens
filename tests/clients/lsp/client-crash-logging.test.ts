@@ -1,4 +1,5 @@
 // flake-shape: real-process-spawn — a child that dies unprompted must emit a real exit signal and close event; a stub never exits on its own
+// flake-shape: raw-timer-wait — the late reader of a full stderr pipe must start after the crash writer met EAGAIN and before its 1 s deadline; the writer exposes no event for that moment, so a bounded real delay is the only way to place the reader (#5746 r4).
 /**
  * #615-followup dogfooding: an ast-grep client died 5 times mid-sweep in a real
  * project and NOTHING in latency.log recorded why — no exit code, no signal,
@@ -31,6 +32,9 @@ import { setupTestEnvironment } from "../test-utils.js";
  *  #5746 r4 bound, pinned here as numbers so a changed cap is a visible edit. */
 const CRASH_STACK_MAX_BYTES = 16 * 1024;
 const TRUNCATION_LINE = "\n[lsp-crash] crash report truncated at 16384 bytes\n";
+/** How long the late reader waits after the child starts its report: past
+ *  the writer's first write, and a quarter of its 1 s deadline. */
+const LATE_READER_MS = 250;
 
 vi.mock("../../../clients/latency-logger.js", async (importActual) => ({
 	...(await importActual<
@@ -443,6 +447,10 @@ writeSync(1, "RETURNED\\n");`;
 			await new Promise<void>((resolve) =>
 				child.stdout?.once("data", () => resolve()),
 			);
+			// The reader starts well after the writer met the full pipe, and
+			// well inside its 1 s deadline: a writer that gave up at its first
+			// EAGAIN has delivered nothing by then.
+			await new Promise((resolve) => setTimeout(resolve, LATE_READER_MS));
 			const reader = new net.Socket({
 				fd: readFd,
 				readable: true,
