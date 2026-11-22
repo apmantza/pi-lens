@@ -1,9 +1,14 @@
+import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	_resetStateCacheForTests,
+	markDisposition,
+} from "../../clients/diagnostic-dispositions.js";
 import {
 	IN_FLIGHT_REASON,
 	noPrimaryCheckerReason,
@@ -39,8 +44,12 @@ import {
 	setRenderCallback,
 	setSessionLanguages,
 	setWidgetChangeCallback,
+	WIDGET_CLEAR_HIDE_DELAY_MS,
 	WIDGET_STATE_VERSION,
+	widgetStore,
 } from "../../clients/widget-state.js";
+import { beginScope } from "../../clients/session-scope.js";
+import { setupTestEnvironment } from "./test-utils.js";
 
 const e = String.fromCharCode(27);
 const theme = {
@@ -2887,6 +2896,333 @@ describe("past-EOF diagnostic gate (#1641)", () => {
 		} finally {
 			await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
 		}
+	});
+});
+
+describe("renderWidget hideWhenClean", () => {
+	const hide = { hideWhenClean: true } as const;
+	const clean = () => {
+		setSessionLanguages(["jsts"]);
+		recordRunner("/repo/a.ts", "type-safety", "succeeded", 0);
+		recordDiagnostics("/repo/a.ts", []);
+	};
+	const warn = () =>
+		recordDiagnostics("/repo/a.ts", [
+			{ severity: "warning", message: "w", line: 1, rule: "r" },
+		]);
+	const delay = WIDGET_CLEAR_HIDE_DELAY_MS;
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+	afterEach(() => {
+		clearWidgetState();
+		vi.useRealTimers();
+	});
+
+	it("shows ✓ clean before the hide delay has passed", () => {
+		clean();
+		expect(visibleFrame(renderWidget(120, theme, hide))).toContain("✓ clean");
+		vi.advanceTimersByTime(delay - 1);
+		expect(visibleFrame(renderWidget(120, theme, hide))).toContain("✓ clean");
+	});
+
+	// A session with an LSP server up and no file record draws a bare header
+	// that `✓ clean` never replaces; it hides at once, with no delay to wait out.
+	describe("with nothing to report and no completed check", () => {
+		const bare = { compact: true, hideWhenClean: true } as const;
+
+		it("hides an LSP-only session at once, in every layout", () => {
+			setSessionLanguages(["jsts"]);
+			recordLsp("typescript", "/repo", "spawn_success");
+			expect(renderWidget(120, theme, hide)).toEqual([]);
+			expect(renderWidget(60, theme, hide)).toEqual([]);
+			expect(renderWidget(120, theme, bare)).toEqual([]);
+			// Without the setting the bare header still draws.
+			expect(renderWidget(120, theme).length).toBeGreaterThan(0);
+		});
+
+		it("hides a session whose only file no check can cover", () => {
+			setSessionLanguages(["jsts"]);
+			recordDiagnostics("/repo/notes.zzz", [], undefined, undefined, {
+				reason: "no analyzer handles this file type",
+				inapplicable: true,
+			});
+			expect(renderWidget(120, theme).length).toBeGreaterThan(0);
+			expect(renderWidget(120, theme, hide)).toEqual([]);
+		});
+
+		it("draws while an LSP server is still spawning, then hides once it is ready", () => {
+			recordLsp("typescript", "/repo", "spawn_start");
+			expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+			vi.advanceTimersByTime(delay * 2);
+			expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+			recordLsp("typescript", "/repo", "spawn_success");
+			expect(renderWidget(120, theme, hide)).toEqual([]);
+		});
+
+		it("draws again when a warning lands after the idle hide", () => {
+			recordLsp("typescript", "/repo", "spawn_success");
+			expect(renderWidget(120, theme, hide)).toEqual([]);
+			warn();
+			expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+		});
+
+		it("shows ✓ clean for the full delay once the first check completes", () => {
+			recordLsp("typescript", "/repo", "spawn_success");
+			expect(renderWidget(120, theme, hide)).toEqual([]);
+			clean();
+			expect(visibleFrame(renderWidget(120, theme, hide))).toContain("✓ clean");
+			vi.advanceTimersByTime(delay - 1);
+			expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+			vi.advanceTimersByTime(1);
+			expect(renderWidget(120, theme, hide)).toEqual([]);
+		});
+
+		it("keeps drawing a file still under analysis", () => {
+			recordRunner("/repo/a.ts", "type-safety", "running", 0);
+			expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+		});
+	});
+
+	it("draws nothing once a clean state has shown for the hide delay", () => {
+		clean();
+		renderWidget(120, theme, hide);
+		vi.advanceTimersByTime(delay);
+		expect(renderWidget(120, theme, hide)).toEqual([]);
+	});
+
+	it("asks for a repaint exactly when the hide delay passes", () => {
+		clean();
+		const repaint = vi.fn();
+		setRenderCallback(repaint);
+		renderWidget(120, theme, hide);
+		vi.advanceTimersByTime(delay - 1);
+		expect(repaint).toHaveBeenCalledTimes(0);
+		vi.advanceTimersByTime(1);
+		expect(repaint).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps the widget visible while a warning is recorded, and restarts the full delay once it clears", () => {
+		clean();
+		renderWidget(120, theme, hide);
+		vi.advanceTimersByTime(delay - 1);
+		warn();
+		expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+		vi.advanceTimersByTime(delay * 2);
+		expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+
+		recordDiagnostics("/repo/a.ts", []);
+		expect(visibleFrame(renderWidget(120, theme, hide))).toContain("✓ clean");
+		vi.advanceTimersByTime(delay - 1);
+		expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+		vi.advanceTimersByTime(1);
+		expect(renderWidget(120, theme, hide)).toEqual([]);
+	});
+
+	it("draws again when a warning lands after the widget hid", () => {
+		clean();
+		renderWidget(120, theme, hide);
+		vi.advanceTimersByTime(delay);
+		expect(renderWidget(120, theme, hide)).toEqual([]);
+		warn();
+		expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+	});
+
+	it("draws again when a file enters analysis after the widget hid", () => {
+		clean();
+		renderWidget(120, theme, hide);
+		vi.advanceTimersByTime(delay);
+		expect(renderWidget(120, theme, hide)).toEqual([]);
+		// A second file under analysis: `a.ts` stays a completed check, so only
+		// the pending analysis keeps the state from reading clean.
+		recordRunner("/repo/b.ts", "type-safety", "running", 0);
+		const summary = getWidgetSummary();
+		expect(summary).toMatchObject({
+			hasPendingAnalysis: true,
+			hasRenderableCheckedFile: true,
+			uncheckedCount: 0,
+			totalErrors: 0,
+			totalWarnings: 0,
+			totalSuppressed: 0,
+		});
+		expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+	});
+
+	describe("after the hide delay, a state that is not clean still draws", () => {
+		const settled = () => {
+			clean();
+			renderWidget(120, theme, hide);
+			vi.advanceTimersByTime(delay);
+			expect(renderWidget(120, theme, hide)).toEqual([]);
+		};
+
+		it("an error", () => {
+			settled();
+			recordDiagnostics("/repo/b.ts", [
+				{ severity: "error", semantic: "blocking", message: "x", line: 1 },
+			]);
+			expect(visibleFrame(renderWidget(120, theme, hide))).toContain("1E");
+		});
+
+		it("an unchecked file", () => {
+			settled();
+			recordDiagnostics("/repo/b.ts", [], undefined, undefined, {
+				reason: "no primary checker is enabled for this kind",
+			});
+			expect(visibleFrame(renderWidget(120, theme, hide))).toContain(
+				"1 unchecked",
+			);
+		});
+
+		it("a language server that is spawning", () => {
+			settled();
+			recordLsp("typescript-language-server", process.cwd(), "spawn_start");
+			expect(visibleFrame(renderWidget(120, theme, hide))).toContain("LSP↑");
+		});
+	});
+
+	describe("a suppressed finding", () => {
+		let env: ReturnType<typeof setupTestEnvironment>;
+		const priorHome = process.env.PI_LENS_HOME;
+		const content = "const bad = true;\n";
+		const finding = {
+			tool: "eslint",
+			rule: "no-constant-condition",
+			message: "Unexpected constant condition",
+			line: 1,
+		};
+
+		beforeEach(() => {
+			env = setupTestEnvironment("pi-lens-hide-clear-");
+			process.env.PI_LENS_HOME = env.tmpDir;
+			_resetStateCacheForTests();
+		});
+		afterEach(() => {
+			clearWidgetState();
+			_resetStateCacheForTests();
+			if (priorHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = priorHome;
+			env.cleanup();
+		});
+
+		it("keeps the widget drawn after the hide delay", () => {
+			const file = path.join(env.tmpDir, "fixture.ts");
+			nodeFs.writeFileSync(file, content);
+			setSessionLanguages(["jsts"]);
+			// A completed check, so the header alone reads `✓ clean`: only the
+			// suppressed count keeps the widget drawn.
+			recordRunner(file, "type-safety", "succeeded", 0);
+			recordDiagnostics(file, [{ ...finding, severity: "error" }]);
+			markDisposition(
+				env.tmpDir,
+				{ ...finding, cwd: env.tmpDir, filePath: file, content },
+				"false-positive",
+			);
+			expect(getWidgetSummary().totalSuppressed).toBe(1);
+			expect(getWidgetSummary().totalErrors).toBe(0);
+			expect(visibleFrame(renderWidget(120, theme))).toContain("✓ clean");
+
+			renderWidget(120, theme, hide);
+			vi.advanceTimersByTime(delay);
+			expect(visibleFrame(renderWidget(120, theme, hide))).toContain(
+				"suppressed: 1",
+			);
+		});
+	});
+
+	it("fires no repaint after the store is cleared, and a later clean render starts a fresh delay", () => {
+		clean();
+		const repaint = vi.fn();
+		setRenderCallback(repaint);
+		renderWidget(120, theme, hide);
+		vi.advanceTimersByTime(delay - 1000);
+		clearWidgetState();
+		setRenderCallback(repaint);
+		vi.advanceTimersByTime(delay * 2);
+		expect(repaint).toHaveBeenCalledTimes(0);
+
+		clean();
+		repaint.mockClear();
+		renderWidget(120, theme, hide);
+		vi.advanceTimersByTime(delay - 1);
+		expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+		vi.advanceTimersByTime(1);
+		expect(repaint).toHaveBeenCalledTimes(1);
+		expect(renderWidget(120, theme, hide)).toEqual([]);
+	});
+
+	// Recurrence: PR #5725 r1 (CodeRabbit). A file with a completed snapshot
+	// and a failed formatter has no error or warning, so the gate read it as
+	// clean and hid the `fmt-failed` row the user needs.
+	it("keeps drawing a failed-formatter row after the hide delay", () => {
+		clean();
+		recordFormatter("/repo/a.ts", "biome", false, false);
+		expect(visibleFrame(renderWidget(120, theme, hide))).toContain("x a.ts");
+		vi.advanceTimersByTime(delay * 2);
+		expect(visibleFrame(renderWidget(120, theme, hide))).toContain("x a.ts");
+		expect(visibleFrame(renderWidget(60, theme, hide))).toContain(
+			"fmt-failed:biome",
+		);
+	});
+
+	it("arms no timer and keeps drawing when hideWhenClean is off", () => {
+		clean();
+		const before = vi.getTimerCount();
+		expect(visibleFrame(renderWidget(120, theme))).toContain("✓ clean");
+		expect(vi.getTimerCount()).toBe(before);
+		vi.advanceTimersByTime(delay * 2);
+		expect(visibleFrame(renderWidget(120, theme))).toContain("✓ clean");
+	});
+
+	it("hides the compact summary after the delay", () => {
+		clean();
+		const opts = { compact: true, hideWhenClean: true } as const;
+		expect(visibleFrame(renderWidget(120, theme, opts))).toContain("✓ clean");
+		vi.advanceTimersByTime(delay);
+		expect(renderWidget(120, theme, opts)).toEqual([]);
+	});
+
+	describe("a resumed session", () => {
+		let env: ReturnType<typeof setupTestEnvironment>;
+
+		beforeEach(() => {
+			env = setupTestEnvironment("pi-lens-hide-resume-");
+		});
+		afterEach(() => {
+			clearWidgetState();
+			env.cleanup();
+		});
+
+		it("shows ✓ clean for the full delay after the store restores a clean sidecar, then hides", async () => {
+			const file = path.join(env.tmpDir, "a.ts");
+			nodeFs.writeFileSync(file, "export {};\n");
+			setSessionLanguages(["jsts"]);
+			recordRunner(file, "type-safety", "succeeded", 0);
+			recordDiagnostics(file, []);
+			// The previous session hid its clean widget before it saved.
+			renderWidget(120, theme, hide);
+			vi.advanceTimersByTime(delay);
+			expect(renderWidget(120, theme, hide)).toEqual([]);
+			const saved = exportWidgetState();
+
+			await widgetStore.restore(beginScope({ role: "primary" }), saved, {
+				reason: "resume",
+				source: "own-sidecar",
+				savedAt: nodeFs.statSync(file).mtimeMs + 1000,
+				sessionManager: undefined,
+				cwd: env.tmpDir,
+			});
+
+			expect(getFileDiagnosticSummaries().map((f) => f.filePath)).toEqual([
+				file,
+			]);
+			expect(visibleFrame(renderWidget(120, theme, hide))).toContain("✓ clean");
+			vi.advanceTimersByTime(delay - 1);
+			expect(visibleFrame(renderWidget(120, theme, hide))).toContain("✓ clean");
+			vi.advanceTimersByTime(1);
+			expect(renderWidget(120, theme, hide)).toEqual([]);
+		});
 	});
 });
 

@@ -87,6 +87,11 @@ const CONVERSATION_MODULE_STATE: Readonly<Record<string, readonly string[]>> = {
 	"clients/tool-set-policy.ts": [],
 	"clients/turn-summary.ts": [],
 	"clients/widget-state.ts": [
+		// widget.hideWhenClean: the hide-delay timer handle and the time the widget
+		// first read clean. Not a store: they hold no conversation facts, only
+		// render timing, and `clearWidgetState` resets both.
+		"clearHideTimer",
+		"clearSinceMs",
 		"diagnosticsWriteGuard",
 		"files",
 		"lspServers",

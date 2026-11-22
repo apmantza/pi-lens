@@ -738,6 +738,7 @@ export function clearWidgetState(): void {
 	lspServers.clear();
 	sessionLanguages = [];
 	requestRenderFn = null;
+	resetClearHide();
 	diagnosticsWriteGuard.clear();
 	runnerWriteGuard.clear();
 	nextInactivePruneSize = MAX_INACTIVE_FILE_RECORDS + 1;
@@ -2458,6 +2459,106 @@ function summarizeWidget(
 	};
 }
 
+/**
+ * The header's `✓ clean` verdict: no error, warning or unchecked file, at
+ * least one completed check (#5287), and no analysis still running.
+ */
+function isHeaderClean(facts: WidgetSummary): boolean {
+	return (
+		facts.totalErrors === 0 &&
+		facts.totalWarnings === 0 &&
+		facts.uncheckedCount === 0 &&
+		facts.hasRenderableCheckedFile &&
+		!facts.hasPendingAnalysis
+	);
+}
+
+/**
+ * widget.hideWhenClean's gate: the header shows `✓ clean` and the frame draws
+ * nothing else a user needs (no suppressed count, no starting server, no
+ * failed-formatter row: `✓ clean` counts diagnostics, and a failed formatter
+ * leaves none).
+ */
+function isWidgetClean(
+	facts: WidgetSummary,
+	spawningCount: number,
+	records: readonly FileRecord[],
+): boolean {
+	return (
+		isHeaderClean(facts) &&
+		facts.totalSuppressed === 0 &&
+		spawningCount === 0 &&
+		!records.some(hasFailedFormatter)
+	);
+}
+
+/**
+ * widget.hideWhenClean's other gate: the frame has nothing to report and
+ * `✓ clean` cannot show, because no completed check exists. An LSP server that
+ * is up with no edit yet, or only files no check can cover, leaves a bare
+ * header; without this gate `isWidgetClean` is never true and it never hides.
+ */
+function isWidgetIdle(
+	facts: WidgetSummary,
+	renderableCount: number,
+	spawningCount: number,
+): boolean {
+	return (
+		renderableCount === 0 &&
+		facts.totalErrors === 0 &&
+		facts.totalWarnings === 0 &&
+		facts.totalSuppressed === 0 &&
+		facts.uncheckedCount === 0 &&
+		!facts.hasPendingAnalysis &&
+		spawningCount === 0
+	);
+}
+
+/**
+ * widget.hideWhenClean: how long the widget shows `✓ clean` before it hides.
+ * The first clean render starts the delay; any render that is not clean
+ * cancels it, so the next clean state waits the full delay again. The timer
+ * only asks for a repaint; the repaint re-reads the store and decides.
+ */
+export const WIDGET_CLEAR_HIDE_DELAY_MS = 5000;
+let clearSinceMs: number | null = null;
+let clearHideTimer: ReturnType<typeof setTimeout> | null = null;
+
+function resetClearHide(): void {
+	if (clearHideTimer !== null) clearTimeout(clearHideTimer);
+	clearHideTimer = null;
+	clearSinceMs = null;
+}
+
+/** Track the clean state and answer whether the hide delay has passed. */
+function clearHideElapsed(clean: boolean): boolean {
+	if (!clean) {
+		resetClearHide();
+		return false;
+	}
+	const now = Date.now();
+	if (clearSinceMs === null) {
+		clearSinceMs = now;
+		clearHideTimer = setTimeout(() => {
+			clearHideTimer = null;
+			// A detached callback has no caller to contain a host throw; same
+			// bounded record as the store-change listener in `requestRender`.
+			try {
+				requestRenderFn?.();
+			} catch (err) {
+				recordDegradationOnce({
+					kind: "widget-change-listener-failed",
+					subject: "widget-hide-timer",
+					reason: `hide-timer repaint threw: ${err instanceof Error ? err.message : String(err)}`,
+				});
+			}
+		}, WIDGET_CLEAR_HIDE_DELAY_MS);
+		// Don't keep the process alive solely for this repaint.
+		clearHideTimer?.unref?.();
+	}
+	return now - clearSinceMs >= WIDGET_CLEAR_HIDE_DELAY_MS;
+}
+
 /** The current store's tallies, without rendering a widget frame. */
 export function getWidgetSummary(): WidgetSummary {
 	const records = [...files.values()];
@@ -2477,7 +2578,9 @@ export function renderWidget(
 	},
 	// #3959: one-line summary switch (ui.compactWidget / --lens-compact-widget).
 	// An options object instead of a boolean flag parameter, per no-flag-argument.
-	opts?: { compact?: boolean },
+	// `hideWhenClean` (widget.hideWhenClean): draw nothing while no error,
+	// warning or unchecked file is outstanding.
+	opts?: { compact?: boolean; hideWhenClean?: boolean },
 ): string[] {
 	const dim = (s: string) => theme.fg("dim", s);
 	const red = (s: string) => theme.fg("error", s);
@@ -2487,7 +2590,10 @@ export function renderWidget(
 	const w = Math.max(1, width || 80);
 	const useHorizontal = w >= HORIZONTAL_MIN_WIDTH;
 
-	if (files.size === 0 && lspServers.size === 0) return [];
+	if (files.size === 0 && lspServers.size === 0) {
+		resetClearHide();
+		return [];
+	}
 
 	const lines: string[] = [];
 
@@ -2524,8 +2630,7 @@ export function renderWidget(
 				? yellow(`⚠ ${summaryFacts.uncheckedCount} unchecked`)
 				: // #5287: a formatter row for a file no check can cover (a generated
 					// file) is not a completed check; `✓ clean` needs one that is.
-					summaryFacts.hasRenderableCheckedFile &&
-					  !summaryFacts.hasPendingAnalysis
+					isHeaderClean(summaryFacts)
 					? green("✓ clean")
 					: "";
 
@@ -2539,6 +2644,23 @@ export function renderWidget(
 		(useHorizontal || opts?.compact) && spawning.length > 0
 			? "  " + dim("LSP↑")
 			: "";
+
+	// widget.hideWhenClean: nothing to report and no `✓ clean` to wait for.
+	if (
+		opts?.hideWhenClean &&
+		isWidgetIdle(summaryFacts, renderable.length, spawning.length)
+	) {
+		resetClearHide();
+		return [];
+	}
+
+	// widget.hideWhenClean: hide once `✓ clean` has shown for the delay.
+	if (
+		opts?.hideWhenClean &&
+		clearHideElapsed(isWidgetClean(summaryFacts, spawning.length, records))
+	) {
+		return [];
+	}
 
 	// #3959: compact mode stops at the summary header. File rows, the
 	// suppressed count and blocker details stay reachable via lens_diagnostics.

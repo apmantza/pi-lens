@@ -160,6 +160,8 @@ add a denial but never re-enable one. See
 | --- | --- | --- | --- |
 | `ignore` | global + project | `[]` | Gitignore-style globs excluded from every scan |
 | `widget.visible` | global | `true` | Whether the diagnostics widget shows at session start |
+| `widget.position` | global | `"belowEditor"` | `"aboveEditor"` or `"belowEditor"`: where the widget draws relative to the input box |
+| `widget.hideWhenClean` | global | `false` | Hide the widget 5 s after it first shows `✓ clean`. See [globalconfig](globalconfig.md#widget-position-and-hiding) |
 | `dispatch.runnerTimeoutFloorMs` | global | none (no floor) | Minimum wall-clock budget per dispatch runner |
 | `lsp.queryMaxFileLines` | global | `5000` | Line limit of the explicit single-file `lens_diagnostics source=lsp` query only; a whole number from `5000` to `40000` (suggested `20000`). See [globalconfig](globalconfig.md#explicit-diagnostics-query-line-limit) |
 | `dispatch.disabledRunners` | global + project | `[]` | Dispatch runner ids that never run (for example `["dotnet-build"]`). A denial: the union of every tier, so a project can add but never re-enable. Unknown ids are dropped with a warning. See [configuration](configuration.md#dispatchdisabledrunners--turning-a-dispatch-runner-off) |
@@ -182,7 +184,7 @@ add a denial but never re-enable one. See
 User-level. The file is selected by the [global-location table](configuration.md#global-config-location)
 and applies to **every** project. It honors **all** flag keys from the
 table above plus the non-flag global knobs (`ignore`, `widget.visible`,
-`dispatch.runnerTimeoutFloorMs`, `dispatch.disabledRunners`, `format.mode`,
+`widget.position`, `widget.hideWhenClean`, `dispatch.runnerTimeoutFloorMs`, `dispatch.disabledRunners`, `format.mode`,
 `actionableWarnings.autoFix.maxFixes`, `lsp.queryMaxFileLines`). On Windows the path is
 `%USERPROFILE%\.pi-lens\config.json`.
 
