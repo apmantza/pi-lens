@@ -1558,7 +1558,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// the tool declares, in its condition and its return.
 		// 22 -> 23 (#5553): `namedWriterPaths` resolves the `path` field of an
 		// unclassified foreign tool the net arms for.
-		"clients/runtime-tool-call.ts": 23,
+		"clients/runtime-tool-call.ts": 21,
 		// 22 -> 20 (#3650): the tool_result path read is routed through
 		// readToolResultPathField; the open-coded input.path cast is gone.
 		// 19 -> 18 (#4576): the tool_result path resolves through
@@ -1571,7 +1571,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// recognized-set subtraction compare REAL paths (`realpathOrResolve`), so
 		// a symlinked spelling of a worktree file matches the identity git
 		// reported. Three `path.resolve` reads became realpath reads.
-		"clients/runtime-tool-result.ts": 17,
+		"clients/runtime-tool-result.ts": 15,
 		// 25 -> 27 (#3218): the resolved-blocker filter keys both the current
 		// blocker set and each resolved entry with `path.resolve`.
 		// 27 -> 26 (#2542 ask 3): `deferralEntryKey` moved to

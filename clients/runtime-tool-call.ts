@@ -71,6 +71,7 @@ import {
 } from "./oldtext-autopatch.js";
 import {
 	isExternalOrVendorFile,
+	pathsEqual,
 	resolveToolCallFilePath,
 	toPosix,
 } from "./path-utils.js";
@@ -2026,7 +2027,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				const existingFile = runtime.cachedExports.get(name);
 				if (
 					existingFile &&
-					path.resolve(existingFile) !== path.resolve(filePath) &&
+					!pathsEqual(existingFile, filePath) &&
 					!currentFileExports?.has(name)
 				) {
 					dupeWarnings.push(

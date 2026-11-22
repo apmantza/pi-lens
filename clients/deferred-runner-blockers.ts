@@ -33,7 +33,6 @@
  */
 
 import * as fs from "node:fs";
-import { resolve } from "node:path";
 import { gateFindingsByPathFreshness } from "./advisory-provenance.js";
 import { hashContentBytes } from "./content-stamp.js";
 import {
@@ -45,6 +44,7 @@ import { laneCopyStandsFor } from "./dispatch/lane-copies.js";
 import { type Diagnostic, reachedNoVerdict } from "./dispatch/types.js";
 import { stampLineHashes } from "./line-alignment.js";
 import { logLatency } from "./latency-logger.js";
+import { pathsEqual } from "./path-utils.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 
 /** Runner ids one bounded row names; the counts stay exact. */
@@ -151,7 +151,7 @@ export function recordDeferredRunnerBlockers(
 				: [],
 		),
 		bytes?.toString("utf-8"),
-		(d) => !d.filePath || resolve(d.filePath) === resolve(pending.filePath),
+		(d) => !d.filePath || pathsEqual(d.filePath, pending.filePath),
 	);
 	if (blocking.length === 0) return 0;
 	const recorded = runtime.recordDeferredInlineBlockers(
