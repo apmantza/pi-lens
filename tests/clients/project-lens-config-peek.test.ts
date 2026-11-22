@@ -94,6 +94,21 @@ describe("peekPiLensProjectConfig (#5739)", () => {
 		expect(notices.join("\n")).toContain("pi-lens.json");
 	});
 
+	it("leaves an unreadable legacy document's report to the next loud read in a layered chain", () => {
+		write("repo/.pi-lens.json", JSON.stringify({ autofix: { enabled: true } }));
+		write(
+			"repo/pkg/.pi-lens.json",
+			JSON.stringify({ format: { enabled: false } }),
+		);
+		write("repo/pi-lens.json", "{ not json");
+
+		peekPiLensProjectConfig(path.join(repo, "pkg"));
+		expect(notices).toEqual([]);
+
+		loadPiLensProjectConfig(path.join(repo, "pkg"));
+		expect(notices.join("\n")).toContain("pi-lens.json");
+	});
+
 	it("leaves an unreadable canonical document's report to the next loud read in a layered chain", () => {
 		write("repo/.pi-lens.json", JSON.stringify({ autofix: { enabled: true } }));
 		write("repo/pkg/.pi-lens.json", "{ not json");
@@ -103,5 +118,46 @@ describe("peekPiLensProjectConfig (#5739)", () => {
 
 		loadPiLensProjectConfig(path.join(repo, "pkg"));
 		expect(notices.join("\n")).toContain("pkg/.pi-lens.json");
+	});
+
+	it("says nothing about an unknown key on a miss or a hit, and the loud read still warns", () => {
+		write("repo/.pi-lens.json", JSON.stringify({ notAPiLensKey: 1 }));
+
+		peekPiLensProjectConfig(repo);
+		peekPiLensProjectConfig(repo);
+		expect(notices).toEqual([]);
+
+		loadPiLensProjectConfig(repo);
+		expect(notices.join("\n")).toContain("notAPiLensKey");
+	});
+
+	it("says nothing about an unknown key in a layered chain on a miss or a hit, and the loud read still warns", () => {
+		write("repo/.pi-lens.json", JSON.stringify({ autofix: { enabled: true } }));
+		write("repo/pkg/.pi-lens.json", JSON.stringify({ notAPiLensKey: 1 }));
+
+		peekPiLensProjectConfig(path.join(repo, "pkg"));
+		peekPiLensProjectConfig(path.join(repo, "pkg"));
+		expect(notices).toEqual([]);
+
+		loadPiLensProjectConfig(path.join(repo, "pkg"));
+		expect(notices.join("\n")).toContain("notAPiLensKey");
+	});
+
+	it("says nothing about a legacy document in a layered chain, and the loud read still warns", () => {
+		write("repo/.pi-lens.json", JSON.stringify({ autofix: { enabled: true } }));
+		write(
+			"repo/pkg/.pi-lens.json",
+			JSON.stringify({ format: { enabled: false } }),
+		);
+		write(
+			"repo/pi-lens.json",
+			JSON.stringify({ tools: { module_report: { enabled: false } } }),
+		);
+
+		peekPiLensProjectConfig(path.join(repo, "pkg"));
+		expect(notices).toEqual([]);
+
+		loadPiLensProjectConfig(path.join(repo, "pkg"));
+		expect(notices.join("\n")).toContain("deprecated");
 	});
 });
