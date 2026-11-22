@@ -639,6 +639,11 @@ reported, never charged. A new `vi.mock` of a module outside
 hand-rolled LSP client or service double, carries the flake-shape header for
 its detector, a baseline row, and an `ADMITTED_AFTER_BASELINE` entry.
 
+A flaky test is fixed at its cause: no sleeps, no retry-until-green, no skip. A
+repeat flake whose cause stays unknown after a root-cause attempt may be
+deleted with the reason recorded in the PR body, never when it alone pins a
+behaviour.
+
 The real-pi harness defaults to `--no-session`; a persisted-session witness
 opts into `withRealPi({ persistedSession: true })`, which pins `--session-dir`
 under the probe home and uses pi's documented `--continue` flag for a second
@@ -881,3 +886,8 @@ after a check with `;` or a pipe instead of `&&` (#3471); and every hook bypass
 #3778). `kill $(pgrep -f …)` is a known blind spot; kill your own recorded PID.
 For a red that looks unrelated, prove it with `node scripts/red-on-base.mjs` and
 stop.
+
+A new guard or hook starts in `observe` mode (it logs each would-be denial with
+its reason and passes) and moves to `enforce` only once its log shows a fire
+rate and its false positives; `off` is the third mode. The observe log
+is the fire data the net-count rule asks for.

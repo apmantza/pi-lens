@@ -8,6 +8,7 @@ import {
 	parseDefectShapes,
 } from "../../scripts/lib/defect-shapes.mjs";
 import { assertNonEmptyScan, stripSource } from "../support/sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 
@@ -57,6 +58,52 @@ describe("AGENTS.md trigger-block governance (#3259)", () => {
 		expect(triggers.length).toBeGreaterThan(0);
 		expect(triggers.every(Boolean)).toBe(true);
 		expect(new Set(triggers).size).toBe(triggers.length);
+	});
+
+	// #5753 item 1: the orchestrator's brief generators inject only the blocks a
+	// diff matches, so a block with no machine trigger (or one whose globs match
+	// no file) would silently never load, or always load. Recurrence this
+	// prevents: a block added or retitled without its trigger line, and a glob
+	// typo that reads as coverage while matching nothing.
+	it(
+		"gives every catalog block a machine-readable trigger line (#5753)",
+		() => {
+			const lines = catalogText().split("\n");
+			const problems: string[] = [];
+			let blocks = 0;
+			lines.forEach((line, index) => {
+				if (!/^<important if="[^"]*">$/.test(line)) return;
+				blocks += 1;
+				for (const problem of triggerProblems(lines[index + 1] ?? ""))
+					problems.push(`line ${index + 1} (${line}): ${problem}`);
+			});
+			assertNonEmptyScan("catalog blocks with a trigger", blocks, 7);
+			expect(problems).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
+
+	it("refuses a trigger line the gate cannot read (#5753)", () => {
+		// Recurrence: a gate that passes a trigger it cannot resolve. Each planted
+		// line is one spelling the catalog test above must red on.
+		const refused = (line: string) => triggerProblems(line).join("; ");
+		expect(refused("")).toMatch(/no `<!-- trigger/);
+		expect(refused('<!-- trigger: {"paths": []} -->')).toMatch(/non-empty/);
+		expect(refused('<!-- trigger: {"paths": ["no/such/dir/**"]} -->')).toMatch(
+			/matches no file/,
+		);
+		expect(refused('<!-- trigger: {"always": false} -->')).toMatch(/always/);
+		expect(refused('<!-- trigger: {"always": true, "diff": "x"} -->')).toMatch(
+			/always/,
+		);
+		expect(refused('<!-- trigger: {"glob": ["a"]} -->')).toMatch(/unknown/);
+		expect(refused("<!-- trigger: {} -->")).toMatch(/no path/);
+		expect(refused("<!-- trigger: {oops} -->")).toMatch(/parse/);
+		expect(refused('<!-- trigger: {"diff": "("} -->')).toMatch(/compile/);
+		expect(refused('<!-- trigger: {"always": true} -->')).toBe("");
+		expect(
+			refused('<!-- trigger: {"paths": ["index.ts"], "diff": "x"} -->'),
+		).toBe("");
 	});
 
 	it("keeps every numbered defect shape exactly once", () => {
@@ -231,6 +278,66 @@ describe("AGENTS.md trigger-block governance (#3259)", () => {
 		expect(gaps).toEqual([]);
 	});
 });
+
+/**
+ * What is wrong with the line after a catalog block's opener (#5753): it must
+ * be `<!-- trigger: {...} -->` whose JSON is `{"always": true}` alone, or names
+ * `paths` (a non-empty list of globs that each match a file in the tree)
+ * and/or `diff` (a regex that compiles). Anything else, including an unknown
+ * key, is a problem: the gate admits the known forms and refuses the rest.
+ */
+function triggerProblems(line: string): string[] {
+	const match = /^<!-- trigger: (.*) -->$/.exec(line);
+	if (!match)
+		return ["no `<!-- trigger: {...} -->` line directly after the opener"];
+	let trigger: unknown;
+	try {
+		trigger = JSON.parse(match[1]);
+	} catch {
+		return ["trigger JSON does not parse"];
+	}
+	if (typeof trigger !== "object" || trigger === null || Array.isArray(trigger))
+		return ["trigger JSON is not an object"];
+	const record = trigger as Record<string, unknown>;
+	const keys = Object.keys(record);
+	const problems: string[] = [];
+	const unknown = keys.filter(
+		(key) => !["always", "paths", "diff"].includes(key),
+	);
+	if (unknown.length > 0)
+		problems.push(`unknown trigger key ${unknown.join(", ")}`);
+	if (record.always !== undefined) {
+		if (record.always !== true || keys.length !== 1)
+			problems.push('"always" is `{"always": true}` alone');
+		return problems;
+	}
+	if (record.paths === undefined && record.diff === undefined)
+		problems.push("trigger names no path, diff or always key");
+	if (record.paths !== undefined) {
+		const paths = record.paths;
+		if (
+			!Array.isArray(paths) ||
+			paths.length === 0 ||
+			!paths.every((glob) => typeof glob === "string" && glob.length > 0)
+		)
+			problems.push('"paths" is not a non-empty list of globs');
+		else
+			for (const glob of paths)
+				if (fs.globSync(glob, { cwd: REPO_ROOT }).length === 0)
+					problems.push(`glob "${glob}" matches no file`);
+	}
+	if (record.diff !== undefined) {
+		if (typeof record.diff !== "string" || record.diff.length === 0)
+			problems.push('"diff" is not a non-empty regex string');
+		else
+			try {
+				new RegExp(record.diff);
+			} catch {
+				problems.push('"diff" does not compile as a RegExp');
+			}
+	}
+	return problems;
+}
 
 /** One JSON/YAML object, or an empty one: the configs are parsed, not trusted. */
 function asRecord(value: unknown): Record<string, unknown> {

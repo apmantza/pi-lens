@@ -1,7 +1,11 @@
 ## Recurring defect shapes
 
 Screen against these before writing code. Shapes are numbered once, grouped by
-the surface they bite; each block loads only when its trigger applies. A shape
+the surface they bite; each block loads only when its trigger applies. The
+trigger a script reads is the `<!-- trigger: {...} -->` line directly after the
+block's opener: `paths` (globs over the changed files) and/or `diff` (a regex
+over each added line, without its `+`) apply the block when either matches, and
+`{"always": true}` applies it to every change (#5753). A shape
 whose open population is countable names its census in its entry. The census
 is one command, run at the repo root, printing one line per member or naming
 one baseline key. A PR that fixes members of the shape quotes that census
@@ -11,6 +15,7 @@ fixes its members says so instead of quoting a before and after.
 <!-- markdownlint-disable MD029 -->
 
 <important if="touching a path key or path spelling">
+<!-- trigger: {"paths": ["clients/path-*.ts", "clients/writers.ts", "clients/mutation-bridge.ts", "clients/read-guard*.ts", "clients/lsp/edits.ts", "clients/dispatch/rule-policy.ts", "clients/runtime-tool-call.ts", "clients/tool-cwd.ts"], "diff": "PathKeyedMap|normalizeMapKey|realpathOrResolve|path\\.(resolve|win32)\\(|toPosix|pathsEqual|resolveHostToolPath|resolveToolCallFilePath|creditAuthorship|walkUpDirs|splitPathSegments"} -->
 
 ### touching a path key or path spelling
 
@@ -91,6 +96,7 @@ fixes its members says so instead of quoting a before and after.
 </important>
 
 <important if="adding or reading a cache, durable record, or project-intelligence state">
+<!-- trigger: {"paths": ["clients/durable-store.ts", "clients/cache/**/*.ts", "clients/cache-manager.ts", "clients/bounded-*.ts", "clients/atomic-write*.ts", "clients/json-cache-read.ts", "clients/degradation-ledger.ts", "clients/ledger-bounds.ts", "clients/word-index-store.ts", "clients/session-state-store.ts", "clients/review-graph/**/*.ts"], "diff": "durable-store|atomic-write|BoundedCache|new (Map|Set)\\b|setInterval|setTimeout\\(|\\.unref\\(|new Worker\\(|\\.watch\\("} -->
 
 ### adding or reading a cache / durable record
 
@@ -172,6 +178,7 @@ fixes its members says so instead of quoting a before and after.
 </important>
 
 <important if="a delivery surface or lane">
+<!-- trigger: {"paths": ["index.ts", "tools/**/*.ts", "mcp/**/*.ts", "clients/mcp/**/*.ts", "clients/runtime-*.ts", "clients/finding-delivery-gate.ts", "clients/ephemeral-root.ts", "clients/dispatch/types.ts", "clients/turn-end/**/*.ts", "clients/*render*.ts", "clients/test-runner-delivery.ts", "clients/config-core/**/*.ts", "scripts/hooks/guard-bash.mjs"], "diff": "DELIVERY_SURFACES|fallbackFor|cleanVerdict|checkedVerdict|RUNNER_SKIP_REASONS|positionStale|unansweredPrimaries|findDeny|\\bcatch\\s*[({]"} -->
 
 ### a delivery surface or lane
 
@@ -338,6 +345,7 @@ file-scoped worklist and receives no project-wide scanner output.
 </important>
 
 <important if="a runner outcome or tool execution">
+<!-- trigger: {"paths": ["clients/dispatch/**/*.ts", "clients/lsp/**/*.ts", "clients/tool-*.ts", "clients/safe-spawn.ts", "clients/spawn-*.ts", "clients/file-utils.ts", "clients/map-with-concurrency.ts", "clients/mutating-tool.ts", "clients/tree-sitter*.ts", "scripts/hooks/guard-bash.mjs", "scripts/lib/vitest-summary.mjs"], "diff": "safeSpawn|spawn(Sync)?\\(|execFile|resolveToolCwd|parseVitestSummary|classifyTreeSitterWasmError|withParsedTree|reportWasmAbort|classifyMutatingTool|node_modules|result\\.error|failure ==="} -->
 
 ### a runner or tool outcome
 
@@ -541,6 +549,7 @@ file-scoped worklist and receives no project-wide scanner output.
 </important>
 
 <important if="a test double, ratchet or sweep">
+<!-- trigger: {"paths": ["tests/**", "scripts/governance-rules/**", "scripts/hooks/**", "scripts/lib/is-main-module.mjs", "formal/**", "vitest.config.ts", ".github/workflows/**"], "diff": "vi\\.(mock|doMock|fn)\\(|\\.(skip|todo)\\(|setTimeout\\(|waitFor\\(|PI_LENS_HOME|flushAllNdjsonWriters|fake-child|baseline|exemption"} -->
 
 ### a test double, ratchet or sweep
 
@@ -797,6 +806,7 @@ file-scoped worklist and receives no project-wide scanner output.
 </important>
 
 <important if="session, turn or generation lifecycle">
+<!-- trigger: {"paths": ["index.ts", "mcp/**/*.ts", "clients/mcp/**/*.ts", "clients/session-*.ts", "clients/sessionstart-logger.ts", "clients/runtime-*.ts", "clients/process-singletons.ts", "clients/turn-end/**/*.ts", "clients/config-core/**/*.ts", "formal/session-*/**"], "diff": "session_start|session_shutdown|getProcessSingleton|globalThis|Symbol\\.for\\(|scopeCell|sessionCell|generation|WeakMap|WeakSet|const \\w+ = .*process\\.platform"} -->
 
 ### session, turn or generation lifecycle
 
@@ -946,6 +956,7 @@ file-scoped worklist and receives no project-wide scanner output.
 </important>
 
 <important if="availability policy or installer">
+<!-- trigger: {"paths": ["clients/dispatch/runners/utils/availability-policy.ts", "clients/dispatch/runners/utils/toolchain-availability.ts", "clients/availability-*.ts", "clients/installer/**/*.ts", "clients/install-diagnostics.ts", "clients/package-manager.ts", "formal/availability-latch/**"], "diff": "createAvailabilityLatch|availability-policy|availabilityLatch|KNOWN_GAPS"} -->
 
 ### availability or installer
 

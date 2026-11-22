@@ -120,6 +120,11 @@ registry; other doubles only as `AGENTS.md` admits them.
   `MUTATION` line, and no survivor triage. The nightly Stryker report on master
   is exploratory and is not read here. Use bounded hand probes locally; never
   run a full Stryker campaign in a worktree.
+- For parsers, path keys, config merging and any round-trip or invariant code,
+  prefer a `fast-check` property (a dev dependency; see
+  `tests/clients/dispatch/rule-policy-merge-properties.test.ts`) over
+  hand-picked cases: its inputs do not share the author's blind spots, and
+  shape 57 adds the shapes older released writers produced (#5753).
 - A PR that relaxes or rewrites an existing assertion (a changed meaning makes
   the old expectation wrong) mutates the behaviour that test is named for. Quote
   the red on the new assertion. A rewrite that stays green with that

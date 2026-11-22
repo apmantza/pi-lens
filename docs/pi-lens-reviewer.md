@@ -272,6 +272,13 @@ instead of rebuilding the probe.
   `// flake-shape: <detector> — <reason>` header and `wallClockBudgetInclude`
   membership (#2547). A pinned file whose count falls below its pin needs its
   baseline tightened; a stale ceiling re-admits regrowth.
+- **Self-judging gate.** CI runs the governance suite from the PR head, so a
+  diff that touches a ratchet baseline, a governance test, a shape scanner or a
+  gate script (`scripts/hooks/`, `scripts/governance-rules/`, a `scripts/check-*`
+  gate) can loosen the gate that judges it while staying green (#5753). Name
+  each such change in the review and judge whether it loosens the gate (a
+  raised ceiling, a new exemption, a narrowed scan, a removed row); a review
+  that does not name it is incomplete.
 - **Hot-path timing.** When the diff touches dispatch, `session_start`, LSP
   diagnostics, a cache lookup or turn-end, re-run the body's before/after
   timing on the real path, at a small and a large input (file size, file
