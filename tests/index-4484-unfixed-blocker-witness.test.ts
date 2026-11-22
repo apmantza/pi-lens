@@ -210,6 +210,10 @@ const boundary = vi.hoisted(() => {
 		 * touch the service names no coverage gap. With `stale`, the merged
 		 * binding says the answer is about other bytes (a second auxiliary's
 		 * view diverged from disk while ast-grep's answer covered these).
+		 * With `lastKnown` (diagnostics-wait only), the primary's last-known row
+		 * for older bytes rides along in `.diags` too (#4231: an inconclusive
+		 * primary may contribute its last-known diagnostics); the runner withholds
+		 * it, so every row it holds is withheld.
 		 */
 		primarySilent: undefined as
 			| undefined
@@ -217,6 +221,7 @@ const boundary = vi.hoisted(() => {
 					reason: "diagnostics-wait" | "primary-unavailable";
 					auxSilent?: boolean;
 					stale?: boolean;
+					lastKnown?: boolean;
 			  },
 		/** Pending held answers; `release(true)` fails the touch instead. */
 		held: [] as Array<(fail?: boolean) => void>,
@@ -234,13 +239,31 @@ const boundary = vi.hoisted(() => {
 		) => {
 			lsp.touches += 1;
 			if (lsp.primarySilent) {
-				const { reason, auxSilent, stale } = lsp.primarySilent;
+				const { reason, auxSilent, stale, lastKnown } = lsp.primarySilent;
+				const primaryRows = lastKnown
+					? [
+							{
+								severity: 1,
+								message: "Cannot find name 'BAD_OLD'.",
+								code: 2304,
+								source: "ts",
+								serverId: "python",
+								range: {
+									start: { line: 0, character: 0 },
+									end: { line: 0, character: 5 },
+								},
+							},
+						]
+					: [];
 				return {
-					diags: auxSilent
-						? []
-						: (lsp.diagnose(content) as Array<{ serverId?: string }>).filter(
-								(d) => d.serverId === "ast-grep",
-							),
+					diags: [
+						...primaryRows,
+						...(auxSilent
+							? []
+							: (lsp.diagnose(content) as Array<{ serverId?: string }>).filter(
+									(d) => d.serverId === "ast-grep",
+								)),
+					],
 					inconclusive: true,
 					inconclusiveServerIds: ["python"],
 					inconclusiveReason: reason,
@@ -2810,6 +2833,34 @@ describe("#5727 witness: an auxiliary's answer judges its own recorded blocker",
 		const w2 = await s.write(PY_STILL_BARE);
 		expect(w2).toMatch(/Still unfixed: 1 blocker reported earlier/);
 		expect(await s.commitBlocked()).toBe(true);
+		boundary.lsp.primarySilent = undefined;
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence it prevents (#5727 F1): the named-contributor arm of the stale
+	// drop had no cell, so a change that cleared the answered list there kept an
+	// auxiliary's fixed blocker as "Still unfixed" while the silent primary's
+	// stale last-known row was withheld. Here every row is withheld and the
+	// auxiliary's clean answer for these bytes is the only evidence left.
+	it("retires the auxiliary's fixed blocker while the silent primary's stale row is withheld (#5727)", async () => {
+		boundary.lsp.enabled = true;
+		boundary.ag.diag = true;
+		boundary.lsp.primarySilent = { reason: "diagnostics-wait" };
+		const s = await openSession("py-known", "src/py-known.py", PY_CLEAN);
+		expect(await s.write(PY_BAD)).toContain("🔴 STOP");
+		expect(await s.commitBlocked()).toBe(true);
+
+		boundary.lsp.primarySilent = {
+			reason: "diagnostics-wait",
+			stale: true,
+			lastKnown: true,
+		};
+		const w2 = await s.write(PY_FIXED);
+		expect(w2).not.toMatch(/Still unfixed/);
+		expect(w2).not.toContain("BAD_OLD");
+		expect(w2).not.toContain("🔴");
+		expect(await s.commitBlocked()).toBe(false);
+		expect(await s.endTurn()).not.toContain("Unresolved from this turn");
 		boundary.lsp.primarySilent = undefined;
 		await fixAndDrain(s);
 	}, 120_000);
