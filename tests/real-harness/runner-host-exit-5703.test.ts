@@ -1,5 +1,5 @@
 // flake-shape: real-process-spawn — the regression is a detached safeSpawnAsync child surviving a SIGKILLed real pi host and being reaped by the next real pi host.
-// flake-shape: ungoverned-wait-for — host and runner death are only observable through their real pid transitions; each poll is bounded by waitFor's real-clock deadline.
+// flake-shape: raw-timer-wait — host and runner death are only observable through their real pid transitions; each poll is bounded by waitFor's real-clock deadline.
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
