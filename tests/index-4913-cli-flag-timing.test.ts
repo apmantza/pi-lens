@@ -19,12 +19,13 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
 	BLOCKING_FILE,
 	endTurn,
 	step,
 	toolResults,
+	warmGuardedSession,
 	writeTarget,
 } from "./support/pi-session-commit-gate.js";
 import {
@@ -38,6 +39,13 @@ import {
 } from "./support/pi-session.js";
 
 const fixture = piSessionFixture();
+
+// #5731: the first session this file starts pays the process's one-time cold
+// start (the extension's load, the ast-grep rule catalog, the first tree-sitter
+// and oxlint use): 1.2 s of the `--no-lens` control's 2.4-3.6 s idle, and 5.5-6.4 s
+// with every core busy, against its 5 s cap. The shared warm-up (#5061) pays it
+// in a hook, which runs against hookTimeout, so no case carries it.
+beforeAll(() => warmGuardedSession(fixture.root));
 
 /** The bundled `debugger-statement` rule's message, as `write` reports it. */
 const BLOCKER_TEXT = "debugger_statement";
