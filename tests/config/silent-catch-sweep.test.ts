@@ -876,10 +876,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :207, :382, :630, :696, :743, :922
 	"clients/mcp/review.ts": {
-		silent: 3,
-		identities: "fd3a6c2269932b0b",
+		silent: 1,
+		identities: "d4831a54c80fb2ff",
 		reason: PRE_RULE,
-	}, // :77, :124, :149
+	}, // :92
 	"clients/mcp/session.ts": {
 		silent: 1,
 		identities: "7a22e287f518528b",

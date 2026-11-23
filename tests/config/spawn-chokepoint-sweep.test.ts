@@ -129,12 +129,6 @@ const ADMITTED: Readonly<Record<string, Admission>> = {
 		sites: 2,
 		evidence: "buildProcessQuery",
 	},
-	"clients/mcp/review.ts#spawn": {
-		reason:
-			"the analyze worker's interpreter is the running node (`process.execPath`), an absolute file this process already runs, never a search-path lookup",
-		sites: 1,
-		evidence: "spawn(process.execPath",
-	},
 };
 
 /**

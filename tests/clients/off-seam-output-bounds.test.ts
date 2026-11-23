@@ -9,10 +9,12 @@
  * `RangeError: Invalid string length`. A throw raised in a `data` handler is
  * delivered to the process, not to the awaiting caller, so it terminated the Pi
  * host (Pi 0.86.1, 2026-09-22). #3375 fixed the shared spawn seam; the class
- * sweep for it found these three producers that bypass that seam entirely — a
- * forked analyze worker, the unref'd one-shot collector (which is what
- * `safe-spawn.ts` itself depends on, so it can never route through it) and the
- * installer's interpreter user-base probes (on the spawn seam since #4530).
+ * sweep for it found three producers that bypassed that seam: a forked analyze
+ * worker (on the spawn seam since the fresh-analyze fork folded onto it,
+ * `tests/clients/mcp/review.test.ts`), the unref'd one-shot collector (which
+ * is what `safe-spawn.ts` itself depends on, so it can never route through
+ * it) and the installer's interpreter user-base probes (on the spawn seam
+ * since #4530).
  *
  * `node:child_process` is mocked for the same reason
  * `safe-spawn-default-output-cap.test.ts` mocks it: "the child wrote enough to
@@ -41,7 +43,6 @@ vi.mock("node:child_process", async (importOriginal) => {
 	};
 });
 
-const { analyzeFileFresh } = await import("../../clients/mcp/review.js");
 const { spawnCollectStdoutResult } =
 	await import("../../clients/child-unref.js");
 const { userBaseProbeResult } =
@@ -88,74 +89,6 @@ describe("createBoundedOutputSink (#3383)", () => {
 		expect(sink.truncated).toBe(false);
 		// Bytes, not characters: "é" is two of them.
 		expect(sink.observedBytes).toBe(6);
-	});
-});
-
-describe("analyzeFileFresh output bound (#3383)", () => {
-	function driveWorker(
-		chunks: Array<{ stream: "stdout" | "stderr"; text: string }>,
-		exitCode = 0,
-	) {
-		const child = makeFakeChild(4242);
-		spawnMock.mockImplementation(() => {
-			queueMicrotask(() => {
-				for (const chunk of chunks)
-					child[chunk.stream].emit("data", chunk.text);
-				child.emit("close", exitCode);
-			});
-			return child;
-		});
-		const pending = analyzeFileFresh("/w/worker.js", "/w/a.ts", "/w");
-		return { child, pending };
-	}
-
-	it("bounds a worker that writes without end, kills it, and records the trip", async () => {
-		const { child, pending } = driveWorker(
-			Array.from({ length: 5 }, () => ({
-				stream: "stdout" as const,
-				text: CHUNK,
-			})),
-		);
-		await vi.advanceTimersByTimeAsync(10);
-		const outcome = await pending;
-		expect(outcome.result).toBeUndefined();
-		expect(outcome.error).toBe(
-			`worker output exceeded ${DEFAULT_MAX_OUTPUT_BYTES} bytes`,
-		);
-		expect(child.kill).toHaveBeenCalled();
-		const row = ledgerRow("spawn-output-cap-truncated");
-		expect(row?.count).toBe(1);
-		expect(row?.latestReasons[0]?.subject).toBe("mcp-fresh-analyze");
-		expect(row?.latestReasons[0]?.reason).toContain("worker terminated");
-	});
-
-	it("still returns a normal worker result, so the bound is not a blanket refusal", async () => {
-		const { pending } = driveWorker([
-			{ stream: "stdout", text: JSON.stringify({ filePath: "/w/a.ts" }) },
-		]);
-		await vi.advanceTimersByTimeAsync(10);
-		const outcome = await pending;
-		expect(outcome.result).toEqual({ filePath: "/w/a.ts" });
-		expect(ledgerRow("spawn-output-cap-truncated")).toBeUndefined();
-	});
-
-	it("retains nothing after the outcome has settled", async () => {
-		const child = makeFakeChild(4242);
-		spawnMock.mockImplementation(() => child);
-		const pending = analyzeFileFresh(
-			"/w/worker.js",
-			"/w/a.ts",
-			"/w",
-			{},
-			1_000,
-		);
-		await vi.advanceTimersByTimeAsync(2_000);
-		const outcome = await pending;
-		expect(outcome.error).toContain("timed out");
-		// A child that outlives its own timeout keeps writing into a pipe nobody
-		// awaits: every byte after the settle is retention with no reader.
-		for (let i = 0; i < 5; i++) child.stdout.emit("data", CHUNK);
-		expect(ledgerRow("spawn-output-cap-truncated")).toBeUndefined();
 	});
 });
 

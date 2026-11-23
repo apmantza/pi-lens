@@ -2026,7 +2026,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lsp/launch.ts": 1,
 		"clients/lsp/server.ts": 4,
 		"clients/mcp/analyze.ts": 9,
-		"clients/mcp/review.ts": 1,
+		// 1 -> 3 (fresh-analyze fork on the spawn seam): the worker's exit
+		// check and its error text read `SpawnResult.status`.
+		"clients/mcp/review.ts": 3,
 		// #5087: `SpawnResult.status`, the git exit code of the default-branch
 		// read (for-each-ref, show); the spawn seam names the field.
 		"clients/metrics/complexity-baseline.ts": 2,
