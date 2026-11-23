@@ -29,6 +29,7 @@ import {
 	rotateLogIfNeeded,
 } from "../../clients/log-cleanup.js";
 import { getProjectDataDir } from "../../clients/file-utils.js";
+import { readLimitFromEnv } from "../../clients/log-rotation-limits.js";
 import { createNdjsonLogger } from "../../clients/ndjson-logger.js";
 import { minTmpRootLength, removeTempDirSync } from "./test-utils.js";
 
@@ -221,6 +222,66 @@ describe("runLogCleanup retention rows (#5702)", () => {
 		expect(fs.existsSync(freshSpill)).toBe(true);
 		expect(fs.existsSync(activeLog)).toBe(true);
 		expect(result.report).toMatch(/spill log/);
+	});
+
+	describe.each(["0", "off", "Unlimited"])(
+		"PI_LENS_LOG_RETENTION_DAYS=%s",
+		(value) => {
+			afterEach(() => {
+				vi.unstubAllEnvs();
+			});
+
+			it("keeps every aged file instead of falling back to 7 days", async () => {
+				vi.stubEnv("PI_LENS_LOG_RETENTION_DAYS", value);
+				const ancientSpill = path.join(
+					home,
+					`tool-result-${Date.now()}-${randomUUID()}.log`,
+				);
+				fs.writeFileSync(ancientSpill, "x");
+				backdate(ancientSpill, 4000);
+
+				const { runLogCleanup } = await loadCleanup();
+				const result = await runLogCleanup();
+
+				expect(fs.existsSync(ancientSpill)).toBe(true);
+				expect(result.cleaned).toBe(0);
+				expect(result.invalid).toEqual([]);
+				expect(result.report).toContain("retention: unlimited");
+			});
+		},
+	);
+
+	it("names an unusable retention value and applies the default instead", async () => {
+		vi.stubEnv("PI_LENS_LOG_RETENTION_DAYS", "seven");
+		const oldSpill = path.join(
+			home,
+			`tool-result-${Date.now()}-${randomUUID()}.log`,
+		);
+		fs.writeFileSync(oldSpill, "x");
+		backdate(oldSpill, 40);
+
+		const { runLogCleanup } = await loadCleanup();
+		const result = await runLogCleanup();
+		vi.unstubAllEnvs();
+
+		expect(fs.existsSync(oldSpill)).toBe(false);
+		expect(result.invalid).toEqual(["PI_LENS_LOG_RETENTION_DAYS=seven"]);
+		expect(result.report).toContain("retention: 7d");
+		expect(result.report).toContain(
+			"ignored unusable PI_LENS_LOG_RETENTION_DAYS=seven",
+		);
+	});
+
+	it("never rotates an active log when the size limit is unlimited, and still does at a positive one", async () => {
+		const activeLog = path.join(home, "latency.log");
+		fs.writeFileSync(activeLog, Buffer.alloc(2 * 1024 * 1024));
+		const { rotateLogIfNeeded } = await loadCleanup();
+
+		vi.stubEnv("PI_LENS_MAX_LOG_SIZE_MB", "0");
+		expect(rotateLogIfNeeded(activeLog).rotated).toBe(false);
+		vi.stubEnv("PI_LENS_MAX_LOG_SIZE_MB", "1");
+		expect(rotateLogIfNeeded(activeLog).rotated).toBe(true);
+		vi.unstubAllEnvs();
 	});
 
 	it("removes an orphaned project data dir and keeps a live one, an unrecognized name and the ephemeral base", async () => {
@@ -591,5 +652,33 @@ describe("getManagedLogFiles — auto-derivation", () => {
 		createNdjsonLogger({ filePath: path.join(dir, "bus-events.log") });
 
 		expect(getManagedLogFiles(dir)).toContain("bus-events.log");
+	});
+});
+
+describe("readLimitFromEnv", () => {
+	const NAME = "PI_LENS_TEST_LIMIT";
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
+	it.each([
+		[undefined, 7, undefined],
+		["", 7, undefined],
+		["  ", 7, undefined],
+		["30", 30, undefined],
+		[" 30 ", 30, undefined],
+		["0", Number.POSITIVE_INFINITY, undefined],
+		["off", Number.POSITIVE_INFINITY, undefined],
+		["UNLIMITED", Number.POSITIVE_INFINITY, undefined],
+		["-1", 7, `${NAME}=-1`],
+		["1.5", 7, `${NAME}=1.5`],
+		["7d", 7, `${NAME}=7d`],
+		["abc", 7, `${NAME}=abc`],
+	])("reads %j as %s", (raw, value, invalid) => {
+		if (raw === undefined) vi.stubEnv(NAME, undefined);
+		else vi.stubEnv(NAME, raw);
+		const reading = readLimitFromEnv(NAME, 7);
+		expect(reading.value).toBe(value);
+		expect(reading.invalid).toBe(invalid);
 	});
 });

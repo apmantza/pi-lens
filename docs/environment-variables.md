@@ -438,11 +438,23 @@ entry for what's still holding the loop open.
 
 ### `PI_LENS_LOG_RETENTION_DAYS`
 
-Days to keep rotated logs before cleanup. **Default:** `7`.
+Days to keep logs, rotated backups, spill logs and session state files before
+cleanup. **Default:** `7`. A positive integer, or `0` / `off` / `unlimited` to
+keep them forever. An unusable value falls back to the default and the session
+start report names it.
 
 ### `PI_LENS_MAX_LOG_SIZE_MB`
 
-Maximum log size (MB) before rotation. **Default:** `10`.
+Maximum log size (MB) before rotation. **Default:** `10`. A positive integer,
+or `0` / `off` / `unlimited` to never rotate. An unusable value falls back to
+the default and the session start report names it.
+
+### `PI_LENS_READ_GUARD_MAX_BYTES` and `PI_LENS_AW_LOG_MAX_BYTES`
+
+Maximum size (bytes) of `read-guard.log` and `actionable-warnings.log` before
+the one backup is replaced. **Default:** `1048576`; a positive value below
+`131072` is raised to it. `0` / `off` / `unlimited` never rotates. An unusable
+value falls back to the default and the session start report names it.
 
 ## Diagnostic-only knobs
 

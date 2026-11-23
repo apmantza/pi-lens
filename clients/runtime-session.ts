@@ -2950,7 +2950,9 @@ export async function handleSessionStart(
 						deferred: true,
 					},
 				});
-				if (logCleanup.cleaned > 0 || logCleanup.rotated > 0) {
+				if (logCleanup.invalid.length > 0) {
+					notify(`🧹 ${logCleanup.report}`, "warning");
+				} else if (logCleanup.cleaned > 0 || logCleanup.rotated > 0) {
 					notify(`🧹 ${logCleanup.report}`, "info");
 				}
 			} catch (err) {
