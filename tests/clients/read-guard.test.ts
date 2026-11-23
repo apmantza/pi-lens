@@ -205,6 +205,28 @@ describe("ReadGuard", () => {
 			);
 		}
 
+		it("allows a range-only adapter edit a newer covering read supersedes (#5762)", () => {
+			// The IO bridge reports an adapter's edit as `editRanges` with no
+			// `touchedLines`. That single range must survive the producer collapse
+			// and be the range the supersede check judges, or a stale binding
+			// blocks every later edit once a re-read delivers bytes but no binding.
+			const env = setupTestEnvironment("read-guard-supersede-range-only-");
+			try {
+				const filePath = path.join(env.tmpDir, "range-only.ts");
+				fs.writeFileSync(filePath, before);
+				const guard = createReadGuard("supersede-range-only-session");
+				recordBridgeBinding(guard, filePath, 1);
+				fs.writeFileSync(filePath, after);
+				recordNativeRead(guard, filePath, 1, 3);
+
+				expect(guard.checkEdit(filePath, undefined, [[1, 1]])).toEqual({
+					action: "allow",
+				});
+			} finally {
+				env.cleanup();
+			}
+		});
+
 		it("allows an edit a newer covering native re-read supersedes", () => {
 			const env = setupTestEnvironment("read-guard-supersede-");
 			try {

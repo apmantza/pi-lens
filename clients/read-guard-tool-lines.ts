@@ -931,7 +931,7 @@ function resolveOldTextEdits(
 		Math.min(...starts),
 		Math.max(...ends),
 	];
-	const editRanges = resolvedRanges.length > 1 ? resolvedRanges : undefined;
+	const editRanges = resolvedRanges.length > 0 ? resolvedRanges : undefined;
 	logBatchEvent({
 		event: "touched_lines_detected",
 		sessionId,
@@ -1385,7 +1385,7 @@ export function getTouchedLinesForGuard(
 			} else if (oldTextTouchedLines) {
 				allEditRanges.push(oldTextTouchedLines);
 			}
-			const editRanges = allEditRanges.length > 1 ? allEditRanges : undefined;
+			const editRanges = allEditRanges.length > 0 ? allEditRanges : undefined;
 			if (filePath) {
 				logReadGuardEvent({
 					event: "touched_lines_detected",
