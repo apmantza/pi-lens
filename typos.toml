@@ -104,6 +104,10 @@ edn = "edn"
 # `deriveHashiCorpReleaseAsset`, kept in frozen fixtures under tests/fixtures/
 # (the live installer code was renamed in #5643).
 hashi = "hashi"
+# The GitHub handle of contributor "ody", rendered by all-contributors as
+# `#code-ody` / `#ideas-ody` anchors in the README table (4c55a854b), where
+# typos' tokenizer reads the handle as a truncation of "body".
+ody = "ody"
 # Valid English spelling, already allowlisted for typos-lsp's bundled
 # default (rules/typos/_typos.toml, #967) — repeated here so the same
 # tolerance applies once a project-local config supersedes the bundle.
