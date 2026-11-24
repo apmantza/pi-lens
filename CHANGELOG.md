@@ -14,6 +14,10 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Fixed
 
+#### Language servers
+
+- **An edit to a clean file no longer waits a full budget to be called unchecked when an auxiliary is attached.** The clean-confirm gate needed `clientScope: "primary"` or `"all"` while the per-edit path uses `"with-auxiliary"` as soon as a language has an auxiliary, so a push-only server that publishes nothing on a clean transition (marksman on markdown, beside the typos auxiliary) was reported inconclusive on every edit, and the agent was told the file was not fully checked, while its silence is exactly what its own clean behaviour predicts. The confirm now also runs on the with-auxiliary edit, subject to the conditions it already had: the notify write landed, the primary is classified silent-on-clean, and it still answers a liveness probe. It decides on the cascade class rather than the capability tier, so a primary that can still be *asked* for its diagnostics (typescript with `typescript.tsserverRequest`) keeps its inconclusive verdict instead of being confirmed clean while its project is still loading. An auxiliary that stays silent is still a named coverage gap and does not change the verdict.
+
 ### Security
 
 ## [4.5.2] - 2026-11-22

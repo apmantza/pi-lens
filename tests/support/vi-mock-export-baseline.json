@@ -145,6 +145,7 @@
 	"tests/clients/lsp/service-touch-collect.test.ts:../../../clients/lsp/client.js:[\"createLSPClient\"]": 35,
 	"tests/clients/lsp/service-tsserver-sync-confirm.test.ts:../../../clients/lsp/client.js:[\"createLSPClient\"]": 35,
 	"tests/clients/lsp/shutdown-wedged-connection.test.ts:../../../clients/instance-registry.js:[\"recordLspChild\",\"removeLspChild\"]": 3,
+	"tests/clients/lsp/silent-clean-auxiliary.test.ts:../../../clients/lsp/client.js:[\"createLSPClient\"]": 35,
 	"tests/clients/lsp/silent-clean-confirm.test.ts:../../../clients/lsp/client.js:[\"createLSPClient\"]": 35,
 	"tests/clients/lsp/spawn-record-truth.test.ts:../../../clients/lsp/client.js:[\"createLSPClient\"]": 35,
 	"tests/clients/lsp/spawn-shutdown-race.test.ts:../../../clients/lsp/client.js:[\"createLSPClient\"]": 35,

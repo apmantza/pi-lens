@@ -629,9 +629,10 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 	// server silent on clean is trusted only after it answers a round trip, and
 	// that round trip read no abort either. The ping's own ceiling is 1200 ms
 	// here, so a cancel inside 500 ms of the abort is the abort's, not the timer's.
-	// Two call sites send it: the single-server gate (`primary`) and the
-	// aggregate gate (`all`).
-	it.each(["primary", "all"] as const)(
+	// Three call sites send it: the single-server gate (`primary`), the aggregate
+	// gate (`all`), and the with-auxiliary per-edit gate — the last one added with
+	// that gate, so its ping is covered by the same contract rather than assumed.
+	it.each(["primary", "all", "with-auxiliary"] as const)(
 		"the %s-scope clean-confirm ping is cancelled when the bound aborts, and the touch stays unconfirmed",
 		async (clientScope) => {
 			const filePath = register("workspace/symbol", "lua");
