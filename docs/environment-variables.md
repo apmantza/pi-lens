@@ -438,7 +438,19 @@ entry for what's still holding the loop open.
 
 ### `PI_LENS_LOG_RETENTION_DAYS`
 
-Days to keep rotated logs before cleanup. **Default:** `7`.
+How many days the session-start cleanup keeps these files before it removes them:
+the daily `logs/*.jsonl` files, rotated log backups, oversized tool-result spill
+logs (`tool-result-<id>.log`), and per-session state snapshots. The current
+session's snapshot stays whatever its age. **Default:** `7`. A value of `0` or one
+that is not a number reads as `7`.
+
+The same cleanup also removes two things this variable does not tune. An MCP
+endpoint socket in the temp directory goes after one day, and only when its
+owner process has exited or nothing answers on it. A project data directory goes after 30 days, and only
+when no path on disk can still be the project the directory name encodes. The cleanup
+never removes a project data directory on Windows, and it keeps any entry it
+cannot judge. It runs once per session start, off the startup path, and shows
+a `🧹` notice when it removed something.
 
 ### `PI_LENS_MAX_LOG_SIZE_MB`
 
