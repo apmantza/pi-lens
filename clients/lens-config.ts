@@ -199,6 +199,14 @@ export interface PiLensGlobalConfig {
 		 * orientation stops telling the agent it must fix it.
 		 */
 		requirePreExistingFixes?: boolean;
+		/**
+		 * #5770: caps on what `contextInjection.retain` keeps. Whole numbers; `0`
+		 * means no cap. Defaults: 64 entries and 256 KiB per session, 32 sessions.
+		 * Past a cap a new injection reaches one request only.
+		 */
+		retainMaxEntries?: number;
+		retainMaxBytes?: number;
+		retainMaxSessions?: number;
 	};
 	turnSummary?: {
 		/**
@@ -515,6 +523,26 @@ export function loadPiLensGlobalConfig(
 			} else {
 				warnInvalid(
 					"contextInjection.requirePreExistingFixes must be a boolean",
+					"PILENS_CFG_0005",
+				);
+			}
+		}
+
+		// #5770: caps on retained injections. A whole number; 0 means no cap. Out
+		// of range is ignored with a warning, never clamped, like the keys above.
+		for (const key of [
+			"retainMaxEntries",
+			"retainMaxBytes",
+			"retainMaxSessions",
+		] as const) {
+			if (!contextInjection || !(key in contextInjection)) continue;
+			const cap = contextInjection[key];
+			if (typeof cap === "number" && Number.isInteger(cap) && cap >= 0) {
+				config.contextInjection ??= {};
+				(config.contextInjection as Record<string, unknown>)[key] = cap;
+			} else {
+				warnInvalid(
+					`contextInjection.${key} must be a whole number of 0 or more (0 means no cap); ignored`,
 					"PILENS_CFG_0005",
 				);
 			}

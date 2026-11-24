@@ -369,6 +369,7 @@ import {
 import {
 	createInjectionLedger,
 	retainedSnapshotLabel,
+	retainLimitsFromConfig,
 } from "./clients/context-injection-ledger.js";
 import {
 	buildStartupTimingRecords,
@@ -1449,7 +1450,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// The flag is read per request because pi applies extension flag values
 	// after the factory runs; its CLI value and the global config are fixed per
 	// load.
-	const injectionLedger = createInjectionLedger();
+	const injectionLedger = createInjectionLedger(
+		retainLimitsFromConfig(globalConfig?.contextInjection),
+	);
 	let lensWidgetVisible = globalConfig?.widget?.visible !== false;
 	let mountedLensWidgetUi: LensWidgetUi | undefined;
 	let widgetMountFailureLogged = false;

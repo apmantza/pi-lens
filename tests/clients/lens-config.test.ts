@@ -494,6 +494,26 @@ describe("global pi-lens config", () => {
 		).toBeUndefined();
 	});
 
+	it("parses the contextInjection.retainMax* caps, with 0 as no cap (#5770)", () => {
+		const home = makeTempHome();
+		const configPath = writeConfig(
+			home,
+			JSON.stringify({
+				contextInjection: {
+					retain: true,
+					retainMaxEntries: 0,
+					retainMaxBytes: 1048576,
+					retainMaxSessions: 4,
+				},
+			}),
+		);
+		expect(loadPiLensGlobalConfig(configPath)?.contextInjection).toMatchObject({
+			retainMaxEntries: 0,
+			retainMaxBytes: 1048576,
+			retainMaxSessions: 4,
+		});
+	});
+
 	it("defaults context injection to enabled when unset", () => {
 		const home = makeTempHome();
 		const configPath = writeConfig(home, JSON.stringify({ widget: {} }));
@@ -933,6 +953,34 @@ describe("global pi-lens config", () => {
 			loadPiLensGlobalConfig(silentPath);
 			expect(warnedFor("requirePreExistingFixes")).toBe(false);
 		});
+
+		it.each([[-1], [1.5], ["unlimited"], [null]])(
+			"ignores a contextInjection.retainMaxBytes of %j with a warning; absent stays silent (#5770)",
+			(bad) => {
+				const home = makeTempHome();
+				const badPath = writeConfig(
+					home,
+					JSON.stringify({ contextInjection: { retainMaxBytes: bad } }),
+				);
+				expect(
+					loadPiLensGlobalConfig(badPath)?.contextInjection?.retainMaxBytes,
+				).toBeUndefined();
+				expect(console.error).toHaveBeenCalledWith(
+					expect.stringContaining(
+						"contextInjection.retainMaxBytes must be a whole number of 0 or more",
+					),
+				);
+
+				(console.error as ReturnType<typeof vi.fn>).mockClear();
+				const silentHome = makeTempHome();
+				const silentPath = writeConfig(
+					silentHome,
+					JSON.stringify({ contextInjection: { retain: true } }),
+				);
+				loadPiLensGlobalConfig(silentPath);
+				expect(warnedFor("retainMax")).toBe(false);
+			},
+		);
 
 		it("warns once on a present-but-invalid dispatch.runnerTimeoutFloorMs; absent stays silent", () => {
 			const home = makeTempHome();

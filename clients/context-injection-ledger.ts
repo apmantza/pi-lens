@@ -21,11 +21,12 @@
  *   while that digest still matches; any other transcript (a compaction, a
  *   /tree move, another extension's rewrite) deletes it for good.
  * - The partition is the request ctx's stable session id. No id, no entry.
- * - Bounded: {@link MAX_RETAINED_ENTRIES} entries and
- *   {@link MAX_RETAINED_BYTES} rendered bytes per session, and
- *   {@link MAX_RETAINED_SESSIONS} sessions (LRU). At a cap the NEW injection
- *   is delivered once, as without the flag, and not retained: the prefix then
- *   breaks at the newest point, the cheapest one.
+ * - Bounded by {@link RetainLimits}, defaulting to {@link MAX_RETAINED_ENTRIES}
+ *   entries and {@link MAX_RETAINED_BYTES} rendered bytes per session and
+ *   {@link MAX_RETAINED_SESSIONS} sessions (LRU); each is a config key
+ *   (`contextInjection.retainMax*`), and `0` there means no cap. At a cap the
+ *   NEW injection is delivered once, as without the flag, and not retained: the
+ *   prefix then breaks at the newest point, the cheapest one.
  * - Each decline records one `context-injection-retain-declined` degradation
  *   per session and reason.
  */
@@ -41,6 +42,45 @@ import { resolveLensToolName } from "./tool-config.js";
 export const MAX_RETAINED_ENTRIES = 64;
 export const MAX_RETAINED_BYTES = 256 * 1024;
 export const MAX_RETAINED_SESSIONS = 32;
+
+/** The caps on what the ledger keeps; `Infinity` is no cap. */
+export interface RetainLimits {
+	maxEntries: number;
+	maxBytes: number;
+	maxSessions: number;
+}
+
+export const DEFAULT_RETAIN_LIMITS: RetainLimits = {
+	maxEntries: MAX_RETAINED_ENTRIES,
+	maxBytes: MAX_RETAINED_BYTES,
+	maxSessions: MAX_RETAINED_SESSIONS,
+};
+
+/** The limits a `contextInjection` config section asks for: unset keeps the default, `0` is no cap. */
+export function retainLimitsFromConfig(
+	section:
+		| {
+				retainMaxEntries?: number;
+				retainMaxBytes?: number;
+				retainMaxSessions?: number;
+		  }
+		| undefined,
+): RetainLimits {
+	const cap = (configured: number | undefined, fallback: number): number =>
+		configured === undefined
+			? fallback
+			: configured === 0
+				? Number.POSITIVE_INFINITY
+				: configured;
+	return {
+		maxEntries: cap(section?.retainMaxEntries, DEFAULT_RETAIN_LIMITS.maxEntries),
+		maxBytes: cap(section?.retainMaxBytes, DEFAULT_RETAIN_LIMITS.maxBytes),
+		maxSessions: cap(
+			section?.retainMaxSessions,
+			DEFAULT_RETAIN_LIMITS.maxSessions,
+		),
+	};
+}
 
 /** One message of a provider request, as pi's request hooks carry it. */
 export type LedgerMessage = { role: string; content: unknown };
@@ -151,9 +191,11 @@ function recordDecline(sessionId: string, reason: DeclineReason): void {
 	});
 }
 
-export function createInjectionLedger(): InjectionLedger {
+export function createInjectionLedger(
+	limits: RetainLimits = DEFAULT_RETAIN_LIMITS,
+): InjectionLedger {
 	const sessions = new BoundedLruCache<string, RetainedEntry[]>(
-		MAX_RETAINED_SESSIONS,
+		limits.maxSessions,
 	);
 
 	const noSession = (raw: ReadonlyArray<LedgerMessage>): LedgerRebuild => ({
@@ -258,10 +300,10 @@ export function createInjectionLedger(): InjectionLedger {
 					? textBytes(injection.text)
 					: messagesBytes(injection.messages);
 			const reason: DeclineReason | undefined =
-				current.length >= MAX_RETAINED_ENTRIES
+				current.length >= limits.maxEntries
 					? "entry-cap"
 					: current.reduce((sum, entry) => sum + entry.bytes, 0) + bytes >
-						  MAX_RETAINED_BYTES
+						  limits.maxBytes
 						? "byte-cap"
 						: undefined;
 			if (reason) {
