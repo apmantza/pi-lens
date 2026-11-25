@@ -50,13 +50,10 @@ describe("AGENTS.md trigger-block governance (#3259)", () => {
 	// AGENTS.md even though docs/defect-shapes.md keeps the same wrappers around
 	// the entries it owns.
 	it("keeps every trigger marker standalone and paired (#3265)", () => {
-		const text = agentsText();
-		const literalOpenings = [...text.matchAll(/<important if=/g)].length;
-		const anchoredOpenings = [...text.matchAll(/^<important if="[^"]*">$/gm)]
-			.length;
-		const anchoredClosings = [...text.matchAll(/^<\/important>$/gm)].length;
-		expect(literalOpenings).toBe(anchoredOpenings);
-		expect(anchoredOpenings).toBe(anchoredClosings);
+		// The pairing is `blockTagProblems`', not a second count: two totals agree
+		// with a closer before its opener and with a nested opener (review 5754
+		// r3), so this case reads the same tag scan the catalog does.
+		expect(blockTagProblems(agentsText().split("\n"))).toEqual([]);
 	});
 
 	it("gives every important block one unique non-empty trigger", () => {
@@ -104,10 +101,8 @@ describe("AGENTS.md trigger-block governance (#3259)", () => {
 		// form, so an unclassified spelling shipped with no trigger line while
 		// the other blocks satisfied the floor. A commented-out or fenced example
 		// is the mirror case: it must not stand in for a block either.
-		const refuse = (markdown: string) =>
-			blockTagProblems(blankMarkdown(markdown).split("\n")).join("; ");
 		expect(
-			refuse(
+			refuseBlockTags(
 				'<important if="a">\n<!-- trigger: {"always": true} -->\n</important>\n',
 			),
 		).toBe("");
@@ -118,12 +113,53 @@ describe("AGENTS.md trigger-block governance (#3259)", () => {
 			'<important when="a">',
 			"<important>",
 		])
-			expect(refuse(`${opener}\n</important>\n`), opener).toMatch(/standalone/);
+			expect(refuseBlockTags(`${opener}\n</important>\n`), opener).toMatch(
+				/standalone/,
+			);
 		// A fenced or commented example is prose, and the reader sees no block.
-		expect(refuse('```\n<important if="example">\n```\n')).toBe("");
-		expect(refuse('<!--\n<important if="hidden">\n-->\n')).toBe("");
-		expect(refuse('<important if="a">\n')).toMatch(/closers/);
-		expect(refuse("</important>\n")).toMatch(/closers/);
+		expect(refuseBlockTags('```\n<important if="example">\n```\n')).toBe("");
+		expect(refuseBlockTags('<!--\n<important if="hidden">\n-->\n')).toBe("");
+		expect(refuseBlockTags('<important if="a">\n')).toMatch(/closers/);
+		expect(refuseBlockTags("</important>\n")).toMatch(/never opened/);
+	});
+
+	// Review 5754 r3: `blockTagProblems` compared opener and closer totals, so
+	// every case below balanced and passed while the reader saw a broken tag
+	// tree (shape 43: a gate matches structure, not a count).
+	it("refuses a closer that arrives before its opener (#5753)", () => {
+		expect(refuseBlockTags('</important>\n<important if="a">\n')).toMatch(
+			/never opened/,
+		);
+	});
+
+	it("refuses an opener nested inside an open block (#5753)", () => {
+		expect(
+			refuseBlockTags(
+				'<important if="a">\n<!-- trigger: {"always": true} -->\n<important if="b">\n</important>\n</important>\n',
+			),
+		).toMatch(/inside an unclosed block/);
+	});
+
+	it("refuses a block left unclosed at the end (#5753)", () => {
+		expect(
+			refuseBlockTags(
+				'<important if="a">\n<!-- trigger: {"always": true} -->\n',
+			),
+		).toMatch(/never closed/);
+	});
+
+	it("refuses a closer spelling it cannot classify (#5753)", () => {
+		for (const closer of [
+			" </important>",
+			"</important> ",
+			"</important >",
+			"</important foo>",
+			"x</important>",
+		])
+			expect(
+				refuseBlockTags(`<important if="a">\n${closer}\n`),
+				closer,
+			).toMatch(/standalone/);
 	});
 
 	// #5753 item 1: block 3 governs the delivery surfaces and lanes, so its paths
@@ -475,32 +511,59 @@ function triggerProblems(line: string): string[] {
 	return problems;
 }
 
+/** `blockTagProblems` over one markdown document, joined for one assertion. */
+function refuseBlockTags(markdown: string): string {
+	return blockTagProblems(blankMarkdown(markdown).split("\n")).join("; ");
+}
+
 /**
- * Problems with the catalog's `<important` tags, read from markdown-blanked
- * lines (#5753 review 5754 F1). Every opener must be the standalone `if` form
- * this gate reads, and openers and closers must pair: an opener spelled any
- * other way would ship with no trigger line while the other blocks satisfied
- * the floor, and a commented-out opener would hide its block from the reader
- * while still counting here (AGENTS.md shapes 43 and 69: a detector matches
- * code, not prose, and fails closed on what it does not recognize).
+ * Problems with the `AGENTS.md` and catalog `<important` tags, read from
+ * markdown-blanked lines (#5753 review 5754 F1, r3). Every tag must be the
+ * standalone form this gate reads, and a block must open before it closes:
+ * an opener spelled any other way would ship with no trigger line while the
+ * other blocks satisfied the floor, a commented-out opener would hide its
+ * block from the reader while still counting here, and a count of openers
+ * against closers accepts a closer before its opener and an opener nested in
+ * an open block. The depth is tracked in source order for that reason
+ * (AGENTS.md shapes 43 and 69: a detector matches code, not prose, and fails
+ * closed on what it does not recognize).
  */
 function blockTagProblems(blankedLines: readonly string[]): string[] {
 	const problems: string[] = [];
-	let openers = 0;
-	let closers = 0;
+	// The line of the open block, or 0 at depth 0: nesting is refused, so the
+	// depth never exceeds one and the opener's line is what a later problem
+	// needs to name.
+	let openedAt = 0;
 	blankedLines.forEach((line, index) => {
+		const at = `line ${index + 1}`;
 		if (line.includes("<important")) {
-			if (/^<important if="[^"]*">$/.test(line)) openers += 1;
-			else
+			if (!/^<important if="[^"]*">$/.test(line))
 				problems.push(
-					`line ${index + 1}: ${JSON.stringify(line.trim())} is not the standalone \`<important if="...">\` opener`,
+					`${at}: ${JSON.stringify(line.trim())} is not the standalone \`<important if="...">\` opener`,
 				);
+			else if (openedAt > 0)
+				problems.push(
+					`${at}: ${JSON.stringify(line.trim())} is an opener inside an unclosed block (line ${openedAt})`,
+				);
+			else openedAt = index + 1;
 		}
-		if (/^<\/important>$/.test(line)) closers += 1;
+		// The closer rule mirrors the opener rule: a `</important` spelling this
+		// gate cannot read is refused, never counted as an opener's partner.
+		if (line.includes("</important")) {
+			if (!/^<\/important>$/.test(line))
+				problems.push(
+					`${at}: ${JSON.stringify(line.trim())} is not the standalone \`</important>\` closer`,
+				);
+			else if (openedAt === 0)
+				problems.push(
+					`${at}: \`</important>\` closes a block that was never opened`,
+				);
+			else openedAt = 0;
+		}
 	});
-	if (openers !== closers)
+	if (openedAt > 0)
 		problems.push(
-			`${openers} \`<important if="...">\` openers but ${closers} \`</important>\` closers`,
+			`\`</important>\` closers are missing: the block opened at line ${openedAt} is never closed`,
 		);
 	return problems;
 }
