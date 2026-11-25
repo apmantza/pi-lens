@@ -47,16 +47,12 @@ const { spawnCollectStdoutResult } =
 	await import("../../clients/child-unref.js");
 const { userBaseProbeResult } =
 	await import("../../clients/installer/index.js");
-const { getDegradationSummary, resetDegradationLedger } =
+const { resetDegradationLedger } =
 	await import("../../clients/degradation-ledger.js");
 
 const MiB = 1024 * 1024;
 /** One chunk; five of them cross the 32 MiB default bound. */
 const CHUNK = "x".repeat(8 * MiB);
-
-function ledgerRow(kind: string) {
-	return getDegradationSummary().find((entry) => entry.kind === kind);
-}
 
 beforeEach(() => {
 	vi.useFakeTimers();
