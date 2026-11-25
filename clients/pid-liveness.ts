@@ -4,7 +4,8 @@
  * import cycle). Every consumer that asks "is this recorded pid still running"
  * routes through it: the instance registry, the reaper, the budget, the review
  * graph stage sweep, the install and bounded pid-file locks, the generation
- * lock and the turn-state owner check. A rival copy decides EPERM or an
+ * lock, the turn-state owner check and the retention sweep's pid-scoped
+ * socket gate (`clients/log-cleanup.ts`). A rival copy decides EPERM or an
  * unprobeable pid its own way (the turn-state copy read EPERM as dead and
  * handed a live foreign worklist to the next writer).
  */

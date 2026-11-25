@@ -24,7 +24,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	getManagedLogFiles,
-	pidScopedSocketLiveness,
 	ROTATED_BACKUP_RE,
 	rotateLogIfNeeded,
 } from "../../clients/log-cleanup.js";
@@ -486,6 +485,94 @@ describe("runLogCleanup retention rows (#5702)", () => {
 		},
 	);
 
+	// Recurrence: #5707 gave the retention sweep its own `process.kill(pid, 0)`
+	// probe (a fifth copy beside the four #5702-era folds that
+	// tests/clients/pid-liveness-seam.test.ts guards), so a change to the one
+	// check's EPERM or unprobeable reading (`clients/pid-liveness.ts`) reached
+	// every lock but not this gate. `process.kill` is the OS boundary: the
+	// double answers only the sentinel pids with signal 0.
+	it.skipIf(socketTestLacksRoom)(
+		"reads a pid-scoped socket's owner through the one liveness check: ESRCH reaps, EPERM and an unprobeable pid keep",
+		async () => {
+			const socketDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-retain-sock-"),
+			);
+			const realKill = process.kill.bind(process);
+			const answers: Record<number, string> = {
+				999997: "ESRCH",
+				999998: "EPERM",
+				999996: "EINVAL",
+			};
+			const killSpy = vi
+				.spyOn(process, "kill")
+				.mockImplementation((pid, signal) => {
+					const code = answers[pid];
+					if (code !== undefined && signal === 0) {
+						throw Object.assign(new Error(`kill ${code}`), { code });
+					}
+					return realKill(pid, signal as NodeJS.Signals | number);
+				});
+			const nameFor = (pid: number): string =>
+				`pi-lens-mcp-${pid}-diagnostics-fedcba9876543210.sock`;
+			try {
+				process.env.TMPDIR = socketDir;
+				for (const pid of [999997, 999998, 999996]) {
+					await seedStaleSocket(socketDir, nameFor(pid));
+					backdate(path.join(socketDir, nameFor(pid)), 2);
+				}
+
+				const { runLogCleanup } = await loadCleanup();
+				await runLogCleanup();
+				const { getDegradationSummary } =
+					await import("../../clients/degradation-ledger.js");
+
+				expect(fs.existsSync(path.join(socketDir, nameFor(999997)))).toBe(
+					false,
+				);
+				expect(fs.existsSync(path.join(socketDir, nameFor(999998)))).toBe(true);
+				expect(fs.existsSync(path.join(socketDir, nameFor(999996)))).toBe(true);
+				const unprobeable = getDegradationSummary().find(
+					(group) => group.kind === "pid-liveness-unprobeable",
+				);
+				expect(unprobeable?.count).toBe(1);
+				expect(unprobeable?.latestReasons[0]?.subject).toBe("EINVAL");
+			} finally {
+				killSpy.mockRestore();
+				if (savedRetainTmp === undefined) delete process.env.TMPDIR;
+				else process.env.TMPDIR = savedRetainTmp;
+				removeTempDirSync(socketDir);
+			}
+		},
+	);
+
+	// Recurrence: the seam reads pid 0 as a dead owner (a lock file naming it
+	// was never held), while the pre-fold probe's `kill(0, 0)` signalled the
+	// sweeper's own process group and read it alive. A name carrying no
+	// holdable pid has no owner to judge, so the gate keeps the socket.
+	it.skipIf(socketTestLacksRoom)(
+		"keeps an aged pid-scoped socket whose name carries pid 0: no owner to judge",
+		async () => {
+			const socketDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-retain-sock-"),
+			);
+			const name = "pi-lens-mcp-0-diagnostics-fedcba9876543210.sock";
+			try {
+				process.env.TMPDIR = socketDir;
+				await seedStaleSocket(socketDir, name);
+				backdate(path.join(socketDir, name), 2);
+
+				const { runLogCleanup } = await loadCleanup();
+				await runLogCleanup();
+
+				expect(fs.existsSync(path.join(socketDir, name))).toBe(true);
+			} finally {
+				if (savedRetainTmp === undefined) delete process.env.TMPDIR;
+				else process.env.TMPDIR = savedRetainTmp;
+				removeTempDirSync(socketDir);
+			}
+		},
+	);
+
 	// lane: Unit tests. Root skips: root's connect ignores the socket's mode,
 	// so the dial answers "dead" and the cell this case pins cannot arise.
 	it.skipIf(socketTestLacksRoom || process.getuid?.() === 0)(
@@ -515,22 +602,6 @@ describe("runLogCleanup retention rows (#5702)", () => {
 			}
 		},
 	);
-});
-
-describe("pidScopedSocketLiveness (#5702)", () => {
-	it("a dead owner is stale: nobody can ever bind that name again", () => {
-		expect(pidScopedSocketLiveness(4242, () => "esrch")).toBe("stale");
-	});
-
-	it("an alive owner is live", () => {
-		expect(pidScopedSocketLiveness(4242, () => "alive")).toBe("live");
-	});
-
-	it("a probe the process refuses to answer keeps the socket: judging it would reap another user's live listener", () => {
-		expect(pidScopedSocketLiveness(4242, () => "refused")).toBe(
-			"indeterminate",
-		);
-	});
 });
 
 describe("getManagedLogFiles — auto-derivation", () => {
