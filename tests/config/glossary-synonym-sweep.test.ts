@@ -1234,7 +1234,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// (`path.join(dir, entry.name)` for the stat) and joins candidates
 		// with `path.posix.join`.
 		"clients/file-utils.ts": 69,
-		"clients/finding-identity.ts": 2,
 		"clients/fix-worklog.ts": 3,
 		// 3 -> 2, 16 -> 15 (#4689): the formatter is handed `realpathOrResolve`,
 		// not a `path.resolve` of the spelling it was given. 2 -> 3 (#4675 F2):

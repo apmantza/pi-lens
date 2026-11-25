@@ -26,8 +26,7 @@
  */
 
 import { createHash } from "node:crypto";
-import * as path from "node:path";
-import { normalizeMapKey, toPosix } from "./path-utils.js";
+import { normalizeMapKey, relativeInside } from "./path-utils.js";
 
 /** Every finding id in this codebase truncates its sha256 hex digest to this
  * many characters. Single source so the three call sites this module
@@ -252,8 +251,9 @@ export function hashText(
 export function relativeFile(filePath: string, cwd: string): string {
 	const canonicalCwd = normalizeMapKey(cwd);
 	const canonicalFile = normalizeMapKey(filePath);
-	const rel = toPosix(path.relative(canonicalCwd, canonicalFile));
-	return rel && !rel.startsWith("..") ? rel : canonicalFile;
+	// `relativeInside` owns "is it inside": a bare `startsWith("..")` read a
+	// directory called `..foo` as outside the root (shape 32).
+	return relativeInside(canonicalCwd, canonicalFile) || canonicalFile;
 }
 
 /**

@@ -223,11 +223,14 @@ const SEAM_ADMISSIONS: Readonly<Record<string, string>> = {
  * and deleted them: 32 rows plus the admission made the 33 sites printed then.
  * The `relativeInside` fold (#2556's remainder) then routed twelve more runtime
  * rows and the admission itself through the seam: 20 rows plus the seam's new
- * admission make the 21 sites printed now.
+ * admission made the 21 sites printed then. `relativeFile`
+ * (`clients/finding-identity.ts`, the relative component of every finding id)
+ * then went through `relativeInside` too, because a `..foo` directory's file
+ * hashed the checkout's absolute path, so its id differed per clone: 19 rows
+ * plus the admission make the 20 sites printed now.
  */
 const BASELINE: Readonly<Record<string, string>> = {
 	"clients/actionable-warnings.ts#legacyActionableWarningId": `${DURABLE_ID} This one rebuilds the id older releases wrote so a stored record can be migrated, so its spelling is the old release's by definition.`,
-	"clients/finding-identity.ts#relativeFile": `${DURABLE_ID} This one is the relative component of every \`dd:\`/\`ddw:\`/\`aw:\`/\`cq:\` finding id.`,
 	"scripts/hooks/guard-bash.mjs#hasNodeModulesSymlinkOutside": `${SEAM_COPY} It cannot fold because the hook is a bare-Node \`.mjs\` that Claude Code runs before any build, so it may not import a TypeScript seam. Baselined as the record that the copy was read.`,
 	"scripts/hooks/guard-bash.mjs#isUnderTmpRoot": `${SEAM_COPY} The same bare-Node boundary (no build step, so no TypeScript seam import) is why it stays a copy.`,
 	"scripts/lib/pr-worktree.mjs#nestedDestinationError": `${SEAM_COPY} It runs on the same bare-Node boundary as the git guard: a \`.mjs\` script that cannot import the TypeScript seam.`,
