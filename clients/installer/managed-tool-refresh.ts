@@ -48,7 +48,6 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { HOOK_WALL_BUDGET_MS } from "../hook-budgets.js";
-import { writeFileAtomicAsync } from "../atomic-write.js";
 import { hashContentBytes } from "../content-stamp.js";
 import { bounded } from "../deadline-utils.js";
 import { recordDegradationOnce } from "../degradation-ledger.js";
@@ -66,6 +65,7 @@ import {
 import { stripAnsi } from "../sanitize.js";
 import { safeSpawnAsync } from "../safe-spawn.js";
 import { logSessionStart } from "../sessionstart-logger.js";
+import { downloadInstallerFile } from "./download.js";
 import {
 	acquireManagedInstallGate,
 	findManagedToolBinary,
@@ -1133,37 +1133,23 @@ function opengrepPackUrl(): string | undefined {
 	return OPENGREP_REGISTRY_PACK_URL;
 }
 
-async function downloadOpengrepPack(url: string): Promise<Buffer> {
-	const res = await fetch(url, {
-		signal: AbortSignal.timeout(PACK_FETCH_TIMEOUT_MS),
-		// `identity` is load-bearing: semgrep.dev/c/auto answers a client that
-		// accepts gzip (Node's fetch does by default) with the rule set as JSON,
-		// and one that does not with YAML (measured 2026-10-23). The CLI loads
-		// either from a `.yaml` file; the language server loads the JSON as zero
-		// rules and publishes empty diagnostics, which would turn a cached pack
-		// into a silent clean scan.
-		headers: { "User-Agent": "pi-lens/1.0", "Accept-Encoding": "identity" },
-	});
-	if (!res.ok) throw new Error(`HTTP ${res.status}`);
-	if (!res.body) throw new Error("empty response body");
-	const chunks: Uint8Array[] = [];
-	let total = 0;
-	const reader = res.body.getReader();
-	for (;;) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		total += value.byteLength;
-		if (total > PACK_MAX_BYTES) {
-			await reader.cancel();
-			throw new Error(`body exceeds ${PACK_MAX_BYTES} bytes`);
-		}
-		chunks.push(value);
-	}
-	const bytes = Buffer.concat(chunks);
+async function downloadOpengrepPack(
+	url: string,
+	destination: string,
+): Promise<{ bytes: Buffer; sha256: string }> {
+	const result = await downloadInstallerFile(
+		url,
+		destination,
+		5,
+		{ "Accept-Encoding": "identity" },
+		PACK_MAX_BYTES,
+		PACK_FETCH_TIMEOUT_MS,
+	);
+	const bytes = await fs.readFile(destination);
 	// Fail closed on the form the language server cannot load (see above).
 	if (bytes.toString("utf-8", 0, 64).trimStart().startsWith("{"))
 		throw new Error("registry answered JSON, not the YAML rule file");
-	return bytes;
+	return { bytes, sha256: result.sha256 };
 }
 
 /**
@@ -1301,8 +1287,10 @@ export async function refreshOpengrepRulePack(
 		try {
 			await fs.mkdir(path.dirname(finalPath), { recursive: true });
 			await sweepStaleCandidates(finalPath);
-			const bytes = await downloadOpengrepPack(url);
-			const digest = hashContentBytes(bytes);
+			const { bytes, sha256: digest } = await downloadOpengrepPack(
+				url,
+				candidate,
+			);
 			let current: Buffer | undefined;
 			try {
 				current = await fs.readFile(finalPath);
@@ -1321,7 +1309,6 @@ export async function refreshOpengrepRulePack(
 				);
 				return "unchanged";
 			}
-			await writeFileAtomicAsync(candidate, bytes, { bestEffort: false });
 			const rejected = await validateOpengrepPack(binary, candidate);
 			if (rejected) throw new Error(rejected);
 

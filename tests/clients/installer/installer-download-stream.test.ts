@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { downloadInstallerFile } from "../../../clients/installer/download.js";
 
@@ -49,6 +50,66 @@ describe("installer download stream", () => {
 		).rejects.toMatchObject({ name: "InstallerDownloadError", code: "cap" });
 		expect(existsSync(destination)).toBe(false);
 		await fs.rm(root, { recursive: true, force: true });
+	});
+
+	it("streams a gzip body to the destination without buffering it in the caller", async () => {
+		const payload = Buffer.from("gzip installer payload");
+		const server = createServer((_request, response) => {
+			const compressed = gzipSync(payload);
+			response.writeHead(200, { "content-length": compressed.length });
+			response.end(compressed);
+		});
+		server.listen(0, "127.0.0.1");
+		servers.push(server);
+		await new Promise<void>((resolve) => server.once("listening", resolve));
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lens-download-"));
+		const destination = path.join(root, "asset.gz");
+		const address = server.address();
+		if (!address || typeof address === "string")
+			throw new Error("server address missing");
+		try {
+			const result = await downloadInstallerFile(
+				`http://127.0.0.1:${address.port}/asset.gz`,
+				destination,
+			);
+			expect(result.bytes).toBeGreaterThan(payload.length / 2);
+			expect(await fs.readFile(destination)).toEqual(gzipSync(payload));
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("times out a stalled socket and removes its partial file", async () => {
+		const server = createServer((_request, response) => {
+			response.writeHead(200);
+			response.write("partial");
+		});
+		server.listen(0, "127.0.0.1");
+		servers.push(server);
+		await new Promise<void>((resolve) => server.once("listening", resolve));
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lens-download-"));
+		const destination = path.join(root, "stalled");
+		const address = server.address();
+		if (!address || typeof address === "string")
+			throw new Error("server address missing");
+		try {
+			await expect(
+				downloadInstallerFile(
+					`http://127.0.0.1:${address.port}/stalled`,
+					destination,
+					5,
+					{},
+					1024,
+					25,
+				),
+			).rejects.toMatchObject({
+				name: "InstallerDownloadError",
+				code: "timeout",
+			});
+			expect(existsSync(destination)).toBe(false);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
 	});
 
 	// #5706 F2 recurrence: a relative `Location` (`/final`) reached the next
