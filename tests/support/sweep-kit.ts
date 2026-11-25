@@ -2062,7 +2062,8 @@ export interface SymbolCountAuditInput {
 
 /**
  * A per-file stateful-SYMBOL-COUNT pin, layered on {@link auditRegistry}'s
- * registered-or-fail semantics rather than a parallel mechanism (#1817).
+ * registered-or-fail semantics (#1817), plus one stale-pin check that audit
+ * cannot see: a pinned file the scan no longer measures.
  *
  * The session-state sweep's file-level coverage audit ({@link auditRegistry}
  * called directly on file paths) answers "is this FILE registered or
