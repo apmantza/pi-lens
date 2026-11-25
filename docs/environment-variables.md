@@ -441,8 +441,9 @@ entry for what's still holding the loop open.
 How many days the session-start cleanup keeps these files before it removes them:
 the daily `logs/*.jsonl` files, rotated log backups, oversized tool-result spill
 logs (`tool-result-<id>.log`), and per-session state snapshots. The current
-session's snapshot stays whatever its age. **Default:** `7`. A value of `0` or one
-that is not a number reads as `7`.
+session's snapshot stays whatever its age. **Default:** `7`. Cleanup reads the value as a
+leading integer, so `1garbage` reads as `1`; a value that yields `0` or no leading
+integer reads as `7`, and a negative one as `1`.
 
 The same cleanup also removes two things this variable does not tune. An MCP
 endpoint socket in the temp directory goes after one day, and only when its
