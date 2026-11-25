@@ -649,7 +649,10 @@ operator's private notes, so a different orchestrator can run the same train.
     manifest / lockfile.
   - **Tier B — one scoped review pass, scope stated in the brief:** tests-only
     diffs that are not governance sweeps or ratchets (those are Tier A: a
-    guard is production for the train).
+    guard is production for the train). A review of a diff that touches a
+    ratchet baseline, a governance test, a shape scanner or a gate script names
+    that change and judges whether it loosens the gate that judges the PR
+    (`docs/pi-lens-reviewer.md` "Standing probes", #5753).
   - **Tier C — no reviewer agent:** docs, comments, rename-only, data files.
     Orchestrator read plus CI on the exact head.
   A prescribed-remedy fix round stays "merge on green" in every tier.

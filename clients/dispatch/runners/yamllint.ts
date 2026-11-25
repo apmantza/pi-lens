@@ -4,7 +4,7 @@ import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
 import { pathsEqual, relativeInside } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
-import { logRunnerAdvisoryOnce } from "../../tool-cwd.js";
+import { logRunnerAdvisoryOnce, resolveRunnerCwd } from "../../tool-cwd.js";
 import { getLinterPolicyForCwd } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -13,10 +13,7 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import {
-	resolveRunnerCwd,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";

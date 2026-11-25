@@ -2729,17 +2729,9 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/lsp-document-symbols.ts": 2,
 	"clients/lsp/cascade-tier.ts": 2,
 	"clients/lsp/config.ts": 4,
-	// #2817 round 2 F5: Git recovery now awaits the existing drift scheduler
-	// and its per-server root resolution. This remains an intentionally
-	// unbounded helper count until #2523 AC4 threads hook signals into the LSP
-	// service dependencies; the scheduler itself bounds each recovery pass.
-	// #2878: the late auxiliary re-promotion observer resolves the server root,
-	// adding one real async seam. clients/lsp/index.ts goes 158 -> 159; the
-	// new await belongs to the late-runner identity lookup. clients/lsp/server.ts
-	// went 111 -> 112 for the new
-	// `await server.root` inside resolveLspServerCwd. Neither number is the
-	// old bare probe being removed.
-	"clients/lsp/index.ts": 159,
+	// #2878: clients/lsp/server.ts went 111 -> 112 for the new
+	// `await server.root` inside resolveLspServerCwd; not the old bare probe
+	// being removed.
 	// #4299: 112 -> 116, net four local-filesystem awaits for canonical
 	// compiler/package validation and candidate admission, after deleting the
 	// wrapper-relative fallback. Each is a local stat/realpath/read before
@@ -2869,24 +2861,6 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// bounded persist wait, then rejects if work remains. Only the test helper
 	// registry calls it; no hook handler reaches it.
 	"clients/project-snapshot.ts": 3,
-	// #3871 r3: runtime-turn imports only the synchronous
-	// `hasAmbientPythonEnvironment`, which this one-hop walk cannot tell apart.
-	// The four awaits are `detectPythonEnvironment`'s filesystem probes, which
-	// turn_end already reached two hops away through test-runner-client.ts.
-	// #4638: 4 -> 10. `detectPythonTargetVersion` reads one small declaration
-	// file per ancestor directory (pyproject, the one ruff config it would use,
-	// pyrightconfig.json, `.python-version`); the tool handlers that call it
-	// carry their own signal, but this module is also imported directly by a
-	// hook handler, so hook-signal threading stays #2523 AC4.
-	// 10 -> 13: the declarer walk was split into one function per tier (Sonar
-	// S3776, cognitive complexity 35 -> under the limit), so the same five reads
-	// now cost three extra `await` expressions at the tier calls. No new I/O, no
-	// new unbounded operation; the probes themselves are unchanged.
-	// 13 -> 11 (#4638 r3 N1): each tier now returns its declaration together
-	// with whether it closed the walk, and one per-directory function drives the
-	// four tiers, so the tier awaits sit in one loop instead of in the walker.
-	// Fewer awaits, the same declaration-file reads, no new unbounded operation.
-	"clients/python-environment.ts": 11,
 	"clients/quiet-window.ts": 5,
 	"clients/read-expansion.ts": 2,
 	// 5 -> 3 (#3612): `resolveReadGuardStartState`'s two sidecar awaits moved
@@ -2982,11 +2956,6 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// list, and the one `path` read folded into it). See the #5371 note under
 	// `tools/shared.ts`.
 	"tools/lens-diagnostics.ts": 22,
-	// #2598 lowered both by one: `collectDiagnosticsForFile` and
-	// `openFileBestEffort` each dropped their `await lspService.openFile(…)`
-	// arm — the fallback for "a service shape without touchFile", which the
-	// real `LSPService` never was.
-	"tools/lsp-diagnostics.ts": 29,
 	// #4638: 32 -> 34, the two probes that must hand the sync finding-policy seam
 	// a prepared Python declaration: the path read resolves it once, and the
 	// tracked-snapshot read resolves one per file before its synchronous map.

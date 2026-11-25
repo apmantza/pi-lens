@@ -16,6 +16,127 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Security
 
+## [4.5.2] - 2026-11-22
+
+### Added
+
+#### Configuration and flags
+
+- **The diagnostics widget can now move above the editor or hide when clean.** Set `widget.position` to `"aboveEditor"` or `"belowEditor"` (the default), and set `widget.hideWhenClean` to `true` to hide the widget 5 seconds after it first shows `✓ clean`. With the hide on, the widget also draws nothing until a first check gives it something to show. It returns on any finding, unchecked file, suppressed finding, failed formatter or starting server. Both keys are global-only and have no CLI flag. (refs #5724)
+
+### Changed
+
+#### Install and updates
+
+- **The jscpd installer pins 5.4.3, and pi 1.5.2 is the tested host.** New installs get jscpd 5.4.3 in place of 5.4.2. (refs #5670)
+
+- **pi-lens no longer installs rubocop, rustfmt or rust-clippy without asking.** Their installs (`gem install`, `rustup component add`) change your whole gem root or toolchain. The three still run when present. When they are absent, the rubocop runner reports `not-installed`, the rust-clippy runner reports `probe-rejected`, and the rustfmt and rubocop formatters skip silently. (refs #5410)
+
+### Fixed
+
+#### Language servers
+
+- **Esc now cancels a project-wide diagnostics pull and a TypeScript project probe.** A `lens_diagnostics` full scan and the `projectInfo` request sent when a TypeScript file opens used to keep waiting on the language server after you aborted. Both now send a cancel and return at once. (refs #5097)
+
+- **A language-server edit keeps the line ending of the edited line.** In a file with mixed line endings, new lines inserted by a rename or code action took the file's first line ending, so a CRLF line in an LF-first file got a bare LF (and the reverse). Files with one line-ending style are unchanged. (refs #5670)
+
+- **Python servers reach global fallbacks, and PATH never runs unadmitted project files.** Python servers now reach global fallbacks for adopted projects: absent project candidates are reported as missing before trust is considered, while existing refused candidates no longer end a launch stage when installation is disabled. For an adopted project, or one pi has not trusted, a PATH entry inside the project (relative entries such as `bin` or `.` included) is skipped when a language server is looked up, and a PATH link into the project is refused. When PATH reaches such a project, managed lookups read only the pi-lens tool store, so the TypeScript and Jedi fallbacks and the Go, Ruby and .NET runtime installs no longer probe or run its `tsc`, `python` or `go`. (refs #5674)
+
+- **The cascade now re-asks a push-only server about dependents it answered before your edit.** A server such as jdtls republishes a dependent when its own model changes, not when asked, so importers of an edited Java file stayed unconfirmed every time. For a server declared to re-check unchanged bytes (jdtls, TypeScript, Python) the cascade re-sends the dependent once per run and reads the answer; other servers are left as they were. A server that stays silent still leaves the dependent unconfirmed, never clean. (refs #5675)
+
+- **LSP timeout notices now name the server and cause.** An unconfirmed document no longer reports only the generic unavailable message; the dispatch record carries the same reason for later inspection. (refs #5692)
+
+- **On Windows, more language servers now end when pi ends.** A server whose path held a space, such as PowerShell 7 under `C:\Program Files`, or one installed as an npm 9 or later `.cmd` shim, ran behind `cmd.exe`, so pi's exit ended only the wrapper and the server kept running. pi-lens now starts these servers as its own direct child, so Windows ends them with pi even when pi is killed. A server started through another wrapper, such as a pnpm shim or a shim that passes Node flags, still runs behind `cmd.exe` and can outlive pi; pi-lens records each one as `lsp-server-uncontained`. (refs #5694)
+
+- **Language servers now end with the pi or MCP process that started them.** On Linux and macOS, a server that ignored stdin EOF and SIGTERM outlived a pi quit, an MCP client disconnect, a SIGTERM to the MCP host and every `fresh` analysis worker. pi-lens now sends each held server's process group SIGKILL when its host exits. A host killed before that keeps its `instances.json` row, and the next pi or MCP start reaps the server. A server's child that ignores SIGTERM after the server exits is killed too, and `fresh` analysis now reads `lsp.json`. (refs #5699)
+
+- **Language servers close old files and stop when a session goes idle.** Each client keeps at most 256 documents open (`PI_LENS_LSP_OPEN_DOCUMENT_CAP`) and closes the least recently sent one with `didClose`. A closed file's last findings stay readable, marked `closed: true` in the `lsp_navigation` workspace snapshot, and the next touch opens it again. Every server not declared `resident` is now released after the idle window on the pi host and the MCP host. Before, 32 servers, including every server a project declares, were never released. Only five project indexers (expert, kotlin, powershell, rust, svelte) stay resident. The pi host's session idle reset now restarts after a turn that edited files; before, such a turn cancelled it and nothing armed it again. (refs #5700)
+
+- **Deno projects now use the Deno language server for TypeScript files.** TypeScript no longer claims files governed by `deno.json` or `deno.jsonc`, allowing the configured Deno fallback to start. (refs #5720)
+
+- **An uncaught host error now runs exit cleanup for held language servers.** The LSP crash guard prints the stack and exits non-zero through Node's normal exit path, so pi RPC/print mode and the MCP host no longer leave a server behind. The stack report writes at most 16 KiB and waits at most 1 s for a full stderr pipe, so it cannot hold a crashing host. (refs #5744)
+
+- **A checkout or rebase in a sibling worktree now refreshes the language server.**
+  A bash command that moved HEAD in another linked worktree it named, or
+  discarded edits there, left the server holding the old files with no record,
+  so it reported errors against code that no longer existed. (refs #5718)
+
+#### Blockers and sessions
+
+- **A file reached through a symlink no longer blocks its own export.** The duplicate-export STOP, the cached-export refresh and the deferred runner blocker each compared two spellings of one file as two files, so an edit through the real path left a removed export cached, the next write that declared it was refused, and a deferred blocker lost its line text. All three now compare by path identity. (refs #2556)
+
+- **A fixed ast-grep blocker no longer stays "Still unfixed" while the language server is silent.** When a file's language server did not answer or could not start, pi-lens kept every blocker it had recorded for the file, including ast-grep ones that the ast-grep server had just checked clean. The fix then read as unfixed, stayed in `lens_diagnostics`, was listed again at turn end, and kept the commit gate shut. A recorded blocker is now judged by its own server's answer; blockers of a server that did not answer still stay. (refs #5727)
+
+- **A STOP block now names the file a cross-file blocker belongs to.** The mypy
+  runner reports errors in the modules an edit imports, and those rows used to read as
+  lines of the edited file, with that file's line shown as their snippet. An
+  agent then marked them against the wrong file, where the mark never applied. (refs #5710)
+
+- **A false-positive mark made from a STOP block now hides that finding.** Marking
+  what the block shows (the `[rule]` bracket as the rule, the rest as the message,
+  no tool) used to anchor on an identity the finding never had, so the same
+  finding came back on every edit. (refs #5709)
+
+#### Runners and scanners
+
+- **Prisma and Vite+ project edits no longer start an extra process per save.** The prisma and oxlint runners probed `prisma --version` and `vp --version` on PATH and kept no answer, so a tool that was slow to start or failed its probe cost every edit again. Both now read the shared per-project verdict like every other runner. (refs #5410)
+
+- **A project that ships its own jscpd is no longer reported as missing.** The duplicate-code, circular-dependency, unused-code and secret scans now check their binary the way the linters do, so a managed gitleaks or opengrep that fails its version check falls back to the one on PATH instead of triggering an install. (refs #5410)
+
+#### Tools and reports
+
+- **Suppressing a diagnostic no longer rewrites a CRLF file's line endings.** The inline `pi-lens-ignore` comment takes the ending of the line it is inserted above, every existing line ending is kept, and a whitespace-only CRLF line no longer lends its bare `\r` to the inserted comment's indentation. (refs #5686)
+
+#### Configuration and flags
+
+- **Config readers now agree on `ignorePaths`, `effective_config` tools and legacy files.** A rule's `ignorePaths` match from the folder of the config file that declares them, so `/gen/**` in `repo/.pi-lens.json` skips `repo/gen` wherever you start pi. `effective_config` reports the tool switches your session uses, from the repository's own `.pi-lens.json` and your global config. Once a `.pi-lens.json` sits in the chain from your working directory up to the git root, a legacy `pi-lens.json` is ignored everywhere except the language-server settings. (refs #5738, #5739, #5740)
+
+#### Install and updates
+
+- **Installer downloads are streamed into bounded temporary files.** Release assets no longer collect the full download and decompressed binary in memory before installation. Downloads are capped, timed out, cleaned on failure, and only then moved into the managed install. (refs #5701)
+
+#### Hosts and integrations
+
+- **pi-lens now reaps its leftover logs, state and sockets at session start.** Oversized tool-result spill logs, saved session state, endpoint sockets whose owner process is gone, and project data directories whose project no longer exists used to accumulate forever; a disk audit measured 431 MB of project directories, 16 spill files from September, and 36 stale sockets on one machine. The session-start sweep now reaps each of these past its retention window. A project data directory goes only after 30 days, only when no path on disk can still be the project it was named for, and never on Windows; anything the sweep cannot judge stays. (refs #5702)
+
+#### Security
+
+- **A directory named with a backslash no longer counts as inside the project.** On Linux and macOS, a sibling directory such as `proj\evil` next to the session root `proj` was treated as part of it, so edits there got session treatment. (refs #2556)
+
+- **On Windows, an untrusted project's gopls or rust-analyzer no longer runs through a sibling file.** When `$GOPATH\bin` or `$CARGO_HOME\bin` sat inside the repository and pi did not trust it, pi-lens refused the project's `<tool>.exe` but still offered the extensionless name, which Windows completes to any `.cmd`, `.bat` or `.com` beside it. The extensionless name is now withheld from an untrusted project directory, and refusing a sibling file that exists there is recorded as `trust-refusal`. (refs #5715)
+
+### Internal
+
+<details>
+<summary>10 internal changes: tests, CI, tooling, and refactors</summary>
+
+- A settled `publishes after save only` cell in the LSP capability matrix now changes only after two nights agree, as `clean-behavior` does. One night's silent no-save arm had flipped powershell from `no` to `yes (saved write)` on 2026-11-15. (refs #3405)
+
+- The idle-eviction doc's `result`, `reason`, `respawn` and `coverage` cells now change only after two nights agree, a night that could not spawn a server leaves its row alone, and the nightly seed step restores the doc with the matrix, so one night's reading no longer flips a row (opengrep on 2026-11-14) and a move between `unavailable` and `eligible` (csharp, dart, fsharp, go and ruby on 2026-11-06) waits for its second agreeing night. A census names the hold or the reason for every generated measured column. (refs #5667)
+
+- The `--no-lens` control case in `tests/index-4913-cli-flag-timing.test.ts` and the mark-only turn case in `tests/index-4698-mark-only-turn-gate.test.ts` no longer carry the process's one-time cold start inside their 5 s cap, so both keep their headroom on a slow CI runner, and their stale timeout-headroom baseline rows are gone. (refs #5731)
+
+- The whole-module `vi.mock` export ratchet now reds on a baseline count above the live count, as the flake-shape and LSP-double ratchets do. (refs #4907)
+
+- The PR-gating `host range · newest-in-range` lane now installs the newest stable pi (the npm dist-tag `latest`) with no hand-kept ceiling, so a new pi release is exercised by a gating lane at once; a registry failure resolving `latest` fails the lane closed. The `PI_HOST_SUPPORTED_RANGE` ceiling is gone and the floor stays 0.86.1. (refs #5749)
+
+- The nightly LSP census tracker files its drift issue only when a census output is not success. A job failure outside the census no longer files an issue with an empty census section (refs #5676).
+
+- The `forgetTurnSession` FileTime test now passes on macOS. It looked up FileTime
+  under the temp directory's linked spelling, while the read guard stamps a
+  file's resolved path, so it failed whenever `TMPDIR` was a link. (refs #5716)
+
+- Test workers no longer inherit the shell's active Python environment. An
+  exported `VIRTUAL_ENV`, `CONDA_PREFIX` or `UV_PROJECT_ENVIRONMENT`, and the bin
+  directory activation put on PATH, gave every test that environment's tools.
+  A developer with a global venv active saw tests read its pyright and pytest. (refs #5712)
+
+- The Qodo review bot is retired: its trial ended and its billing notice read as unanswered findings at the land gate. `.pr_agent.toml` is deleted; CodeRabbit and Greptile keep their configs. (refs #4685)
+
+- Four process-wide slots (the spawn-timeout cooldown, the opaque baseline store, the probe-home memo and safe-spawn's lifetime registry) now live behind `getProcessSingleton`, and a new sweep (`tests/config/process-slot-sweep.test.ts`) reds a hand-rolled `globalThis`, `Symbol.for` or `process` slot outside it. (refs #4907)
+
+</details>
+
 ## [4.5.1] - 2026-11-16
 
 ### Added

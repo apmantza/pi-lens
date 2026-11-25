@@ -1694,8 +1694,6 @@ const SEEDED_OFFENDERS: Readonly<Record<string, PathKeyReason>> = {
 	"tests/scripts/release-qa.test.ts#row:11e81b7f#PATH": "spread-override",
 	"tests/scripts/release-qa.test.ts#row:ca835e61#PATH": "spread-override",
 	"tests/scripts/release-qa.test.ts#row:f4153f23#PATH": "spread-override",
-	"tests/scripts/resolve-newest-in-range-host.test.ts#runCli:2b7ac868#PATH":
-		"spread-override",
 	"tests/scripts/resolve-newest-in-range-host.test.ts#runCli:7b47e8d1#PATH":
 		"spread-override",
 	"tests/support/lane-check-kit.ts#runLane:f2fe9f48#PATH": "spread-override",

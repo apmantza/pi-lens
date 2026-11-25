@@ -103,6 +103,39 @@ describe("biome-check runner", () => {
 		}
 	});
 
+	// RECURRENCE THIS PREVENTS: #4907. biome-check imported resolveRunnerCwd from
+	// a second copy in runner-helpers.ts, so a change to the owner in tool-cwd.ts
+	// reached 44 runners and not this one, and no cell here read the spawn cwd.
+	// The lint spawn takes the dispatch context's cwd, resolved by the shared
+	// seam, and not the host's process cwd.
+	it("spawns the biome lint with the dispatch context's cwd, not the host's (#4907)", async () => {
+		const env = setupTestEnvironment("pi-lens-biome-check-cwd-");
+		try {
+			const filePath = path.join(env.tmpDir, "sample.ts");
+			fs.writeFileSync(filePath, "const x = 1\n");
+			safeSpawnAsync.mockResolvedValue({
+				error: null,
+				status: 0,
+				stdout: JSON.stringify({ diagnostics: [] }),
+				stderr: "",
+			});
+
+			const runner = (
+				await import("../../../../clients/dispatch/runners/biome-check.js")
+			).default;
+
+			await runner.run(createCtx(filePath, env.tmpDir) as never);
+
+			const lint = safeSpawnAsync.mock.calls.find((call) =>
+				(call[1] as string[])?.includes("lint"),
+			) as [string, string[], { cwd?: string } | undefined] | undefined;
+			expect(lint).toBeDefined();
+			expect(lint?.[2]?.cwd).toBe(env.tmpDir);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	// RECURRENCE THIS PREVENTS: #4130 item 3. A biome that resolved and then
 	// failed to spawn returned a bare skip, which the smoke classifier read as
 	// "tool absent".

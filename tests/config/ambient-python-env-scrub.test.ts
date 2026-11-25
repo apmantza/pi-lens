@@ -15,13 +15,18 @@
  * the owner actually reads.
  */
 
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import * as path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { detectPythonEnvironment } from "../../clients/python-environment.js";
 import {
 	AMBIENT_PYTHON_ENVIRONMENT_VARIABLES,
 	hasAmbientPythonEnvironment,
 } from "../../clients/python-ambient-environment.js";
+import { setupTestEnvironment } from "../clients/test-utils.js";
 import { pathWithoutActivePythonEnvironments } from "../support/ambient-python-scrub.js";
+import { importSpecifiers } from "../support/module-instance-scan.js";
+import { stripSource } from "../support/sweep-kit.js";
 
 describe("ambient Python environment scrub", () => {
 	it("leaves no ambient Python environment channel in the worker", () => {
@@ -31,13 +36,72 @@ describe("ambient Python environment scrub", () => {
 		expect(leaked).toEqual([]);
 		expect(hasAmbientPythonEnvironment()).toBe(false);
 	});
+});
 
-	it("scrubs every channel the owner reads, VIRTUAL_ENV included", () => {
-		expect(hasAmbientPythonEnvironment({ VIRTUAL_ENV: "/venv" })).toBe(true);
-		for (const name of AMBIENT_PYTHON_ENVIRONMENT_VARIABLES) {
-			expect(hasAmbientPythonEnvironment({ [name]: "/env" }), name).toBe(true);
+// Recurrence: the case that stood here looped over the scrubbed list and asked
+// `hasAmbientPythonEnvironment` about each name, which is true by construction.
+// Dropping CONDA_PREFIX, or UV_PROJECT_ENVIRONMENT, from the list left it green
+// (measured on master dfdd854ed: the uv drop reddened no case in this file), so
+// a channel the owner reads could reach every worker. The channel names below
+// are spelled here, apart from the scrubbed list, and each one is first shown to
+// be read by the real owner, `detectPythonEnvironment`.
+describe("the scrub covers every channel detectPythonEnvironment reads", () => {
+	const OWNER_CHANNELS = [
+		{ variable: "UV_PROJECT_ENVIRONMENT", source: "uv-project-environment" },
+		{ variable: "VIRTUAL_ENV", source: "virtual-env" },
+		{ variable: "CONDA_PREFIX", source: "conda" },
+	] as const;
+
+	it("adopts, names and drops the PATH entry of each channel the owner reads", async () => {
+		for (const { variable, source } of OWNER_CHANNELS) {
+			const env = setupTestEnvironment("pi-lens-ambient-scrub-");
+			try {
+				const project = path.join(env.tmpDir, "project");
+				const home = path.join(env.tmpDir, "home");
+				const venv = path.join(env.tmpDir, "venv");
+				const binDir = path.join(
+					venv,
+					process.platform === "win32" ? "Scripts" : "bin",
+				);
+				mkdirSync(project, { recursive: true });
+				mkdirSync(home, { recursive: true });
+				mkdirSync(binDir, { recursive: true });
+				// uv applies UV_PROJECT_ENVIRONMENT only where the directory is a project.
+				writeFileSync(
+					path.join(project, "pyproject.toml"),
+					'[project]\nname = "scrub-probe"\nversion = "0"\n',
+				);
+				writeFileSync(
+					path.join(
+						binDir,
+						process.platform === "win32" ? "python.exe" : "python",
+					),
+					"",
+				);
+				vi.stubEnv(variable, venv);
+
+				const adopted = await detectPythonEnvironment(project, home);
+
+				expect(adopted?.source, `${variable}: owner source`).toBe(source);
+				expect(
+					hasAmbientPythonEnvironment({ [variable]: venv }),
+					`${variable}: named by the scrubbed list`,
+				).toBe(true);
+				expect(
+					pathWithoutActivePythonEnvironments(
+						{
+							[variable]: venv,
+							PATH: [binDir, "/usr/bin"].join(path.delimiter),
+						},
+						process.platform,
+					),
+					`${variable}: PATH entry dropped`,
+				).toBe("/usr/bin");
+			} finally {
+				vi.unstubAllEnvs();
+				env.cleanup();
+			}
 		}
-		expect(AMBIENT_PYTHON_ENVIRONMENT_VARIABLES).toContain("VIRTUAL_ENV");
 	});
 });
 
@@ -103,16 +167,20 @@ describe("what the worker setup loads for the scrub (#5713 CI)", () => {
 	// real node:fs, and the suites that mock node:fs to count path probes read
 	// zero. A test in the same worker cannot observe its own setup's load order,
 	// so this pins the two modules' import specifiers instead.
+	// Recurrence: the scan here read raw text for double-quoted `import ... from`
+	// at line start, so `export * from`, a single-quoted import and a top-level
+	// `await import()` of path-utils in the scrub left it green, while a block
+	// comment line that began with `import` counted as an import. It now reads
+	// comment-blanked text (string literals kept: the specifier is the evidence)
+	// through the shared `importSpecifiers`, which knows every binding form.
 	it("imports only Node built-ins and the leaf channel module", () => {
 		const specifiers = (file: string): string[] =>
-			[
-				...readFileSync(file, "utf8").matchAll(
-					/^import\s+(?:[^;]*?\s+from\s+)?"([^"]+)";/gms,
-				),
-			].map((match) => match[1] ?? "");
+			importSpecifiers(
+				stripSource(readFileSync(file, "utf8"), { strings: "keep" }),
+			).sort();
 		expect(specifiers("tests/support/ambient-python-scrub.ts")).toEqual([
-			"node:path",
 			"../../clients/python-ambient-environment.js",
+			"node:path",
 		]);
 		expect(specifiers("clients/python-ambient-environment.ts")).toEqual([
 			"node:path",

@@ -382,7 +382,7 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"`gem install <gem> --bindir <pi-lens bin>` — installs into pi-lens's own bin directory",
 	],
 	[
-		"clients/mcp/review.ts#analyzeFileFresh:3ac7e2fe",
+		"clients/mcp/review.ts#analyzeFileFresh:12cbe8fa",
 		"forks the review worker with `process.execPath`; the project it must analyse is passed explicitly as the `--cwd=<dir>` argv flag, so the child's own directory is not the channel",
 	],
 	[

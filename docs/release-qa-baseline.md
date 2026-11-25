@@ -148,17 +148,21 @@ extension lists one any other way, and a narrower pi-tui range turned a raw
 `npm i` with a current pi-tui at the top level into a hard ERESOLVE while
 `pi install` (which runs `--legacy-peer-deps`) showed users nothing.
 
-The window pi-lens actually supports is therefore not in `package.json`. It is
-`PI_HOST_SUPPORTED_RANGE` in `.github/workflows/install-smoke.yml` (the
-newest-in-range lane reads it, bounded above so `"*"` can never mean
-`@latest`), and `tests/packaging.test.ts` pins it against the hosts this
-matrix has passed on. A newer host enters the window in ONE change: run this
-matrix on it, add it to that test's verified list, and move the workflow's
-ceiling together. P1 is one verified host per minor line from 0.86 onward;
-0.86–1.5 are in-window, and every minor line below 0.86 falls outside the
-window entirely, so none needs a dedicated host. A ceiling past an unrun
-minor still claims that minor, so the verified-minor ratchet names the admitted
-lines explicitly.
+The window pi-lens actually supports is therefore not in `package.json`, and it
+has no hand-kept ceiling (#5749, maintainer decision 2026-11-22). Its lower end
+is `PI_HOST_FLOOR_VERSION` in `.github/workflows/install-smoke.yml`; its upper
+end is always the newest stable pi, the npm dist-tag `latest`. The gating
+newest-in-range lane resolves that tag on every run and installs it (no
+prerelease; if the registry cannot answer, the lane fails closed and never
+falls back to an older host), so a new pi release is exercised by a gating lane
+without anyone bumping a range. `tests/packaging.test.ts` derives the window
+from the floor and pins it against the hosts this matrix has passed on. A
+release-QA run on a newer host extends the `Verified hosts` table below: the
+table is evidence about a host, no longer a gate on the lane.
+P1 is one verified host per minor line from 0.86 onward; 0.86 onward are in-window,
+and every minor line below 0.86 falls outside the window entirely, so none needs
+a dedicated host. A minor line above the newest verified one is inside the window
+and tested by the gating lane, but not release-QA verified until its row lands.
 
 The floor is 0.86.1 (#4688, maintainer decision 2026-10-20). 0.80–0.85 are
 out of the window: since #4644 pi-lens injects context only from a `context`
@@ -171,12 +175,13 @@ the old hosts; a real 0.80.10 session delivered the staged guidance at
 
 ### Verified hosts
 
-The certified policy is `>=0.86.1 <1.6.0`, and this table is the whole verified
-set: `tests/packaging.test.ts` fails when it and `PI_HOST_SUPPORTED_RANGE`
-disagree. Each listed minor line through 1.4 has a release-QA witness; 1.5 was
-certified by maintainer decision on 2026-11-02, with its witness blocked by
-the lane npm guard. The workflow ceiling
-and `tests/packaging.test.ts` list are updated together.
+The certified policy is `>=0.86.1`, with no upper end (the newest stable pi is
+inside the window the day it ships, #5749), and this table is the whole verified set:
+`tests/packaging.test.ts` fails when it and the workflow's floor disagree. Each
+listed minor line through 1.4 has a release-QA witness; 1.5 was certified by
+maintainer decision on 2026-11-02, with its witness blocked by the lane npm
+guard. Add a host here, together with that test's list, after release-QA has
+run on it.
 
 | host | date | pi-lens commit | result |
 | --- | --- | --- | --- |

@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
+import { hashContentBytes } from "../content-stamp.js";
 import { PathKeyedMap } from "../path-keyed-map.js";
 import { normalizeEphemeralMapKey } from "../path-utils.js";
 
@@ -620,7 +620,7 @@ export function auxiliaryCoverageGap(
  * CRLF and BOM bytes identically. See `createDiskBindingCache`.
  */
 export function hashDiagnosticContent(content: string): string {
-	return createHash("sha256").update(content).digest("hex");
+	return hashContentBytes(Buffer.from(content, "utf8"));
 }
 
 /**

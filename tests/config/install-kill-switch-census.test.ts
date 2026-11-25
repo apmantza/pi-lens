@@ -833,6 +833,8 @@ const SEAM =
 	"the spawn chokepoint's own forwarding between its entry points, its tool-probe wrapper, or a fixed process-table query (ps/wmic), which take their command from a caller already counted here";
 const PM =
 	"a package-manager query or run-script (config get prefix, bin -g, the repo's rebuild script), not an install verb";
+const REVIEW =
+	"the repo's rebuild script through its package manager (not an install verb), and the fresh-analyze worker: the running node on pi-lens's own worker file, which installs nothing";
 const LSP =
 	"language-server launch and install code: its installs follow PI_LENS_DISABLE_LSP_INSTALL (canInstall in clients/lsp/server.ts, a separate switch), and its probes (java finder, --version) install nothing";
 const OPERAND =
@@ -900,8 +902,10 @@ const ROWS: Readonly<Record<string, Row>> = {
 			],
 		},
 	}),
+	...because(REVIEW, {
+		"clients/mcp/review.ts#safeSpawnAsync": 2,
+	}),
 	...because(PM, {
-		"clients/mcp/review.ts#safeSpawnAsync": 1,
 		"clients/package-manager.ts#probeToolAsync": 1,
 		"clients/package-manager.ts#safeSpawnAsync": 1,
 	}),

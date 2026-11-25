@@ -10,8 +10,8 @@
  *
  * THE CERTIFIED LIST HAS ONE OWNER: the `### Verified hosts` table in
  * `docs/release-qa-baseline.md`. `tests/packaging.test.ts` ties that table to
- * `PI_HOST_SUPPORTED_RANGE`, so the table is already the set a host claim may
- * name. The parser lives here and both readers import it, because a second
+ * the floor `PI_HOST_FLOOR_VERSION`, so the table is already the set a host
+ * claim may name. The parser lives here and both readers import it, because a second
  * copy of "which rows count as verified" is how the spread and the packaging
  * ratchet would drift apart.
  *

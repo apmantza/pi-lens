@@ -931,7 +931,7 @@ function resolveOldTextEdits(
 		Math.min(...starts),
 		Math.max(...ends),
 	];
-	const editRanges = resolvedRanges.length > 1 ? resolvedRanges : undefined;
+	const editRanges = resolvedRanges.length > 0 ? resolvedRanges : undefined;
 	logBatchEvent({
 		event: "touched_lines_detected",
 		sessionId,

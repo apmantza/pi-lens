@@ -182,6 +182,48 @@ describe("formatter PATH probes (#1495)", () => {
 		expect(await names(cwd, filePath)).toEqual(["rustfmt"]);
 	});
 
+	// Recurrence: package-manager.ts logs the finder's evidence on every
+	// unavailable row (#1500: a reader judges the verdict without re-running
+	// the probe); this twin classified the same failures through the same
+	// `classifyFinderFailure` and dropped the evidence, so a formatter held
+	// off by a spawn failure, a timeout or an absence left a bare row.
+	it.each([
+		{
+			name: "a timeout",
+			result: timeoutResult,
+			evidence: {
+				status: null,
+				failure: "timeout",
+				spawnFailureKind: "timeout",
+			},
+		},
+		{
+			name: "a genuine absence",
+			result: notFoundResult,
+			evidence: { status: 1 },
+		},
+		{
+			name: "an unspawnable prober",
+			result: proberUnspawnableResult,
+			evidence: {
+				status: null,
+				failure: "spawn",
+				spawnFailureKind: "permission-denied",
+				errno: "EACCES",
+			},
+		},
+	])("records the finder's evidence on the row for $name", async (probe) => {
+		const { cwd, filePath } = rustFile();
+		safeSpawnAsync.mockImplementation(async () => probe.result);
+		await names(cwd, filePath);
+
+		expect(decisions()[0]?.metadata).toMatchObject({
+			tool: "rustfmt",
+			verdict: "unavailable",
+			evidence: probe.evidence,
+		});
+	});
+
 	it("keeps a stalled probe from suppressing an unrelated language", async () => {
 		// The first cut counted transients process-wide, so one stalled
 		// `which rustfmt` stopped a shell detection from caching and stamped

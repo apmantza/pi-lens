@@ -1234,7 +1234,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// (`path.join(dir, entry.name)` for the stat) and joins candidates
 		// with `path.posix.join`.
 		"clients/file-utils.ts": 69,
-		"clients/finding-identity.ts": 2,
 		"clients/fix-worklog.ts": 3,
 		// 3 -> 2, 16 -> 15 (#4689): the formatter is handed `realpathOrResolve`,
 		// not a `path.resolve` of the spelling it was given. 2 -> 3 (#4675 F2):
@@ -1383,7 +1382,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 111 -> 114 (#5504): `findTypeScriptNativeAlias` joins the alias
 		// directory and its manifest and resolves its `bin.tsc` against it:
 		// three filesystem path uses on the same probe.
-		"clients/lsp/server.ts": 114,
+		// 114 -> 113 (#5728): folding IgnoreHomeRoot onto isAtOrAboveHomeDir
+		// replaces `path.resolve(root)` with `realpathOrResolve(root)`.
+		"clients/lsp/server.ts": 113,
 		"clients/lsp/session-roots.ts": 7,
 		// 13 -> 15 (#4346): a creation's path joins the entry's dependency
 		// scope test (Go package directory, created-file stem/directory names).
@@ -2026,7 +2027,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lsp/launch.ts": 1,
 		"clients/lsp/server.ts": 4,
 		"clients/mcp/analyze.ts": 9,
-		"clients/mcp/review.ts": 1,
+		// 1 -> 3 (fresh-analyze fork on the spawn seam): the worker's exit
+		// check and its error text read `SpawnResult.status`.
+		"clients/mcp/review.ts": 3,
 		// #5087: `SpawnResult.status`, the git exit code of the default-branch
 		// read (for-each-ref, show); the spawn seam names the field.
 		"clients/metrics/complexity-baseline.ts": 2,
