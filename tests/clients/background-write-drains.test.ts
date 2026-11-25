@@ -232,6 +232,45 @@ describe("background write drains across module copies (#4937)", () => {
 		expect(await lateProbeCacheUpdate(false)).toEqual(["probe-tool"]);
 	});
 
+	// Recurrence: #5745 r10, the same edge for the snapshot writer: a persist
+	// a later drain started after the snapshot drain had run was in no pass.
+	it("waits for a snapshot persist a later drain started, in another pass", async () => {
+		const env = setupTestEnvironment("bwd-snapshot-late-");
+		let other: typeof import("../../clients/project-snapshot.js") | undefined;
+		try {
+			pinEnv(path.join(env.tmpDir, "home"), path.join(env.tmpDir, "data"));
+			vi.resetModules();
+			const snapshots = await import("../../clients/project-snapshot.js");
+			other = snapshots;
+			const snapshot = JSON.parse(
+				fs.readFileSync(path.join(CORPUS, "snapshot.json"), "utf-8"),
+			) as ProjectSnapshot;
+			const cwd = path.join(env.tmpDir, "project");
+			process.env.PI_LENS_TEST_SNAPSHOT_PERSIST_WORKER_DELAY_MS = "400";
+			let started = false;
+			async function lateSnapshotPersistForTests(): Promise<
+				string | undefined
+			> {
+				if (started) return undefined;
+				started = true;
+				snapshots.saveProjectSnapshot(cwd, snapshot);
+				return undefined;
+			}
+			registerBackgroundWriteDrain(lateSnapshotPersistForTests, () => false);
+
+			await drainRegisteredBackgroundWritesForTests();
+
+			expect(snapshots.getProjectSnapshotPersistStateForTests(cwd).active).toBe(
+				false,
+			);
+			expect(fs.existsSync(snapshots.getProjectSnapshotPath(cwd))).toBe(true);
+		} finally {
+			await other?.waitForProjectSnapshotPersistsForTests();
+			await other?.terminateProjectSnapshotPersistWorkerForTests();
+			env.cleanup();
+		}
+	}, 30_000);
+
 	// Recurrence: #5745 r10. The runner repeats passes until no drain reports
 	// pending work, so a pending signal that never clears would hold a file's
 	// teardown until the hook timeout cut it, with no record of why. The
