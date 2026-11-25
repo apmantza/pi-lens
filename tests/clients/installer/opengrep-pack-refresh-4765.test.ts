@@ -92,7 +92,8 @@ type ServerMode =
 	| "oversize"
 	| "offline"
 	| "gzip-json"
-	| "json";
+	| "json"
+	| "drip";
 let server: http.Server;
 let baseUrl: string;
 let mode: ServerMode;
@@ -106,6 +107,25 @@ beforeAll(async () => {
 			res.writeHead(500).end("boom");
 		} else if (mode === "garbage") {
 			res.writeHead(200).end("<html>captive portal</html>");
+		} else if (mode === "drip") {
+			// One byte per ~20 ms, forever: it never trips an idle timeout. Paced by
+			// the governed `waitFor`, not a raw timer (the flake-shape ratchet).
+			res.writeHead(200);
+			let closed = false;
+			res.on("close", () => {
+				closed = true;
+			});
+			void (async () => {
+				while (!closed) {
+					res.write("x");
+					const next = Date.now() + 20;
+					await waitFor(
+						() => (closed ? Number.POSITIVE_INFINITY : Date.now()),
+						(now) => now >= next,
+						{ timeoutMs: 2000 },
+					);
+				}
+			})();
 		} else if (mode === "oversize") {
 			res.writeHead(200);
 			const chunk = Buffer.alloc(1024 * 1024, "a");
@@ -131,6 +151,9 @@ beforeAll(async () => {
 
 afterAll(async () => {
 	vi.unstubAllEnvs();
+	// A downloader that ignored its deadline leaves the drip connection open;
+	// close it so the failure is the test's assertion, not a hung hook.
+	server.closeAllConnections();
 	await new Promise<void>((resolve) => server.close(() => resolve()));
 	fs.rmSync(TEST_HOME, { recursive: true, force: true });
 });
@@ -311,6 +334,34 @@ describe.skipIf(process.platform === "win32")(
 			expect(await refreshOpengrepRulePack(NOW)).toBe("refreshed");
 			expect(fs.readFileSync(CACHED, "utf-8")).toBe(body);
 			expect(fs.readFileSync(CACHED, "utf-8").startsWith("rules:")).toBe(true);
+		});
+
+		// #5781 F1/F4: the pack was bounded by `AbortSignal.timeout(60 s)` before it
+		// moved onto the shared downloader, which only had an idle timeout; a server
+		// dripping a byte per window then held the single-flight refresh slot for as
+		// long as it liked. The 60 s is the pack's own constant, so the test swaps
+		// only that timer for a short one and asserts the call asked for 60 s.
+		it("fails a slow-drip registry at its 60 s elapsed deadline instead of holding the refresh slot", async () => {
+			mode = "drip";
+			const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+			const asked: number[] = [];
+			const spy = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+				asked.push(ms);
+				return realTimeout(ms === 60_000 ? 200 : ms);
+			});
+			try {
+				expect(await refreshOpengrepRulePack(NOW)).toBe("failed");
+			} finally {
+				spy.mockRestore();
+			}
+			expect(asked).toContain(60_000);
+			expect(fs.existsSync(CACHED)).toBe(false);
+			expect(leftoverCandidates()).toEqual([]);
+			expect(packDegradations().map((d) => d.reason)).toEqual([
+				expect.stringMatching(/elapsed deadline/),
+			]);
+			expect(shimCalls()).toBe(0);
+			expect(await packStamp()).toMatchObject({ checkedAt: NOW, failed: true });
 		});
 
 		it("rejects a JSON body outright, keeping the current pack", async () => {

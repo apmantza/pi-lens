@@ -1141,9 +1141,19 @@ async function downloadOpengrepPack(
 		url,
 		destination,
 		5,
+		// `identity` is load-bearing: semgrep.dev/c/auto answers a client that
+		// accepts gzip with the rule set as JSON, and one that does not with YAML
+		// (measured 2026-10-23). The CLI loads either from a `.yaml` file; the
+		// language server loads the JSON as zero rules and publishes empty
+		// diagnostics, which would turn a cached pack into a silent clean scan.
 		{ "Accept-Encoding": "identity" },
 		PACK_MAX_BYTES,
+		// Idle bound (no bytes for 60 s) and elapsed bound (60 s in all, redirect
+		// hops included): a server that trickles a byte per window never trips the
+		// idle one, and a refresh stuck in the single-flight slot blocks every
+		// later refresh in the process.
 		PACK_FETCH_TIMEOUT_MS,
+		AbortSignal.timeout(PACK_FETCH_TIMEOUT_MS),
 	);
 	// Fail closed on the form the language server cannot load (see above).
 	if (result.prefix.toString("utf-8").trimStart().startsWith("{"))

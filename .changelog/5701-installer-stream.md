@@ -4,4 +4,4 @@ audience: user
 area: install
 ---
 
-- **Installer downloads now stream through bounded temporary files.** Large release and rule-pack downloads no longer accumulate whole network bodies in memory, and stalled downloads are timed out with partial files removed. (refs #5701)
+- **The Opengrep rule pack now streams to disk, and release metadata is size-capped.** The pack download no longer holds its whole body in memory, a pack download that outlasts 60 seconds is cut off with its partial file removed, and a GitHub release answer past 2 MiB is refused. (refs #5701)

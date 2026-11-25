@@ -18,6 +18,16 @@ export class InstallerDownloadError extends globalThis.Error {
 	}
 }
 
+/**
+ * Download `url` to `destination`, streaming through a byte cap and a digest.
+ *
+ * Two bounds, both rejecting `timeout` and removing the partial file: `timeoutMs`
+ * is an idle timeout (no socket activity), which a server that trickles one
+ * byte per window never trips; `signal` is the elapsed deadline a caller wants
+ * over the whole download, redirect hops included (#5781). The caller creates
+ * it once (`AbortSignal.timeout(ms)`) and every hop reuses that one signal, so a
+ * redirect cannot restart the clock.
+ */
 export function downloadInstallerFile(
 	url: string,
 	destination: string,
@@ -25,6 +35,7 @@ export function downloadInstallerFile(
 	headers: Record<string, string> = {},
 	maxBytes = MAX_BYTES,
 	timeoutMs = TIMEOUT_MS,
+	signal?: AbortSignal,
 ): Promise<{ bytes: number; sha256: string; prefix: Buffer }> {
 	return new Promise((resolve, reject) => {
 		let settled = false;
@@ -33,9 +44,17 @@ export function downloadInstallerFile(
 			settled = true;
 			void fs.rm(destination, { force: true }).finally(() => reject(error));
 		};
+		// The deadline signal destroys the request, so the request's own `error`
+		// event carries it (the response error that follows loses the race to
+		// `settled`); report it as the deadline, not as an AbortError.
+		const deadlineExceeded = () =>
+			new InstallerDownloadError(
+				"timeout",
+				"download exceeded its elapsed deadline",
+			);
 		const request = (url.startsWith("http:") ? http : https).get(
 			url,
-			{ headers: { "User-Agent": "pi-lens/1.0", ...headers } },
+			{ headers: { "User-Agent": "pi-lens/1.0", ...headers }, signal },
 			(res) => {
 				if (
 					res.statusCode &&
@@ -70,6 +89,7 @@ export function downloadInstallerFile(
 						nextHeaders,
 						maxBytes,
 						timeoutMs,
+						signal,
 					).then(resolve, fail);
 					return;
 				}
@@ -165,10 +185,12 @@ export function downloadInstallerFile(
 			fail(
 				error instanceof InstallerDownloadError
 					? error
-					: new InstallerDownloadError(
-							"network",
-							`download failed: ${error.message}`,
-						),
+					: signal?.aborted
+						? deadlineExceeded()
+						: new InstallerDownloadError(
+								"network",
+								`download failed: ${error.message}`,
+							),
 			),
 		);
 	});
