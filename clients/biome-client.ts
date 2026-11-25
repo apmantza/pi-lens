@@ -25,6 +25,7 @@ import { biomeConfigArgs } from "./tool-policy.js";
 import { resolveToolCwd } from "./tool-cwd.js";
 import {
 	type ClientAvailabilityResult,
+	resolveInstalledToolCommand,
 	resolveManagedToolClient,
 } from "./dispatch/runners/utils/runner-helpers.js";
 import {
@@ -114,64 +115,46 @@ export class BiomeClient {
 		const resolveCwd = cwd ?? process.cwd();
 		const cached = this.localBinaryByCwd.get(resolveCwd);
 		if (cached) return { cmd: cached, args: [] };
+		// The availability sweep has no project cwd. Keep its dedicated npx and
+		// install-client path; analysis spawns with a cwd use the shared ladder.
+		if (cwd === undefined) {
+			const isWin = process.platform === "win32";
+			const piLensBin = path.join(
+				getGlobalPiLensDir(),
+				"tools",
+				"node_modules",
+				".bin",
+			);
+			const localBiome = localBinPath(
+				findLocalBinAt("biome", resolveCwd, {
+					windowsExt: ".cmd",
+					isWindows: isWin,
+				}),
+			);
+			if (localBiome) return { cmd: localBiome, args: [] };
+			if (this.autoInstalledBinaryPath) {
+				return { cmd: this.autoInstalledBinaryPath, args: [] };
+			}
+			const managed = isWin
+				? [path.join(piLensBin, "biome.cmd"), path.join(piLensBin, "biome")]
+				: [path.join(piLensBin, "biome")];
+			for (const candidate of managed) {
+				if (fs.existsSync(candidate)) return { cmd: candidate, args: [] };
+			}
+			const global = await findGlobalBinary("biome");
+			if (global) return { cmd: global, args: [] };
+			return { cmd: "npx", args: ["@biomejs/biome"] };
+		}
 
-		// Check `<cwd>/node_modules/.bin/biome` BEFORE trusting
-		// `autoInstalledBinaryPath` (#1731). NOT a walk, despite what this
-		// comment claimed until #2544 review F1 — the candidates below are
-		// joined onto `resolveCwd` and nothing climbs. Callers pass the edited
-		// file's own project/sub-package root (see above), which is where an
-		// npm-workspace install puts the shim; converting this to the shared
-		// ancestor walk is a behaviour change with no reported defect behind
-		// it, so it is deliberately NOT part of #2514's ceiling fold. That
-		// field is set once, the first
-		// time `ensureAvailable()` auto-installs for ANY cwd this session, and
-		// every later call for every OTHER cwd short-circuited on it — so a
-		// project that ships its own biome never won once the session's first
-		// managed install had already happened. Project-local-first (discipline
-		// B, #1721) means the project's pinned version and config resolution
-		// always outrank a managed copy, autoinstalled or not.
-		// On Windows prefer .cmd (native batch) over the sh wrapper — 2x faster.
-		const isWin = process.platform === "win32";
-		const piLensBin = path.join(
-			getGlobalPiLensDir(),
-			"tools",
-			"node_modules",
-			".bin",
-		);
-		// THE shared construction seam (#4268 HIGH-1): the project's own shim is
-		// resolved through the trust-gated lookup, never a private join, so it is
-		// refused under unknown/untrusted trust while the managed copy below runs.
-		const localBiome = localBinPath(
-			findLocalBinAt("biome", resolveCwd, {
-				windowsExt: ".cmd",
-				isWindows: isWin,
-			}),
-		);
-		if (localBiome) {
-			this.localBinaryByCwd.set(resolveCwd, localBiome);
-			return { cmd: localBiome, args: [] };
+		// The shared resolver owns the trust-gated project rung, version probe,
+		// managed fallback, and PATH order. Biome keeps only its npx fallback.
+		const resolved = await resolveInstalledToolCommand(resolveCwd, "biome");
+		if (resolved.command) {
+			this.localBinaryByCwd.set(resolveCwd, resolved.command);
+			return { cmd: resolved.command, args: [] };
 		}
 		if (this.autoInstalledBinaryPath) {
 			return { cmd: this.autoInstalledBinaryPath, args: [] };
-		}
-		// Also check ~/.pi-lens/tools (where ensureTool("biome") auto-installs),
-		// so we avoid the ~1.5s `npx @biomejs/biome --version` fallback when the
-		// tool is already installed but not in the project's node_modules.
-		const managedCandidates = isWin
-			? [path.join(piLensBin, "biome.cmd"), path.join(piLensBin, "biome")]
-			: [path.join(piLensBin, "biome")];
-		for (const p of managedCandidates) {
-			if (fs.existsSync(p)) {
-				this.localBinaryByCwd.set(resolveCwd, p);
-				return { cmd: p, args: [] };
-			}
-		}
-		// Any package manager's global bin dir (npm/pnpm/yarn/bun) before npx —
-		// catches `pnpm add -g @biomejs/biome` installs that PATH misses (#375).
-		const global = await findGlobalBinary("biome");
-		if (global) {
-			this.localBinaryByCwd.set(resolveCwd, global);
-			return { cmd: global, args: [] };
 		}
 		// Fallback: npx (slower but works anywhere)
 		return { cmd: "npx", args: ["@biomejs/biome"] };

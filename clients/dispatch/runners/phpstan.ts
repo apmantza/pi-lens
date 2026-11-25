@@ -38,7 +38,7 @@ import { finishParsedRun } from "./utils/tool-failure.js";
 // findings.
 const PHPSTAN_EXIT_CODES: ToolExitCodes = { ran: [1] };
 
-const phpstan = createAvailabilityChecker("phpstan", ".phar");
+const phpstan = createAvailabilityChecker("phpstan", ".bat");
 
 interface PhpstanError {
 	message: string;

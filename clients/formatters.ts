@@ -1259,7 +1259,8 @@ export const shfmtFormatter: FormatterInfo = {
 	detect: managedToolDetect(
 		"shfmt",
 		undefined,
-		async () => (await which("shfmt")) !== null,
+		async (cwd) =>
+			(await resolveInstalledToolCommand(cwd, "shfmt")).command !== null,
 	),
 };
 
@@ -1570,18 +1571,13 @@ export const styluaFormatter: FormatterInfo = {
 	name: "stylua",
 	command: ["stylua", "$FILE"],
 	extensions: [".lua"],
-	resolveCommand: managedFormatterResolver("stylua", [], (binary, cwd) =>
-		localBinPath(findLocalBinUpwards(binary, cwd)),
-	),
+	resolveCommand: managedFormatterResolver("stylua", []),
 	detect: managedToolDetect(
 		"stylua",
 		async (cwd) =>
 			(await findUp(["stylua.toml", ".stylua.toml"], cwd)).length > 0,
 		async (cwd) =>
-			Boolean(
-				localBinPath(findLocalBinUpwards("stylua", cwd)) ||
-				(await which("stylua")),
-			),
+			(await resolveInstalledToolCommand(cwd, "stylua")).command !== null,
 	),
 };
 
