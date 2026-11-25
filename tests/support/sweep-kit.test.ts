@@ -20,6 +20,7 @@ import {
 	assertNonEmptyScan,
 	assignNearestExclusive,
 	auditRegistry,
+	auditSymbolCounts,
 	bindTagsToSeams,
 	checkSeamEvidence,
 	findEnclosingSymbol,
@@ -1168,6 +1169,42 @@ describe("sweep-kit: auditRegistry", () => {
 			registered: ["a.ts", "b.ts"],
 		});
 		expect(audit.problems).toEqual([]);
+	});
+});
+
+describe("sweep-kit: auditSymbolCounts", () => {
+	// Recurrence: hook-await-bounds' HELPER_UNBOUNDED kept pins for three files
+	// (clients/lsp/index.ts, clients/python-environment.ts, tools/lsp-diagnostics.ts)
+	// that no hook handler imports any more, green, because the registered-or-fail
+	// audit permits a registered id nothing flags. A pin for a file the scan no
+	// longer measures pre-admits that file's old count if it comes back.
+	const counts = { "a.ts": 2, "b.ts": 5 };
+
+	it("passes when every pin matches the measured count", () => {
+		expect(
+			auditSymbolCounts({ sweepName: "probe pins", counts, pinned: counts })
+				.problems,
+		).toEqual([]);
+	});
+
+	it("reds on a pin for a file the scan no longer measures", () => {
+		const audit = auditSymbolCounts({
+			sweepName: "probe pins",
+			counts,
+			pinned: { ...counts, "gone.ts": 3 },
+		});
+		expect(audit.problems).toHaveLength(1);
+		expect(audit.problems[0]).toContain("1 pinned file(s) the scan no longer");
+		expect(audit.problems[0]).toContain("gone.ts");
+	});
+
+	it("still reds on a count that moved, as an unaccounted item", () => {
+		const audit = auditSymbolCounts({
+			sweepName: "probe pins",
+			counts: { "a.ts": 3, "b.ts": 5 },
+			pinned: counts,
+		});
+		expect(audit.unaccounted).toEqual(["a.ts@3"]);
 	});
 });
 

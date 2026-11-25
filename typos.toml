@@ -80,6 +80,12 @@ extend-ignore-re = [
   # `3dbe85a2b4e1` (docs/lsp-capability-matrix.md) split into the flagged `dbe`
   # and redded master after #4848. All-letter words stay checked.
   '`[0-9a-f]*[0-9][0-9a-f]*`',
+  # The all-contributors table in README.md links each contribution as
+  # `#<type>-<login>`, and a login is a name, not prose: `#code-ody` (Cody
+  # Herriges) split into the flagged `ody` and redded master after the 4.5.2
+  # credit (#5755). Ignore the anchor of the contribution types the table
+  # uses, not the word, so a real `ody` typo elsewhere still reds.
+  'href="#(?:bug|code|doc|ideas|maintenance|review|test|infra|tool|design|example|platform|security|research|question)-[A-Za-z0-9-]+"',
 ]
 
 # Dictionary tuning — reaches BOTH lanes (typos-lsp and typos-cli).

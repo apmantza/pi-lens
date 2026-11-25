@@ -73,7 +73,7 @@ describe("read-guard tool line helpers", () => {
 
 		const result = getTouchedLinesForGuard(event, "/src/file.ts");
 		expect(result.touchedLines).toEqual([45, 45]);
-		expect(result.editRanges).toBeUndefined();
+		expect(result.editRanges).toEqual([[45, 45]]);
 		expect(result.preflightError).toBeUndefined();
 	});
 
@@ -91,7 +91,7 @@ describe("read-guard tool line helpers", () => {
 
 		const result = getTouchedLinesForGuard(event, "/src/file.ts");
 		expect(result.touchedLines).toEqual([45, 48]);
-		expect(result.editRanges).toBeUndefined();
+		expect(result.editRanges).toEqual([[45, 48]]);
 		expect(result.preflightError).toBeUndefined();
 	});
 
@@ -225,7 +225,7 @@ describe("read-guard tool line helpers", () => {
 
 			const result = getTouchedLinesForGuard(event, filePath);
 			expect(result.touchedLines).toEqual([5, 7]);
-			expect(result.editRanges).toBeUndefined();
+			expect(result.editRanges).toEqual([[5, 7]]);
 			expect(result.preflightError).toBeUndefined();
 			expect(result.contentMatchValidated).toBe(true);
 		} finally {

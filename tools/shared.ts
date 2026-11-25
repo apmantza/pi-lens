@@ -5,6 +5,7 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Type } from "../clients/deps/typebox.js";
 import { expandPathsEntry } from "../clients/path-globs.js";
 import {
 	isAtOrAboveHomeDir,
@@ -297,6 +298,48 @@ export function defaultedCwdHomeRefusal(
 	return {
 		reason: "defaulted cwd resolves at or above home directory",
 		text: `Refused: no \`paths\` given and the working directory (${spelling}) resolves at or above the home directory — this would reach every unrelated tree under your home. Pass explicit \`paths\`, or run from a project directory.`,
+	};
+}
+
+/**
+ * The ast-grep parameters `ast_grep_search` and `ast_grep_replace` declare
+ * with the same name and the same meaning: the language, the match strictness
+ * and the five relational filters. One owner, so the two tools cannot
+ * advertise different words for one filter (they carried two inline copies).
+ * A factory, not a constant: each tool's schema gets its own fresh objects, so
+ * a host that edits one tool's schema cannot alter the other's. Key order is
+ * the order each tool spreads them in, which the registered schema keeps.
+ */
+export function astGrepSharedParams() {
+	return {
+		lang: Type.String({
+			description: "Language id, e.g. typescript, tsx, python, go.",
+		}),
+		strictness: Type.Optional(
+			Type.String({
+				enum: ["smart", "relaxed", "ast", "cst", "signature", "template"],
+				description: "Match strictness; default smart.",
+			}),
+		),
+		relational: {
+			insideKind: Type.Optional(
+				Type.String({ description: "Ancestor AST node kind filter." }),
+			),
+			hasKind: Type.Optional(
+				Type.String({ description: "Immediate child AST node kind filter." }),
+			),
+			hasDescendantKind: Type.Optional(
+				Type.String({
+					description: "Recursive descendant AST node kind filter.",
+				}),
+			),
+			follows: Type.Optional(
+				Type.String({ description: "Preceding sibling pattern filter." }),
+			),
+			precedes: Type.Optional(
+				Type.String({ description: "Following sibling pattern filter." }),
+			),
+		},
 	};
 }
 

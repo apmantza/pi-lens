@@ -30,10 +30,10 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import {
-	resolveRunnerCwd,
 	resolveToolCommandWithInstallFallback,
 	toolAbsentSkip,
 } from "./utils/runner-helpers.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 
