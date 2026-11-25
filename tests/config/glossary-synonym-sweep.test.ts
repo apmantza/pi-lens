@@ -1382,7 +1382,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 111 -> 114 (#5504): `findTypeScriptNativeAlias` joins the alias
 		// directory and its manifest and resolves its `bin.tsc` against it:
 		// three filesystem path uses on the same probe.
-		"clients/lsp/server.ts": 114,
+		// 114 -> 113 (#5728): folding IgnoreHomeRoot onto isAtOrAboveHomeDir
+		// replaces `path.resolve(root)` with `realpathOrResolve(root)`.
+		"clients/lsp/server.ts": 113,
 		"clients/lsp/session-roots.ts": 7,
 		// 13 -> 15 (#4346): a creation's path joins the entry's dependency
 		// scope test (Go package directory, created-file stem/directory names).
