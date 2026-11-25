@@ -26,7 +26,7 @@ import {
 	logAvailabilityDecision,
 	startHostStallSampler,
 } from "./dispatch/runners/utils/availability-policy.js";
-import { safeSpawnAsync } from "./safe-spawn.js";
+import { safeSpawnAsync, trustScopedEnvironment } from "./safe-spawn.js";
 import { probeToolAsync } from "./tool-probe.js";
 import { createAvailabilityProbeFlight } from "./availability-probe-flight.js";
 import {
@@ -387,7 +387,10 @@ const packageManagerCacheGeneration = createGenerationSource(
 const globalBinDirProbeFlights = createAvailabilityProbeFlight<string[]>();
 
 /** Directories where a given manager installs global binaries. */
-async function globalBinDirsFor(pm: NodePackageManager): Promise<string[]> {
+async function globalBinDirsFor(
+	pm: NodePackageManager,
+	env: NodeJS.ProcessEnv,
+): Promise<string[]> {
 	// #4530: keyed by trust scope too. Since #5632 every query runs from HOME, so
 	// the answer does not depend on trust, but the scope stays in the key: no
 	// trust change may serve an answer made under another trust after
@@ -402,7 +405,7 @@ async function globalBinDirsFor(pm: NodePackageManager): Promise<string[]> {
 	// Concurrent callers (dispatch runs several tools per edit) must share ONE
 	// probe rather than each spawning their own `npm config get prefix` (#1602).
 	const shared = globalBinDirProbeFlights.run(key, () =>
-		probeGlobalBinDirs(pm, key, generation),
+		probeGlobalBinDirs(pm, key, generation, env),
 	);
 	return shared.promise;
 }
@@ -411,6 +414,7 @@ async function probeGlobalBinDirs(
 	pm: NodePackageManager,
 	key: string,
 	generation: GenerationHandle,
+	env: NodeJS.ProcessEnv,
 ): Promise<string[]> {
 	if (pm === "bun") {
 		// bun has no per-call query cost — the global bin dir is deterministic.
@@ -436,6 +440,7 @@ async function probeGlobalBinDirs(
 	const res = await safeSpawnAsync(pmBinary(pm), query, {
 		timeout: 5000,
 		cwd: os.homedir(),
+		env,
 	});
 	if (res.status !== 0 || res.error) return [];
 	const out = res.stdout.trim();
@@ -464,12 +469,33 @@ async function probeGlobalBinDirs(
  */
 export async function allAvailableGlobalBinDirs(
 	onTransient?: () => void,
+	rootEntry?: (entry: string) => boolean,
 ): Promise<string[]> {
+	// #5689: HOME prevents project configuration reads, but does not make a
+	// manager on the caller's PATH safe. The caller supplies its root judgment.
+	const scopedEnv = trustScopedEnvironment(
+		process.env,
+		process.cwd(),
+		rootEntry === undefined
+			? undefined
+			: (entry) => {
+					try {
+						return rootEntry(entry) !== false;
+					} catch {
+						return true;
+					}
+				},
+	);
+	// safeSpawn merges ambient env underneath overrides. Preserve a deleted
+	// PATH as an explicit undefined override, including Windows key spellings.
+	const env = Object.fromEntries(
+		Object.keys(process.env).map((key) => [key, scopedEnv[key]]),
+	);
 	const dirs: string[] = [];
 	const seen = new Set<string>();
 	for (const pm of PREFERENCE) {
 		if (!(await isAvailable(pm, onTransient))) continue;
-		for (const dir of await globalBinDirsFor(pm)) {
+		for (const dir of await globalBinDirsFor(pm, env)) {
 			// #5632 F1: a relative answer resolves against HOME, the cwd the query
 			// ran from, not against the session cwd.
 			const normalized = path.resolve(os.homedir(), dir);
@@ -563,12 +589,16 @@ registerBackgroundWriteDrain(settlePrimedGlobalBinDirsForTests);
 export async function findGlobalBinary(
 	command: string,
 	windowsExt = ".cmd",
+	rootEntry?: (entry: string) => boolean,
 ): Promise<string | undefined> {
 	const candidates = onWindows()
 		? [`${command}${windowsExt}`, `${command}.exe`, command]
 		: [command];
 	try {
-		for (const binDir of await allAvailableGlobalBinDirs()) {
+		for (const binDir of await allAvailableGlobalBinDirs(
+			undefined,
+			rootEntry,
+		)) {
 			for (const name of candidates) {
 				const full = path.join(binDir, name);
 				if (!fs.existsSync(full)) continue;

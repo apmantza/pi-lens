@@ -32,6 +32,8 @@ import { truncateForLedger } from "../../clients/ledger-bounds.js";
 import { createAvailabilityLatch } from "../../clients/dispatch/runners/utils/availability-policy.js";
 import { resetDispatchAvailabilityState } from "../../clients/dispatch/runners/utils/runner-helpers.js";
 import {
+	biomeFormatter,
+	prettierFormatter,
 	clearFormatterCache,
 	getFormattersForFile,
 	gofmtFormatter,
@@ -74,6 +76,14 @@ import {
 } from "../support/path-probe-stub.js";
 import { withEnv } from "../support/with-env.js";
 import { pinFixtureHome, setupTestEnvironment } from "./test-utils.js";
+
+import { readNdjsonRows } from "../support/ndjson-rows.js";
+import {
+	flushExtensionLog,
+	getExtensionLogPath,
+} from "../../clients/extension-log.js";
+import { BiomeClient } from "../../clients/biome-client.js";
+import { projectSearchJudge } from "../../clients/session-repository.js";
 
 const TOOL = "pi-lens-4530-tool";
 const POSIX = process.platform !== "win32";
@@ -1157,3 +1167,121 @@ describe.runIf(process.platform === "win32")(
 		});
 	},
 );
+
+// Recurrence #5689: the package-manager query itself executed a manager in an
+// adopted root; the later server-command trust check cannot undo its effects.
+describe.skipIf(!POSIX)("package-manager probe root trust (#5689)", () => {
+	const members = [
+		"launch",
+		"global-dirs",
+		"biome-formatter",
+		"prettier-formatter",
+		"biome-client",
+	] as const;
+	async function probe(
+		member: (typeof members)[number],
+		root: string,
+		admitted: boolean,
+	) {
+		if (member === "launch") {
+			await expect(
+				withLspProjectCodePermission(admitted, () =>
+					launchLSP("pi-lens-5689-absent", [], { cwd: root }),
+				),
+			).rejects.toThrow();
+		} else if (member === "global-dirs") {
+			await allAvailableGlobalBinDirs(undefined, projectSearchJudge(root));
+		} else if (member === "biome-client") {
+			await (
+				new BiomeClient() as unknown as {
+					getBiomeBinary(cwd: string): Promise<unknown>;
+				}
+			).getBiomeBinary(root);
+		} else {
+			const formatter =
+				member === "biome-formatter" ? biomeFormatter : prettierFormatter;
+			await formatter.resolveCommand?.(path.join(root, "missing.ts"), root);
+		}
+	}
+	it.each(members)(
+		"%s refuses the absolute in-root pnpm then permits admitted code",
+		async (member) => {
+			cleanups.push(withEnv({ PI_LENS_TEST_MODE: "0" }));
+			const root = path.join(layout.outside, "adopted");
+			const bin = path.join(root, "bin");
+			const marker = path.join(layout.root, "5689-marker");
+			writeStandIn(bin, "pnpm", `printf ran >> '${marker}'`);
+			cleanups.push(
+				withEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH}` }),
+			);
+			setProjectTrustState("unknown");
+			await probe(member, root, false);
+			expect(ran(marker)).toBe(false);
+			await flushExtensionLog();
+			const written = readNdjsonRows(getExtensionLogPath());
+			expect(written.skipped).toBe(0);
+			expect(written.rows).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						subsystem: "project-trust",
+						metadata: expect.objectContaining({ entry: bin }),
+					}),
+				]),
+			);
+			expect(getDegradationSummary()).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ kind: "trust-refusal" }),
+				]),
+			);
+			_resetPackageManagerCache();
+			setProjectTrustState("trusted");
+			// The direct owner has no root permission argument: call it outside the
+			// unadmitted-root scope for its admitted control.
+			if (member === "global-dirs") await allAvailableGlobalBinDirs();
+			else await probe(member, root, true);
+			expect(ran(marker)).toBe(true);
+		},
+	);
+	it("launch refuses an adopted manager even when host trust is trusted", async () => {
+		const root = path.join(layout.outside, "adopted");
+		const marker = path.join(layout.root, "5689-marker");
+		const bin = path.join(root, "bin");
+		writeStandIn(bin, "pnpm", `printf ran >> '${marker}'`);
+		cleanups.push(
+			withEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH}` }),
+		);
+		setProjectTrustState("trusted");
+		await probe("launch", root, false);
+		expect(ran(marker)).toBe(false);
+	});
+	it("refuses a PATH directory link by identity and still probes an outside manager", async () => {
+		const root = path.join(layout.outside, "adopted");
+		const marker = path.join(layout.root, "5689-marker");
+		const bin = path.join(root, "bin");
+		writeStandIn(bin, "pnpm", `printf ran >> '${marker}'`);
+		const link = path.join(layout.root, "outside-link");
+		fs.symlinkSync(bin, link, "dir");
+		const outsideMarker = path.join(layout.root, "5689-outside-marker");
+		stub.plantOnPath("pnpm", `printf ran >> '${outsideMarker}'`);
+		cleanups.push(
+			withEnv({ PATH: `${link}${path.delimiter}${process.env.PATH}` }),
+		);
+		setProjectTrustState("unknown");
+		await probe("biome-client", root, false);
+		expect(ran(marker)).toBe(false);
+		expect(ran(outsideMarker)).toBe(true);
+	});
+	it.each(["throws", "unknown"])(
+		"refuses a manager when PATH classification %s",
+		async (mode) => {
+			const marker = path.join(layout.root, "5689-marker");
+			stub.plantOnPath("pnpm", `printf ran >> '${marker}'`);
+			setProjectTrustState("trusted");
+			await allAvailableGlobalBinDirs(undefined, () => {
+				if (mode === "throws") throw new Error("classification unavailable");
+				return undefined as unknown as boolean;
+			});
+			expect(ran(marker)).toBe(false);
+		},
+	);
+});
