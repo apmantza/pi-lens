@@ -325,7 +325,7 @@ function authoredRangeCovers(
 	editRanges?: [number, number][],
 ): boolean {
 	if (authored.authoredRanges === undefined) return true;
-	const requested = editRanges ?? (touchedLines ? [touchedLines] : undefined);
+	const requested = requestedEditRanges(touchedLines, editRanges);
 	return (
 		requested !== undefined &&
 		requested.every(([start, end]) =>
@@ -335,6 +335,21 @@ function authoredRangeCovers(
 			),
 		)
 	);
+}
+
+/**
+ * The ranges this edit asks the guard to judge: the producer's per-range detail
+ * when it supplied one, else the single bounding range. A producer that reports
+ * only `editRanges` (the IO-bridge adapter path, #5762) must not be collapsed to
+ * "no range": every range-aware gate would return before it can supersede a
+ * stale binding, with no transition back to a usable state.
+ */
+function requestedEditRanges(
+	touchedLines?: [number, number],
+	editRanges?: [number, number][],
+): [number, number][] | undefined {
+	if (editRanges !== undefined && editRanges.length > 0) return editRanges;
+	return touchedLines ? [touchedLines] : undefined;
 }
 
 function isValidAuthoredRanges(
@@ -1773,21 +1788,18 @@ export class ReadGuard {
 			}
 		}
 
-		// If no line range specified, we can only check zero-read and FileTime
-		if (!touchedLines) {
+		// 3. Range coverage check
+		// When the edit touches multiple disjoint spots (e.g. rename across 4 tool
+		// registrations), check each spot independently. Collapsing to a bounding
+		// box would falsely flag reads that cover exactly the right lines.
+		const rangesToCheck = requestedEditRanges(touchedLines, editRanges);
+		if (!rangesToCheck) {
 			const verdict = this.allow();
 			this.recordVerdict(filePath, "edit", touchedLines, verdict, {
 				reasonKind: "no_line_info",
 			});
 			return verdict;
 		}
-
-		// 3. Range coverage check
-		// When the edit touches multiple disjoint spots (e.g. rename across 4 tool
-		// registrations), check each spot independently. Collapsing to a bounding
-		// box would falsely flag reads that cover exactly the right lines.
-		const rangesToCheck: [number, number][] =
-			editRanges && editRanges.length > 1 ? editRanges : [touchedLines];
 
 		let viaSymbol = false;
 		for (const range of rangesToCheck) {
@@ -2610,11 +2622,7 @@ export class ReadGuard {
 			return false;
 		}
 
-		const rangesToCheck: [number, number][] | undefined = touchedLines
-			? editRanges && editRanges.length > 1
-				? editRanges
-				: [touchedLines]
-			: undefined;
+		const rangesToCheck = requestedEditRanges(touchedLines, editRanges);
 
 		if (!rangesToCheck) {
 			const lastRead = reads.at(-1);
@@ -2757,8 +2765,8 @@ export class ReadGuard {
 	 * effective range must cover the line (never the context zone), it must
 	 * carry a read-time hash for the line, and that hash must equal the bytes on
 	 * disk now. A newer partial, unhashed, search-slack-only, or stale read is
-	 * not eligible, and `touchedLines === undefined` keeps the existing block
-	 * (there is no range to prove coverage over).
+	 * not eligible. A producer that supplies only `editRanges` gives the range
+	 * the check judges; a call with no range at all still blocks.
 	 */
 	private newerReadSupersedesBinding(
 		filePath: string,
@@ -2767,9 +2775,8 @@ export class ReadGuard {
 		touchedLines?: [number, number],
 		editRanges?: [number, number][],
 	): boolean {
-		if (!touchedLines) return false;
-		const rangesToCheck: [number, number][] =
-			editRanges && editRanges.length > 1 ? editRanges : [touchedLines];
+		const rangesToCheck = requestedEditRanges(touchedLines, editRanges);
+		if (!rangesToCheck) return false;
 
 		const boundIndex = fileReads.lastIndexOf(boundRead);
 		if (boundIndex < 0) return false;

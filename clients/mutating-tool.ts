@@ -137,7 +137,10 @@ interface MutationLineResult {
 	 * names no path, so the classifier falls back to the static field list.
 	 */
 	path?: string;
-	/** Individual ranges for a multi-range edit; the guard checks each one. */
+	/**
+	 * Per-range detail for an edit, including a single range; the guard checks
+	 * each one and a range-only producer needs it when `touchedLines` is absent.
+	 */
 	editRanges?: [number, number][];
 	preflightError?: string;
 	editBatchSummary?: ReadGuardEditBatchSummary;
@@ -328,13 +331,16 @@ function parseHashlineAnchor(anchor: unknown): number | undefined {
 	return Number.isInteger(line) && line > 0 ? line : undefined;
 }
 
-/** Bounding box plus per-range detail for a multi-range edit. */
+/**
+ * Bounding box plus per-range detail for an edit. A single range is kept: the
+ * guard's range-only producers consume `editRanges` when they report no box.
+ */
 function combineRanges(ranges: [number, number][]): MutationLineResult {
 	const starts = ranges.map(([start]) => start);
 	const ends = ranges.map(([, end]) => end);
 	return {
 		touchedLines: [Math.min(...starts), Math.max(...ends)],
-		editRanges: ranges.length > 1 ? ranges : undefined,
+		editRanges: ranges.length > 0 ? ranges : undefined,
 	};
 }
 
