@@ -94,16 +94,6 @@ const REGISTRY: Readonly<Record<string, BoundedHandlers>> = {
 			"#3383: createBoundedOutputSink() at the shared default; a truncated process table is the partial-output ending this collector already documents.",
 		evidence: ["createBoundedOutputSink()", "out.append(chunk)"],
 	},
-	"clients/mcp/review.ts": {
-		handlers: 2,
-		bound:
-			"#3383: createBoundedOutputSink() per pipe; a truncated stdout kills the worker and resolves the cap as the outcome.",
-		evidence: [
-			"createBoundedOutputSink()",
-			"stdout.append(chunk)",
-			"stderr.append(chunk)",
-		],
-	},
 	"clients/mcp/ipc.ts": {
 		handlers: 2,
 		bound:
