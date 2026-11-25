@@ -2595,7 +2595,16 @@ async function settleProbeCacheForTests(): Promise<string | undefined> {
 // the tier-2 harness's loaded extension copy owns one the test's own import
 // cannot reach, so its write lands after the fixture root is removed. The
 // harness joins it through the registry (`clients/background-write-drains.ts`).
-registerBackgroundWriteDrain(settleProbeCacheForTests);
+// Pending: what the drain above waits for or flushes. A dirty change with no
+// loaded cache is not pending: the flush answers it `idle`.
+registerBackgroundWriteDrain(
+	settleProbeCacheForTests,
+	() =>
+		_probeCacheUpdatesPending.size > 0 ||
+		_probeCacheFlushTimer !== null ||
+		_probeCacheWriteInFlight !== null ||
+		(_probeCacheDirty && _probeCache !== null),
+);
 
 function isAstGrepVersionOutput(output: string): boolean {
 	return /\bast[- ]grep\b/i.test(output);

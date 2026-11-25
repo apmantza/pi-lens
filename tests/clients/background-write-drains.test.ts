@@ -22,6 +22,8 @@ import {
 	waitForProjectSnapshotPersistsForTests,
 } from "../../clients/project-snapshot.js";
 import type { ProjectSnapshot } from "../../clients/project-snapshot.js";
+import { registerBackgroundWriteDrain } from "../../clients/background-write-drains.js";
+import { getDegradationSummary } from "../../clients/degradation-ledger.js";
 import { drainRegisteredBackgroundWritesForTests } from "../support/background-write-drains.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
@@ -177,6 +179,47 @@ describe("background write drains across module copies (#4937)", () => {
 		} finally {
 			other?.resetProbeCacheStateForTesting();
 			env.cleanup();
+		}
+	});
+
+	// Recurrence: #5745 r10. The runner repeats passes until no drain reports
+	// pending work, so a pending signal that never clears would hold a file's
+	// teardown until the hook timeout cut it, with no record of why. The
+	// deadline ends the passes, rejects, and records the event once.
+	it("a fixed point the deadline cuts rejects, stops its passes and records once", async () => {
+		let stuck = true;
+		let pendingReads = 0;
+		async function neverIdleWriterForTests(): Promise<string | undefined> {
+			return undefined;
+		}
+		registerBackgroundWriteDrain(neverIdleWriterForTests, () => {
+			pendingReads += 1;
+			return stuck;
+		});
+		try {
+			await expect(
+				drainRegisteredBackgroundWritesForTests({ deadlineMs: 50 }),
+			).rejects.toThrow(
+				/^background-write drains did not reach a fixed point within 50 ms; still pending: .*neverIdleWriterForTests/,
+			);
+			// The abandoned passes stop: nothing reads the signal any more.
+			const readsAtDeadline = pendingReads;
+			for (let turn = 0; turn < 3; turn += 1)
+				await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(pendingReads).toBe(readsAtDeadline);
+
+			await expect(
+				drainRegisteredBackgroundWritesForTests({ deadlineMs: 50 }),
+			).rejects.toThrow(/did not reach a fixed point/);
+			const group = getDegradationSummary().find(
+				(entry) => entry.kind === "background-write-drain-deadline",
+			);
+			expect(group?.count).toBe(1);
+			expect(group?.latestReasons.map((entry) => entry.subject)).toEqual([
+				"fixed-point",
+			]);
+		} finally {
+			stuck = false;
 		}
 	});
 });

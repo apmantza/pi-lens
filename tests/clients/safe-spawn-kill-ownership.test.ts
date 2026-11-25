@@ -663,6 +663,107 @@ describe("kill-by-pid ownership (#2042)", () => {
 		}
 	});
 
+	// #5745 r10: the ledger drain is one call per pass of the runner. While it
+	// waited on one child's row write, a second spawn added another; a drain
+	// that returned after the first write (`while` read as `if`) left the second
+	// to land after it, and a row write kept out of the tracked set was not
+	// waited for at all. Linux: the start read is a /proc read of the real
+	// fixture children, not a process-table query on the spawn double.
+	it.skipIf(process.platform !== "linux")(
+		"the ledger drain joins a row write added while it waits on another",
+		async () => {
+			const firstOwned = await spawnOwnedFixtureChild();
+			const secondOwned = await spawnOwnedFixtureChild();
+			if (firstOwned.pid === undefined || secondOwned.pid === undefined)
+				throw new Error("fixture child did not get a pid");
+			const children = [
+				new FakeChild(firstOwned.pid),
+				new FakeChild(secondOwned.pid),
+			];
+			const spawned = [...children];
+			vi.resetModules();
+			vi.doMock("node:child_process", () => ({
+				spawn: vi.fn(() => children.shift()),
+				spawnSync: vi.fn(() => ({ status: 0, stdout: "", stderr: "" })),
+				execSync: vi.fn(() => ""),
+				execFileSync: vi.fn(() => ""),
+			}));
+			const held = await import("../../clients/held-children.js");
+			const { safeSpawnAsync } = await import("../../clients/safe-spawn.js");
+			const { registeredBackgroundWriteDrainsForTests } =
+				await import("../../clients/background-write-drains.js");
+			const writes = new Map<
+				number,
+				{ called: Promise<void>; markCalled: () => void; release: () => void }
+			>();
+			const writeFor = (pid: number) => {
+				let entry = writes.get(pid);
+				if (!entry) {
+					let markCalled: () => void = () => {};
+					const called = new Promise<void>((resolve) => {
+						markCalled = resolve;
+					});
+					entry = { called, markCalled, release: () => {} };
+					writes.set(pid, entry);
+				}
+				return entry;
+			};
+			held.provideOwnedChildLedger({
+				write: (row) =>
+					new Promise<void>((resolve) => {
+						const entry = writeFor(row.pid);
+						entry.release = resolve;
+						entry.markCalled();
+					}),
+				remove: async () => {},
+			});
+			const pendings: Promise<unknown>[] = [];
+			try {
+				pendings.push(
+					safeSpawnAsync(process.execPath, ["-e", "0"], { timeout: 50_000 }),
+				);
+				await writeFor(firstOwned.pid).called;
+				// This copy's drain: the last one of that name registered.
+				const ledger = registeredBackgroundWriteDrainsForTests()
+					.filter(
+						({ drain }) => drain.name === "settleOwnedChildLedgerForTests",
+					)
+					.at(-1);
+				if (!ledger) throw new Error("safe-spawn registers no ledger drain");
+				let drained = false;
+				const drain = ledger.drain().then(() => {
+					drained = true;
+				});
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				expect(drained).toBe(false);
+
+				pendings.push(
+					safeSpawnAsync(process.execPath, ["-e", "0"], { timeout: 50_000 }),
+				);
+				await writeFor(secondOwned.pid).called;
+				writeFor(firstOwned.pid).release();
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				expect(drained).toBe(false);
+				expect(ledger.pending()).toBe(true);
+
+				writeFor(secondOwned.pid).release();
+				await drain;
+				expect(ledger.pending()).toBe(false);
+			} finally {
+				for (const entry of writes.values()) entry.release();
+				for (const child of spawned) child.emit("close", 0, null);
+				await Promise.all(pendings);
+				// The ledger cell is a process singleton: a fresh registry module
+				// provides the production ledger again.
+				vi.resetModules();
+				await import("../../clients/instance-registry.js");
+				firstOwned.kill("SIGKILL");
+				secondOwned.kill("SIGKILL");
+				lifetimeState().pids.clear();
+			}
+		},
+	);
+
 	// Everything below reads `/proc`, which only Linux has. The Windows and
 	// macOS arms of the same predicate are covered above WITHOUT a lane, by the
 	// fresh-import case that stubs the platform before module load.

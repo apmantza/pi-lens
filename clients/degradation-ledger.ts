@@ -205,6 +205,15 @@ export type DegradationKind =
 	| "aux_wait_repromoted"
 	/** `availability-probe-overrun`: An availability probe exceeded its advertised wall-clock budget (#2131). */
 	| "availability-probe-overrun"
+	/**
+	 * `background-write-drain-deadline`: The test-side runner of the registered background-write drains
+	 * (`tests/support/background-write-drains.ts`, #5745) did not reach a fixed
+	 * point, a full pass after which no drain reports pending work, before its
+	 * deadline. The runner stops scheduling passes and rejects, naming the
+	 * drains still pending, so the fixture root is not removed under them.
+	 * Subject: `fixed-point`; once per process.
+	 */
+	| "background-write-drain-deadline"
 	| "bash-view-clipped"
 	/**
 	 * `bash-write-scope-guessed`: A bash command filled a directory the scan could not read (`rsync ... "$D"`,

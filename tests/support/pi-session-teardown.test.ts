@@ -45,9 +45,11 @@ describe("pi-session: the file-level drain pass (#4937)", () => {
 		const gate = new Promise<void>((resolve) => {
 			release = resolve;
 		});
+		let wrote = false;
 		const landed = gate.then(() => {
 			fs.mkdirSync(path.join(fixture.root, "data"), { recursive: true });
 			fs.writeFileSync(path.join(fixture.root, "data", "late.json"), "{}");
+			wrote = true;
 		});
 		// A stand-in writer the registry joins, as the loaded copy's would be.
 		const drain = async () => {
@@ -55,7 +57,7 @@ describe("pi-session: the file-level drain pass (#4937)", () => {
 			await landed;
 			return undefined;
 		};
-		registerBackgroundWriteDrain(drain);
+		registerBackgroundWriteDrain(drain, () => !wrote);
 
 		await drainPiSessionWrites();
 		fixture.cleanup();

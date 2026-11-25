@@ -444,14 +444,16 @@ describe("updateProbeCache", () => {
 		void updateProbeCache(TOOL_ID, TOOL_PATH);
 		// The installer's own drain, by name: running the whole registry would let
 		// the other writers' drains hold the call back past the release below.
-		const drain = registeredBackgroundWriteDrainsForTests().find(
-			(fn) => fn.name === "settleProbeCacheForTests",
+		const entry = registeredBackgroundWriteDrainsForTests().find(
+			({ drain }) => drain.name === "settleProbeCacheForTests",
 		);
 		expect(
-			drain,
+			entry,
 			"the installer registers its probe-cache drain",
 		).toBeDefined();
-		const settle = (drain as () => Promise<string | undefined>)();
+		const settle = (
+			entry as { drain: () => Promise<string | undefined> }
+		).drain();
 		// A macrotask later: a settle that did not join the update has already
 		// answered idle by now, and the release below marks the change after it.
 		await new Promise((resolve) => setTimeout(resolve, 20));

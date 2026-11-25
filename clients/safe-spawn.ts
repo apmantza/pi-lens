@@ -83,11 +83,19 @@ function trackOwnedChildLedger(work: Promise<void>): Promise<void> {
 }
 
 // One drain per evaluation of this module. It resolves only when no ledger
-// work is left; a write that settles may queue its removal, so it loops.
-registerBackgroundWriteDrain(async () => {
+// work is left. It loops: a spawn while it waits adds another child's row
+// write, and a write that settles may queue its removal. Work a later drain
+// creates after this one returned (the package-manager prime's probes, #5745
+// r10) is the runner's: it repeats passes while the pending signal is true.
+async function settleOwnedChildLedgerForTests(): Promise<string | undefined> {
 	while (ownedChildLedgerWork.size > 0) await Promise.all(ownedChildLedgerWork);
 	return undefined;
-});
+}
+
+registerBackgroundWriteDrain(
+	settleOwnedChildLedgerForTests,
+	() => ownedChildLedgerWork.size > 0,
+);
 
 export interface SpawnResourceUsage {
 	sampleCount: number;
