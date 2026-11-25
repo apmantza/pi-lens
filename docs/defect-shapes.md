@@ -178,7 +178,7 @@ fixes its members says so instead of quoting a before and after.
 </important>
 
 <important if="a delivery surface or lane">
-<!-- trigger: {"paths": ["index.ts", "tools/**/*.ts", "mcp/**/*.ts", "clients/mcp/**/*.ts", "clients/runtime-*.ts", "clients/finding-delivery-gate.ts", "clients/ephemeral-root.ts", "clients/dispatch/types.ts", "clients/turn-end/**/*.ts", "clients/*render*.ts", "clients/test-runner-delivery.ts", "clients/config-core/**/*.ts", "scripts/hooks/guard-bash.mjs"], "diff": "DELIVERY_SURFACES|fallbackFor|cleanVerdict|checkedVerdict|RUNNER_SKIP_REASONS|positionStale|unansweredPrimaries|findDeny|\\bcatch\\s*[({]"} -->
+<!-- trigger: { "paths": ["index.ts", "tools/**/*.ts", "mcp/**/*.ts", "clients/mcp/**/*.ts", "clients/runtime-*.ts", "clients/finding-delivery-gate.ts", "clients/ephemeral-root.ts", "clients/dispatch/types.ts", "clients/turn-end/**/*.ts", "clients/*render*.ts", "clients/test-runner-delivery.ts", "clients/config-core/**/*.ts", "scripts/hooks/guard-bash.mjs", "clients/agent-behavior-client.ts", "clients/agent-nudge.ts", "clients/cascade-format.ts", "clients/dispatch/integration.ts", "clients/git-guard.ts", "clients/lens-engine.ts", "clients/lsp/index.ts", "clients/mutating-tool.ts", "clients/pipeline.ts", "clients/read-guard-tool-lines.ts", "clients/shared-checkout-guard.ts", "clients/staged-delta.ts", "clients/widget-state.ts"], "diff": "DELIVERY_SURFACES|fallbackFor|cleanVerdict|checkedVerdict|RUNNER_SKIP_REASONS|positionStale|unansweredPrimaries|findDeny" } -->
 
 ### a delivery surface or lane
 

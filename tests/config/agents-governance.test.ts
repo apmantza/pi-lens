@@ -1,12 +1,20 @@
+// flake-shape: real-process-spawn — the trigger gate's population is git's own
+// tracked list (`git ls-files`), and only real git answers which paths a PR
+// diff can produce: a filesystem walk admits a directory, a gitignored build
+// twin and a path outside the checkout, each of which matches no diff (review
+// 5754 F3).
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { minimatch } from "minimatch";
 import { describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
+import { DELIVERY_SURFACES } from "../../clients/finding-delivery-gate.js";
 import {
 	blankMarkdown,
 	parseDefectShapes,
+	sourceWithoutFencedBlocks,
 } from "../../scripts/lib/defect-shapes.mjs";
+import { gitExecFileSync } from "../support/git-fixture-env.js";
 import { assertNonEmptyScan, stripSource } from "../support/sweep-kit.js";
 import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
@@ -63,18 +71,26 @@ describe("AGENTS.md trigger-block governance (#3259)", () => {
 	// #5753 item 1: the orchestrator's brief generators inject only the blocks a
 	// diff matches, so a block with no machine trigger (or one whose globs match
 	// no file) would silently never load, or always load. Recurrence this
-	// prevents: a block added or retitled without its trigger line, and a glob
-	// typo that reads as coverage while matching nothing.
+	// prevents: a block added or retitled without its trigger line, a glob typo
+	// that reads as coverage while matching nothing, a block quoted in a code
+	// fence or commented out, and an opener spelled any way the gate cannot read
+	// (review 5754 F1).
 	it(
 		"gives every catalog block a machine-readable trigger line (#5753)",
 		() => {
-			const lines = catalogText().split("\n");
-			const problems: string[] = [];
+			const raw = catalogText();
+			// Blanked: a fenced example or a commented-out opener is prose, so it
+			// neither counts as a block nor hides the one it replaced.
+			const blanked = blankMarkdown(raw).split("\n");
+			// Fenced-code-blanked only: the trigger line IS an HTML comment, so the
+			// blanking the opener read needs would erase the line it names.
+			const withComments = sourceWithoutFencedBlocks(raw).split("\n");
+			const problems = blockTagProblems(blanked);
 			let blocks = 0;
-			lines.forEach((line, index) => {
+			blanked.forEach((line, index) => {
 				if (!/^<important if="[^"]*">$/.test(line)) return;
 				blocks += 1;
-				for (const problem of triggerProblems(lines[index + 1] ?? ""))
+				for (const problem of triggerProblems(withComments[index + 1] ?? ""))
 					problems.push(`line ${index + 1} (${line}): ${problem}`);
 			});
 			assertNonEmptyScan("catalog blocks with a trigger", blocks, 7);
@@ -83,6 +99,61 @@ describe("AGENTS.md trigger-block governance (#3259)", () => {
 		TREE_WALK_TIMEOUT_MS,
 	);
 
+	it("refuses a catalog block opener it cannot classify (#5753)", () => {
+		// Review 5754 F1: the scan skipped every opener that was not the anchored
+		// form, so an unclassified spelling shipped with no trigger line while
+		// the other blocks satisfied the floor. A commented-out or fenced example
+		// is the mirror case: it must not stand in for a block either.
+		const refuse = (markdown: string) =>
+			blockTagProblems(blankMarkdown(markdown).split("\n")).join("; ");
+		expect(
+			refuse(
+				'<important if="a">\n<!-- trigger: {"always": true} -->\n</important>\n',
+			),
+		).toBe("");
+		for (const opener of [
+			"<important if='a'>",
+			'<important if="a"> ',
+			'  <important if="a">',
+			'<important when="a">',
+			"<important>",
+		])
+			expect(refuse(`${opener}\n</important>\n`), opener).toMatch(/standalone/);
+		// A fenced or commented example is prose, and the reader sees no block.
+		expect(refuse('```\n<important if="example">\n```\n')).toBe("");
+		expect(refuse('<!--\n<important if="hidden">\n-->\n')).toBe("");
+		expect(refuse('<important if="a">\n')).toMatch(/closers/);
+		expect(refuse("</important>\n")).toMatch(/closers/);
+	});
+
+	// #5753 item 1: block 3 governs the delivery surfaces and lanes, so its paths
+	// must reach every surface the registry names. `DELIVERY_SURFACES` in
+	// `clients/finding-delivery-gate.ts` IS that registry; a hand-kept path list
+	// drifted from it and left 12 of 22 surfaces loading no block (review 5754
+	// F4).
+	it("covers every registered delivery surface in the lane block (#5753)", () => {
+		const lane = catalogTriggers().get("a delivery surface or lane");
+		expect(
+			lane,
+			"a catalog block named `a delivery surface or lane` with a trigger",
+		).toBeDefined();
+		const paths = asStrings(asRecord(lane).paths);
+		const files = [
+			...new Set([
+				...Object.values(DELIVERY_SURFACES).map((surface) => surface.file),
+				// Shape 10's screen names `unansweredPrimaries`, defined here.
+				"clients/lsp/index.ts",
+			]),
+		].sort();
+		assertNonEmptyScan("registered delivery surfaces", files.length, 22);
+		expect(
+			files.filter(
+				(file) => !paths.some((glob) => minimatch(file, glob, { dot: true })),
+			),
+			"delivery surfaces the lane block's paths do not reach",
+		).toEqual([]);
+	});
+
 	it("refuses a trigger line the gate cannot read (#5753)", () => {
 		// Recurrence: a gate that passes a trigger it cannot resolve. Each planted
 		// line is one spelling the catalog test above must red on.
@@ -90,7 +161,7 @@ describe("AGENTS.md trigger-block governance (#3259)", () => {
 		expect(refused("")).toMatch(/no `<!-- trigger/);
 		expect(refused('<!-- trigger: {"paths": []} -->')).toMatch(/non-empty/);
 		expect(refused('<!-- trigger: {"paths": ["no/such/dir/**"]} -->')).toMatch(
-			/matches no file/,
+			/matches no tracked file/,
 		);
 		expect(refused('<!-- trigger: {"always": false} -->')).toMatch(/always/);
 		expect(refused('<!-- trigger: {"always": true, "diff": "x"} -->')).toMatch(
@@ -100,6 +171,47 @@ describe("AGENTS.md trigger-block governance (#3259)", () => {
 		expect(refused("<!-- trigger: {} -->")).toMatch(/no path/);
 		expect(refused("<!-- trigger: {oops} -->")).toMatch(/parse/);
 		expect(refused('<!-- trigger: {"diff": "("} -->')).toMatch(/compile/);
+		// Review 5754 F2: every guard in `triggerProblems` reds under a hand
+		// mutation, so every one of them carries a plant. A guard no plant can
+		// red is a guard that does not need to exist.
+		expect(refused("<!-- trigger: [] -->")).toMatch(/not an object/);
+		expect(refused("<!-- trigger: null -->")).toMatch(/not an object/);
+		expect(refused('<!-- trigger: {"paths": "index.ts"} -->')).toMatch(
+			/non-empty list of globs/,
+		);
+		expect(refused('<!-- trigger: {"paths": [""]} -->')).toMatch(
+			/non-empty list of globs/,
+		);
+		expect(refused('<!-- trigger: {"diff": ""} -->')).toMatch(
+			/non-empty regex string/,
+		);
+		expect(refused('<!-- trigger: {"diff": 1} -->')).toMatch(
+			/non-empty regex string/,
+		);
+		// Review 5754 F3: an empty alternation branch makes a regex match every
+		// added line of every diff, so it is `{"always": true}` respelled.
+		expect(refused('<!-- trigger: {"diff": "foo|"} -->')).toMatch(
+			/matches the empty string/,
+		);
+		expect(refused('<!-- trigger: {"diff": "^"} -->')).toMatch(
+			/matches the empty string/,
+		);
+		// Review 5754 F3: the population is git's tracked set, so a selector that
+		// only reaches a directory or a gitignored build twin is dead in every
+		// real diff, and one outside the checkout is never in one.
+		for (const glob of ["clients/lsp", "clients/path-*.js"])
+			expect(
+				refused(`<!-- trigger: {"paths": ["${glob}"]} -->`),
+				`${glob} selects no tracked file`,
+			).toMatch(/matches no tracked file/);
+		expect(
+			refused('<!-- trigger: {"paths": ["/etc/hosts"]} -->'),
+			"a path outside the checkout is never in a diff",
+		).toMatch(/is not relative to the repo/);
+		// Review 5754 F1: a `-->` inside the JSON ends the comment before it ends.
+		expect(refused('<!-- trigger: {"diff": "a-->b"} -->')).toMatch(
+			/ends the comment/,
+		);
 		expect(refused('<!-- trigger: {"always": true} -->')).toBe("");
 		expect(
 			refused('<!-- trigger: {"paths": ["index.ts"], "diff": "x"} -->'),
@@ -282,14 +394,20 @@ describe("AGENTS.md trigger-block governance (#3259)", () => {
 /**
  * What is wrong with the line after a catalog block's opener (#5753): it must
  * be `<!-- trigger: {...} -->` whose JSON is `{"always": true}` alone, or names
- * `paths` (a non-empty list of globs that each match a file in the tree)
- * and/or `diff` (a regex that compiles). Anything else, including an unknown
- * key, is a problem: the gate admits the known forms and refuses the rest.
+ * `paths` (a non-empty list of repo-relative globs that each select a
+ * git-tracked file) and/or `diff` (a regex that compiles and does not match the
+ * empty string, i.e. every added line of every diff). Anything else, including
+ * an unknown key, is a problem: the gate admits the known forms and refuses
+ * the rest.
  */
 function triggerProblems(line: string): string[] {
 	const match = /^<!-- trigger: (.*) -->$/.exec(line);
 	if (!match)
 		return ["no `<!-- trigger: {...} -->` line directly after the opener"];
+	// A JSON string holding `-->` ends the HTML comment before its own end, so
+	// the reader sees a truncated object and the tail as prose (review 5754 F1).
+	if (match[1].includes("-->"))
+		return ["trigger carries `-->` inside its JSON, which ends the comment"];
 	let trigger: unknown;
 	try {
 		trigger = JSON.parse(match[1]);
@@ -322,21 +440,93 @@ function triggerProblems(line: string): string[] {
 		)
 			problems.push('"paths" is not a non-empty list of globs');
 		else
-			for (const glob of paths)
-				if (fs.globSync(glob, { cwd: REPO_ROOT }).length === 0)
-					problems.push(`glob "${glob}" matches no file`);
+			for (const glob of paths) {
+				// The population is the tracked set `git diff --name-only` draws from,
+				// never the working tree: a directory, a gitignored build twin and a path
+				// outside the checkout all match something on disk and nothing in a diff
+				// (review 5754 F3).
+				if (path.isAbsolute(glob) || /(^|\/)\.\.(\/|$)/.test(glob))
+					problems.push(`glob "${glob}" is not relative to the repo`);
+				else if (
+					!trackedFiles().some((file) => minimatch(file, glob, { dot: true }))
+				)
+					problems.push(`glob "${glob}" matches no tracked file`);
+			}
 	}
 	if (record.diff !== undefined) {
 		if (typeof record.diff !== "string" || record.diff.length === 0)
 			problems.push('"diff" is not a non-empty regex string');
-		else
+		else {
+			let regex: RegExp | undefined;
 			try {
-				new RegExp(record.diff);
+				regex = new RegExp(record.diff);
 			} catch {
 				problems.push('"diff" does not compile as a RegExp');
 			}
+			// A regex that matches the empty string fires on every added line of
+			// every diff, which is `{"always": true}` respelled (review 5754 F3).
+			if (regex?.test("")) problems.push('"diff" matches the empty string');
+		}
 	}
 	return problems;
+}
+
+/**
+ * Problems with the catalog's `<important` tags, read from markdown-blanked
+ * lines (#5753 review 5754 F1). Every opener must be the standalone `if` form
+ * this gate reads, and openers and closers must pair: an opener spelled any
+ * other way would ship with no trigger line while the other blocks satisfied
+ * the floor, and a commented-out opener would hide its block from the reader
+ * while still counting here (AGENTS.md shapes 43 and 69: a detector matches
+ * code, not prose, and fails closed on what it does not recognize).
+ */
+function blockTagProblems(blankedLines: readonly string[]): string[] {
+	const problems: string[] = [];
+	let openers = 0;
+	let closers = 0;
+	blankedLines.forEach((line, index) => {
+		if (line.includes("<important")) {
+			if (/^<important if="[^"]*">$/.test(line)) openers += 1;
+			else
+				problems.push(
+					`line ${index + 1}: ${JSON.stringify(line.trim())} is not the standalone \`<important if="...">\` opener`,
+				);
+		}
+		if (/^<\/important>$/.test(line)) closers += 1;
+	});
+	if (openers !== closers)
+		problems.push(
+			`${openers} \`<important if="...">\` openers but ${closers} \`</important>\` closers`,
+		);
+	return problems;
+}
+
+/** The catalog's block names, each with the trigger JSON after its opener. */
+function catalogTriggers(): Map<string, unknown> {
+	const blanked = blankMarkdown(catalogText()).split("\n");
+	const withComments = sourceWithoutFencedBlocks(catalogText()).split("\n");
+	const triggers = new Map<string, unknown>();
+	blanked.forEach((line, index) => {
+		const opener = /^<important if="([^"]*)">$/.exec(line);
+		if (!opener) return;
+		const trigger = /^<!-- trigger: (.*) -->$/.exec(
+			withComments[index + 1] ?? "",
+		);
+		if (trigger) triggers.set(opener[1], JSON.parse(trigger[1]));
+	});
+	return triggers;
+}
+
+/** `git ls-files` of this checkout, read once: the population a diff draws from. */
+let trackedFileList: string[] | undefined;
+function trackedFiles(): string[] {
+	trackedFileList ??= gitExecFileSync("git", ["ls-files", "-z"], {
+		cwd: REPO_ROOT,
+		encoding: "utf8",
+	})
+		.split("\0")
+		.filter(Boolean);
+	return trackedFileList;
 }
 
 /** One JSON/YAML object, or an empty one: the configs are parsed, not trusted. */

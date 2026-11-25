@@ -887,7 +887,10 @@ after a check with `;` or a pipe instead of `&&` (#3471); and every hook bypass
 For a red that looks unrelated, prove it with `node scripts/red-on-base.mjs` and
 stop.
 
-A new guard or hook starts in `observe` mode (it logs each would-be denial with
-its reason and passes) and moves to `enforce` only once its log shows a fire
-rate and its false positives; `off` is the third mode. The observe log
-is the fire data the net-count rule asks for.
+A new orchestrator hook or guard, and a new CLI or workflow guard, starts in
+`observe` mode (it logs each would-be denial with its reason and passes) and
+moves to `enforce` only once its log shows a fire rate and its false positives;
+`off` is the third mode. The observe log is the fire data the net-count rule
+asks for. A runtime trust boundary (the read guard, spawn and LSP trust) and a
+Vitest governance gate are not this rule's: they fail closed from the first
+commit.
