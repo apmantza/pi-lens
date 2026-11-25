@@ -18,15 +18,17 @@
  *   node scripts/promote-lsp-idle-eviction.mjs --summary <path> [--body <path>]
  *       [--matrix <path>] [--server-src <path>] [--reasons <path>] [--today <YYYY-MM-DD>]
  *
- * Fail closed and best-effort: a missing or unparsable summary clears the night
- * memory (a night that measured nothing is not a consecutive eligible night)
- * and promotes nothing; the script always exits 0. With `GITHUB_OUTPUT` set it
- * writes `promoted=true|false`.
+ * Fail closed and best-effort: a missing or unparsable summary clears partial
+ * night memory while keeping settled pairs (a night that measured nothing is
+ * not a consecutive eligible night, nor a clearing event) and promotes nothing;
+ * the script always exits 0. With `GITHUB_OUTPUT` set it writes
+ * `promoted=true|false`.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+	isSettledPair,
 	parseRejectedServers,
 	planPromotions,
 } from "./lib/lsp-idle-eviction-promote.mjs";
@@ -70,19 +72,23 @@ export function promoteFromSummary(opts) {
 		} catch {
 			// handled below: no summary is a night that measured nothing.
 		}
+		const prior = parseRefreshState(matrixText)[IDLE_EVICTION_KEY];
 		if (!rows) {
+			const settled = Object.fromEntries(
+				Object.entries(prior ?? {}).filter(([, entry]) => isSettledPair(entry)),
+			);
 			log(
-				"idle-eviction promotion: no readable measurement summary; clearing the night memory and promoting nothing",
+				"idle-eviction promotion: no readable measurement summary; keeping settled pairs, clearing partial night memory, and promoting nothing",
 			);
 			fs.writeFileSync(
 				opts.matrixPath,
-				setRefreshStateKey(matrixText, IDLE_EVICTION_KEY, {}),
+				setRefreshStateKey(matrixText, IDLE_EVICTION_KEY, settled),
 			);
 			return [];
 		}
 		const plan = planPromotions({
 			rows,
-			prior: parseRefreshState(matrixText)[IDLE_EVICTION_KEY],
+			prior,
 			today: opts.today,
 			serverSource: fs.readFileSync(opts.serverPath, "utf8"),
 			reasonsText: fs.readFileSync(opts.reasonsPath, "utf8"),
