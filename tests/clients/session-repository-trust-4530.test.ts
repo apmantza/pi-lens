@@ -82,6 +82,10 @@ import {
 	flushExtensionLog,
 	getExtensionLogPath,
 } from "../../clients/extension-log.js";
+import {
+	flushLatencyLog,
+	getLatencyLogPath,
+} from "../../clients/latency-logger.js";
 import { BiomeClient } from "../../clients/biome-client.js";
 import { projectSearchJudge } from "../../clients/session-repository.js";
 
@@ -1270,6 +1274,53 @@ describe.skipIf(!POSIX)("package-manager probe root trust (#5689)", () => {
 		await probe("biome-client", root, false);
 		expect(ran(marker)).toBe(false);
 		expect(ran(outsideMarker)).toBe(true);
+	});
+	it("records throwing PATH classification once per session and rearms after reset", async () => {
+		// #5689 r1b: a trust judge failure must refuse with a bounded record.
+		cleanups.push(withEnv({ PI_LENS_TEST_MODE: "0" }));
+		const marker = path.join(layout.root, "5689-marker");
+		stub.plantOnPath("pnpm", `printf ran >> '${marker}'`);
+		setProjectTrustState("trusted");
+		const judge = () => {
+			throw new Error("classification unavailable");
+		};
+		await flushLatencyLog();
+		const before = readNdjsonRows(getLatencyLogPath());
+		expect(before.skipped).toBe(0);
+		for (let i = 0; i < 2; i++)
+			await allAvailableGlobalBinDirs(undefined, judge);
+		expect(ran(marker)).toBe(false);
+		await flushLatencyLog();
+		const written = readNdjsonRows<{
+			phase?: string;
+			metadata?: Record<string, unknown>;
+		}>(getLatencyLogPath());
+		expect(written.skipped).toBe(0);
+		const records = written.rows
+			.slice(before.rows.length)
+			.filter(
+				(row) =>
+					row.phase === "degradation_ledger" &&
+					row.metadata?.kind === "trust-refusal" &&
+					row.metadata?.subject === "package-manager-path-classification",
+			);
+		expect(records).toHaveLength(1);
+		resetDegradationLedger();
+		await allAvailableGlobalBinDirs(undefined, judge);
+		await flushLatencyLog();
+		const resetRows = readNdjsonRows<{ metadata?: Record<string, unknown> }>(
+			getLatencyLogPath(),
+		);
+		expect(resetRows.skipped).toBe(0);
+		expect(
+			resetRows.rows
+				.slice(before.rows.length)
+				.filter(
+					(row) =>
+						row.metadata?.kind === "trust-refusal" &&
+						row.metadata?.subject === "package-manager-path-classification",
+				),
+		).toHaveLength(2);
 	});
 	it.each(["throws", "unknown"])(
 		"refuses a manager when PATH classification %s",

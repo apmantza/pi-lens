@@ -482,6 +482,11 @@ export async function allAvailableGlobalBinDirs(
 					try {
 						return rootEntry(entry) !== false;
 					} catch {
+						recordDegradationOnce({
+							kind: "trust-refusal",
+							subject: "package-manager-path-classification",
+							reason: "package-manager PATH judge failed; entry refused",
+						});
 						return true;
 					}
 				},
