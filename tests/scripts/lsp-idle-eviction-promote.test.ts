@@ -746,6 +746,89 @@ describe("the nightly driver, end to end on files (#3989)", () => {
 		).toEqual([]);
 		expect(logged[0]).toContain("idle-eviction promotion:");
 	});
+
+	// #5747 F1: the settled pair is evidence the policy already earned, so a
+	// night that could not qualify must not erase it. On 2026-11-23 csharp
+	// measured eligible at 4721 ms (over the 3000 ms cap), the writer dropped its
+	// settled 2026-11-19/2026-11-20 pair, and the next night read one night where
+	// the reducer can only produce two or none.
+	it("keeps a settled pair through a night that could not qualify", () => {
+		const ws = workspace();
+		const settled = setRefreshStateKey(
+			fs.readFileSync(ws.matrixPath, "utf8"),
+			IDLE_EVICTION_KEY,
+			{
+				csharp: {
+					nights: [
+						{ day: "2026-11-19", rssMb: 236, coldMs: 2942 },
+						{ day: "2026-11-20", rssMb: 237, coldMs: 2951 },
+					],
+				},
+			},
+		);
+		fs.writeFileSync(ws.matrixPath, settled);
+		promoteFromSummary({
+			summaryPath: ws.summary([
+				row("csharp", { coldStartMs: COLD_START_MAX_MS + 1 }),
+			]),
+			matrixPath: ws.matrixPath,
+			serverPath: ws.serverPath,
+			reasonsPath: ws.reasonsPath,
+			registryPath: ws.registryPath,
+			today: "2026-11-23",
+			log: () => {},
+		});
+		const text = fs.readFileSync(ws.matrixPath, "utf8");
+		expect(
+			parseRefreshState(text)[IDLE_EVICTION_KEY]?.csharp?.nights.map(
+				(n) => n.day,
+			),
+		).toEqual(["2026-11-19", "2026-11-20"]);
+		// The night could not tell, so the block is byte-identical: no churn.
+		expect(text).toBe(settled);
+	});
+
+	it("empties a settled pair on a hard veto or once the policy is no longer unmeasured", () => {
+		for (const night of [
+			row("csharp", {
+				result: "vetoed",
+				reason: "respawn-failed",
+				respawn: "failed",
+			}),
+			row("csharp", { declared: "resident" }),
+		] as const) {
+			const ws = workspace();
+			fs.writeFileSync(
+				ws.matrixPath,
+				setRefreshStateKey(
+					fs.readFileSync(ws.matrixPath, "utf8"),
+					IDLE_EVICTION_KEY,
+					{
+						csharp: {
+							nights: [
+								{ day: "2026-11-19", rssMb: 236, coldMs: 2942 },
+								{ day: "2026-11-20", rssMb: 237, coldMs: 2951 },
+							],
+						},
+					},
+				),
+			);
+			promoteFromSummary({
+				summaryPath: ws.summary([night]),
+				matrixPath: ws.matrixPath,
+				serverPath: ws.serverPath,
+				reasonsPath: ws.reasonsPath,
+				registryPath: ws.registryPath,
+				today: "2026-11-23",
+				log: () => {},
+			});
+			expect(
+				parseRefreshState(fs.readFileSync(ws.matrixPath, "utf8"))[
+					IDLE_EVICTION_KEY
+				],
+			).toBeUndefined();
+		}
+	});
 });
 
 describe("calendar adjacency of nights (#3989 F2)", () => {

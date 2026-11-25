@@ -586,5 +586,5 @@ the pending `idle-eviction-doc` flips (#5667).
 Regenerated every run; never a measurement.
 
 ```json
-{"clean-behavior":{"fallow":{"pendingBehavior":"silent","pendingTier":"3","runs":1}},"first-publish":{"fallow":{"pendingFirstPublish":"direct","runs":1}},"idle-eviction":{"dart":{"nights":[{"day":"2026-11-06","rssMb":75,"coldMs":511},{"day":"2026-11-07","rssMb":75,"coldMs":538}]},"go":{"nights":[{"day":"2026-11-06","rssMb":89,"coldMs":567},{"day":"2026-11-07","rssMb":90,"coldMs":595}]}},"save-verdict":{"powershell":{"pendingSaveVerdict":"no","runs":1}}}
+{"clean-behavior":{"fallow":{"pendingBehavior":"silent","pendingTier":"3","runs":1}},"first-publish":{"fallow":{"pendingFirstPublish":"direct","runs":1}},"idle-eviction":{"csharp":{"nights":[{"day":"2026-11-19","rssMb":236,"coldMs":2942},{"day":"2026-11-20","rssMb":237,"coldMs":2951}]},"dart":{"nights":[{"day":"2026-11-06","rssMb":75,"coldMs":511},{"day":"2026-11-07","rssMb":75,"coldMs":538}]},"go":{"nights":[{"day":"2026-11-06","rssMb":89,"coldMs":567},{"day":"2026-11-07","rssMb":90,"coldMs":595}]}},"save-verdict":{"powershell":{"pendingSaveVerdict":"no","runs":1}}}
 ```

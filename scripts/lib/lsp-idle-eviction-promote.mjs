@@ -65,15 +65,24 @@ function previousDay(day) {
 }
 
 /**
- * Advance the per-server night memory by one run. A server keeps (or gains) a
- * night only when this run's row qualifies; every other outcome (vetoed,
- * inconclusive, unavailable, budget-exhausted, no row, over the cold-start cap,
- * under the RSS floor, no longer `unmeasured`) drops its entry, so the nights held are consecutive.
- * A held night counts only when it is the previous UTC day; any other (a skipped
- * night, or today's own earlier run) restarts the count at one, so two runs on
- * one UTC day count once and a manual dispatch cannot satisfy the rule. An entry that already holds `PROMOTE_NIGHTS` nights is left
- * untouched, so a settled server writes a byte-identical block and the refresh
- * PR does not open on timing noise.
+ * Advance the per-server night memory by one run. A server without a settled
+ * entry keeps (or gains) a night only when this run's row qualifies; every
+ * other outcome (vetoed, inconclusive, unavailable, budget-exhausted, no row,
+ * over the cold-start cap, under the RSS floor, no longer `unmeasured`) drops
+ * its partial entry, so the nights held are consecutive. A held night counts
+ * only when it is the previous UTC day; any other (a skipped night, or today's
+ * own earlier run) restarts the count at one, so two runs on one UTC day count
+ * once and a manual dispatch cannot satisfy the rule.
+ *
+ * An entry that already holds `PROMOTE_NIGHTS` nights is SETTLED and is kept
+ * byte-identical through a night that does not qualify, as the sibling
+ * `publishIdleEvictionDoc` seam keeps a published row (`holdSettledCell`): a
+ * night over the cold-start cap, under the RSS floor, inconclusive or
+ * unavailable could not tell, and it does not erase evidence the policy already
+ * earned (#5747 F1). Only a hard veto (the respawn failed or the coverage
+ * narrowed) or a policy that no longer reads `unmeasured` empties it, so a
+ * settled server cannot be promoted on the strength of nights it has since
+ * failed, and a promoted or `resident` server stops being re-proposed.
  *
  * @param {NightState | undefined} prior
  * @param {readonly object[]} rows  this run's summary rows
@@ -84,12 +93,13 @@ export function advanceNights(prior, rows, today) {
 	/** @type {NightState} */
 	const next = {};
 	for (const row of rows) {
-		if (!qualifies(row)) continue;
 		const held = prior?.[row.serverId]?.nights ?? [];
 		if (held.length >= PROMOTE_NIGHTS) {
+			if (row.result === "vetoed" || row.declared !== "unmeasured") continue;
 			next[row.serverId] = { nights: held.slice(-PROMOTE_NIGHTS) };
 			continue;
 		}
+		if (!qualifies(row)) continue;
 		/** @type {Night} */
 		const night = {
 			day: today,
