@@ -449,12 +449,16 @@ Maximum log size (MB) before rotation. **Default:** `10`. A positive integer,
 or `0` / `off` / `unlimited` to never rotate. An unusable value falls back to
 the default and the session start report names it.
 
-### `PI_LENS_READ_GUARD_MAX_BYTES` and `PI_LENS_AW_LOG_MAX_BYTES`
+### Log byte caps
 
-Maximum size (bytes) of `read-guard.log` and `actionable-warnings.log` before
-the one backup is replaced. **Default:** `1048576`; a positive value below
-`131072` is raised to it. `0` / `off` / `unlimited` never rotates. An unusable
-value falls back to the default and the session start report names it.
+`PI_LENS_READ_GUARD_MAX_BYTES`, `PI_LENS_AW_LOG_MAX_BYTES`,
+`PI_LENS_AST_GREP_LOG_MAX_BYTES`, `PI_LENS_DISPOSITION_LOG_MAX_BYTES` and
+`PI_LENS_DEAD_CODE_LOG_MAX_BYTES`: maximum size (bytes) of `read-guard.log`,
+`actionable-warnings.log`, `ast-grep-tools.log`, `dispositions.log` and
+`dead-code.log` before the one backup is replaced. **Default:** `1048576`; a
+positive value below `131072` is raised to it. `0` / `off` / `unlimited` never
+rotates. An unusable value falls back to the default and the session start
+report names it.
 
 ## Diagnostic-only knobs
 

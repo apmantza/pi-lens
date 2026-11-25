@@ -51,6 +51,18 @@ export const LOG_LIMIT_ENVS = {
 		name: "PI_LENS_AW_LOG_MAX_BYTES",
 		default: 1048576,
 	},
+	astGrepMaxBytes: {
+		name: "PI_LENS_AST_GREP_LOG_MAX_BYTES",
+		default: 1048576,
+	},
+	dispositionMaxBytes: {
+		name: "PI_LENS_DISPOSITION_LOG_MAX_BYTES",
+		default: 1048576,
+	},
+	deadCodeMaxBytes: {
+		name: "PI_LENS_DEAD_CODE_LOG_MAX_BYTES",
+		default: 1048576,
+	},
 } as const;
 
 /** The effective value of one log limit; `UNLIMITED` when the variable says so. */

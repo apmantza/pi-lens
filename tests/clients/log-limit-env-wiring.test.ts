@@ -1,5 +1,6 @@
 /**
- * The byte caps of `read-guard.log` and `actionable-warnings.log` go through the
+ * The byte caps of `read-guard.log`, `actionable-warnings.log`,
+ * `ast-grep-tools.log`, `dispositions.log` and `dead-code.log` go through the
  * same limit reader as the retention and rotation limits (#5771): `0`, `off`
  * or `unlimited` is no cap, and an unusable value is named by
  * `unusableLogLimitEnv()` instead of silently becoming the default.
@@ -24,24 +25,100 @@ afterEach(() => {
 	for (const home of homes.splice(0)) removeTempDirSync(home);
 });
 
+interface Emitter {
+	emit: (padding: string) => void;
+	logName: string;
+	/** Roughly the bytes one emitted line adds; only the 0.5x and 1.5x margins depend on it. */
+	lineBytes: number;
+}
+
 /** The module's real log call, narrowed to one padded string per line. */
-async function loadEmitter(
-	moduleName: string,
-): Promise<(padding: string) => void> {
-	if (moduleName === "read-guard-logger") {
-		const { logReadGuardEvent } =
-			await import("../../clients/read-guard-logger.js");
-		return (symbol) =>
-			logReadGuardEvent({
-				event: "edit_blocked",
-				filePath: "/scratch/file.ts",
-				symbol,
-			});
+async function loadEmitter(moduleName: string): Promise<Emitter> {
+	switch (moduleName) {
+		case "read-guard-logger": {
+			const { logReadGuardEvent } =
+				await import("../../clients/read-guard-logger.js");
+			return {
+				emit: (symbol) =>
+					logReadGuardEvent({
+						event: "edit_blocked",
+						filePath: "/scratch/file.ts",
+						symbol,
+					}),
+				logName: "read-guard.log",
+				lineBytes: LINE_BYTES,
+			};
+		}
+		case "ast-grep-tool-logger": {
+			const { logAstGrepToolEvent } =
+				await import("../../clients/ast-grep-tool-logger.js");
+			// The logger truncates the pattern at 500 characters, so a line is small.
+			return {
+				emit: (pattern) =>
+					logAstGrepToolEvent({
+						tool: "ast_grep_search",
+						lang: "typescript",
+						pattern,
+						patternLineCount: 1,
+						pathsCount: 1,
+						outcome: "success",
+						matchCount: 0,
+						truncated: false,
+						durationMs: 1,
+					}),
+				logName: "ast-grep-tools.log",
+				lineBytes: 700,
+			};
+		}
+		case "disposition-logger": {
+			const { logDispositionEvent } =
+				await import("../../clients/disposition-logger.js");
+			return {
+				emit: (reason) =>
+					logDispositionEvent({
+						event: "mark",
+						disposition: "false-positive",
+						filePath: "src/file.ts",
+						anchor: "anchor",
+						reason,
+					}),
+				logName: "dispositions.log",
+				lineBytes: LINE_BYTES,
+			};
+		}
+		case "dead-code-logger": {
+			const { logDeadCodeScan } =
+				await import("../../clients/dead-code-logger.js");
+			return {
+				emit: (reason) =>
+					logDeadCodeScan({
+						language: "typescript",
+						success: true,
+						cached: false,
+						unusedExports: 0,
+						unusedFiles: 0,
+						unusedDeps: 0,
+						unlistedDeps: 0,
+						reason,
+					}),
+				logName: "dead-code.log",
+				lineBytes: LINE_BYTES,
+			};
+		}
+		default: {
+			const { logActionableWarningsEvent } =
+				await import("../../clients/actionable-warnings-logger.js");
+			return {
+				emit: (padding) =>
+					logActionableWarningsEvent({
+						event: "scratch",
+						metadata: { padding },
+					}),
+				logName: "actionable-warnings.log",
+				lineBytes: LINE_BYTES,
+			};
+		}
 	}
-	const { logActionableWarningsEvent } =
-		await import("../../clients/actionable-warnings-logger.js");
-	return (padding) =>
-		logActionableWarningsEvent({ event: "scratch", metadata: { padding } });
 }
 
 /**
@@ -62,16 +139,11 @@ async function rotatesAfter(
 	vi.stubEnv("PI_LENS_TEST_MODE", "0");
 	vi.resetModules();
 	const padding = "x".repeat(LINE_BYTES);
-	const lines = Math.ceil(bytes / LINE_BYTES);
 	const { flushAllNdjsonWriters } =
 		await import("../../clients/ndjson-logger.js");
-	const emit = await loadEmitter(moduleName);
-	const logFile = path.join(
-		home,
-		moduleName === "read-guard-logger"
-			? "read-guard.log"
-			: "actionable-warnings.log",
-	);
+	const { emit, logName, lineBytes } = await loadEmitter(moduleName);
+	const lines = Math.ceil(bytes / lineBytes);
+	const logFile = path.join(home, logName);
 	for (let i = 0; i < lines; i++) {
 		emit(padding);
 		// The sink plans a rotation per drain, so a batch queued in one tick is
@@ -86,6 +158,9 @@ async function rotatesAfter(
 describe.each([
 	["read-guard-logger", "PI_LENS_READ_GUARD_MAX_BYTES"],
 	["actionable-warnings-logger", "PI_LENS_AW_LOG_MAX_BYTES"],
+	["ast-grep-tool-logger", "PI_LENS_AST_GREP_LOG_MAX_BYTES"],
+	["disposition-logger", "PI_LENS_DISPOSITION_LOG_MAX_BYTES"],
+	["dead-code-logger", "PI_LENS_DEAD_CODE_LOG_MAX_BYTES"],
 ])("%s byte cap", (moduleName, envName) => {
 	it.each(["0", "off", "Unlimited"])(
 		"never rotates past the default size when the value is %s",
