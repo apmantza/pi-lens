@@ -20,6 +20,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { writeFileAtomic } from "../atomic-write.js";
+import { hashContentBytes } from "../content-stamp.js";
 import { incrementDegradationCount } from "../degradation-ledger.js";
 import { DEFAULT_MAX_OUTPUT_BYTES } from "../spawn-output-cap.js";
 import type { LSPCodeAction, LSPDiagnostic } from "../lsp/client.js";
@@ -427,7 +428,7 @@ export type WarmDiagnosticsResult =
 	| { available: false; reason: WarmDiagnosticsFailureReason };
 
 export function contentHash(content: string): string {
-	return crypto.createHash("sha256").update(content).digest("hex");
+	return hashContentBytes(Buffer.from(content, "utf8"));
 }
 
 type WarmIpcOutcome<TResponse> =
