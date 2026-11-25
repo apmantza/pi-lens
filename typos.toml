@@ -85,7 +85,7 @@ extend-ignore-re = [
   # Herriges) split into the flagged `ody` and redded master after the 4.5.2
   # credit (#5755). Ignore the anchor of the contribution types the table
   # uses, not the word, so a real `ody` typo elsewhere still reds.
-  'href="#(?:bug|code|doc|ideas|maintenance|review|test|infra|tool|design|example|platform|security|research|question)-[^"]+"',
+  'href="#(?:bug|code|doc|ideas|maintenance|review|test|infra|tool|design|example|platform|security|research|question)-[A-Za-z0-9-]+"',
 ]
 
 # Dictionary tuning — reaches BOTH lanes (typos-lsp and typos-cli).
