@@ -154,69 +154,73 @@ describe("AGENTS.md trigger-block governance (#3259)", () => {
 		).toEqual([]);
 	});
 
-	it("refuses a trigger line the gate cannot read (#5753)", () => {
-		// Recurrence: a gate that passes a trigger it cannot resolve. Each planted
-		// line is one spelling the catalog test above must red on.
-		const refused = (line: string) => triggerProblems(line).join("; ");
-		expect(refused("")).toMatch(/no `<!-- trigger/);
-		expect(refused('<!-- trigger: {"paths": []} -->')).toMatch(/non-empty/);
-		expect(refused('<!-- trigger: {"paths": ["no/such/dir/**"]} -->')).toMatch(
-			/matches no tracked file/,
-		);
-		expect(refused('<!-- trigger: {"always": false} -->')).toMatch(/always/);
-		expect(refused('<!-- trigger: {"always": true, "diff": "x"} -->')).toMatch(
-			/always/,
-		);
-		expect(refused('<!-- trigger: {"glob": ["a"]} -->')).toMatch(/unknown/);
-		expect(refused("<!-- trigger: {} -->")).toMatch(/no path/);
-		expect(refused("<!-- trigger: {oops} -->")).toMatch(/parse/);
-		expect(refused('<!-- trigger: {"diff": "("} -->')).toMatch(/compile/);
-		// Review 5754 F2: every guard in `triggerProblems` reds under a hand
-		// mutation, so every one of them carries a plant. A guard no plant can
-		// red is a guard that does not need to exist.
-		expect(refused("<!-- trigger: [] -->")).toMatch(/not an object/);
-		expect(refused("<!-- trigger: null -->")).toMatch(/not an object/);
-		expect(refused('<!-- trigger: {"paths": "index.ts"} -->')).toMatch(
-			/non-empty list of globs/,
-		);
-		expect(refused('<!-- trigger: {"paths": [""]} -->')).toMatch(
-			/non-empty list of globs/,
-		);
-		expect(refused('<!-- trigger: {"diff": ""} -->')).toMatch(
-			/non-empty regex string/,
-		);
-		expect(refused('<!-- trigger: {"diff": 1} -->')).toMatch(
-			/non-empty regex string/,
-		);
-		// Review 5754 F3: an empty alternation branch makes a regex match every
-		// added line of every diff, so it is `{"always": true}` respelled.
-		expect(refused('<!-- trigger: {"diff": "foo|"} -->')).toMatch(
-			/matches the empty string/,
-		);
-		expect(refused('<!-- trigger: {"diff": "^"} -->')).toMatch(
-			/matches the empty string/,
-		);
-		// Review 5754 F3: the population is git's tracked set, so a selector that
-		// only reaches a directory or a gitignored build twin is dead in every
-		// real diff, and one outside the checkout is never in one.
-		for (const glob of ["clients/lsp", "clients/path-*.js"])
+	it(
+		"refuses a trigger line the gate cannot read (#5753)",
+		() => {
+			// Recurrence: a gate that passes a trigger it cannot resolve. Each planted
+			// line is one spelling the catalog test above must red on.
+			const refused = (line: string) => triggerProblems(line).join("; ");
+			expect(refused("")).toMatch(/no `<!-- trigger/);
+			expect(refused('<!-- trigger: {"paths": []} -->')).toMatch(/non-empty/);
 			expect(
-				refused(`<!-- trigger: {"paths": ["${glob}"]} -->`),
-				`${glob} selects no tracked file`,
+				refused('<!-- trigger: {"paths": ["no/such/dir/**"]} -->'),
 			).toMatch(/matches no tracked file/);
-		expect(
-			refused('<!-- trigger: {"paths": ["/etc/hosts"]} -->'),
-			"a path outside the checkout is never in a diff",
-		).toMatch(/is not relative to the repo/);
-		// Review 5754 F1: a `-->` inside the JSON ends the comment before it ends.
-		expect(refused('<!-- trigger: {"diff": "a-->b"} -->')).toMatch(
-			/ends the comment/,
-		);
-		expect(refused('<!-- trigger: {"always": true} -->')).toBe("");
-		expect(
-			refused('<!-- trigger: {"paths": ["index.ts"], "diff": "x"} -->'),
-		).toBe("");
-	});
+			expect(refused('<!-- trigger: {"always": false} -->')).toMatch(/always/);
+			expect(
+				refused('<!-- trigger: {"always": true, "diff": "x"} -->'),
+			).toMatch(/always/);
+			expect(refused('<!-- trigger: {"glob": ["a"]} -->')).toMatch(/unknown/);
+			expect(refused("<!-- trigger: {} -->")).toMatch(/no path/);
+			expect(refused("<!-- trigger: {oops} -->")).toMatch(/parse/);
+			expect(refused('<!-- trigger: {"diff": "("} -->')).toMatch(/compile/);
+			// Review 5754 F2: every guard in `triggerProblems` reds under a hand
+			// mutation, so every one of them carries a plant. A guard no plant can
+			// red is a guard that does not need to exist.
+			expect(refused("<!-- trigger: [] -->")).toMatch(/not an object/);
+			expect(refused("<!-- trigger: null -->")).toMatch(/not an object/);
+			expect(refused('<!-- trigger: {"paths": "index.ts"} -->')).toMatch(
+				/non-empty list of globs/,
+			);
+			expect(refused('<!-- trigger: {"paths": [""]} -->')).toMatch(
+				/non-empty list of globs/,
+			);
+			expect(refused('<!-- trigger: {"diff": ""} -->')).toMatch(
+				/non-empty regex string/,
+			);
+			expect(refused('<!-- trigger: {"diff": 1} -->')).toMatch(
+				/non-empty regex string/,
+			);
+			// Review 5754 F3: an empty alternation branch makes a regex match every
+			// added line of every diff, so it is `{"always": true}` respelled.
+			expect(refused('<!-- trigger: {"diff": "foo|"} -->')).toMatch(
+				/matches the empty string/,
+			);
+			expect(refused('<!-- trigger: {"diff": "^"} -->')).toMatch(
+				/matches the empty string/,
+			);
+			// Review 5754 F3: the population is git's tracked set, so a selector that
+			// only reaches a directory or a gitignored build twin is dead in every
+			// real diff, and one outside the checkout is never in one.
+			for (const glob of ["clients/lsp", "clients/path-*.js"])
+				expect(
+					refused(`<!-- trigger: {"paths": ["${glob}"]} -->`),
+					`${glob} selects no tracked file`,
+				).toMatch(/matches no tracked file/);
+			expect(
+				refused('<!-- trigger: {"paths": ["/etc/hosts"]} -->'),
+				"a path outside the checkout is never in a diff",
+			).toMatch(/is not relative to the repo/);
+			// Review 5754 F1: a `-->` inside the JSON ends the comment before it ends.
+			expect(refused('<!-- trigger: {"diff": "a-->b"} -->')).toMatch(
+				/ends the comment/,
+			);
+			expect(refused('<!-- trigger: {"always": true} -->')).toBe("");
+			expect(
+				refused('<!-- trigger: {"paths": ["index.ts"], "diff": "x"} -->'),
+			).toBe("");
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("keeps every numbered defect shape exactly once", () => {
 		const numbers = shapeNumbers(catalogText());

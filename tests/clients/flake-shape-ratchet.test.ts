@@ -1282,6 +1282,15 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the claim is what a CHILD process sees of the worker's environment, the inheritance the #4780 opengrep writes into the real home depended on; an in-process read of process.env proves the worker, not the child, and the probe child only prints its environment",
 	},
+	// 2026-11-23 (review 5754 F3): the trigger gate's glob population is git's
+	// own tracked list, so a directory, a gitignored build twin and a path
+	// outside the checkout are refused the way a real diff refuses them; a
+	// filesystem walk admits all three.
+	"real-process-spawn:config/agents-governance.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the glob gate validates each catalog selector against `git ls-files`, which is the population a PR diff draws from; a filesystem walk would admit a directory, a gitignored build twin and an out-of-checkout path that no diff contains",
+	},
 	// 2026-11-13 (#5072): the baseline census takes its population from git's
 	// tracked list, which only a real git answers.
 	"real-process-spawn:config/baseline-owner-governance.test.ts": {
