@@ -1385,7 +1385,7 @@ export function getTouchedLinesForGuard(
 			} else if (oldTextTouchedLines) {
 				allEditRanges.push(oldTextTouchedLines);
 			}
-			const editRanges = allEditRanges.length > 0 ? allEditRanges : undefined;
+			const editRanges = allEditRanges.length > 1 ? allEditRanges : undefined;
 			if (filePath) {
 				logReadGuardEvent({
 					event: "touched_lines_detected",
