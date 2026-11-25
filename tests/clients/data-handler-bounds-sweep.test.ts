@@ -109,8 +109,11 @@ const REGISTRY: Readonly<Record<string, BoundedHandlers>> = {
 	"clients/installer/index.ts": {
 		handlers: 1,
 		bound:
-			"The two interpreter user-base probes (#3383's createBoundedOutputSink pair) moved onto the spawn seam's own output cap in #4530 and attach no handler here. The two Buffer[] sinks — the HTTPS asset body and the gunzip of it — are deliberately UNBOUNDED: `Buffer.concat` has no reachable length ceiling (buffer.constants.MAX_LENGTH is 9007199254740991 on Node 22), so there is no throw to convert into a bounded result, the failure mode is host OOM, and any byte cap would refuse an asset the user explicitly asked to install (#3383 non-goal).",
-		evidence: ["Buffer.concat(chunks)"],
+			"The GitHub API metadata response is capped at MAX_GITHUB_METADATA_BYTES before Buffer.concat; asset and rule-pack payloads use the streaming temp-file seam.",
+		evidence: [
+			"totalBytes > MAX_GITHUB_METADATA_BYTES",
+			"Buffer.concat(chunks)",
+		],
 	},
 	"clients/installer/download.ts": {
 		handlers: 2,

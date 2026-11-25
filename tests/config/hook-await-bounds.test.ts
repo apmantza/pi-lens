@@ -2681,7 +2681,12 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// hook, and each network/spawn await carries its own timeout
 	// (PACK_FETCH_TIMEOUT_MS, PACK_VALIDATE_TIMEOUT_MS); none can take the hook's
 	// signal until #2523 AC4 threads it, so this records the measured increase.
-	"clients/installer/managed-tool-refresh.ts": 56,
+	// 56 -> 53 (#5701): the streaming downloader removes the fetch reader,
+	// cancellation, and destination read awaits; its one bounded-resource
+	// download await remains. This refresh is timer-launched, never inline in a
+	// hook, so its network and spawn ceilings remain the owner of its waits until
+	// #2523 AC4 threads a hook signal through installer dependencies.
+	"clients/installer/managed-tool-refresh.ts": 53,
 	// #3538/#3539 add five in each. The reaper reads start times and owner
 	// tags before its backstop decision and asks again before every signal
 	// (the identity query, its re-check, and the kill's own confirm await);

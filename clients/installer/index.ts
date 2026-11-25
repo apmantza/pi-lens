@@ -4102,6 +4102,8 @@ interface HttpGetResponse {
 	etag?: string;
 }
 
+const MAX_GITHUB_METADATA_BYTES = 2 * 1024 * 1024;
+
 /**
  * Fetch a URL, following up to `maxRedirects` redirects, and surface the status
  * line and `ETag` alongside the body.
@@ -4161,7 +4163,19 @@ function httpsGetWithMeta(
 						);
 					}
 					const chunks: Buffer[] = [];
-					res.on("data", (chunk: Buffer) => chunks.push(chunk));
+					let totalBytes = 0;
+					res.on("data", (chunk: Buffer) => {
+						chunks.push(chunk);
+						totalBytes += chunk.length;
+						if (totalBytes > MAX_GITHUB_METADATA_BYTES) {
+							res.destroy();
+							reject(
+								new Error(
+									`GitHub metadata exceeds ${MAX_GITHUB_METADATA_BYTES} bytes`,
+								),
+							);
+						}
+					});
 					res.on("end", () =>
 						resolve({ statusCode: 200, body: Buffer.concat(chunks), etag }),
 					);
