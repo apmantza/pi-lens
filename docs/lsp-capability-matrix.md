@@ -275,7 +275,7 @@ carries the named admission until then.
 | json | vscode-json-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | pi-lens-auto | — |
 | css | vscode-css-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | pi-lens-auto | — |
 | html | vscode-html-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | pi-lens-auto | — |
-| rust | rust-analyzer | pull | — | n/a (pull) | 1 | dev+ci | 0.3.3121-standalone | global-path | — |
+| rust | rust-analyzer | pull | — | n/a (pull) | 1 | dev+ci | 0.3.3130-standalone | global-path | — |
 | svelte | svelte-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | pi-lens-auto | — |
 | deno | deno (alt of typescript) | pull | — | n/a (pull) | 1 | dev+ci | 2.9.8 | global-path | — |
 | ruby | ruby-lsp | pull | — | n/a (pull) | 1 | ci | — | — | — |
@@ -309,7 +309,7 @@ carries the named admission until then.
 | expert | Expert (alternate of ElixirLS) | push-only | publishes-unversioned | unknown | 2* | ci | 17.0.1 | global-path | — |
 | typst | tinymist | push-only | publishes-unversioned | direct | 2* | ci | 51.256320801 | global-path | — |
 | fish | fish-lsp | push-only | publishes-unversioned | direct | 2* | ci | 1.1.5 | pi-lens-auto | — |
-| zizmor | zizmor (auxiliary) | push-only | publishes-versioned | direct | 2 | ci | 1.32.0 | global-path | — |
+| zizmor | zizmor (auxiliary) | push-only | publishes-versioned | direct | 2 | ci | 1.33.1 | global-path | — |
 | typos | typos (auxiliary) | push-only | publishes-versioned | direct | 2 | ci | — | global-path | — |
 
 **Servers without a row.** A server gets a row the first night characterize-lsp
@@ -508,7 +508,7 @@ dispatched nightly replaces it on the first night that reaches the server.
 | csharp | `save+text` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 1 diagnostic. Gated. | `node scripts/probe-save-verdict.mjs` (fixture csharp) |
 | deno | `save` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 1 diagnostic. Gated. | `node scripts/probe-save-verdict.mjs` (fixture deno) |
 | svelte | `save` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 2 diagnostics. Gated. | `node scripts/probe-save-verdict.mjs` (fixture svelte) |
-| powershell | `save+text` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 1 publish event. Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture powershell) |
+| powershell | `save+text` | yes | Measured: only the save published — silent on didOpen (6000 ms), then 1 publish event after the save alone. Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture powershell) |
 | cmake | `save` | inconclusive | Measured: inconclusive — no arm published, so this fixture does not distinguish a save-triggered server from one that never diagnoses it (arms: no-save silent (6000 ms), save alone silent (6000 ms), saved write silent (6000 ms)). Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture cmake) |
 
 Notes.
@@ -586,5 +586,5 @@ the pending `idle-eviction-doc` flips (#5667).
 Regenerated every run; never a measurement.
 
 ```json
-{"clean-behavior":{"fallow":{"pendingBehavior":"silent","pendingTier":"3","runs":1}},"first-publish":{"fallow":{"pendingFirstPublish":"direct","runs":1}},"idle-eviction":{"csharp":{"nights":[{"day":"2026-11-19","rssMb":236,"coldMs":2942},{"day":"2026-11-20","rssMb":237,"coldMs":2951}]},"dart":{"nights":[{"day":"2026-11-06","rssMb":75,"coldMs":511},{"day":"2026-11-07","rssMb":75,"coldMs":538}]},"go":{"nights":[{"day":"2026-11-06","rssMb":89,"coldMs":567},{"day":"2026-11-07","rssMb":90,"coldMs":595}]},"kotlin":{"nights":[{"day":"2026-11-16","rssMb":264,"coldMs":2805},{"day":"2026-11-17","rssMb":288,"coldMs":2409}]},"powershell":{"nights":[{"day":"2026-11-16","rssMb":171,"coldMs":2165},{"day":"2026-11-17","rssMb":189,"coldMs":1934}]},"rust":{"nights":[{"day":"2026-11-16","rssMb":699,"coldMs":2909},{"day":"2026-11-17","rssMb":631,"coldMs":2607}]},"svelte":{"nights":[{"day":"2026-11-16","rssMb":233,"coldMs":2540},{"day":"2026-11-17","rssMb":228,"coldMs":2342}]}}}
+{"clean-behavior":{"fallow":{"pendingBehavior":"silent","pendingTier":"3","runs":1}},"first-publish":{"fallow":{"pendingFirstPublish":"direct","runs":1}},"idle-eviction":{"dart":{"nights":[{"day":"2026-11-06","rssMb":75,"coldMs":511},{"day":"2026-11-07","rssMb":75,"coldMs":538}]},"go":{"nights":[{"day":"2026-11-06","rssMb":89,"coldMs":567},{"day":"2026-11-07","rssMb":90,"coldMs":595}]}},"save-verdict":{"powershell":{"pendingSaveVerdict":"no","runs":1}}}
 ```

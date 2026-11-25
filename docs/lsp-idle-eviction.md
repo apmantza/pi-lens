@@ -15,7 +15,7 @@ respawned server reports every finding it reported before eviction; the
 content-bound coverage check the auxiliary freeze depends on. A server that
 cannot demonstrate it is never proposed for eviction on perf grounds alone.
 
-_Last generated: 2026-11-21 on linux; 51 registry servers: 38 eligible, 0 vetoed, 3 inconclusive, 10 unavailable (0 not reached: budget)._
+_Last generated: 2026-11-25 on linux; 51 registry servers: 38 eligible, 0 vetoed, 3 inconclusive, 10 unavailable (0 not reached: budget)._
 
 ## Per-server rows
 
@@ -54,7 +54,7 @@ step log only, because it flaps.
 | docker | primary | transparent | eligible | · | ok | preserved |
 | docker-official | primary | transparent | eligible | · | ok | preserved |
 | elixir | primary | unmeasured | unavailable | server-not-started | n/a | n/a |
-| expert | primary | unmeasured | eligible | · | ok | preserved |
+| expert | primary | resident | eligible | · | ok | preserved |
 | fallow | auxiliary | unmeasured | eligible | · | ok | preserved |
 | fish | primary | transparent | eligible | · | ok | preserved |
 | fsharp | primary | unmeasured | inconclusive | no-baseline | n/a | unproven |
@@ -65,7 +65,7 @@ step log only, because it flaps.
 | html | primary | transparent | eligible | · | ok | preserved |
 | java | primary | unmeasured | unavailable | server-not-started | n/a | n/a |
 | json | primary | transparent | eligible | · | ok | preserved |
-| kotlin | primary | unmeasured | eligible | · | ok | preserved |
+| kotlin | primary | resident | eligible | · | ok | preserved |
 | lean | primary | unmeasured | unavailable | server-not-started | n/a | n/a |
 | lua | primary | unmeasured | eligible | · | ok | preserved |
 | marksman | primary | transparent | eligible | · | ok | preserved |
@@ -74,14 +74,14 @@ step log only, because it flaps.
 | omnisharp | primary | unmeasured | unavailable | no-fixture | n/a | n/a |
 | opengrep | auxiliary | transparent | eligible | · | ok | preserved |
 | php | primary | transparent | eligible | · | ok | preserved |
-| powershell | primary | unmeasured | eligible | · | ok | preserved |
+| powershell | primary | resident | eligible | · | ok | preserved |
 | prisma | primary | transparent | eligible | · | ok | preserved |
 | python | primary | transparent | eligible | · | ok | preserved |
 | python-jedi | primary | transparent | eligible | · | ok | preserved |
 | ruby | primary | unmeasured | eligible | · | ok | preserved |
-| rust | primary | unmeasured | eligible | · | ok | preserved |
+| rust | primary | resident | eligible | · | ok | preserved |
 | shuck | primary | unmeasured | unavailable | server-not-started | n/a | n/a |
-| svelte | primary | unmeasured | eligible | · | ok | preserved |
+| svelte | primary | resident | eligible | · | ok | preserved |
 | swift | primary | unmeasured | unavailable | server-not-started | n/a | n/a |
 | terraform | primary | unmeasured | eligible | · | ok | preserved |
 | tinymist | primary | unmeasured | eligible | · | ok | preserved |
@@ -103,16 +103,16 @@ nothing.
 - **csharp** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **cue** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **dart** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **expert** [proposal] declared unmeasured but eviction and respawn preserved its findings
+- **expert** [info] declared resident although eviction and respawn preserved its findings
 - **fallow** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **gleam** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **go** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **kotlin** [proposal] declared unmeasured but eviction and respawn preserved its findings
+- **kotlin** [info] declared resident although eviction and respawn preserved its findings
 - **lua** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **powershell** [proposal] declared unmeasured but eviction and respawn preserved its findings
+- **powershell** [info] declared resident although eviction and respawn preserved its findings
 - **ruby** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **rust** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **svelte** [proposal] declared unmeasured but eviction and respawn preserved its findings
+- **rust** [info] declared resident although eviction and respawn preserved its findings
+- **svelte** [info] declared resident although eviction and respawn preserved its findings
 - **terraform** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **tinymist** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **toml** [proposal] declared unmeasured but eviction and respawn preserved its findings
