@@ -40,6 +40,7 @@ export interface Skipped {
 export function selectPromotions(
 	state: NightState,
 	hold: ReadonlyMap<string, string>,
+	rows: readonly IdleEvictionRow[],
 ): {
 	promote: Promotion[];
 	skipped: Skipped[];
