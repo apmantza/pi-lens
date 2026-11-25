@@ -182,6 +182,48 @@ describe("background write drains across module copies (#4937)", () => {
 		}
 	});
 
+	// Recurrence: #5745 r10. A drain registered after the installer's queued a
+	// probe-cache update once the installer's drain had run. One pass left that
+	// update's debounced flush armed, to write after the fixture root was
+	// removed; the installer's pending signal sends the runner round again.
+	it("flushes a probe-cache update a later drain queued, in another pass", async () => {
+		const env = setupTestEnvironment("bwd-probe-cache-late-");
+		let other: typeof import("../../clients/installer/index.js") | undefined;
+		try {
+			const home = path.join(env.tmpDir, "home");
+			fs.mkdirSync(home, { recursive: true });
+			pinEnv(home, path.join(env.tmpDir, "data"));
+			const tool = path.join(env.tmpDir, "tool.sh");
+			fs.writeFileSync(tool, "#!/bin/sh\n");
+			vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+			vi.resetModules();
+			const installer = await import("../../clients/installer/index.js");
+			other = installer;
+			let queued = false;
+			async function lateProbeCacheWriterForTests(): Promise<
+				string | undefined
+			> {
+				if (!queued) {
+					queued = true;
+					await installer.updateProbeCache("probe-tool", tool);
+				}
+				return undefined;
+			}
+			registerBackgroundWriteDrain(lateProbeCacheWriterForTests, () => false);
+
+			await drainRegisteredBackgroundWritesForTests();
+
+			const cacheFile = path.join(home, "probe-cache.json");
+			expect(
+				Object.keys(JSON.parse(fs.readFileSync(cacheFile, "utf-8"))),
+			).toEqual(["probe-tool"]);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			other?.resetProbeCacheStateForTesting();
+			env.cleanup();
+		}
+	});
+
 	// Recurrence: #5745 r10. The runner repeats passes until no drain reports
 	// pending work, so a pending signal that never clears would hold a file's
 	// teardown until the hook timeout cut it, with no record of why. The
