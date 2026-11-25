@@ -175,6 +175,8 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 		"terminal behavior cases, not a production population sweep",
 	"tests/clients/gzip-stage-write.test.ts":
 		"gzip stage cases, not a production population sweep",
+	"tests/clients/log-cleanup.test.ts":
+		"log retention and rotation behavior cases over a fixture home (#5702, #5771); its readdirSync lists one scratch session dir and the toEqual([]) assertions are on one run's invalid-value list, not a production population sweep",
 	"tests/clients/installer/install-lock.test.ts":
 		"lock behavior cases; it lists one lock directory and asserts an empty " +
 		"degradation ledger, not a production population sweep",

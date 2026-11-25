@@ -61,10 +61,12 @@ export function getLogLimit(key: keyof typeof LOG_LIMIT_ENVS): number {
 
 /** Each log-limit variable that holds an unusable value, as `NAME=value`. */
 export function unusableLogLimitEnv(): string[] {
-	return Object.values(LOG_LIMIT_ENVS).flatMap(({ name, default: defaultValue }) => {
-		const { invalid } = readLimitFromEnv(name, defaultValue);
-		return invalid === undefined ? [] : [invalid];
-	});
+	return Object.values(LOG_LIMIT_ENVS).flatMap(
+		({ name, default: defaultValue }) => {
+			const { invalid } = readLimitFromEnv(name, defaultValue);
+			return invalid === undefined ? [] : [invalid];
+		},
+	);
 }
 
 /** Rotation threshold for every active `~/.pi-lens/*.log`, in MB. */

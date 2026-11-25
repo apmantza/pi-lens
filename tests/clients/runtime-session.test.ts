@@ -487,15 +487,23 @@ it(
 		vi.stubEnv("PI_LENS_LOG_RETENTION_DAYS", "seven");
 		const { env, notify } = await runSessionStart("quick");
 		try {
-			await vi.waitFor(
-				() =>
-					expect(notify).toHaveBeenCalledWith(
-						expect.stringContaining(
-							"ignored unusable PI_LENS_LOG_RETENTION_DAYS=seven",
-						),
-						"warning",
+			await waitForCondition(
+				() => notify.mock.calls,
+				(calls) =>
+					calls.some(
+						([message, level]) =>
+							level === "warning" &&
+							String(message).includes(
+								"ignored unusable PI_LENS_LOG_RETENTION_DAYS=seven",
+							),
 					),
-				{ timeout: HEAVY_IO_TIMEOUT_MS },
+				{ timeoutMs: HEAVY_IO_TIMEOUT_MS },
+			);
+			expect(notify).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"ignored unusable PI_LENS_LOG_RETENTION_DAYS=seven",
+				),
+				"warning",
 			);
 		} finally {
 			vi.unstubAllEnvs();

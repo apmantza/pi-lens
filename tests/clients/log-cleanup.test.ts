@@ -133,6 +133,7 @@ describe("runLogCleanup retention rows (#5702)", () => {
 		else process.env.PI_LENS_HOME = savedRetainHome;
 		if (savedRetainDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 		else process.env.PILENS_DATA_DIR = savedRetainDataDir;
+		vi.unstubAllEnvs();
 		removeTempDirSync(home);
 	});
 
@@ -227,10 +228,6 @@ describe("runLogCleanup retention rows (#5702)", () => {
 	describe.each(["0", "off", "Unlimited"])(
 		"PI_LENS_LOG_RETENTION_DAYS=%s",
 		(value) => {
-			afterEach(() => {
-				vi.unstubAllEnvs();
-			});
-
 			it("keeps every aged file instead of falling back to 7 days", async () => {
 				vi.stubEnv("PI_LENS_LOG_RETENTION_DAYS", value);
 				const ancientSpill = path.join(
@@ -262,7 +259,6 @@ describe("runLogCleanup retention rows (#5702)", () => {
 
 		const { runLogCleanup } = await loadCleanup();
 		const result = await runLogCleanup();
-		vi.unstubAllEnvs();
 
 		expect(fs.existsSync(oldSpill)).toBe(false);
 		expect(result.invalid).toEqual(["PI_LENS_LOG_RETENTION_DAYS=seven"]);
@@ -281,7 +277,6 @@ describe("runLogCleanup retention rows (#5702)", () => {
 		expect(rotateLogIfNeeded(activeLog).rotated).toBe(false);
 		vi.stubEnv("PI_LENS_MAX_LOG_SIZE_MB", "1");
 		expect(rotateLogIfNeeded(activeLog).rotated).toBe(true);
-		vi.unstubAllEnvs();
 	});
 
 	it("removes an orphaned project data dir and keeps a live one, an unrecognized name and the ephemeral base", async () => {
