@@ -64,6 +64,11 @@ function previousDay(day) {
 		.slice(0, 10);
 }
 
+/** True when a night-state entry already holds `PROMOTE_NIGHTS` qualifying nights (#5747). */
+export function isSettledPair(entry) {
+	return Array.isArray(entry?.nights) && entry.nights.length >= PROMOTE_NIGHTS;
+}
+
 /**
  * Advance the per-server night memory by one run. A server without a settled
  * entry keeps (or gains) a night only when this run's row qualifies; every
@@ -93,8 +98,9 @@ export function advanceNights(prior, rows, today) {
 	/** @type {NightState} */
 	const next = {};
 	for (const row of rows) {
-		const held = prior?.[row.serverId]?.nights ?? [];
-		if (held.length >= PROMOTE_NIGHTS) {
+		const entry = prior?.[row.serverId];
+		const held = entry?.nights ?? [];
+		if (isSettledPair(entry)) {
 			if (row.result === "vetoed" || row.declared !== "unmeasured") continue;
 			next[row.serverId] = { nights: held.slice(-PROMOTE_NIGHTS) };
 			continue;
@@ -128,8 +134,9 @@ export function selectPromotions(state, hold, rows) {
 	const promote = [];
 	const skipped = [];
 	for (const serverId of Object.keys(state).sort()) {
-		const nights = state[serverId].nights;
-		if (nights.length < PROMOTE_NIGHTS) {
+		const entry = state[serverId];
+		const nights = entry.nights;
+		if (!isSettledPair(entry)) {
 			skipped.push({
 				serverId,
 				reason: `pending: ${nights.length}/${PROMOTE_NIGHTS} consecutive eligible nights`,

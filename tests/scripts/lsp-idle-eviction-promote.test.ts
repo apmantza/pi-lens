@@ -855,6 +855,74 @@ describe("the nightly driver, end to end on files (#3989)", () => {
 		}
 	});
 
+	it("missing summary keeps settled pairs (C1.1)", () => {
+		const ws = workspace();
+		const settledJson = {
+			nights: [
+				{ day: "2026-11-19", rssMb: 236, coldMs: 2942 },
+				{ day: "2026-11-20", rssMb: 237, coldMs: 2951 },
+			],
+		};
+		fs.writeFileSync(
+			ws.matrixPath,
+			setRefreshStateKey(
+				fs.readFileSync(ws.matrixPath, "utf8"),
+				IDLE_EVICTION_KEY,
+				{
+					json: settledJson,
+					toml: { nights: [{ day: "2026-11-22", rssMb: 120, coldMs: 1500 }] },
+				},
+			),
+		);
+		const logged: string[] = [];
+		const promoted = promoteFromSummary({
+			summaryPath: path.join(ws.dir, "absent.json"),
+			bodyPath: ws.bodyPath,
+			matrixPath: ws.matrixPath,
+			serverPath: ws.serverPath,
+			reasonsPath: ws.reasonsPath,
+			registryPath: ws.registryPath,
+			changelogPath: ws.changelogPath,
+			today: "2026-11-23",
+			log: (l) => logged.push(l),
+		});
+		expect(promoted).toEqual([]);
+		expect(fs.readFileSync(ws.serverPath, "utf8")).toBe(FIXTURE_SERVER_TS);
+		expect(
+			parseRefreshState(fs.readFileSync(ws.matrixPath, "utf8"))[
+				IDLE_EVICTION_KEY
+			],
+		).toEqual({ json: settledJson });
+		expect(logged[0]).toContain("no readable measurement summary");
+
+		const unparseable = workspace();
+		fs.appendFileSync(
+			unparseable.matrixPath,
+			"\n## Capability matrix refresh state (nightly-generated)\n\n```json\n{corrupt\n```\n",
+		);
+		const corruptLogged: string[] = [];
+		expect(
+			promoteFromSummary({
+				summaryPath: path.join(unparseable.dir, "absent.json"),
+				matrixPath: unparseable.matrixPath,
+				serverPath: unparseable.serverPath,
+				reasonsPath: unparseable.reasonsPath,
+				registryPath: unparseable.registryPath,
+				today: "2026-11-23",
+				log: (l) => corruptLogged.push(l),
+			}),
+		).toEqual([]);
+		expect(
+			parseRefreshState(fs.readFileSync(unparseable.matrixPath, "utf8"))[
+				IDLE_EVICTION_KEY
+			],
+		).toBeUndefined();
+		expect(fs.readFileSync(unparseable.matrixPath, "utf8")).not.toContain(
+			"{corrupt",
+		);
+		expect(corruptLogged[0]).toContain("no readable measurement summary");
+	});
+
 	it("empties a settled pair on a hard veto or once the policy is no longer unmeasured", () => {
 		for (const night of [
 			row("csharp", {

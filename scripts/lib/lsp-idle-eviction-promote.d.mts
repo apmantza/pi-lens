@@ -19,6 +19,10 @@ export function parseRejectedServers(
 	text: string | null | undefined,
 ): Set<string>;
 
+export function isSettledPair(
+	entry: { nights?: readonly IdleEvictionNight[] } | null | undefined,
+): boolean;
+
 export function advanceNights(
 	prior: NightState | undefined,
 	rows: readonly IdleEvictionRow[],
