@@ -25,6 +25,7 @@ import {
 import { compactRenderResult } from "./render-compact.js";
 import { combineAbortSignals } from "../clients/deadline-utils.js";
 import {
+	astGrepSharedParams,
 	defaultedCwdHomeRefusal,
 	readAstGrepLang,
 	MAX_PATHS_ENTRIES,
@@ -321,6 +322,7 @@ export function astGrepDumpCompatibilityResult(
 }
 
 export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
+	const shared = astGrepSharedParams();
 	return {
 		name: "ast_grep_search" as const,
 		label: "AST Search",
@@ -357,9 +359,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 		parameters: Type.Object({
 			dump: Type.Optional(Type.Boolean()),
 			pattern: Type.Optional(Type.String({ description: "AST pattern." })),
-			lang: Type.String({
-				description: "Language id, e.g. typescript, tsx, python, go.",
-			}),
+			lang: shared.lang,
 			paths: Type.Optional(
 				Type.Array(Type.String(), {
 					maxItems: MAX_PATHS_ENTRIES,
@@ -381,31 +381,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 					description: "AST node kind without a pattern.",
 				}),
 			),
-			insideKind: Type.Optional(
-				Type.String({
-					description: "Ancestor AST node kind filter.",
-				}),
-			),
-			hasKind: Type.Optional(
-				Type.String({
-					description: "Immediate child AST node kind filter.",
-				}),
-			),
-			hasDescendantKind: Type.Optional(
-				Type.String({
-					description: "Recursive descendant AST node kind filter.",
-				}),
-			),
-			follows: Type.Optional(
-				Type.String({
-					description: "Preceding sibling pattern filter.",
-				}),
-			),
-			precedes: Type.Optional(
-				Type.String({
-					description: "Following sibling pattern filter.",
-				}),
-			),
+			...shared.relational,
 			rule: Type.Optional(
 				Type.String({
 					description: "Raw ast-grep YAML rule.",
@@ -426,12 +402,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 					description: "Group matches by file.",
 				}),
 			),
-			strictness: Type.Optional(
-				Type.String({
-					enum: ["smart", "relaxed", "ast", "cst", "signature", "template"],
-					description: "Match strictness; default smart.",
-				}),
-			),
+			strictness: shared.strictness,
 			validateOnly: Type.Optional(
 				Type.Boolean({
 					description: "Validate without scanning.",

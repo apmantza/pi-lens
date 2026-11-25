@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { CacheManager, ModifiedRange } from "./cache-manager.js";
@@ -45,6 +44,7 @@ import { toRunnerDisplayPath } from "./dispatch/runner-context.js";
 import { logActionableWarningsEvent } from "./actionable-warnings-logger.js";
 import { displayProjectDataPath, getProjectDataDir } from "./file-utils.js";
 import { commitDurableStore } from "./durable-store.js";
+import { hashContentBytes } from "./content-stamp.js";
 import { establishToolAgreement } from "./tool-agreement.js";
 import { resolveLensToolName, type LensToolHost } from "./tool-config.js";
 
@@ -991,7 +991,7 @@ export async function buildActionableWarningsReport(
 				: undefined;
 			const contentHash =
 				content !== undefined
-					? createHash("sha256").update(content).digest("hex")
+					? hashContentBytes(Buffer.from(content, "utf8"))
 					: undefined;
 			const cached =
 				contentHash !== undefined

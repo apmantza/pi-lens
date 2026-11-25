@@ -2062,7 +2062,8 @@ export interface SymbolCountAuditInput {
 
 /**
  * A per-file stateful-SYMBOL-COUNT pin, layered on {@link auditRegistry}'s
- * registered-or-fail semantics rather than a parallel mechanism (#1817).
+ * registered-or-fail semantics (#1817), plus one stale-pin check that audit
+ * cannot see: a pinned file the scan no longer measures.
  *
  * The session-state sweep's file-level coverage audit ({@link auditRegistry}
  * called directly on file paths) answers "is this FILE registered or
@@ -2088,7 +2089,7 @@ export interface SymbolCountAuditInput {
  */
 export function auditSymbolCounts(input: SymbolCountAuditInput): RegistryAudit {
 	const key = (file: string, count: number) => `${file}@${count}`;
-	return auditRegistry({
+	const audit = auditRegistry({
 		sweepName: input.sweepName,
 		flagged: Object.entries(input.counts).map(([file, count]) =>
 			key(file, count),
@@ -2108,6 +2109,22 @@ export function auditSymbolCounts(input: SymbolCountAuditInput): RegistryAudit {
 				"import-time constant the scan cannot distinguish (SWEEP_HEURISTIC_LIMITS " +
 				"item 5) — THEN update the pin to the new count.",
 	});
+	// A pin for a file the scan no longer measures at all is invisible to the
+	// registered-or-fail audit above, which permits a registered id nothing
+	// flags: the row stays and pre-admits the file's old count if the file comes
+	// back (hook-await-bounds' HELPER_UNBOUNDED kept `clients/zz-gone.ts: 3`
+	// green). A pin whose count merely moved is already an unaccounted `file@N`.
+	const stalePins = Object.keys(input.pinned).filter(
+		(file) => !Object.hasOwn(input.counts, file),
+	);
+	if (stalePins.length > 0) {
+		audit.problems.push(
+			`${input.sweepName}: ${stalePins.length} pinned file(s) the scan no longer ` +
+				"measures — remove them, a stale pin pre-admits the file's old count:\n" +
+				stalePins.map((file) => `  ${file}`).join("\n"),
+		);
+	}
+	return audit;
 }
 
 // ── 4. The emptiness guard ──────────────────────────────────────────────────

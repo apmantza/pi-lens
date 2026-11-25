@@ -449,9 +449,11 @@ function nodeSpawnOptionsIndex(importedName: string): number {
 	return importedName === "exec" || importedName === "execSync" ? 1 : 2;
 }
 
-/** Resolver bindings imported from the shared tool-cwd seam (or its one-hop
- * runner helper). Names alone are deliberately insufficient: a local helper
- * named `resolveToolCwd` is ordinary application code, not the seam. */
+/** Resolver bindings imported from the shared tool-cwd seam, and from nowhere
+ * else: `runner-helpers.ts` held a second `resolveRunnerCwd` that this read
+ * admitted by import source, so four runners' cwd bypassed the owner's tests
+ * (#4907). Names alone are deliberately insufficient: a local helper named
+ * `resolveToolCwd` is ordinary application code, not the seam. */
 function importedResolverNames(root: SgNode): Set<string> {
 	const names = new Set<string>();
 	const visit = (node: SgNode): void => {
@@ -460,9 +462,7 @@ function importedResolverNames(root: SgNode): Set<string> {
 				.field("source")
 				?.text()
 				.replace(/^['"]|['"]$/g, "");
-			const shared =
-				source?.endsWith("/tool-cwd.js") ||
-				source?.endsWith("/runner-helpers.js");
+			const shared = source?.endsWith("/tool-cwd.js");
 			if (shared) {
 				for (const child of node.children()) {
 					if (String(child.kind()) !== "import_clause") continue;

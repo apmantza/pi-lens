@@ -546,7 +546,7 @@ async function which(command: string): Promise<string | null> {
 	// `classifyFinderFailure` owns that reading (#1495 review): a forced row is
 	// a caller assertion over the classifier's answer, so it logs
 	// `classifiedBy: "caller"` (#2226 review F1).
-	const { outcome, cause, forced } = classifyFinderFailure(result, {
+	const { outcome, cause, evidence, forced } = classifyFinderFailure(result, {
 		hostStallMs,
 	});
 	const retryAfterMs = entry.latch.noteUnavailable(outcome, cause);
@@ -566,6 +566,7 @@ async function which(command: string): Promise<string | null> {
 		...(retryAfterMs > 0 && { retryAfterMs }),
 		budgetMs: WHICH_BUDGET_MS,
 		classifiedBy: forced ? "caller" : "probe",
+		evidence,
 	});
 	return null;
 }

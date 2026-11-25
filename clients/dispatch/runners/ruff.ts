@@ -25,10 +25,8 @@ import type {
 } from "../types.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 import { parseRuffOutput } from "./utils/diagnostic-parsers.js";
-import {
-	resolveToolCommandWithInstallFallback,
-	resolveRunnerCwd,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { semanticFor } from "../types.js";
 
 export function parseRuffJson(raw: string, filePath: string): Diagnostic[] {

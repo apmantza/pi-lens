@@ -48,6 +48,7 @@ import {
 } from "./log-rotation-limits.js";
 import { classifyIpcSocketName, probeIpcSocketListener } from "./mcp/ipc.js";
 import { getRegisteredLogFiles } from "./ndjson-logger.js";
+import { realIsPidAlive } from "./pid-liveness.js";
 import { getGlobalPiLensLogDir } from "./probe-home-state.js";
 import { pathsEqual } from "./path-utils.js";
 import { sessionsDir, sessionStateFileName } from "./session-state-store.js";
@@ -190,42 +191,6 @@ function getFileSizeMB(filePath: string): number {
 }
 
 type LivenessVerdict = "live" | "stale" | "indeterminate";
-
-/** What one `kill(pid, 0)` probe of a socket owner pid answered. */
-type PidProbe = "alive" | "esrch" | "refused";
-
-function realPidProbe(pid: number): PidProbe {
-	try {
-		process.kill(pid, 0);
-		return "alive";
-	} catch (err) {
-		// none: the verdict the gate needs (a refused probe keeps the socket)
-		// is this catch's return value.
-		return (err as NodeJS.ErrnoException).code === "ESRCH"
-			? "esrch"
-			: "refused";
-	}
-}
-
-/**
- * Whether a pid-scoped socket's owner is gone. The name embeds the owner's
- * pid, so a dead owner means nobody can ever bind that name again; a probe
- * we cannot judge (a live pid of another user answers EPERM) keeps the
- * socket. `signal` is the process boundary, injectable for tests.
- */
-export function pidScopedSocketLiveness(
-	pid: number,
-	signal: (pid: number) => PidProbe = realPidProbe,
-): LivenessVerdict {
-	switch (signal(pid)) {
-		case "alive":
-			return "live";
-		case "esrch":
-			return "stale";
-		case "refused":
-			return "indeterminate";
-	}
-}
 
 /**
  * One retention row (#5702): a directory, the entry names it may reap, and a
@@ -413,7 +378,12 @@ async function socketLiveness(
 	const classified = classifyIpcSocketName(name);
 	if (!classified) return "indeterminate";
 	if (classified.kind === "pid-scoped") {
-		return pidScopedSocketLiveness(classified.pid);
+		// The name carries its owner's pid, so a dead owner means nobody can
+		// ever bind it again. The one liveness check judges the owner (EPERM
+		// and an unprobeable pid read alive, so the socket stays); a name
+		// carrying no holdable pid has no owner to judge and stays too.
+		if (!(classified.pid > 0)) return "indeterminate";
+		return realIsPidAlive(classified.pid) ? "live" : "stale";
 	}
 	// ipc.ts's probe answers "dead" for the same verdict this gate calls
 	// stale: a socket file no listener serves.
