@@ -32,6 +32,7 @@ function errorTextWithHint(raw: string): string {
 	return hint ? `Error: ${raw}\n\n${hint}` : `Error: ${raw}`;
 }
 import {
+	astGrepSharedParams,
 	defaultedCwdHomeRefusal,
 	PATHS_GLOB_CLAUSE,
 	readAstGrepLang,
@@ -62,6 +63,7 @@ export function createAstGrepReplaceTool(
 	 */
 	getFlag?: (name: string, cwd?: string) => boolean | string | undefined,
 ) {
+	const shared = astGrepSharedParams();
 	return {
 		name: "ast_grep_replace" as const,
 		label: "AST Replace",
@@ -90,48 +92,17 @@ export function createAstGrepReplaceTool(
 			rewrite: Type.String({
 				description: "Replacement using meta-variables from pattern",
 			}),
-			lang: Type.String({
-				description: "Language id, e.g. typescript, tsx, python, go.",
-			}),
+			lang: shared.lang,
 			paths: Type.Optional(
 				Type.Array(Type.String(), {
 					description: `Specific files/folders. ${PATHS_GLOB_CLAUSE}`,
 				}),
 			),
-			insideKind: Type.Optional(
-				Type.String({
-					description: "Ancestor AST node kind filter.",
-				}),
-			),
-			hasKind: Type.Optional(
-				Type.String({
-					description: "Immediate child AST node kind filter.",
-				}),
-			),
-			hasDescendantKind: Type.Optional(
-				Type.String({
-					description: "Recursive descendant AST node kind filter.",
-				}),
-			),
-			follows: Type.Optional(
-				Type.String({
-					description: "Preceding sibling pattern filter.",
-				}),
-			),
-			precedes: Type.Optional(
-				Type.String({
-					description: "Following sibling pattern filter.",
-				}),
-			),
+			...shared.relational,
 			apply: Type.Optional(
 				Type.Boolean({ description: "Apply changes (default: false)" }),
 			),
-			strictness: Type.Optional(
-				Type.String({
-					enum: ["smart", "relaxed", "ast", "cst", "signature", "template"],
-					description: "Match strictness; default smart.",
-				}),
-			),
+			strictness: shared.strictness,
 		}),
 		async execute(
 			_toolCallId: string,
