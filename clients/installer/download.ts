@@ -25,7 +25,7 @@ export function downloadInstallerFile(
 	headers: Record<string, string> = {},
 	maxBytes = MAX_BYTES,
 	timeoutMs = TIMEOUT_MS,
-): Promise<{ bytes: number; sha256: string }> {
+): Promise<{ bytes: number; sha256: string; prefix: Buffer }> {
 	return new Promise((resolve, reject) => {
 		let settled = false;
 		const fail = (error: Error): void => {
@@ -83,6 +83,8 @@ export function downloadInstallerFile(
 					);
 				}
 				let bytes = 0;
+				const prefix: Buffer[] = [];
+				let prefixBytes = 0;
 				const digest = createHash("sha256");
 				const limiter = new Transform({
 					transform(chunk: Buffer, _encoding, callback) {
@@ -94,6 +96,11 @@ export function downloadInstallerFile(
 									`download exceeds ${maxBytes} bytes`,
 								),
 							);
+						if (prefixBytes < 64) {
+							const kept = chunk.subarray(0, 64 - prefixBytes);
+							prefix.push(kept);
+							prefixBytes += kept.length;
+						}
 						digest.update(chunk);
 						callback(null, chunk);
 					},
@@ -114,7 +121,11 @@ export function downloadInstallerFile(
 					output.on("finish", () => {
 						if (!settled) {
 							settled = true;
-							resolve({ bytes, sha256: digest.digest("hex") });
+							resolve({
+								bytes,
+								sha256: digest.digest("hex"),
+								prefix: Buffer.concat(prefix),
+							});
 						}
 					});
 					return;
@@ -123,7 +134,11 @@ export function downloadInstallerFile(
 					() => {
 						if (!settled) {
 							settled = true;
-							resolve({ bytes, sha256: digest.digest("hex") });
+							resolve({
+								bytes,
+								sha256: digest.digest("hex"),
+								prefix: Buffer.concat(prefix),
+							});
 						}
 					},
 					(error: unknown) =>

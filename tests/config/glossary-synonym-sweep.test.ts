@@ -2006,8 +2006,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/installer/index.ts": 44,
 		// 9 -> 14 (#4765): refreshOpengrepRulePack reads the fetch `res.status`, the
 		// validate spawn's `status` (twice) and the refresh-state read's `status`
-		// discriminant: host fields, not a pi-lens status vocabulary.
-		"clients/installer/managed-tool-refresh.ts": 14,
+		// discriminant: host fields, not a pi-lens status vocabulary. 14 -> 13
+		// (#5701): replacing the buffered fetch removes that fetch `res.status`.
+		"clients/installer/managed-tool-refresh.ts": 13,
 		"clients/instance-reaper.ts": 15,
 		"clients/knip-client.ts": 4,
 		"clients/latency-logger.ts": 1,

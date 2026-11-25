@@ -1136,7 +1136,7 @@ function opengrepPackUrl(): string | undefined {
 async function downloadOpengrepPack(
 	url: string,
 	destination: string,
-): Promise<{ bytes: Buffer; sha256: string }> {
+): Promise<{ bytes: number; sha256: string }> {
 	const result = await downloadInstallerFile(
 		url,
 		destination,
@@ -1145,11 +1145,10 @@ async function downloadOpengrepPack(
 		PACK_MAX_BYTES,
 		PACK_FETCH_TIMEOUT_MS,
 	);
-	const bytes = await fs.readFile(destination);
 	// Fail closed on the form the language server cannot load (see above).
-	if (bytes.toString("utf-8", 0, 64).trimStart().startsWith("{"))
+	if (result.prefix.toString("utf-8").trimStart().startsWith("{"))
 		throw new Error("registry answered JSON, not the YAML rule file");
-	return { bytes, sha256: result.sha256 };
+	return { bytes: result.bytes, sha256: result.sha256 };
 }
 
 /**
@@ -1340,7 +1339,7 @@ export async function refreshOpengrepRulePack(
 				await swap.release?.();
 			}
 			logSessionStart(
-				`managed-tool-refresh ${OPENGREP_PACK_STAMP_ID}: cached pack now ${digest.slice(0, 12)} (${bytes.byteLength} bytes, ${Date.now() - startedAt}ms)`,
+				`managed-tool-refresh ${OPENGREP_PACK_STAMP_ID}: cached pack now ${digest.slice(0, 12)} (${bytes} bytes, ${Date.now() - startedAt}ms)`,
 			);
 			return "refreshed";
 		} catch (err) {
