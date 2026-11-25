@@ -73,7 +73,10 @@ export function retainLimitsFromConfig(
 				? Number.POSITIVE_INFINITY
 				: configured;
 	return {
-		maxEntries: cap(section?.retainMaxEntries, DEFAULT_RETAIN_LIMITS.maxEntries),
+		maxEntries: cap(
+			section?.retainMaxEntries,
+			DEFAULT_RETAIN_LIMITS.maxEntries,
+		),
 		maxBytes: cap(section?.retainMaxBytes, DEFAULT_RETAIN_LIMITS.maxBytes),
 		maxSessions: cap(
 			section?.retainMaxSessions,

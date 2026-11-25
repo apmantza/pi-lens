@@ -354,10 +354,7 @@ describe("request N+1 keeps the exact prefix request N sent", () => {
 		run: () => Promise<T>,
 	): Promise<T> {
 		const configPath = path.join(fixture.root, "retain-caps-config.json");
-		fs.writeFileSync(
-			configPath,
-			JSON.stringify({ contextInjection: section }),
-		);
+		fs.writeFileSync(configPath, JSON.stringify({ contextInjection: section }));
 		vi.stubEnv("PI_LENS_CONFIG_PATH", configPath);
 		try {
 			return await run();
@@ -393,9 +390,7 @@ describe("request N+1 keeps the exact prefix request N sent", () => {
 				injectionOccurred: true,
 				retention: { retainedNew: true },
 			});
-			expect(
-				(rows[atLast]?.retention as Record<string, unknown>).declined,
-			).toBeUndefined();
+			expect(rows[atLast]?.retention).not.toHaveProperty("declined");
 		});
 	});
 
