@@ -184,9 +184,11 @@ describe("background write drains across module copies (#4937)", () => {
 
 	// Recurrence: #5745 r10. A drain registered after the installer's queued a
 	// probe-cache update once the installer's drain had run. One pass left that
-	// update's debounced flush armed, to write after the fixture root was
-	// removed; the installer's pending signal sends the runner round again.
-	it("flushes a probe-cache update a later drain queued, in another pass", async () => {
+	// update's flush to write after the fixture root was removed; the
+	// installer's pending signal sends the runner round again. `awaited`: the
+	// update has marked its change (the dirty term) or is still in flight (the
+	// pending-update term) when the pass ends.
+	async function lateProbeCacheUpdate(awaited: boolean): Promise<string[]> {
 		const env = setupTestEnvironment("bwd-probe-cache-late-");
 		let other: typeof import("../../clients/installer/index.js") | undefined;
 		try {
@@ -203,25 +205,31 @@ describe("background write drains across module copies (#4937)", () => {
 			async function lateProbeCacheWriterForTests(): Promise<
 				string | undefined
 			> {
-				if (!queued) {
-					queued = true;
-					await installer.updateProbeCache("probe-tool", tool);
-				}
+				if (queued) return undefined;
+				queued = true;
+				const update = installer.updateProbeCache("probe-tool", tool);
+				if (awaited) await update;
 				return undefined;
 			}
 			registerBackgroundWriteDrain(lateProbeCacheWriterForTests, () => false);
 
 			await drainRegisteredBackgroundWritesForTests();
 
-			const cacheFile = path.join(home, "probe-cache.json");
-			expect(
-				Object.keys(JSON.parse(fs.readFileSync(cacheFile, "utf-8"))),
-			).toEqual(["probe-tool"]);
 			expect(vi.getTimerCount()).toBe(0);
+			const cacheFile = path.join(home, "probe-cache.json");
+			return Object.keys(JSON.parse(fs.readFileSync(cacheFile, "utf-8")));
 		} finally {
 			other?.resetProbeCacheStateForTesting();
 			env.cleanup();
 		}
+	}
+
+	it("flushes a probe-cache change a later drain marked, in another pass", async () => {
+		expect(await lateProbeCacheUpdate(true)).toEqual(["probe-tool"]);
+	});
+
+	it("joins a probe-cache update a later drain left in flight, in another pass", async () => {
+		expect(await lateProbeCacheUpdate(false)).toEqual(["probe-tool"]);
 	});
 
 	// Recurrence: #5745 r10. The runner repeats passes until no drain reports

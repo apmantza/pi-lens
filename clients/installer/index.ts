@@ -2595,14 +2595,14 @@ async function settleProbeCacheForTests(): Promise<string | undefined> {
 // the tier-2 harness's loaded extension copy owns one the test's own import
 // cannot reach, so its write lands after the fixture root is removed. The
 // harness joins it through the registry (`clients/background-write-drains.ts`).
-// Pending: what the drain above waits for or flushes. A dirty change with no
-// loaded cache is not pending: the flush answers it `idle`.
+// Pending: an update that has not marked its change yet, or a change the flush
+// above would write. An armed timer and a write in flight both keep the change
+// dirty until a write publishes it, so they need no term of their own; a dirty
+// change with no loaded cache is not pending, the flush answers it `idle`.
 registerBackgroundWriteDrain(
 	settleProbeCacheForTests,
 	() =>
 		_probeCacheUpdatesPending.size > 0 ||
-		_probeCacheFlushTimer !== null ||
-		_probeCacheWriteInFlight !== null ||
 		(_probeCacheDirty && _probeCache !== null),
 );
 
