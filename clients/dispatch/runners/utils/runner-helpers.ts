@@ -76,7 +76,6 @@ import {
 	type RunnerResult,
 } from "../../types.js";
 import { isInSpawnTimeoutCooldown } from "../../../spawn-timeout-cooldown.js";
-import { resolveToolCwd } from "../../../tool-cwd.js";
 import { createAvailabilityProbeFlight } from "../../../availability-probe-flight.js";
 import {
 	type AvailabilityCause,
@@ -2298,9 +2297,4 @@ export function resolveAvailableOrInstall(
 	});
 	byTool.set(toolId, promise);
 	return promise;
-}
-
-/** Shared cwd seam for runner probes and analysis children (#2777). */
-export function resolveRunnerCwd(ctx: DispatchContext, tool: string): string {
-	return resolveToolCwd("runner", tool, ctx.filePath, ctx).cwd;
 }

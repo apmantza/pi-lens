@@ -26,10 +26,8 @@ import type {
 } from "../types.js";
 import { faultResult, faultSkip } from "../types.js";
 
-import {
-	resolveRunnerCwd,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
 

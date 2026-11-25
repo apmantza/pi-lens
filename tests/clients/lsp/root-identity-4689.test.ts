@@ -20,15 +20,18 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	CssServer,
+	HtmlServer,
 	NearestRoot,
 	resolveLspServerCwd,
+	SvelteServer,
 	TypeScriptServer,
+	VueServer,
 	WorkspacePriorityRoot,
 } from "../../../clients/lsp/server.js";
 import { realpathOrResolve } from "../../../clients/path-utils.js";
 import {
 	createPathIdentityFixture,
-	pinFixtureHome,
 	plantPackageLink,
 	setupTestEnvironment,
 } from "../test-utils.js";
@@ -227,45 +230,225 @@ describe("#4689 item 6: the refused directories are compared on the identity axi
 	// home, which never equals the spelled one, and the home's tsconfig
 	// became the root of every file below it.
 	it("the home directory is refused under both spellings of a link-spelled home", async (ctx) => {
-		// The fixture HOME lives outside the deletable test root (#4591): a
-		// straggler that inherits HOME must never re-create a removed root.
-		const { home: pinnedHome, restore } = pinFixtureHome(
-			"pi-lens-4689-lsp-home",
-		);
+		// Non-ignored scratch root (`rootMarker: false` so only the planted
+		// base `package.json` acts as fallback marker): `.probe-home` is
+		// gitignored, so `FileDirRoot` skips past it (#5728).
+		const env = setupTestEnvironment("pi-lens-4689-lsp-home-", {
+			rootMarker: false,
+		});
+		cleanups.push(env.cleanup);
+		const base = path.join(env.tmpDir, "project");
+		const home = path.join(base, "home-real");
+		const homeLink = path.join(base, "home-link");
+		write(path.join(base, "package.json"));
+		write(path.join(home, "tsconfig.json"));
+		write(path.join(home, "proj", "src", "x.ts"), "export {};\n");
 		try {
-			const base = path.join(pinnedHome, "project");
-			const home = path.join(base, "home-real");
-			const homeLink = path.join(base, "home-link");
-			write(path.join(base, "package.json"));
-			write(path.join(home, "tsconfig.json"));
-			write(path.join(home, "proj", "src", "x.ts"), "export {};\n");
-			try {
-				link("home-real", homeLink);
-			} catch (err) {
-				return ctx.skip(`cannot create symlinks here: ${String(err)}`);
-			}
-			vi.stubEnv("HOME", homeLink);
-			vi.stubEnv("USERPROFILE", homeLink);
-			vi.spyOn(process, "cwd").mockReturnValue(base);
-			// The home is read when the server table is built.
-			vi.resetModules();
-			const server = await import("../../../clients/lsp/server.js");
+			// A win32 junction requires no symlink privilege while still giving
+			// `homeLink` an independent spelling resolving to `home`.
+			fs.symlinkSync(
+				process.platform === "win32" ? home : "home-real",
+				homeLink,
+				process.platform === "win32" ? "junction" : "dir",
+			);
+		} catch (err) {
+			return ctx.skip(`cannot create symlinks here: ${String(err)}`);
+		}
+		vi.stubEnv("HOME", homeLink);
+		vi.stubEnv("USERPROFILE", homeLink);
+		vi.spyOn(process, "cwd").mockReturnValue(base);
 
-			for (const file of [
-				path.join(homeLink, "proj", "src", "x.ts"),
-				path.join(home, "proj", "src", "x.ts"),
-			]) {
-				const found = await server.TypeScriptServer.root(file);
-				expect(
-					typeof found === "string" && realpathOrResolve(found),
-					file,
-				).toBe(realpathOrResolve(base));
-			}
-		} finally {
-			// The stubs recorded the pinned home as their original, so they are
-			// undone first and the pin's own undo then restores the real HOME.
-			vi.unstubAllEnvs();
-			restore();
+		for (const file of [
+			path.join(homeLink, "proj", "src", "x.ts"),
+			path.join(home, "proj", "src", "x.ts"),
+		]) {
+			const found = await TypeScriptServer.root(file);
+			expect(typeof found === "string" && realpathOrResolve(found), file).toBe(
+				realpathOrResolve(base),
+			);
+		}
+	});
+
+	// RECURRENCE GUARDED: #5728 — `IgnoreHomeRoot` checked `root === home`,
+	// so markers in an ancestor of HOME bypassed it and became the root for
+	// files in another registered root outside cwd.
+	it("refuses markers in an ancestor of HOME across TypeScript root detectors", async () => {
+		// `{ rootMarker: false }` so no test-root `.git` triggers `FileDirRoot`.
+		const env = setupTestEnvironment("pi-lens-4689-lsp-ceiling-ts-", {
+			rootMarker: false,
+		});
+		cleanups.push(env.cleanup);
+		const cases = [
+			{ name: "ts-config", marker: "tsconfig.json", fileName: "x.ts" },
+			{ name: "either-jsconfig", marker: "jsconfig.json", fileName: "x.js" },
+			{ name: "tooling-lockfile", marker: "pnpm-lock.yaml", fileName: "x.ts" },
+		] as const;
+		for (const { name, marker, fileName } of cases) {
+			const ceiling = path.join(env.tmpDir, name, "ceiling");
+			const outside = path.join(env.tmpDir, name, "session");
+			const home = path.join(ceiling, "home");
+			const srcDir = path.join(home, "proj", "src");
+			const file = path.join(srcDir, fileName);
+			write(path.join(ceiling, marker), "{}\n");
+			write(file, "export {};\n");
+			fs.mkdirSync(outside, { recursive: true });
+			vi.stubEnv("HOME", home);
+			vi.stubEnv("USERPROFILE", home);
+			vi.spyOn(process, "cwd").mockReturnValue(outside);
+
+			const found = await TypeScriptServer.root(file);
+			expect(typeof found === "string" && realpathOrResolve(found), name).toBe(
+				realpathOrResolve(srcDir),
+			);
+		}
+	});
+
+	it("refuses markers in an ancestor of HOME across HTML, Vue, Svelte, and CSS servers", async () => {
+		const env = setupTestEnvironment("pi-lens-4689-lsp-ceiling-web-", {
+			rootMarker: false,
+		});
+		cleanups.push(env.cleanup);
+		const cases = [
+			{
+				server: HtmlServer,
+				marker: "vite.config.ts",
+				fileName: "page.html",
+				content: "<html></html>\n",
+			},
+			{
+				server: VueServer,
+				marker: "pnpm-lock.yaml",
+				fileName: "App.vue",
+				content: "<template><div /></template>\n",
+			},
+			{
+				server: SvelteServer,
+				marker: "pnpm-lock.yaml",
+				fileName: "App.svelte",
+				content: "<div />\n",
+			},
+			{
+				server: CssServer,
+				marker: "vite.config.ts",
+				fileName: "app.css",
+				content: "body {}\n",
+			},
+		] as const;
+		for (const { server, marker, fileName, content } of cases) {
+			const ceiling = path.join(env.tmpDir, server.id, "ceiling");
+			const outside = path.join(env.tmpDir, server.id, "session");
+			const home = path.join(ceiling, "home");
+			const srcDir = path.join(home, "proj", "src");
+			const file = path.join(srcDir, fileName);
+			write(path.join(ceiling, marker), "");
+			write(file, content);
+			fs.mkdirSync(outside, { recursive: true });
+			vi.stubEnv("HOME", home);
+			vi.stubEnv("USERPROFILE", home);
+			vi.spyOn(process, "cwd").mockReturnValue(outside);
+
+			const found = await server.root(file);
+			expect(
+				typeof found === "string" && realpathOrResolve(found),
+				server.id,
+			).toBe(realpathOrResolve(srcDir));
+		}
+	});
+
+	it("refuses an ancestor of HOME even when HOME is spelled through a directory link", async (ctx) => {
+		const env = setupTestEnvironment("pi-lens-4689-lsp-ceiling-link-", {
+			rootMarker: false,
+		});
+		cleanups.push(env.cleanup);
+		const ceiling = path.join(env.tmpDir, "ceiling");
+		const homeReal = path.join(ceiling, "home-real");
+		const homeLink = path.join(env.tmpDir, "alias", "home-link");
+		const outside = path.join(env.tmpDir, "session");
+		const srcDir = path.join(homeReal, "proj", "src");
+		write(path.join(ceiling, "tsconfig.json"), "{}\n");
+		write(path.join(srcDir, "x.ts"), "export {};\n");
+		fs.mkdirSync(outside, { recursive: true });
+		try {
+			fs.mkdirSync(path.dirname(homeLink), { recursive: true });
+			fs.symlinkSync(
+				process.platform === "win32" ? homeReal : "../ceiling/home-real",
+				homeLink,
+				process.platform === "win32" ? "junction" : "dir",
+			);
+		} catch (err) {
+			return ctx.skip(`cannot create symlinks here: ${String(err)}`);
+		}
+		vi.stubEnv("HOME", homeLink);
+		vi.stubEnv("USERPROFILE", homeLink);
+		vi.spyOn(process, "cwd").mockReturnValue(outside);
+
+		for (const file of [
+			path.join(homeLink, "proj", "src", "x.ts"),
+			path.join(srcDir, "x.ts"),
+		]) {
+			const found = await TypeScriptServer.root(file);
+			expect(typeof found === "string" && realpathOrResolve(found), file).toBe(
+				realpathOrResolve(srcDir),
+			);
+		}
+	});
+
+	it("keeps a project marker below HOME when an ancestor of HOME also holds one", async () => {
+		const env = setupTestEnvironment("pi-lens-4689-lsp-below-home-", {
+			rootMarker: false,
+		});
+		cleanups.push(env.cleanup);
+		const servers = [
+			{
+				server: TypeScriptServer,
+				marker: "tsconfig.json",
+				fileName: "x.ts",
+				content: "export {};\n",
+			},
+			{
+				server: HtmlServer,
+				marker: "vite.config.ts",
+				fileName: "page.html",
+				content: "<html></html>\n",
+			},
+			{
+				server: VueServer,
+				marker: "pnpm-lock.yaml",
+				fileName: "App.vue",
+				content: "<template><div /></template>\n",
+			},
+			{
+				server: SvelteServer,
+				marker: "pnpm-lock.yaml",
+				fileName: "App.svelte",
+				content: "<div />\n",
+			},
+			{
+				server: CssServer,
+				marker: "vite.config.ts",
+				fileName: "app.css",
+				content: "body {}\n",
+			},
+		] as const;
+		for (const { server, marker, fileName, content } of servers) {
+			const ceiling = path.join(env.tmpDir, server.id, "ceiling");
+			const outside = path.join(env.tmpDir, server.id, "session");
+			const home = path.join(ceiling, "home");
+			const project = path.join(home, "proj");
+			const file = path.join(project, "src", fileName);
+			write(path.join(ceiling, marker), "{}\n");
+			write(path.join(project, marker), "{}\n");
+			write(file, content);
+			fs.mkdirSync(outside, { recursive: true });
+			vi.stubEnv("HOME", home);
+			vi.stubEnv("USERPROFILE", home);
+			vi.spyOn(process, "cwd").mockReturnValue(outside);
+
+			const found = await server.root(file);
+			expect(
+				typeof found === "string" && realpathOrResolve(found),
+				server.id,
+			).toBe(realpathOrResolve(project));
 		}
 	});
 

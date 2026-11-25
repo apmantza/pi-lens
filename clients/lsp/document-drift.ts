@@ -88,8 +88,8 @@
  * backpressure demotion rather than bypassing them.
  */
 
-import { createHash } from "node:crypto";
 import nodeFs from "node:fs";
+import { hashContentBytes } from "../content-stamp.js";
 import { nonNegativeIntEnv } from "../env-utils.js";
 import { normalizeMapKey } from "../path-utils.js";
 import { createSingleFlight, type SingleFlight } from "../single-flight.js";
@@ -101,7 +101,7 @@ import { createSingleFlight, type SingleFlight } from "../single-flight.js";
  */
 export function fingerprintDocumentContent(content: string): string {
 	if (content.length <= 96) return `${content.length}:${content}`;
-	return `${content.length}:${createHash("sha256").update(content).digest("hex")}`;
+	return `${content.length}:${hashContentBytes(Buffer.from(content, "utf8"))}`;
 }
 
 /** What the server was last told, and when. */

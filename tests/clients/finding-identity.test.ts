@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	FINDING_ID_HASH_LENGTH,
 	hashText,
@@ -114,5 +114,93 @@ describe("finding-identity", () => {
 		} finally {
 			removeTempDirSync(projectDir);
 		}
+	});
+
+	// Recurrence: shape 32 / #2556. `relativeFile` kept its own
+	// `rel && !rel.startsWith("..")` containment test beside the owner
+	// `relativeInside`, whose header records `..foo` as a directory INSIDE the
+	// root (#4835). A file under `<root>/..foo/` read as outside, so its id hashed
+	// the checkout's absolute path and differed per clone, where every other file
+	// hashes its root-relative path. The expected strings are literals, not values
+	// the setup supplied.
+	describe("relativeFile containment edge keys (shape 32)", () => {
+		let projectDir: string;
+		let siblingDir: string;
+		beforeEach(() => {
+			projectDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-finding-identity-edge-"),
+			);
+			siblingDir = `${projectDir}-backup`;
+			fs.mkdirSync(path.join(projectDir, "..foo"), { recursive: true });
+			fs.writeFileSync(path.join(projectDir, "..foo", "a.ts"), "x\n");
+			fs.mkdirSync(siblingDir, { recursive: true });
+			fs.writeFileSync(path.join(siblingDir, "b.ts"), "x\n");
+		});
+		afterEach(() => {
+			removeTempDirSync(projectDir);
+			removeTempDirSync(siblingDir);
+		});
+
+		it("names a file under a directory called ..foo by its root-relative path", () => {
+			expect(
+				relativeFile(path.join(projectDir, "..foo", "a.ts"), projectDir),
+			).toBe("..foo/a.ts");
+		});
+
+		it("gives a ..foo file the same finding id in two checkouts of one tree", () => {
+			const otherDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-finding-identity-edge-"),
+			);
+			try {
+				fs.mkdirSync(path.join(otherDir, "..foo"), { recursive: true });
+				fs.writeFileSync(path.join(otherDir, "..foo", "a.ts"), "x\n");
+				const parts = ["tool", "rule", "msg"];
+				expect(
+					stableFindingId("zz:", {
+						cwd: projectDir,
+						filePath: path.join(projectDir, "..foo", "a.ts"),
+						parts,
+					}),
+				).toBe(
+					stableFindingId("zz:", {
+						cwd: otherDir,
+						filePath: path.join(otherDir, "..foo", "a.ts"),
+						parts,
+					}),
+				);
+			} finally {
+				removeTempDirSync(otherDir);
+			}
+		});
+
+		it("keeps a plain child, the root itself, a sibling sharing the root's prefix and a parent as before", () => {
+			fs.mkdirSync(path.join(projectDir, "src"), { recursive: true });
+			expect(
+				relativeFile(path.join(projectDir, "src", "a.ts"), projectDir),
+			).toBe("src/a.ts");
+			// The root itself and anything outside it read as their own identity.
+			expect(relativeFile(projectDir, projectDir)).toBe(
+				normalizeMapKey(projectDir),
+			);
+			expect(relativeFile(path.join(siblingDir, "b.ts"), projectDir)).toBe(
+				normalizeMapKey(path.join(siblingDir, "b.ts")),
+			);
+			expect(relativeFile(path.dirname(projectDir), projectDir)).toBe(
+				normalizeMapKey(path.dirname(projectDir)),
+			);
+		});
+
+		it("relativizes against a filesystem root and a trailing-slash cwd", () => {
+			const fsRoot = path.parse(projectDir).root;
+			expect(
+				relativeFile(path.join(fsRoot, "pi-lens-no-such-dir", "a.ts"), fsRoot),
+			).toBe("pi-lens-no-such-dir/a.ts");
+			expect(
+				relativeFile(
+					path.join(projectDir, "..foo", "a.ts"),
+					`${projectDir}${path.sep}`,
+				),
+			).toBe("..foo/a.ts");
+		});
 	});
 });

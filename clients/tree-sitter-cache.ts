@@ -13,9 +13,9 @@
  */
 
 import { logTreeSitterDiagnostic } from "./tree-sitter-logger.js";
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import { BoundedFifoMap } from "./bounded-cache.js";
+import { hashContentBytes } from "./content-stamp.js";
 import { normalizeFilePath } from "./path-utils.js";
 
 const TREE_RETIREMENT_GRACE_MICROTASKS = 4;
@@ -269,11 +269,7 @@ export class TreeCache {
 	 * Generate hash for file content
 	 */
 	private hashContent(content: string): string {
-		return crypto
-			.createHash("sha256")
-			.update(content)
-			.digest("hex")
-			.slice(0, 16);
+		return hashContentBytes(Buffer.from(content, "utf8")).slice(0, 16);
 	}
 
 	/**

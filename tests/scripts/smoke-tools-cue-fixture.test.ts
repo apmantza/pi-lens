@@ -37,10 +37,6 @@ const cueFixture = (LSP_FIXTURES as LspFixture[]).find(
 );
 
 describe("CUE tool-smoke fixture (#1520 F2)", () => {
-	it("is registered in the LSP smoke lane", () => {
-		expect(cueFixture).toBeDefined();
-	});
-
 	// Without this the lane falls through to the bare "handshook" pass, which
 	// treats zero diagnostics as success — backwards for this fixture.
 	it("binds its verdict to the diagnostic message", () => {

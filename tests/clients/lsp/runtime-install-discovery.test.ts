@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import * as os from "node:os";
 import * as path from "node:path";
 import { removeTempDirSync } from "../test-utils.js";
@@ -60,6 +68,7 @@ import {
 	TypeScriptServer,
 } from "../../../clients/lsp/server.js";
 import { ensureTool } from "../../../clients/installer/index.js";
+import { resolveJavaRuntimeEnv } from "../../../clients/lsp/jvm-runtime.js";
 
 const isWin = process.platform === "win32";
 const sep = (...parts: string[]) => path.join(...parts);
@@ -112,6 +121,20 @@ describe("canonical-bin candidates (#241)", () => {
 });
 
 describe("runtime-install / discovery server wiring (#241)", () => {
+	// The Lombok case below is the file's only caller of `JavaServer.spawn`, and
+	// `resolveJavaRuntimeEnv` pays two one-time costs on its first call: the lazy
+	// import of the runner helpers and a real `java` PATH probe (a JVM start).
+	// Idle they cost about 0.14 s; with 10 copies of this file sharing one core
+	// they cost about 2 s, and with 28 copies the case ran 5.3-8.4 s against its
+	// 5 s cap (27 of 28 red, "Test timed out in 5000ms"; CI shard 2/5 on
+	// 2026-11-16, runs 43805743173 and 43833581791). A hook runs against
+	// hookTimeout (60 s), so no case carries the cold start. The verdict is the
+	// module's own per-process memo, so the case still drives the real function.
+	// Recurrence guarded: #4909 (the Lombok case timing out on a loaded runner).
+	beforeAll(async () => {
+		await resolveJavaRuntimeEnv();
+	});
+
 	beforeEach(() => {
 		vi.stubEnv("CARGO_HOME", undefined);
 		launchLSP.mockReset();
