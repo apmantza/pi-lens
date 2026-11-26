@@ -181,7 +181,7 @@ describe("unconfirmedBlockerNote settle paths (#5788 review C2, F2)", () => {
 
 	it("says a re-check is running, never that fixing cannot retire it", () => {
 		const note = unconfirmedBlockerNote(
-			[{ ...runner, recheckInFlight: true }],
+			[{ ...runner, recheckRunning: true }],
 			"a.ts",
 		);
 		expect(note).toContain("re-check is still running");

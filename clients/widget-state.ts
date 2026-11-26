@@ -272,14 +272,14 @@ export interface WidgetDiagnostic {
 	citedFile?: string;
 	/**
 	 * #5788 review F1: the carry's marker (`Diagnostic.unconfirmedBy`,
-	 * `recheckInFlight`) and the row's language server, so the session read
+	 * `recheckRunning`) and the row's language server, so the session read
 	 * words this row through the delivery gate as the per-write lines do, and
 	 * a row a check found fresh gets no "not re-checked" note. Additive and
 	 * optional like `citedFile`: a row persisted by an older build has none and
 	 * reads as a row with a verdict, so it gets no note.
 	 */
 	unconfirmedBy?: string;
-	recheckInFlight?: true;
+	recheckRunning?: true;
 	serverId?: string;
 }
 
@@ -1202,7 +1202,7 @@ interface RawWidgetDiagnostic {
 	/** The file the row cites (`Diagnostic.filePath`); see `citedFile`. */
 	filePath?: string;
 	unconfirmedBy?: string;
-	recheckInFlight?: true;
+	recheckRunning?: true;
 	serverId?: string;
 }
 
@@ -1233,7 +1233,7 @@ function normalizeDiagnostics(
 			// #5788 review F1: only a carried row has the marker.
 			...(d.unconfirmedBy !== undefined && {
 				unconfirmedBy: d.unconfirmedBy,
-				...(d.recheckInFlight === true && { recheckInFlight: true as const }),
+				...(d.recheckRunning === true && { recheckRunning: true as const }),
 				...(d.serverId !== undefined && { serverId: d.serverId }),
 			}),
 		} satisfies WidgetDiagnostic;

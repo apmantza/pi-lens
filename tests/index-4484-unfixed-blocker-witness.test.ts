@@ -503,8 +503,10 @@ beforeAll(() => {
 	);
 });
 afterAll(() => removeTempDirSync(tmpDir));
+/** The shared double this cell runs against (`beforeEach`). */
+let lspDouble: Record<string, unknown>;
 beforeEach(async () => {
-	await installLspServiceDouble({
+	lspDouble = await installLspServiceDouble({
 		supportsLSP: () => boundary.lsp.enabled,
 		hasLSP: async () => boundary.lsp.enabled,
 		touchFile: boundary.lsp.touch,
@@ -3166,15 +3168,9 @@ describe("#5784 witness: an unconfirmed carried blocker is not replayed verbatim
 		boundary.lsp.mode = "answer";
 		const target = path.join(tmpDir, "src/allclear.ts");
 		// The production service's sweep shape, answering clean for the file.
-		await installLspServiceDouble({
-			supportsLSP: () => boundary.lsp.enabled,
-			hasLSP: async () => boundary.lsp.enabled,
-			touchFile: boundary.lsp.touch,
-			hasServerPublishedForFileRoot: async () => false,
-			runWorkspaceDiagnostics: async () => [
-				{ filePath: target, diagnostics: [], count: 0 },
-			],
-		} as never);
+		lspDouble.runWorkspaceDiagnostics = async () => [
+			{ filePath: target, diagnostics: [], count: 0 },
+		];
 		const full = await s.settleCall({ mode: "full", waitMs: 30000 });
 		expect(await s.commitBlocked()).toBe(true);
 		const session = await s.sessionDiagnostics();

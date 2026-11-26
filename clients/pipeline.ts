@@ -2083,7 +2083,7 @@ function carryRecordedBlockers(
 ): { carried: Diagnostic[]; matched: ReadonlySet<Diagnostic> } {
 	if (prior.length === 0) return { carried: [], matched: new Set() };
 	const runnerIds = new Set(dispatchResult.inconclusiveSources?.runnerIds);
-	const inFlight = new Set(
+	const rechecking = new Set(
 		dispatchResult.inconclusiveSources?.collectLaterRunnerIds,
 	);
 	const serverIds = new Set(dispatchResult.inconclusiveSources?.serverIds);
@@ -2129,11 +2129,11 @@ function carryRecordedBlockers(
 		// #5788 review F2: a collect-later re-check still in flight answers for
 		// it on its own, so it is marked as running, not as needing a probe.
 		// A marker from an earlier carry is this write's to restate, not keep.
-		const { recheckInFlight: _earlier, ...row } = d;
+		const { recheckRunning: _earlier, ...row } = d;
 		const marker = {
 			unconfirmedBy: d.serverId ?? d.runnerId ?? "unknown",
 			...(d.runnerId !== undefined &&
-				inFlight.has(d.runnerId) && { recheckInFlight: true as const }),
+				rechecking.has(d.runnerId) && { recheckRunning: true as const }),
 		};
 		const at = positionOf(d);
 		// #4509 (N3): kept without a place in these bytes, its line number is

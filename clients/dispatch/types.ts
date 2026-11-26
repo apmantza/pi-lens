@@ -179,7 +179,7 @@ export interface Diagnostic {
 	 * collectLaterRunnerIds`), so its own answer retires or keeps the blocker
 	 * and the gate does not say fixing the code cannot. Never part of identity.
 	 */
-	recheckInFlight?: true;
+	recheckRunning?: true;
 	/**
 	 * #4130: the diagnostic reports the runner's own failure (`faultResult`), not
 	 * a finding about the code. Turn end delivers that fault once, as the

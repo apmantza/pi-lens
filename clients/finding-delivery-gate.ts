@@ -307,7 +307,7 @@ export function dispositionSuppressedLine(
 /** #5784: what the gate's sentence reads off one blocker the carry kept. */
 export type UnconfirmedBlockerRow = Pick<
 	Diagnostic,
-	"unconfirmedBy" | "serverId" | "recheckInFlight"
+	"unconfirmedBy" | "serverId" | "recheckRunning"
 >;
 
 /** "it" or "them" for a count. */
@@ -322,7 +322,7 @@ function pronoun(count: number): string {
  * (yxlimo). Each marked blocker takes one of three settle paths, and the
  * sentence names each path the set holds:
  *
- * - its re-check is still running (`recheckInFlight`, a collect-later run):
+ * - its re-check is still running (`recheckRunning`, a collect-later run):
  *   that answer retires or keeps it, so nothing is asked of the agent;
  * - a language server gave no verdict (`serverId`): fixing the code cannot
  *   retire it, and the `lens_diagnostics source=lsp` probe, which asks that
@@ -345,13 +345,13 @@ export function unconfirmedBlockerNote(
 	const tool = resolveLensToolName("lens_diagnostics", options.host ?? "pi");
 	const probe = (n: number) =>
 		`${tool} source=lsp path=${displayPath} waitMs=${RUNTIME_CONFIG.pipeline.lspExplicitQueryMaxWaitMs} settles ${pronoun(n)}`;
-	const running = unconfirmed.filter((d) => d.recheckInFlight === true).length;
+	const running = unconfirmed.filter((d) => d.recheckRunning === true).length;
 	// A server's blocker on a host without the tool can only wait for a write.
 	const server =
 		tool === undefined
 			? 0
 			: unconfirmed.filter(
-					(d) => d.recheckInFlight !== true && d.serverId !== undefined,
+					(d) => d.recheckRunning !== true && d.serverId !== undefined,
 				).length;
 	const runner = count - running - server;
 	if (running === count)
@@ -481,7 +481,7 @@ const deliveredUnconfirmedReplay = new BoundedFifoMap<
 /** The identity and the coordinates of one blocker, as the replay key reads it. */
 function replayIdentity(d: Diagnostic): string {
 	const at = d.positionStale ? "moved" : String(d.line ?? "none");
-	return `${findingIdentity(d)}@${at}@${d.filePath ?? ""}@${d.unconfirmedBy ?? ""}@${d.recheckInFlight === true ? "running" : ""}`;
+	return `${findingIdentity(d)}@${at}@${d.filePath ?? ""}@${d.unconfirmedBy ?? ""}@${d.recheckRunning === true ? "running" : ""}`;
 }
 
 /**
