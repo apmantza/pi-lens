@@ -47,9 +47,17 @@
     the tool store when the process PATH reaches the root, and the runtime
     install is skipped on the same predicate.
   - Otherwise both run inside `withUnadmittedRootSpawns`, so the spawn
-    chokepoint refuses a bare name that resolves into the root, which covers a
-    link in a global bin dir.
+    chokepoint refuses a bare name that resolves into the root. An absolute
+    path skips that lookup judgment, so the installer's global-bin rung
+    (`firstVerifiedBinary`) and `findGlobalBinary` judge each candidate's real
+    directory with the same judge before returning or running it.
   An admitted root is unchanged.
+  Global manager discovery (`allAvailableGlobalBinDirs`) derives admission by
+  default, including its session-start prime. Its finder and query share the
+  scoped environment and refused-root spawn scope; availability and directory
+  evidence are reused only for the same trust, root, cwd, and environment.
+  `tests/clients/session-repository-trust-4530.test.ts` pins the file-link,
+  planted-finder, warm-answer, and concurrent-root controls.
   `tests/clients/lsp/managed-fallback-after-trust-refusal-4515.test.ts` and
   `tests/clients/project-search-judge-5674.test.ts` pin it.
 - Under pi, project trust is consumed through `isProjectTrusted`; pi-lens never

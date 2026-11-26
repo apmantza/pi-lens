@@ -168,7 +168,7 @@ export class BiomeClient {
 		}
 		// Any package manager's global bin dir (npm/pnpm/yarn/bun) before npx —
 		// catches `pnpm add -g @biomejs/biome` installs that PATH misses (#375).
-		const global = await findGlobalBinary("biome");
+		const global = await findGlobalBinary("biome", ".cmd", resolveCwd);
 		if (global) {
 			this.localBinaryByCwd.set(resolveCwd, global);
 			return { cmd: global, args: [] };

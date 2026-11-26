@@ -26,7 +26,7 @@ import {
 	logAvailabilityDecision,
 	startHostStallSampler,
 } from "./dispatch/runners/utils/availability-policy.js";
-import { safeSpawnAsync } from "./safe-spawn.js";
+import { safeSpawnAsync, trustScopedEnvironment } from "./safe-spawn.js";
 import { probeToolAsync } from "./tool-probe.js";
 import { createAvailabilityProbeFlight } from "./availability-probe-flight.js";
 import {
@@ -47,6 +47,8 @@ import {
 	projectSearchJudge,
 	recordProjectCommandRefusal,
 	sessionRepositoryJudge,
+	withUnadmittedRootSpawns,
+	unadmittedSpawnRoot,
 } from "./session-repository.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { logExtension } from "./extension-log.js";
@@ -161,26 +163,54 @@ const PROBE_TIMEOUT_MS = 5_000;
  * finder that cannot spawn, ENOENT included, and a timeout, abort or host
  * stall expire on a cooldown and are re-probed.
  */
-const availabilityLatches = new Map<NodePackageManager, AvailabilityLatch>();
+type LatchSlot = { scope: string; latch: AvailabilityLatch; flight: string };
 
-function getLatch(pm: NodePackageManager): AvailabilityLatch {
-	let latch = availabilityLatches.get(pm);
-	if (!latch) {
-		latch = createAvailabilityLatch();
-		availabilityLatches.set(pm, latch);
+const availabilityLatches = new Map<NodePackageManager, LatchSlot>();
+let latchGeneration = 0;
+
+// Each latch owns its flight key: a probe records its outcome on one latch,
+// so only callers reading that latch may join it (#5782 r6). Another scope
+// can replace the slot mid-flight; the returning scope then gets a fresh
+// latch and must run its own probe rather than join one it cannot read.
+function getLatch(pm: NodePackageManager, scope: string): LatchSlot {
+	let entry = availabilityLatches.get(pm);
+	if (!entry || entry.scope !== scope) {
+		latchGeneration += 1;
+		entry = {
+			scope,
+			latch: createAvailabilityLatch(),
+			flight: `package-manager:${pm}:${latchGeneration}`,
+		};
+		availabilityLatches.set(pm, entry);
 	}
-	return latch;
+	return entry;
 }
 
-async function probeAvailability(pm: NodePackageManager): Promise<boolean> {
-	const latch = getLatch(pm);
+// A bounded per-manager slot holds only evidence from this execution context.
+function probeScope(env: NodeJS.ProcessEnv): string {
+	return JSON.stringify([
+		getProjectTrustState(),
+		unadmittedSpawnRoot(),
+		process.cwd(),
+		env,
+	]);
+}
+
+async function probeAvailability(
+	pm: NodePackageManager,
+	env: NodeJS.ProcessEnv,
+	latch: AvailabilityLatch,
+): Promise<boolean> {
 	const startedAt = Date.now();
 	const finder = onWindows() ? "where" : "which";
 	const sampler = startHostStallSampler();
 	let result: Awaited<ReturnType<typeof safeSpawnAsync>>;
 	let hostStallMs: number;
 	try {
-		result = await probeToolAsync(finder, [pm], { timeout: PROBE_TIMEOUT_MS });
+		result = await probeToolAsync(finder, [pm], {
+			timeout: PROBE_TIMEOUT_MS,
+			env,
+		});
 	} finally {
 		hostStallMs = sampler.stop();
 	}
@@ -240,8 +270,9 @@ async function probeAvailability(pm: NodePackageManager): Promise<boolean> {
 function isAvailable(
 	pm: NodePackageManager,
 	onTransient?: () => void,
+	env: NodeJS.ProcessEnv = trustScopedEnvironment(process.env),
 ): Promise<boolean> {
-	const latch = getLatch(pm);
+	const { latch, flight } = getLatch(pm, probeScope(env));
 
 	const reportIfTransient = (result: boolean): boolean => {
 		if (!result && isTransientDecision({ outcome: latch.getOutcome() })) {
@@ -255,8 +286,8 @@ function isAvailable(
 
 	// A verdict can now expire, so concurrent callers arriving just after a
 	// cooldown must share ONE probe rather than each spawning their own.
-	const shared = packageManagerProbeFlights.run(`package-manager:${pm}`, () =>
-		probeAvailability(pm),
+	const shared = packageManagerProbeFlights.run(flight, () =>
+		probeAvailability(pm, env, latch),
 	);
 	return shared.promise.then(reportIfTransient);
 }
@@ -380,29 +411,31 @@ export function updateArgs(
  * a session reset cannot repopulate the fresh memo. Reset clears the flight
  * map separately, so later callers cannot share the pre-reset probe.
  */
-const globalBinDirCache = new Map<string, string[]>();
+const globalBinDirCache = new Map<string, { scope: string; dirs: string[] }>();
 const packageManagerCacheGeneration = createGenerationSource(
 	"package-manager-global-bin",
 );
 const globalBinDirProbeFlights = createAvailabilityProbeFlight<string[]>();
 
 /** Directories where a given manager installs global binaries. */
-async function globalBinDirsFor(pm: NodePackageManager): Promise<string[]> {
-	// #4530: keyed by trust scope too. Since #5632 every query runs from HOME, so
-	// the answer does not depend on trust, but the scope stays in the key: no
-	// trust change may serve an answer made under another trust after
-	// `turn_start` re-adopts it. The scope is captured with the key, before the
-	// await (defect shape 58).
+async function globalBinDirsFor(
+	pm: NodePackageManager,
+	env: NodeJS.ProcessEnv,
+): Promise<string[]> {
+	// #5689: fixed per-manager slots retain only answers from the same trust,
+	// refused root, cwd, and environment. Capture that scope before awaiting;
+	// a prime under another root cannot authorize a later caller (shape 58).
 	const scoped = getProjectTrustState() !== "trusted";
 	const key = `${scoped ? "scoped" : "trusted"}:${pm}`;
+	const scope = probeScope(env);
 	const cached = globalBinDirCache.get(key);
-	if (cached) return cached;
+	if (cached?.scope === scope) return cached.dirs;
 	const generation = packageManagerCacheGeneration.capture();
 
 	// Concurrent callers (dispatch runs several tools per edit) must share ONE
 	// probe rather than each spawning their own `npm config get prefix` (#1602).
-	const shared = globalBinDirProbeFlights.run(key, () =>
-		probeGlobalBinDirs(pm, key, generation),
+	const shared = globalBinDirProbeFlights.run(`${key}:${scope}`, () =>
+		probeGlobalBinDirs(pm, key, generation, env),
 	);
 	return shared.promise;
 }
@@ -411,13 +444,15 @@ async function probeGlobalBinDirs(
 	pm: NodePackageManager,
 	key: string,
 	generation: GenerationHandle,
+	env: NodeJS.ProcessEnv,
 ): Promise<string[]> {
+	const scope = probeScope(env);
 	if (pm === "bun") {
 		// bun has no per-call query cost — the global bin dir is deterministic.
 		const base = process.env.BUN_INSTALL || path.join(os.homedir(), ".bun");
 		const dirs = [path.join(base, "bin")];
 		generation.guardedWrite(key, () => {
-			globalBinDirCache.set(key, dirs);
+			globalBinDirCache.set(key, { scope, dirs });
 		});
 		return dirs;
 	}
@@ -436,6 +471,7 @@ async function probeGlobalBinDirs(
 	const res = await safeSpawnAsync(pmBinary(pm), query, {
 		timeout: 5000,
 		cwd: os.homedir(),
+		env,
 	});
 	if (res.status !== 0 || res.error) return [];
 	const out = res.stdout.trim();
@@ -446,7 +482,7 @@ async function probeGlobalBinDirs(
 	const dirs =
 		pm === "npm" ? [onWindows() ? out : path.join(out, "bin")] : [out];
 	generation.guardedWrite(key, () => {
-		globalBinDirCache.set(key, dirs);
+		globalBinDirCache.set(key, { scope, dirs });
 	});
 	return dirs;
 }
@@ -464,12 +500,29 @@ async function probeGlobalBinDirs(
  */
 export async function allAvailableGlobalBinDirs(
 	onTransient?: () => void,
+	root: string = process.cwd(),
 ): Promise<string[]> {
+	const refusedRoot = refusedRootFor(root);
+	if (refusedRoot !== undefined && unadmittedSpawnRoot() === undefined) {
+		return withUnadmittedRootSpawns(refusedRoot, () =>
+			allAvailableGlobalBinDirs(onTransient, root),
+		);
+	}
+	const scopedEnv = trustScopedEnvironment(
+		process.env,
+		process.cwd(),
+		refusedRoot === undefined ? undefined : projectSearchJudge(refusedRoot),
+	);
+	// safeSpawn merges ambient env underneath overrides. Preserve a deleted
+	// PATH as an explicit undefined override, including Windows key spellings.
+	const env = Object.fromEntries(
+		Object.keys(process.env).map((key) => [key, scopedEnv[key]]),
+	);
 	const dirs: string[] = [];
 	const seen = new Set<string>();
 	for (const pm of PREFERENCE) {
-		if (!(await isAvailable(pm, onTransient))) continue;
-		for (const dir of await globalBinDirsFor(pm)) {
+		if (!(await isAvailable(pm, onTransient, env))) continue;
+		for (const dir of await globalBinDirsFor(pm, env)) {
 			// #5632 F1: a relative answer resolves against HOME, the cwd the query
 			// ran from, not against the session cwd.
 			const normalized = path.resolve(os.homedir(), dir);
@@ -479,6 +532,17 @@ export async function allAvailableGlobalBinDirs(
 		}
 	}
 	return dirs;
+}
+
+/**
+ * The root a global lookup for `root` refuses: launch's unadmitted root when
+ * this context runs inside one, else `root` unless pi trusts the project.
+ */
+function refusedRootFor(root: string): string | undefined {
+	return (
+		unadmittedSpawnRoot() ??
+		(getProjectTrustState() === "trusted" ? undefined : root)
+	);
 }
 
 /**
@@ -566,19 +630,28 @@ registerBackgroundWriteDrain(
 export async function findGlobalBinary(
 	command: string,
 	windowsExt = ".cmd",
+	root: string = process.cwd(),
 ): Promise<string | undefined> {
 	const candidates = onWindows()
 		? [`${command}${windowsExt}`, `${command}.exe`, command]
 		: [command];
+	const refusedRoot = refusedRootFor(root);
+	const inRefusedRoot =
+		refusedRoot === undefined ? undefined : projectSearchJudge(refusedRoot);
 	try {
-		for (const binDir of await allAvailableGlobalBinDirs()) {
+		for (const binDir of await allAvailableGlobalBinDirs(undefined, root)) {
 			for (const name of candidates) {
 				const full = path.join(binDir, name);
 				if (!fs.existsSync(full)) continue;
 				// #4530: a global bin dir can hold a link into the project (an
 				// `npm link`ed tool), and the spawn follows it. The target is
 				// what runs, so the target is what the trust judgment reads.
-				if (isUntrustedProjectPath(full)) {
+				// #5782 R5: the refused root is judged the same way, by the
+				// target's real directory, as the spawn seam judges a lookup.
+				if (
+					isUntrustedProjectPath(full) ||
+					inRefusedRoot?.(path.dirname(realpathOrResolve(full))) === true
+				) {
 					recordProjectCommandRefusal(full);
 					continue;
 				}
@@ -953,6 +1026,6 @@ export async function findNodeToolBinary(
 ): Promise<string | undefined> {
 	return (
 		localBinPath(findLocalBinUpwards(tool, cwd, { windowsExt })) ??
-		(await findGlobalBinary(tool, windowsExt))
+		(await findGlobalBinary(tool, windowsExt, cwd))
 	);
 }

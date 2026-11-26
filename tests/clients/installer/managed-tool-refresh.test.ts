@@ -62,7 +62,8 @@ const { spawnMock, sessionLogSpy, shimExitCodes, verifyOptions, verifyCalls } =
 		verifyCalls: vi.fn(),
 	}));
 
-vi.mock("../../../clients/safe-spawn.js", () => ({
+vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../clients/safe-spawn.js")>()),
 	safeSpawn: vi.fn(() => ({ stdout: "", stderr: "", status: 0 })),
 	// #2015: verifyToolBinary probes route through safe-spawn too. Answer
 	// --version probes centrally from the fixture exit-code map; everything

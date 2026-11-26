@@ -816,9 +816,11 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	// #5694 re-pins the identity, count unchanged: the try bodies of the ps1
 	// bypass catch (:564) and the spawn fallback catch (:1199) no longer carry
 	// the deleted `needsShell` value; no handler was added or removed.
+	// #5689 changes the global lookup arguments in the existing fallback;
+	// the same eight handlers remain, with no new silent handler admitted.
 	"clients/lsp/launch.ts": {
 		silent: 8,
-		identities: "455b1d236759b4c2",
+		identities: "4fee9037ac58efe8",
 		reason: PRE_RULE,
 	}, // :244, :564, :942, :948, :1199, :1424, :1435, :1446
 	"clients/lsp/lombok.ts": {

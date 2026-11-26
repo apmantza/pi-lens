@@ -21,7 +21,10 @@ const { safeSpawnAsync } = vi.hoisted(() => ({
 	safeSpawnAsync: vi.fn(),
 }));
 
-vi.mock("../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
+vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../clients/safe-spawn.js")>()),
+	safeSpawnAsync,
+}));
 
 vi.mock(
 	"../../../clients/dispatch/runners/utils/runner-helpers.js",
