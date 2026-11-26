@@ -99,8 +99,10 @@ describe("expectMessageMatch decides on message text, not handshake", () => {
 	// Without a pattern on the fixture the lane falls through to the bare
 	// "handshook" pass, which treats zero diagnostics as success — backwards for
 	// this fixture. Matching the real message also reds a dropped or wrong
-	// pattern (#1520 F2).
+	// pattern (#1520 F2). An empty pattern skips the smoke lane's message check
+	// (#1520 F2).
 	it("uses the fixture's own pattern against the real message", () => {
+		expect(cueFixture?.expectMessageMatch).toBeTruthy();
 		expect(
 			matchDiagnosticMessages(cueFixture?.expectMessageMatch ?? "$^", [
 				realCuelspDiagnostic,
