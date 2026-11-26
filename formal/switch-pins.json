@@ -2922,7 +2922,7 @@
 				"IdentityGuard": {
 					"value": "TRUE",
 					"test": "tests/clients/package-manager.test.ts",
-					"title": "sends explicit PATH deletion to both finder and query"
+					"title": "refuses a global link whose target sits in the scan root"
 				}
 			}
 		}

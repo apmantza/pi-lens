@@ -163,18 +163,27 @@ const PROBE_TIMEOUT_MS = 5_000;
  * finder that cannot spawn, ENOENT included, and a timeout, abort or host
  * stall expire on a cooldown and are re-probed.
  */
-const availabilityLatches = new Map<
-	NodePackageManager,
-	{ scope: string; latch: AvailabilityLatch }
->();
+type LatchSlot = { scope: string; latch: AvailabilityLatch; flight: string };
 
-function getLatch(pm: NodePackageManager, scope: string): AvailabilityLatch {
+const availabilityLatches = new Map<NodePackageManager, LatchSlot>();
+let latchGeneration = 0;
+
+// Each latch owns its flight key: a probe records its outcome on one latch,
+// so only callers reading that latch may join it (#5782 r6). Another scope
+// can replace the slot mid-flight; the returning scope then gets a fresh
+// latch and must run its own probe rather than join one it cannot read.
+function getLatch(pm: NodePackageManager, scope: string): LatchSlot {
 	let entry = availabilityLatches.get(pm);
 	if (!entry || entry.scope !== scope) {
-		entry = { scope, latch: createAvailabilityLatch() };
+		latchGeneration += 1;
+		entry = {
+			scope,
+			latch: createAvailabilityLatch(),
+			flight: `package-manager:${pm}:${latchGeneration}`,
+		};
 		availabilityLatches.set(pm, entry);
 	}
-	return entry.latch;
+	return entry;
 }
 
 // A bounded per-manager slot holds only evidence from this execution context.
@@ -263,8 +272,7 @@ function isAvailable(
 	onTransient?: () => void,
 	env: NodeJS.ProcessEnv = trustScopedEnvironment(process.env),
 ): Promise<boolean> {
-	const scope = probeScope(env);
-	const latch = getLatch(pm, scope);
+	const { latch, flight } = getLatch(pm, probeScope(env));
 
 	const reportIfTransient = (result: boolean): boolean => {
 		if (!result && isTransientDecision({ outcome: latch.getOutcome() })) {
@@ -278,9 +286,8 @@ function isAvailable(
 
 	// A verdict can now expire, so concurrent callers arriving just after a
 	// cooldown must share ONE probe rather than each spawning their own.
-	const shared = packageManagerProbeFlights.run(
-		`package-manager:${pm}:${scope}`,
-		() => probeAvailability(pm, env, latch),
+	const shared = packageManagerProbeFlights.run(flight, () =>
+		probeAvailability(pm, env, latch),
 	);
 	return shared.promise.then(reportIfTransient);
 }

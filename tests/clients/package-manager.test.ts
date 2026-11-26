@@ -416,6 +416,57 @@ describe("allAvailableGlobalBinDirs", () => {
 		});
 		expect(transientCalls).toBe(0);
 	});
+
+	// #5782 r6 (CodeRabbit PRRT_kwDORt8rec68SgAh): latches are per scope but
+	// the flight was keyed by scope, so a second A caller, whose latch slot B
+	// had replaced, joined A's in-flight probe, read its own empty latch, and
+	// lost the transient notice the first A caller received.
+	it("tells every caller joining a transient probe under one root", async () => {
+		setPlatform("linux");
+		setProjectTrustState("unknown");
+		const rootA = tmpDir();
+		const rootB = tmpDir();
+		const cause = new Error("Process timed out after 5000ms");
+		const timedOut = {
+			stdout: "",
+			stderr: "",
+			status: null,
+			error: cause,
+			failure: "timeout" as const,
+			spawnFailure: new SpawnFailureError("timeout", cause.message, cause),
+		};
+		const stalled = gatedPromise<typeof timedOut>();
+		// Every npm probe under A times out; the first one holds until B and
+		// the second A caller have started.
+		let stalledProbes = 0;
+		vi.mocked(safeSpawnAsync).mockImplementation(async (cmd, args) => {
+			if (
+				cmd === "which" &&
+				args?.[0] === "npm" &&
+				unadmittedSpawnRoot() === rootA
+			) {
+				stalledProbes++;
+				return stalledProbes === 1 ? stalled.promise : timedOut;
+			}
+			return { stdout: "", stderr: "", status: 1 };
+		});
+		const told = { first: 0, second: 0 };
+		const first = allAvailableGlobalBinDirs(() => {
+			told.first++;
+		}, rootA);
+		await waitFor(
+			() => stalledProbes,
+			(count) => count === 1,
+		);
+		const other = allAvailableGlobalBinDirs(undefined, rootB);
+		const second = allAvailableGlobalBinDirs(() => {
+			told.second++;
+		}, rootA);
+		stalled.resolve(timedOut);
+		await Promise.all([first, other, second]);
+		expect(told.first).toBeGreaterThan(0);
+		expect(told.second).toBeGreaterThan(0);
+	});
 });
 
 describe("findGlobalBinary", () => {
@@ -518,6 +569,40 @@ describe("findGlobalBinary", () => {
 			if (previousPath === undefined) delete process.env.PATH;
 			else process.env.PATH = previousPath;
 		}
+	});
+
+	// #5782 R5: a global bin dir outside the scan root held a link into it,
+	// and the lookup returned the link, which the caller then runs. The link's
+	// own path is outside the root; only its target's directory is inside.
+	it("refuses a global link whose target sits in the scan root", async () => {
+		setPlatform("linux");
+		const prefix = tmpDir();
+		const binDir = path.join(prefix, "bin");
+		const root = tmpDir();
+		const elsewhere = tmpDir();
+		fs.mkdirSync(binDir);
+		fs.mkdirSync(path.join(root, "tools"));
+		const inRoot = path.join(root, "tools", "real");
+		const outside = path.join(elsewhere, "real");
+		fs.writeFileSync(inRoot, "#!/bin/sh\n");
+		fs.writeFileSync(outside, "#!/bin/sh\n");
+		const link = path.join(binDir, "linked-in");
+		const outsideLink = path.join(binDir, "linked-out");
+		fs.symlinkSync(inRoot, link);
+		fs.symlinkSync(outside, outsideLink);
+		onlyAvailable("npm");
+		setQueryResponder(async () => ({
+			stdout: `${prefix}\n`,
+			stderr: "",
+			status: 0,
+		}));
+		setProjectTrustState("unknown");
+		expect(await findGlobalBinary("linked-in", ".cmd", root)).toBeUndefined();
+		expect(await findGlobalBinary("linked-out", ".cmd", root)).toBe(
+			outsideLink,
+		);
+		setProjectTrustState("trusted");
+		expect(await findGlobalBinary("linked-in", ".cmd", root)).toBe(link);
 	});
 
 	// #5782 F1: concurrent roots can select different npm executables from
