@@ -38,6 +38,7 @@ import {
 	it,
 	vi,
 } from "vitest";
+import { waitFor } from "./clients/interleaving-kit.js";
 
 const boundary = vi.hoisted(() => {
 	/** Round 6 (P27): the ast-grep auxiliary server. Once `published`, napi's
@@ -3212,9 +3213,7 @@ describe("#5784 witness: an unconfirmed carried blocker is not replayed verbatim
 		boundary.lsp.mode = "inconclusive";
 		for (const release of boundary.lsp.held.splice(0)) release(true);
 		// The abandoned run finishes on its own and carries the blocker.
-		for (let i = 0; i < 2_000 && carried() === before; i += 1)
-			await new Promise<void>((resolve) => setImmediate(resolve));
-		expect(carried()).toBeGreaterThan(before);
+		expect(await waitFor(carried, (n) => n > before)).toBeGreaterThan(before);
 		// Its line never reached the agent, so the next write's is delivered.
 		expect(await s.write(withTail(21))).toMatch(STILL_UNFIXED);
 		boundary.lsp.mode = "answer";
