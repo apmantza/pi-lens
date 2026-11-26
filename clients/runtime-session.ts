@@ -89,6 +89,7 @@ import {
 	saveRuntimeProjectSnapshot,
 } from "./project-snapshot.js";
 import { scanProjectRules } from "./rules-scanner.js";
+import type { SessionStartGuidanceRecord } from "./runtime-context.js";
 import type {
 	RuntimeCoordinator,
 	StartupTaskName,
@@ -3367,9 +3368,14 @@ export async function handleSessionStart(
 		dbg("session_start: no project rules found");
 	}
 
-	cacheManager.writeCache(
+	// #5792: stamped with this session's id (`consumeSessionStartGuidance`
+	// compares it), the same id its `context` requests read as.
+	cacheManager.writeCache<SessionStartGuidanceRecord>(
 		"session-start-guidance",
-		{ content: agentStartupGuidance.join("\n") },
+		{
+			content: agentStartupGuidance.join("\n"),
+			sessionId: deps.runtime.telemetrySessionId,
+		},
 		analysisRoot,
 	);
 

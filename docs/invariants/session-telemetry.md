@@ -54,6 +54,15 @@
   the coordinator's for the coordinator and module stores a secondary
   shares, the activation's for its own scope cell. One store never answers
   to two scopes, and a secondary's end fences only its cell.
+- The project's session-start guidance record (`session-start-guidance`) is
+  stamped with the writing session's id (#5792), the coordinator's
+  `telemetrySessionId`: only a full start writes it, and a declined
+  concurrent secondary never does. The `context` hook takes it only for the
+  session whose id it carries; any other request leaves it untouched and
+  writes one `session-start-guidance-addressed-elsewhere` ledger record per
+  owner. A record with no stamp (written before #5792) is the coordinator's.
+  The cache's 30-minute age bound refuses an untaken record, and one record
+  per project is overwritten by the next full start.
 - The project's one turn-end delivery slot (`turn-end-findings`'s
   `content`) is addressed (#4943): the composer stamps `deliverTo` with its
   turn's session, a commit-gate rewrite of the content leaves it out so the

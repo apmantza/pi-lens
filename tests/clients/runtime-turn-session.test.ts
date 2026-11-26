@@ -1448,7 +1448,10 @@ describe("context injection framing", () => {
 			env.tmpDir,
 		);
 
-		const result = consumeSessionStartGuidance(cacheManager, env.tmpDir);
+		const result = consumeSessionStartGuidance(cacheManager, env.tmpDir, {
+			sessionId: "reader",
+			coordinatorId: "reader",
+		});
 		expect(result).toBeDefined();
 		expect(result!.messages[0].content).toContain("not a user request");
 		expect(result!.messages[0].content).toContain("📌 pi-lens active");

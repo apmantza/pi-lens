@@ -2136,6 +2136,15 @@ export type DegradationKind =
 	/** `session-start-duplicate`: A duplicate RPC session start was suppressed after its first full pass. */
 	| "session-start-duplicate"
 	/**
+	 * `session-start-guidance-addressed-elsewhere`: #5792: a request found the per-project session-start
+	 * guidance record stamped for another session (or an unstamped one from
+	 * before #5792, read by a non-coordinator session) and left it for its
+	 * owner. Once per owner, so a skip reads apart from "no guidance was due"
+	 * without one row per request. Subject is the owner's session id, or
+	 * `unstamped`.
+	 */
+	| "session-start-guidance-addressed-elsewhere"
+	/**
 	 * `session-successor-pending`: #3662: a primary replacement shutdown left the process with no primary
 	 * and a successor pending. Subject `declined`: a `startup` start in that
 	 * gap was classified `concurrent-secondary` instead of taking the primary

@@ -302,6 +302,7 @@ describe("#2535 adapter-aware agent tool names", () => {
 			const consumed = consumeSessionStartGuidance(
 				cacheManager,
 				env.tmpDir,
+				{ sessionId: "reader", coordinatorId: "reader" },
 				"mcp",
 			);
 			const text = consumed?.messages[0].content ?? "";
@@ -351,6 +352,7 @@ describe("#2535 adapter-aware agent tool names", () => {
 			const piConsumed = consumeSessionStartGuidance(
 				cacheManagerPi,
 				env.tmpDir,
+				{ sessionId: "reader", coordinatorId: "reader" },
 			);
 			expect(piConsumed?.messages[0].content).toContain(stored);
 		} finally {
