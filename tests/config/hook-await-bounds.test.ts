@@ -2491,7 +2491,17 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// checker's own probe.
 	// #5410 D8: 31 -> 29 — `resolveLocalFirstAsync` (its global-bin lookup and
 	// its PATH probe) is deleted, so two unbounded awaits go with it.
-	"clients/dispatch/runners/utils/runner-helpers.ts": 29,
+	// #5410 r2: 29 -> 30 — BiomeClient's `await findGlobalBinary("biome")` moved
+	// here with the rest of its ladder (the `biome-installed` presence rung). It
+	// is the same await the client made before: `biome-client.ts` is not in the
+	// one-hop set (it is a dynamic-import client, two hops from a handler), so the
+	// move makes the census see it, not the hook path wait longer. The leaf is
+	// bounded by its own `PROBE_TIMEOUT_MS` per package-manager probe, memoized
+	// and single-flight (`allAvailableGlobalBinDirs`), and primed at
+	// `session_start`; it stays unbounded from the hook signal until #2523 AC4.
+	// A `bounded()` here would be a wall-clock-only bound with no signal, which
+	// `BoundedOptions.signal` exists to refuse.
+	"clients/dispatch/runners/utils/runner-helpers.ts": 30,
 	// #5087: the edit's re-measure plus its one default-branch read (9 in
 	// all; 10 -> 9 when the first touch took its table from the analyzer's
 	// own measure, #5443 review F6). Its awaits are the shared parser (init,

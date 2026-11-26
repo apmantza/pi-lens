@@ -1267,7 +1267,8 @@ export const shfmtFormatter: FormatterInfo = {
 	detect: managedToolDetect(
 		"shfmt",
 		undefined,
-		async () => (await which("shfmt")) !== null,
+		async (cwd) =>
+			(await resolveInstalledToolCommand(cwd, "shfmt")).command !== null,
 	),
 };
 
