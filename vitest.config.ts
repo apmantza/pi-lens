@@ -546,6 +546,7 @@ export const realHarnessInclude = [
 	// SIGTERM, and a quit that cannot confirm it keeps the row the next
 	// session reaps: real pi children, a stubborn server, a second session.
 	"tests/real-harness/lsp-host-exit-5699.test.ts",
+	"tests/real-harness/runner-host-exit-5703.test.ts",
 ];
 
 // #1920: files that assert REAL wall-clock elapsed-time budgets (Date.now()
@@ -858,6 +859,7 @@ export const wallClockBudgetInclude = [
 	"tests/clients/workspace-glob-nonbacktracking-budget.test.ts",
 	// #5072: the baseline census reads its population from a real `git ls-files`
 	// child, so dot-files and every extension are in it (flake-shape admission).
+	"tests/config/agents-governance.test.ts",
 	"tests/config/baseline-owner-governance.test.ts",
 	"tests/config/gitignore-tracked-shadow.test.ts",
 	// #3926: the real `Record Windows Vitest outcome` bash block is executed at

@@ -141,6 +141,27 @@ describe("#3310 empty-first-publish hold (php/intelephense class)", () => {
 			emptyFirstPublish: "indexing",
 			pubVersion: "push-unversioned",
 		});
+		// The stored path carries no `via`: it names the fence-drop producer
+		// only (spendEmptyFirstPublishHold, shared with that producer).
+		expect(held[0]?.metadata).not.toHaveProperty("via");
+	});
+
+	it("records a versioned first publish's own version on the hold row", () => {
+		// Recurrence this guards: the stored-path and fence-drop producers of
+		// the hold row folded onto one helper; the fence-drop producer only ever
+		// sees a version-less publish, so a helper that hard-coded
+		// "push-unversioned" would pass every fence-side cell and mislabel this
+		// stored-path row.
+		const { state, publish } = armHandler("php");
+		state.documentVersions.set(KEY, 7);
+
+		publish({ uri, diagnostics: [], version: 7 });
+
+		const held = logLatency.mock.calls
+			.map(([row]) => row as { phase?: string; metadata?: unknown })
+			.filter((row) => row.phase === "lsp_empty_first_publish_held");
+		expect(held).toHaveLength(1);
+		expect(held[0]?.metadata).toMatchObject({ pubVersion: 7 });
 	});
 
 	it.each(EMPTY_FIRST_PUBLISH_CONSUMER_SERVERS)(

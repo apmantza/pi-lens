@@ -17,6 +17,7 @@ import {
 	resetDegradationLedger,
 } from "./degradation-ledger.js";
 import { resetDeferredDispositions } from "./diagnostic-dispositions.js";
+import { resetBlockerReplayState } from "./finding-delivery-gate.js";
 import { getDiagnosticTracker } from "./diagnostic-tracker.js";
 import { resetPsScriptAnalyzerAvailability } from "./dispatch/runners/psscriptanalyzer.js";
 import { resetInstallRetryLatches } from "./dispatch/runners/utils/availability-policy.js";
@@ -2268,6 +2269,8 @@ export function resetSessionScopedState(
 	// project stayed "marked" to the read-only turn's cost guard — for the life
 	// of the PROCESS.
 	resetDeferredDispositions();
+	// #5784: which unconfirmed blocker lines this session already delivered.
+	resetBlockerReplayState();
 	// #817/#1199: Windows command resolution is cached per (command, canonical
 	// effective child PATH/PATHEXT/cwd/per-drive provenance); drop it each
 	// session so environment changes (e.g.

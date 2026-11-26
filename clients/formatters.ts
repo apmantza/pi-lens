@@ -59,13 +59,17 @@ import {
 	holdFlight,
 	runnerFlightKey,
 } from "./dispatch/collect-later-tier.js";
-import { admittedLookupAnswer } from "./session-repository.js";
+import {
+	admittedLookupAnswer,
+	withUnadmittedRootSpawns,
+} from "./session-repository.js";
 import { establishToolAgreement } from "./tool-agreement.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { probeToolAsync } from "./tool-probe.js";
 import {
 	assertInstallAllowed,
 	getProjectTrustGeneration,
+	getProjectTrustState,
 } from "./project-trust.js";
 import { getToolPath } from "./installer/index.js";
 import { getIsolatedNpxSpawnOptions } from "./tool-probe.js";
@@ -975,7 +979,7 @@ export const biomeFormatter: FormatterInfo = {
 		if (local) return [local, ...args, filePath];
 		// Any package manager's global bin dir (npm/pnpm/yarn/bun) before we
 		// auto-install — catches a `pnpm add -g @biomejs/biome` PATH misses (#375).
-		const global = await findGlobalBinary("biome");
+		const global = await findGlobalBinary("biome", ".cmd", cwd);
 		if (global) return [global, ...args, filePath];
 		if (!shouldAutoInstallTool("biome")) return null;
 		const { ensureTool } = await import("./installer/index.js");
@@ -1020,9 +1024,13 @@ export const prettierFormatter: FormatterInfo = {
 		const local = await findInNodeModules("prettier", cwd);
 		if (local) return [local, ...args, filePath];
 		// Global bin of any manager (npm/pnpm/yarn/bun) before auto-install (#375).
-		const global = await findGlobalBinary("prettier");
+		const global = await findGlobalBinary("prettier", ".cmd", cwd);
 		if (global) return [global, ...args, filePath];
-		return resolveManagedSmartDefaultCommand("prettier", filePath, args);
+		return getProjectTrustState() === "trusted"
+			? resolveManagedSmartDefaultCommand("prettier", filePath, args)
+			: withUnadmittedRootSpawns(cwd, () =>
+					resolveManagedSmartDefaultCommand("prettier", filePath, args),
+				);
 	},
 	extensions: [
 		".js",
@@ -1259,7 +1267,8 @@ export const shfmtFormatter: FormatterInfo = {
 	detect: managedToolDetect(
 		"shfmt",
 		undefined,
-		async () => (await which("shfmt")) !== null,
+		async (cwd) =>
+			(await resolveInstalledToolCommand(cwd, "shfmt")).command !== null,
 	),
 };
 

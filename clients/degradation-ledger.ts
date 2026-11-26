@@ -205,6 +205,15 @@ export type DegradationKind =
 	| "aux_wait_repromoted"
 	/** `availability-probe-overrun`: An availability probe exceeded its advertised wall-clock budget (#2131). */
 	| "availability-probe-overrun"
+	/**
+	 * `background-write-drain-deadline`: The test-side runner of the registered background-write drains
+	 * (`tests/support/background-write-drains.ts`, #5745) did not reach a fixed
+	 * point, a full pass after which no drain reports pending work, before its
+	 * deadline. The runner stops scheduling passes and rejects, naming the
+	 * drains still pending, so the fixture root is not removed under them.
+	 * Subject: `fixed-point`; once per ledger session.
+	 */
+	| "background-write-drain-deadline"
 	| "bash-view-clipped"
 	/**
 	 * `bash-write-scope-guessed`: A bash command filled a directory the scan could not read (`rsync ... "$D"`,
@@ -258,6 +267,15 @@ export type DegradationKind =
 	 * delivered pointer only.
 	 */
 	| "blocker-repeat-capped"
+	/**
+	 * `blocker-replay-suppressed`: #5784: a per-write blocker line (the withheld line, `Still unfixed`)
+	 * whose blockers were all carried without a verdict, and which this
+	 * session already delivered for the same file, surface and blocker set, was
+	 * held back (`admitBlockerReplay`). The blockers stay in the record, the
+	 * commit gate and `lens_diagnostics`. Subject is `<surface>:<file>`;
+	 * counted.
+	 */
+	| "blocker-replay-suppressed"
 	/**
 	 * `bounded-pid-lock-wait-skipped`: #3594: `acquireBoundedPidFileLock`'s wait (the durable-store sync
 	 * waiter) was skipped because the same top-generation holder an earlier
@@ -854,6 +872,12 @@ export type DegradationKind =
 	 */
 	| "instance-registry-deregister-root-failed"
 	/**
+	 * `instance-registry-exit-settle-timeout`: #5745: a process about to exit
+	 * explicitly (the MCP `fresh` worker) waited `settleRegistryWritesBeforeExit`'s
+	 * 2 s bound for its queued registry writes and gave up; its entry may outlive it.
+	 */
+	| "instance-registry-exit-settle-timeout"
+	/**
 	 * `instance-registry-identity-fallback`: #3071: a registration-record write fell back to the process cwd because
 	 * the session's identity carried no `projectRoot` — `instance-registry.ts`
 	 * still records the child, just without the caller-supplied root.
@@ -893,7 +917,9 @@ export type DegradationKind =
 	/**
 	 * `instance-registry-registration-missing`: #3071: an LSP child was recorded before `registerInstance` had run for
 	 * this process (or its entry was reaped) — `instance-registry.ts`
-	 * synthesizes a minimal host entry so the child stays tracked.
+	 * synthesizes a minimal host entry so the child stays tracked. A
+	 * `safeSpawnAsync` child's row is dropped instead (#5745 r5, subject
+	 * `owned-child:<pid>`): a spawned command never creates its host's entry.
 	 */
 	| "instance-registry-registration-missing"
 	/**
@@ -2009,6 +2035,8 @@ export type DegradationKind =
 	 * coverage gap once instead of once per edit.
 	 */
 	| "runner-spawn-timeout-cooldown"
+	/** `safe-spawn-owned-child-registry-failed`: A safeSpawnAsync child was created, but its best-effort registry update failed. */
+	| "safe-spawn-owned-child-registry-failed"
 	/**
 	 * `safe-spawn-signal-reraise-unsupported`: The self-signal re-raise at the end of `installLifetimeCleanup`'s signal
 	 * handler did not happen, so the host exits without the signal's default

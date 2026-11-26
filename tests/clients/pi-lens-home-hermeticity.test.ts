@@ -175,7 +175,7 @@ const BEST_EFFORT_LOCK_CALLS = [
 /** A module resolves a getGlobalPiLensDir()-rooted path AND locks it with a
  *  best-effort primitive — #3042's exact writer shape, not merely "uses
  *  getGlobalPiLensDir somewhere" (which alone would also catch read-only
- *  consumers like `clients/biome-client.ts`'s tools-dir path, never racy). */
+ *  consumers like `runner-helpers.ts`'s managed tools-dir path, never racy). */
 function isBestEffortGlobalDirWriter(source: string): boolean {
 	const code = stripSource(source, { strings: "blank" });
 	const callsGlobalDir = /\bgetGlobalPiLensDir\s*\(/.test(code);
@@ -217,7 +217,9 @@ describe("clients/ best-effort getGlobalPiLensDir() writers stay a named, regist
 
 	it("mutation-proof: dropping the best-effort-lock half of the predicate lets read-only getGlobalPiLensDir() consumers into the registry, failing the audit above", () => {
 		// #3042's shape is "resolves the path AND locks it best-effort" — NOT
-		// merely "calls getGlobalPiLensDir somewhere". clients/biome-client.ts,
+		// merely "calls getGlobalPiLensDir somewhere".
+		// clients/dispatch/runners/utils/runner-helpers.ts (its managed-tools
+		// join; BiomeClient's own join moved there in #5410 r2),
 		// clients/effective-config.ts and clients/runtime-session.ts all call
 		// getGlobalPiLensDir() (a tools-dir join, a config resolution, an
 		// atomic-write-stage sweep) with no lock at all — read-only or
@@ -236,7 +238,10 @@ describe("clients/ best-effort getGlobalPiLensDir() writers stay a named, regist
 		// the AND-condition is load-bearing, not decoration.
 		expect(naiveProducerModules.length).toBeGreaterThan(producerModules.length);
 		expect(naiveProducerModules).toEqual(
-			expect.arrayContaining(["biome-client.ts", "effective-config.ts"]),
+			expect.arrayContaining([
+				"dispatch/runners/utils/runner-helpers.ts",
+				"effective-config.ts",
+			]),
 		);
 
 		const mutatedAudit = auditRegistry({
@@ -247,7 +252,10 @@ describe("clients/ best-effort getGlobalPiLensDir() writers stay a named, regist
 		});
 		expect(mutatedAudit.problems.length).toBeGreaterThan(0);
 		expect(mutatedAudit.unaccounted).toEqual(
-			expect.arrayContaining(["biome-client.ts", "effective-config.ts"]),
+			expect.arrayContaining([
+				"dispatch/runners/utils/runner-helpers.ts",
+				"effective-config.ts",
+			]),
 		);
 	});
 });

@@ -19,7 +19,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	getDegradationSummary,
 	resetDegradationLedger,
@@ -1285,18 +1285,21 @@ describe("#5553 a read that gives no answer refuses, recorded once", () => {
 	// the gate, and `tool_call`'s catch let the command run.
 	it("refuses when the read throws", { timeout: 120_000 }, async () => {
 		const proj = stagedProject("throws");
-		const saved = process.env.TMPDIR;
-		process.env.TMPDIR = path.join(fixture.root, "no-such-tmp");
+		// The scratch directory is made under the scanner temp root, so a root
+		// that is not there makes the read's mkdtemp throw. `vi.stubEnv` puts the
+		// harness's own value back (verify r3 R3-2: a hand-assigned `saved` wrote
+		// the string "undefined" when the variable was unset, and the next
+		// tests' mkdtemp failed under a directory of that name).
+		vi.stubEnv(
+			"PI_LENS_TEST_SCANNER_TMPDIR",
+			path.join(fixture.root, "no-such-tmp"),
+		);
 		try {
 			const decision = await decide(proj, 'git commit -m "x"');
 			expectOutcome(decision, "unknown lane_incomplete");
 			expect(decision.reason).toContain("threw");
 		} finally {
-			// Recurrence prevented (verify r3 R3-2): with TMPDIR unset (CI),
-			// assigning `saved` back wrote the string "undefined", and the next
-			// tests' mkdtemp failed under a directory of that name.
-			if (saved === undefined) delete process.env.TMPDIR;
-			else process.env.TMPDIR = saved;
+			vi.unstubAllEnvs();
 		}
 	});
 
@@ -1347,6 +1350,42 @@ describe("#5553 a read that gives no answer refuses, recorded once", () => {
 			expectOutcome(
 				await decide(stagedProject("control"), 'git commit -m "x"'),
 				`refuses ${A}`,
+			);
+		},
+	);
+});
+
+describe("#5553 the read's scratch directory lands in the scanner temp root", () => {
+	// Recurrence prevented: the read made its scratch directory with its own
+	// `mkdtempSync(path.join(os.tmpdir(), ...))` while every other scanner scratch
+	// directory went through `scannerReportParentDir` (#4133). A harness that
+	// removes the root it sets in `PI_LENS_TEST_SCANNER_TMPDIR` never saw this
+	// one, so a gate killed mid-read stranded `pi-lens-staged-*` in the shared
+	// tmpdir.
+	it(
+		"creates its scratch under the root a harness sets and removes it afterwards",
+		{ timeout: 120_000 },
+		async () => {
+			const proj = seedProject(`scratch-root-${seeded++}`, { [A]: CLEAN });
+			write(proj, "notes/scratch.ts", ADDED);
+			const scannerRoot = path.join(fixture.root, `scanner-root-${seeded++}`);
+			fs.mkdirSync(scannerRoot);
+			vi.stubEnv("PI_LENS_TEST_SCANNER_TMPDIR", scannerRoot);
+			const seen = new Set<string>();
+			const watcher = fs.watch(scannerRoot, (_event, name) => {
+				if (name) seen.add(name.toString());
+			});
+			try {
+				expectOutcome(await decide(proj, 'git commit -m "wip"'), "commits");
+				await new Promise<void>((resolve) => setImmediate(resolve));
+			} finally {
+				watcher.close();
+				vi.unstubAllEnvs();
+			}
+			const scratch = [...seen].filter((n) => n.startsWith("pi-lens-staged-"));
+			expect(scratch).toHaveLength(1);
+			expect(fs.existsSync(path.join(scannerRoot, scratch[0] as string))).toBe(
+				false,
 			);
 		},
 	);

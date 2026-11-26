@@ -18,7 +18,8 @@ const { safeSpawnAsync, logLatencySpy, ensureTool, getInstallAttempt } =
 		getInstallAttempt: vi.fn(),
 	}));
 
-vi.mock("../../clients/safe-spawn.js", () => ({
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
 	safeSpawnAsync,
 	safeSpawn: vi.fn(() => ({ stdout: "", stderr: "", status: 1 })),
 }));

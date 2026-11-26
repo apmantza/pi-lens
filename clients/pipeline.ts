@@ -13,6 +13,11 @@
  */
 
 import { resolveLensToolName, type LensToolHost } from "./tool-config.js";
+import {
+	admitBlockerReplay,
+	type BlockerReplayCommit,
+	unconfirmedBlockerNote,
+} from "./finding-delivery-gate.js";
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import type { PiLensFlagSource } from "./lens-config.js";
@@ -497,6 +502,13 @@ export interface PipelineResult {
 	 * agent's next context. Absent when nothing was withheld.
 	 */
 	withheldBlockerLine?: string;
+	/**
+	 * #5788 review F4: the replay latch write this run's blocker line asks for
+	 * (`admitBlockerReplay`). The tool result commits it only when it is
+	 * delivered (`commitBlockerReplay`), so an abandoned delivery latches
+	 * nothing.
+	 */
+	blockerReplayCommit?: BlockerReplayCommit;
 	/**
 	 * #4733 r5 G3: how many blocking findings the observation still holds that
 	 * the #4483 seed called pre-existing (`DispatchResult.preExisting`). Absent
@@ -1757,9 +1769,15 @@ function shortBlockerRule(rule: string): string {
 function formatStillUnfixedLine(
 	blockers: readonly Diagnostic[],
 	filePath: string,
+	display: string,
 ): string {
 	const count = blockers.length;
-	return `🔴 Still unfixed: ${count} blocker${count === 1 ? "" : "s"} reported earlier${formatBlockerPlaces(blockers, filePath)}.`;
+	return `🔴 Still unfixed: ${count} blocker${count === 1 ? "" : "s"} reported earlier${formatBlockerPlaces(blockers, filePath)}.${noteSuffix(unconfirmedBlockerNote(blockers, display))}`;
+}
+
+/** #5784: a sentence appended to a line, with its leading space, or nothing. */
+function noteSuffix(note: string | undefined): string {
+	return note === undefined ? "" : ` ${note}`;
 }
 
 /**
@@ -1798,7 +1816,9 @@ export function formatWithheldBlockerLine(
 		evidence === "changed"
 			? "the file changed while this call ran, but pi-lens cannot confirm this call wrote it"
 			: "this call names the file, but pi-lens could not confirm the call changed it";
-	return `\u26a0 ${count} blocking finding${count === 1 ? "" : "s"} in ${display}${formatBlockerPlaces(blockers, filePath)} withheld: ${known}. If this call wrote it, fix ${them}.${pointer}`;
+	// #5784: a blocker no source re-checked on this write says so, and what
+	// settles it, in the delivery gate's one sentence.
+	return `\u26a0 ${count} blocking finding${count === 1 ? "" : "s"} in ${display}${formatBlockerPlaces(blockers, filePath)} withheld: ${known}.${noteSuffix(unconfirmedBlockerNote(blockers, display, { host }))} If this call wrote it, fix ${them}.${pointer}`;
 }
 
 /**
@@ -2063,6 +2083,9 @@ function carryRecordedBlockers(
 ): { carried: Diagnostic[]; matched: ReadonlySet<Diagnostic> } {
 	if (prior.length === 0) return { carried: [], matched: new Set() };
 	const runnerIds = new Set(dispatchResult.inconclusiveSources?.runnerIds);
+	const rechecking = new Set(
+		dispatchResult.inconclusiveSources?.collectLaterRunnerIds,
+	);
 	const serverIds = new Set(dispatchResult.inconclusiveSources?.serverIds);
 	const answered = dispatchResult.inconclusiveSources?.answeredServerIds;
 	// #5727: a runner with no verdict keeps its recorded blockers, except one
@@ -2100,13 +2123,25 @@ function carryRecordedBlockers(
 	const carried = kept.flatMap((d) => {
 		if (observedNow.has(d)) return [];
 		if (!recorded.has(d)) return [d];
+		// #5784: a recorded blocker still here was kept by `keepUnobserved`, so
+		// its source gave no verdict for it on this write. Its own server names
+		// that source when it has one, else its runner.
+		// #5788 review F2: a collect-later re-check still in flight answers for
+		// it on its own, so it is marked as running, not as needing a probe.
+		// A marker from an earlier carry is this write's to restate, not keep.
+		const { recheckRunning: _earlier, ...row } = d;
+		const marker = {
+			unconfirmedBy: d.serverId ?? d.runnerId ?? "unknown",
+			...(d.runnerId !== undefined &&
+				rechecking.has(d.runnerId) && { recheckRunning: true as const }),
+		};
 		const at = positionOf(d);
 		// #4509 (N3): kept without a place in these bytes, its line number is
 		// from older bytes; say so instead of leaving a later write to infer it
 		// from one line's hash.
 		if (typeof at !== "number")
-			return [d.positionStale ? d : { ...d, positionStale: true as const }];
-		return [at === d.line ? d : { ...d, line: at }];
+			return [{ ...row, positionStale: true as const, ...marker }];
+		return [{ ...row, line: at, ...marker }];
 	});
 	if (carried.some((d) => !dispatchResult.stillObserved?.includes(d))) {
 		incrementDegradationCount({
@@ -2837,8 +2872,21 @@ async function analysePipeline(
 			output += `\n\n${deliveredOutput}`;
 		}
 	}
-	if (stillUnfixed.length > 0) {
-		output += `\n\n${formatStillUnfixedLine(stillUnfixed, filePath)}`;
+	// #5784: the delivery gate decides whether this write's blocker line is a
+	// delivery or an identical replay of blockers no source has re-checked. It
+	// judges the file's whole live set, so any verdict on this write delivers.
+	const replay = admitBlockerReplay({
+		surface: allowAutonomousWriters ? "still-unfixed-line" : "withheld-line",
+		filePath,
+		blockers: liveBlockers,
+	});
+	const replaySuppressed =
+		replay.shown === "suppress" &&
+		(allowAutonomousWriters
+			? stillUnfixed.length > 0
+			: liveBlockers.length > 0);
+	if (stillUnfixed.length > 0 && !replaySuppressed) {
+		output += `\n\n${formatStillUnfixedLine(stillUnfixed, filePath, toRunnerDisplayPath(cwd, filePath))}`;
 	}
 	if (preExisting.length > 0) {
 		output += `\n\n${formatPreExistingLine(preExisting, filePath)}`;
@@ -2847,7 +2895,7 @@ async function analysePipeline(
 	// ones it withheld are still on the file. Say so before the all-clear below
 	// can render over them.
 	const withheldBlockerLine =
-		!allowAutonomousWriters && liveBlockers.length > 0
+		!allowAutonomousWriters && liveBlockers.length > 0 && !replaySuppressed
 			? formatWithheldBlockerLine(
 					liveBlockers,
 					filePath,
@@ -2956,7 +3004,9 @@ async function analysePipeline(
 	// layer up. Treat it as output here, or a format-only change would newly
 	// gain an "all clear" line it never had while the sentence lived inline.
 	let checkedClean = false;
-	if (!output && !postAutofixNotice) {
+	// #5784: a held-back replay still has blockers on the file, so no all-clear
+	// (not even an unconfirmed one) may stand in for the line it replaced.
+	if (!output && !postAutofixNotice && !replaySuppressed) {
 		output = buildAllClearOutput(dispatchResult, elapsed, filePath);
 		// #4734 r3: the all-clear line is not the verdict. A language server
 		// answered, and the run recorded nothing for the file: no delta finding
@@ -3083,6 +3133,9 @@ async function analysePipeline(
 		// #4484: what a clear must find empty, whatever the authorship.
 		currentBlockerCount: liveBlockers.length,
 		...(withheldBlockerLine !== undefined && { withheldBlockerLine }),
+		// #5788 review F4: committed only once the tool result reached the agent
+		// (`clients/runtime-tool-result.ts`).
+		...(replay.commit !== undefined && { blockerReplayCommit: replay.commit }),
 		...(preExisting.length > 0 && {
 			preExistingBlockerCount: preExisting.length,
 		}),

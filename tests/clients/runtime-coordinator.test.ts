@@ -4,7 +4,10 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Diagnostic } from "../../clients/dispatch/types.js";
 import {
+	admitBlockerReplay,
 	BLOCKER_FULL_DELIVERY_CAP,
+} from "../../clients/finding-delivery-gate.js";
+import {
 	MAX_OWED_ANCHORS,
 	RuntimeCoordinator,
 } from "../../clients/runtime-coordinator.js";
@@ -20,6 +23,16 @@ import {
 	retireScope,
 	type SessionScope,
 } from "../../clients/session-scope.js";
+
+/** #5532: the gate's turn-end collapse, from the coordinator's own count. */
+function capped(runtime: RuntimeCoordinator, filePath: string): boolean {
+	return (
+		admitBlockerReplay({
+			surface: "turn-end-replay",
+			fullDeliveries: runtime.peekBlockerFullDeliveryCount(filePath),
+		}).shown === "collapse"
+	);
+}
 
 describe("RuntimeCoordinator", () => {
 	it("resetForSession clears recorded tool-call path attributions (#1642 F5)", () => {
@@ -1441,7 +1454,7 @@ describe("RuntimeCoordinator per-blocker delivery cap (#5532)", () => {
 		const filePath = raise(runtime, "a.ts");
 		const verdicts: boolean[] = [];
 		for (let i = 0; i < 4; i++) {
-			verdicts.push(runtime.blockerFullDeliveryCapped(filePath));
+			verdicts.push(capped(runtime, filePath));
 			deliver(runtime, filePath, 1);
 		}
 		expect(BLOCKER_FULL_DELIVERY_CAP).toBe(3);
@@ -1455,14 +1468,14 @@ describe("RuntimeCoordinator per-blocker delivery cap (#5532)", () => {
 		const first = raise(runtime, "a.ts");
 		deliver(runtime, first, 3);
 		const second = raise(runtime, "b.ts");
-		expect(runtime.blockerFullDeliveryCapped(first)).toBe(true);
-		expect(runtime.blockerFullDeliveryCapped(second)).toBe(false);
+		expect(capped(runtime, first)).toBe(true);
+		expect(capped(runtime, second)).toBe(false);
 		deliver(runtime, second, 2);
 		runtime.clearInlineBlockers(second);
-		expect(runtime.blockerFullDeliveryCapped(first)).toBe(true);
+		expect(capped(runtime, first)).toBe(true);
 		// A cleared blocker has no record left to count against: a no-op.
 		deliver(runtime, second, 1);
-		expect(runtime.blockerFullDeliveryCapped(second)).toBe(false);
+		expect(capped(runtime, second)).toBe(false);
 	});
 
 	it("restarts a blocker's count when it is re-raised", () => {
@@ -1471,9 +1484,9 @@ describe("RuntimeCoordinator per-blocker delivery cap (#5532)", () => {
 		const runtime = new RuntimeCoordinator();
 		const filePath = raise(runtime, "a.ts");
 		deliver(runtime, filePath, 3);
-		expect(runtime.blockerFullDeliveryCapped(filePath)).toBe(true);
+		expect(capped(runtime, filePath)).toBe(true);
 		raise(runtime, "a.ts", 2);
-		expect(runtime.blockerFullDeliveryCapped(filePath)).toBe(false);
+		expect(capped(runtime, filePath)).toBe(false);
 	});
 
 	it("restarts the count when a late runner adds findings to the record", () => {
@@ -1483,11 +1496,11 @@ describe("RuntimeCoordinator per-blocker delivery cap (#5532)", () => {
 		const filePath = raise(runtime, "a.ts");
 		deliver(runtime, filePath, 3);
 		runtime.recordBlockerDelivery(filePath, "collapsed", "a.ts");
-		expect(runtime.blockerFullDeliveryCapped(filePath)).toBe(true);
+		expect(capped(runtime, filePath)).toBe(true);
 		runtime.recordDeferredInlineBlockers(filePath, [blocking(filePath, 2)], {
 			recordedAtMs: 2,
 		});
-		expect(runtime.blockerFullDeliveryCapped(filePath)).toBe(false);
+		expect(capped(runtime, filePath)).toBe(false);
 		// The row flag restarts with it: the next cap writes its own row.
 		deliver(runtime, filePath, 3);
 		runtime.recordBlockerDelivery(filePath, "collapsed", "a.ts");

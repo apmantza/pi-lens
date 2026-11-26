@@ -27,7 +27,8 @@ import { withEnv } from "../support/with-env.js";
 type HandleSessionStart =
 	typeof import("../../clients/runtime-session.js").handleSessionStart;
 
-vi.mock("../../clients/safe-spawn.js", () => ({
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
 	safeSpawn: vi.fn(() => ({ stdout: "", stderr: "", status: 1 })),
 	safeSpawnAsync: vi.fn(async () => ({ stdout: "", stderr: "", status: 1 })),
 	resetSafeSpawnWindowsCommandCache: vi.fn(),

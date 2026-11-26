@@ -5,8 +5,8 @@
  * The sweep uses transitive importer-use reachability over the test's
  * non-mocked production imports, over both registration spellings: hoisted
  * `vi.mock` and the un-hoisted `vi.doMock` twin (#5256). The admission holds
- * one row per (file, specifier, factory shape); read its live count from
- * `tests/support/vi-mock-export-baseline.json`.
+ * one row per (file, specifier, factory shape), naming the exports it admits
+ * as missing; read them in `tests/support/vi-mock-export-baseline.json`.
  *
  * The latency surface (`scanLatencyLoggerSurface`) selects through
  * `isLatencyLoggerSpecifier` (the single source in
@@ -41,7 +41,13 @@ import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const TESTS_ROOT = path.join(REPO_ROOT, "tests");
-const BASELINE: Record<string, number> = JSON.parse(
+/**
+ * A row admits a set of missing exports. A count row (the form before #5782)
+ * still parses, and {@link compareAgainstBaseline} refuses it.
+ */
+type BaselineRow = readonly string[] | number;
+
+const BASELINE: Record<string, BaselineRow> = JSON.parse(
 	fs.readFileSync(
 		path.join(REPO_ROOT, "tests/support/vi-mock-export-baseline.json"),
 		"utf8",
@@ -119,7 +125,7 @@ const LATENCY_ADMITTED: Readonly<Record<string, string>> = {};
 const MIN_LATENCY_REASON = 15;
 
 export function auditLatencyAdmissions(
-	baseline: Readonly<Record<string, number>>,
+	baseline: Readonly<Record<string, BaselineRow>>,
 	admitted: Readonly<Record<string, string>>,
 	readSource: (file: string) => string | undefined,
 ): string[] {
@@ -188,37 +194,70 @@ function compareCodeUnits(a: string, b: string): number {
 	return a < b ? -1 : a > b ? 1 : 0;
 }
 
-function baselineFrom(findings: ViMockExportFinding[]): Record<string, number> {
+function baselineFrom(
+	findings: ViMockExportFinding[],
+): Record<string, string[]> {
 	return Object.fromEntries(
 		findings
-			.map((finding) => [key(finding), finding.missing.length] as const)
+			.map(
+				(finding) =>
+					[key(finding), [...finding.missing].sort(compareCodeUnits)] as const,
+			)
 			.sort(([a], [b]) => compareCodeUnits(a, b)),
 	);
 }
 
+/** One row per line, so a sibling change that adds or drops a row merges. */
+function serializeBaseline(rows: Record<string, readonly string[]>): string {
+	const lines = Object.entries(rows).map(
+		([entry, missing]) =>
+			`\t${JSON.stringify(entry)}: ${JSON.stringify(missing)}`,
+	);
+	return `{\n${lines.join(",\n")}\n}\n`;
+}
+
+function isNameSet(row: unknown): row is readonly string[] {
+	return Array.isArray(row) && row.every((name) => typeof name === "string");
+}
+
 function compareAgainstBaseline(
 	findings: ViMockExportFinding[],
-	baseline: Record<string, number>,
+	baseline: Readonly<Record<string, BaselineRow>>,
 ) {
 	const live = new Map(findings.map((finding) => [key(finding), finding]));
 	const problems: string[] = [];
 	const warnings: string[] = [];
 	for (const [entry, finding] of live) {
 		const admitted = baseline[entry];
-		if (admitted === undefined)
+		if (admitted === undefined) {
 			problems.push(
 				`${entry}: regression; missing ${finding.missing.join(", ")}`,
 			);
-		else if (finding.missing.length > admitted)
-			// Recurrence #4411 round 2 F6 (mocks): a rise only warned, so adding an
-			// export to a module that ~17 admitted partial mocks omit stayed green.
-			// A rise is a regression like a new key; a fall stays a warning.
+			continue;
+		}
+		// Recurrence #5782 V1: a count admitted a swapped export (12 = 12 with
+		// `trustScopedEnvironment` in), so a row names its exports and a row
+		// that names none (a count, or anything else) fails closed.
+		if (!isNameSet(admitted)) {
 			problems.push(
-				`${entry}: missing count rose from ${admitted} to ${finding.missing.length}; missing ${finding.missing.join(", ")}. Spread \`importOriginal()\` into the factory, or admit the rise with \`npm run test:regen -- vi-mock\``,
+				`${entry}: count row ${JSON.stringify(admitted)} names no export; regenerate the row with \`npm run test:regen -- vi-mock\``,
 			);
-		else if (finding.missing.length < admitted)
+			continue;
+		}
+		const allowed = new Set(admitted);
+		const added = finding.missing.filter((name) => !allowed.has(name));
+		// #4411 round 2 F6 (mocks): a rise only warned, so an export added to a
+		// module that ~17 admitted partial mocks omit stayed green. A newly
+		// missing export is a regression like a new key; a fall stays a warning.
+		if (added.length > 0)
+			problems.push(
+				`${entry}: newly missing ${added.join(", ")}. Spread \`importOriginal()\` into the factory, or admit it with \`npm run test:regen -- vi-mock\``,
+			);
+		const missing = new Set(finding.missing);
+		const gone = admitted.filter((name) => !missing.has(name));
+		if (gone.length > 0)
 			warnings.push(
-				`${entry}: missing count fell from ${admitted} to ${finding.missing.length}; lower the baseline row with \`npm run test:regen -- vi-mock\``,
+				`${entry}: no longer missing ${gone.join(", ")}; regenerate the row with \`npm run test:regen -- vi-mock\``,
 			);
 	}
 	for (const entry of Object.keys(baseline))
@@ -1417,9 +1456,9 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 			const finding = findViMockExportGaps(testFile, source, "all");
 			const admissionKey = key(finding[0]);
 			expect(
-				compareAgainstBaseline(finding, { [admissionKey]: 0 }),
+				compareAgainstBaseline(finding, { [admissionKey]: [] }),
 			).toMatchObject({
-				problems: [expect.stringMatching(/missing count rose from 0 to 1.*b/)],
+				problems: [expect.stringMatching(/newly missing b\./)],
 				warnings: [],
 			});
 		} finally {
@@ -1427,7 +1466,7 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 		}
 	});
 
-	it("only warns when an admitted missing count falls", () => {
+	it("only warns when an admitted missing export is no longer missing", () => {
 		// The ratchet-down side of #4411 round 2 F6 (mocks): making a rise red
 		// must not turn a mock that gained an export into a red; the fall stays
 		// a warning until the baseline row is regenerated.
@@ -1443,11 +1482,60 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 			fs.writeFileSync(testFile, source);
 			const finding = findViMockExportGaps(testFile, source, "all");
 			expect(
-				compareAgainstBaseline(finding, { [key(finding[0])]: 2 }),
+				compareAgainstBaseline(finding, { [key(finding[0])]: ["b", "z"] }),
 			).toMatchObject({
 				problems: [],
-				warnings: [expect.stringContaining("fell from 2 to 1")],
+				warnings: [expect.stringContaining("no longer missing z;")],
 			});
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("reds a same-size row whose missing exports swapped, naming the export", () => {
+		// Recurrence #5782 V1: managed-tool-refresh's row admitted 12 and stayed
+		// 12 while `trustScopedEnvironment` swapped into its missing set, so the
+		// count ratchet passed a double that CI then redded 37 times.
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const testFile = path.join(root, "case.test.ts");
+			const source = 'vi.mock("./module.js", () => ({ a: 1 }));\n';
+			fs.writeFileSync(
+				moduleFile,
+				"export const a = 1;\nexport const b = 2;\nexport const c = 3;\n",
+			);
+			fs.writeFileSync(testFile, source);
+			const finding = findViMockExportGaps(testFile, source, "all");
+			expect(finding[0].missing).toEqual(["b", "c"]);
+			expect(
+				compareAgainstBaseline(finding, { [key(finding[0])]: ["b", "x"] }),
+			).toEqual({
+				problems: [expect.stringMatching(/newly missing c\./)],
+				warnings: [expect.stringContaining("no longer missing x")],
+			});
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("reds a count row, which admits no named export", () => {
+		// The pre-#5782 row form still parses; it fails closed with the remedy,
+		// because a count cannot say which exports it admitted.
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const testFile = path.join(root, "case.test.ts");
+			const source = 'vi.mock("./module.js", () => ({ a: 1 }));\n';
+			fs.writeFileSync(
+				moduleFile,
+				"export const a = 1;\nexport const b = 2;\n",
+			);
+			fs.writeFileSync(testFile, source);
+			const finding = findViMockExportGaps(testFile, source, "all");
+			expect(
+				compareAgainstBaseline(finding, { [key(finding[0])]: 1 }).problems,
+			).toEqual([expect.stringContaining("count row 1 names no export")]);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -1464,7 +1552,8 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 			fs.writeFileSync(testFile, source);
 			const finding = findViMockExportGaps(testFile, source);
 			const admitted = {
-				[`${relativePosix(REPO_ROOT, finding[0].file)}:./module.js:["a","b"]`]: 0,
+				[`${relativePosix(REPO_ROOT, finding[0].file)}:./module.js:["a","b"]`]:
+					[],
 			};
 			expect(
 				compareAgainstBaseline(finding, admitted).problems.join("\n"),
@@ -1505,7 +1594,7 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 			const finding = findViMockExportGaps(testFile, source)[0];
 			const oldKey = `${relativePosix(REPO_ROOT, finding.file)}:${finding.line}:${finding.specifier}`;
 			expect(
-				compareAgainstBaseline([finding], { [oldKey]: 1 }).problems.length,
+				compareAgainstBaseline([finding], { [oldKey]: ["b"] }).problems.length,
 			).toBeGreaterThan(0);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
@@ -1581,7 +1670,7 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 		async () => {
 			fs.writeFileSync(
 				path.join(REPO_ROOT, "tests/support/vi-mock-export-baseline.json"),
-				`${JSON.stringify(baselineFrom(await scan()), null, "\t")}\n`,
+				serializeBaseline(baselineFrom(await scan())),
 			);
 		},
 		TREE_WALK_TIMEOUT_MS,

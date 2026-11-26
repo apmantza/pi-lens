@@ -5,7 +5,12 @@ import { FactStore } from "../../../../clients/dispatch/fact-store.js";
 // vi.hoisted ensures this is available when the mock factory below runs.
 const safeSpawnAsync = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
+vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/safe-spawn.js")
+	>()),
+	safeSpawnAsync,
+}));
 
 vi.mock(
 	"../../../../clients/dispatch/runners/utils/runner-helpers.js",

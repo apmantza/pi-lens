@@ -11,7 +11,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const safeSpawnAsync = vi.fn();
 const safeSpawn = vi.fn();
 
-vi.mock("../../clients/safe-spawn.js", () => ({ safeSpawnAsync, safeSpawn }));
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
+	safeSpawnAsync,
+	safeSpawn,
+}));
 
 describe("validateRule honors ast-grep's status-1-with-matches contract (#1087)", () => {
 	beforeEach(() => {
