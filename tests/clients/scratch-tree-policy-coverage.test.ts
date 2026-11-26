@@ -62,7 +62,11 @@ const { safeSpawnAsync, safeSpawn } = vi.hoisted(() => ({
 	safeSpawnAsync: vi.fn(),
 	safeSpawn: vi.fn(),
 }));
-vi.mock("../../clients/safe-spawn.js", () => ({ safeSpawnAsync, safeSpawn }));
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
+	safeSpawnAsync,
+	safeSpawn,
+}));
 
 describe("scratch-tree-policy — single source of truth (#1562)", () => {
 	it("walker-parity tool-format lists are derived from (never a copy that can drift from) EXCLUDED_DIRS", () => {

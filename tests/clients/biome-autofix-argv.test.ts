@@ -9,7 +9,11 @@ const safeSpawnAsync = vi.fn();
 const safeSpawn = vi.fn();
 const ensureTool = vi.fn();
 
-vi.mock("../../clients/safe-spawn.js", () => ({ safeSpawnAsync, safeSpawn }));
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
+	safeSpawnAsync,
+	safeSpawn,
+}));
 // Biome's command now resolves through the shared checker, whose cached hit
 // asks the installer whether the path still spawns (#5410 r2); the double
 // answers it, since the shims below are empty files.

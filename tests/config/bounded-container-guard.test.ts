@@ -65,6 +65,10 @@ const FINITE_REASONS: Readonly<Record<string, string>> = {
 	// #5413: the collect-later run in flight per (project, runner).
 	"clients/dispatch/collect-later-tier.ts#observeRunnerLatency:d31792ad":
 		"keys are (project root, runner id) pairs with a collect-later run in flight: runner ids are the dispatch registry's closed vocabulary and roots are the session's own; chain deletes the key when the flight's last run settles, and resetObservedRunnerLatency clears it at session_start",
+	// #5745 r7: owned-child ledger chains in flight, joined by the module's
+	// background-write drain.
+	"clients/safe-spawn.ts#681e4285":
+		"one entry per owned-child ledger chain still in flight (a start read bounded at 1 s, then one lock-bounded registry write or removal); each chain deletes its own entry in finally when it settles",
 	"clients/session-scope.ts#toStartReason:e2e4ae2a":
 		"#3612 `sessionStores`: keyed by store name, one entry per `defineSessionStore` call at module load (a second declaration of a name throws); four stores today, and the session-scope sweep pins every name",
 };
@@ -528,9 +532,9 @@ describe("#2981 long-lived containers are bounded or admitted", () => {
 		"clients/lsp/server.ts#directLspCommandUnavailableUntil:831316db",
 		"clients/opaque-mutation-scan.ts#getOpaqueBaselineStore:feff1538",
 		"clients/opaque-mutation-scan.ts#isGitWorktree:97337298",
-		"clients/package-manager.ts#PROBE_TIMEOUT_MS:ab1ec294",
+		"clients/package-manager.ts#PROBE_TIMEOUT_MS:169c8f55",
 		// #4530: `globalBinDirCache` keys on trust scope × manager, 2 × 4 keys.
-		"clients/package-manager.ts#updateArgs:e94f9156",
+		"clients/package-manager.ts#updateArgs:85b1ae12",
 		"clients/package-root.ts#1f3e8efd",
 		"clients/project-lens-config.ts#configCache:77a8d572",
 		"clients/project-report.ts#computeDeadWeight:7e342b62",

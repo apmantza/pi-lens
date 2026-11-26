@@ -33,13 +33,23 @@ describe("scratch directory ownership (#2688/#2687)", () => {
 		expect(fs.existsSync(dead)).toBe(false);
 	});
 
-	it("makes smoke-tools use the same live-owner gate", () => {
+	// Recurrence: #2688/#2687 smoke-tools swept every leftover workspace by
+	// prefix and deleted one a live run still held. The live arm alone is
+	// satisfied by a sweepLeftovers that sweeps nothing, so a dead owner's
+	// leftover must go in the same call.
+	it("makes smoke-tools sweep a dead owner's workspace and keep a live owner's", () => {
 		const live = claimScratchDir(SCRATCH_DIR_ROOT, "pi-lens-smoke-");
+		const dead = fs.mkdtempSync(
+			path.join(SCRATCH_DIR_ROOT, "pi-lens-smoke-dead-"),
+		);
+		fs.writeFileSync(path.join(dead, SCRATCH_OWNER_FILE), "999999999");
 		try {
-			sweepLeftovers();
+			expect(sweepLeftovers()).toBeGreaterThanOrEqual(1);
+			expect(fs.existsSync(dead)).toBe(false);
 			expect(fs.existsSync(live)).toBe(true);
 		} finally {
 			fs.rmSync(live, { recursive: true, force: true });
+			fs.rmSync(dead, { recursive: true, force: true });
 		}
 	});
 

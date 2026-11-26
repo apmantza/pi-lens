@@ -31,7 +31,10 @@
  *   `instances.json` row behind with them. It reads the same `lsp.json`, so
  *   its server is the stubborn fixture too; that server and the worker's row
  *   are gone once it exits. Its disabled `typos`, overridden to the fixture
- *   as well, never starts (#5734).
+ *   as well, never starts (#5734). Behind a registry write that never lands
+ *   (`tests/fixtures/stall-registry-tail.mjs`), it still exits once its exit
+ *   join's bound fires, and the abandoned join is a durable ledger row
+ *   (#5745 r5).
  *
  * Linux only: the cases read process liveness and adopt the server for
  * cleanup through `/proc` (`tests/support/kill-guard.ts`). lane: unit (Linux).
@@ -49,6 +52,10 @@ import { McpHarness } from "./harness.js";
 
 const STUBBORN_SERVER = fileURLToPath(
 	new URL("../fixtures/stubborn-lsp-server.mjs", import.meta.url),
+);
+const STALL_REGISTRY_TAIL = new URL(
+	"../fixtures/stall-registry-tail.mjs",
+	import.meta.url,
 );
 const CRASH_PRELOAD = new URL(
 	"../fixtures/mcp-crash-preload.mjs",
@@ -206,6 +213,23 @@ function registryRowPids(home: string): number[] {
 	}
 }
 
+/** The durable `instance-registry-exit-settle-timeout` rows in `latency.log`. */
+function settleTimeoutRows(home: string): unknown[] {
+	let text: string;
+	try {
+		text = fs.readFileSync(path.join(home, "latency.log"), "utf-8");
+	} catch {
+		return [];
+	}
+	return text
+		.split("\n")
+		.filter(Boolean)
+		.map((line) => JSON.parse(line) as { metadata?: { kind?: string } })
+		.filter(
+			(row) => row.metadata?.kind === "instance-registry-exit-settle-timeout",
+		);
+}
+
 function exited(pid: number): Promise<void> {
 	return vi.waitFor(
 		() => {
@@ -314,6 +338,47 @@ describe.runIf(process.platform === "linux")(
 				serverSurvives: await survives(server, DEATH_WAIT_MS),
 				workerRowLeft: registryRowPids(ws.home).includes(worker),
 			}).toEqual({ serverSurvives: false, workerRowLeft: false });
+		}, 150_000);
+
+		it("exits the fresh worker past a stalled registry write and records the abandoned join", async () => {
+			// #5745 r5 F5: the worker's bounded exit join wrote only stderr when
+			// the bound fired. A write that never lands, preloaded into the host
+			// and the worker it forks, makes it fire. No language server runs:
+			// the stall also keeps the worker's exit hook from arming.
+			const env = setupTestEnvironment("worker-settle-5745-");
+			cleanups.push(env.cleanup);
+			const home = path.join(env.tmpDir, "home");
+			const project = path.join(env.tmpDir, "proj");
+			fs.mkdirSync(home);
+			fs.mkdirSync(project);
+			fs.writeFileSync(
+				path.join(home, "lsp.json"),
+				JSON.stringify({ disabledServers: ["ast-grep", "typos", "opengrep"] }),
+			);
+			const file = path.join(project, "notes.txt");
+			fs.writeFileSync(file, "hello\n");
+			const harness = new McpHarness({
+				cwd: project,
+				env: {
+					PI_LENS_HOME: home,
+					PI_LENS_TEST_MODE: "0",
+					PI_LENS_DISABLE_LSP_INSTALL: "1",
+					NODE_OPTIONS: `--import=${STALL_REGISTRY_TAIL.href}`,
+				},
+			});
+			harnesses.push(harness);
+
+			const response = await harness.request(
+				56993,
+				"tools/call",
+				{ name: "pilens_analyze", arguments: { path: file, mode: "fresh" } },
+				120_000,
+			);
+
+			// analyzeFileFresh settles on the worker's close: a worker the bound
+			// did not release would end only at its 120 s kill, as a failure.
+			expect(JSON.stringify(response)).not.toContain("fresh analyze failed");
+			expect(settleTimeoutRows(home)).toHaveLength(1);
 		}, 150_000);
 
 		it("reaps a SIGKILLed host's server at the next MCP host's start", async () => {

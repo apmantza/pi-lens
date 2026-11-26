@@ -191,7 +191,8 @@ const spawnVerdict = vi.hoisted(() => ({
 	// Undefined by default: every other test in this file is unaffected.
 	onCall: undefined as ((command: string, args: string[]) => void) | undefined,
 }));
-vi.mock("../../../clients/safe-spawn.js", () => ({
+vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal()),
 	safeSpawn: vi.fn(() => ({ stdout: "", stderr: "", status: 0 })),
 	safeSpawnAsync: async (
 		command: string,

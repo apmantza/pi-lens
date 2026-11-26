@@ -816,9 +816,11 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	// #5694 re-pins the identity, count unchanged: the try bodies of the ps1
 	// bypass catch (:564) and the spawn fallback catch (:1199) no longer carry
 	// the deleted `needsShell` value; no handler was added or removed.
+	// #5689 changes the global lookup arguments in the existing fallback;
+	// the same eight handlers remain, with no new silent handler admitted.
 	"clients/lsp/launch.ts": {
 		silent: 8,
-		identities: "455b1d236759b4c2",
+		identities: "4fee9037ac58efe8",
 		reason: PRE_RULE,
 	}, // :244, :564, :942, :948, :1199, :1424, :1435, :1446
 	"clients/lsp/lombok.ts": {
@@ -1146,10 +1148,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	// #5699: same 18 handlers; the `/proc` read's handler now reads the held
 	// store through `heldChildren()` (it moved onto the process singleton).
 	"clients/safe-spawn.ts": {
-		silent: 18,
-		identities: "aa26ee5b6400d32a",
+		silent: 20,
+		identities: "37218d2e9b5b69cc",
 		reason: PRE_RULE,
-	}, // :209, :218, :246, :499, :562, :708, :765, :779, :782, :1276, :1765, :2257, :2327, :2357, :2403, :2436, :2583, :2640
+	}, // :209, :218, :246, :499, :562, :708, :765, :779, :782, :1276, :1765, :2257, :2327, :2357, :2397, :2403, :2433, :2436, :2583, :2640
 	"clients/search-read-registration.ts": {
 		silent: 1,
 		identities: "a37a1b3a1638df7c",

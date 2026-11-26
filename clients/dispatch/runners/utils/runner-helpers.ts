@@ -2093,9 +2093,11 @@ function toolBinaryChecker(
 								process.platform === "win32"
 									? [path.join(base, "biome.cmd"), path.join(base, "biome")]
 									: [path.join(base, "biome")];
+							// The scan root is `cwd`, not the process cwd: a global link whose
+							// target sits in it is refused under unknown trust (#5782 V3).
 							return (
 								managed.find((candidate) => fs.existsSync(candidate)) ??
-								(await findGlobalBinary(spec.command)) ??
+								(await findGlobalBinary(spec.command, ".cmd", cwd)) ??
 								null
 							);
 						},

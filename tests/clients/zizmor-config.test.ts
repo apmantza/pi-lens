@@ -6,7 +6,8 @@ import { removeTempDirSync } from "./test-utils.js";
 
 // Controllable mock for the `gh auth token` derivation.
 const safeSpawnAsync = vi.fn();
-vi.mock("../../clients/safe-spawn.js", () => ({
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
 	safeSpawnAsync: (...args: unknown[]) => safeSpawnAsync(...args),
 }));
 

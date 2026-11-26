@@ -10,7 +10,12 @@ const { safeSpawnAsync, runtime } = vi.hoisted(() => ({
 		javaPresent: true,
 	},
 }));
-vi.mock("../../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
+vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/safe-spawn.js")
+	>()),
+	safeSpawnAsync,
+}));
 
 // java present + spotbugs resolves to a stub command. The runtime ladder is the
 // registry resolver (`resolveToolCommandWithInstallFallback`, #5410); the typed

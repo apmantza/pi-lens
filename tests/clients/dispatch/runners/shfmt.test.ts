@@ -4,7 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setupTestEnvironment } from "../../test-utils.js";
 
 const { safeSpawnAsync } = vi.hoisted(() => ({ safeSpawnAsync: vi.fn() }));
-vi.mock("../../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
+vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/safe-spawn.js")
+	>()),
+	safeSpawnAsync,
+}));
 vi.mock("../../../../clients/installer/index.js", () => ({
 	ensureTool: vi.fn(async () => "shfmt"),
 }));

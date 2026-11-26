@@ -2486,6 +2486,35 @@ describe("ReadGuard Tier-2 idle decay and bounds (#1389)", () => {
 		}
 	});
 
+	// Recurrence: #5762 routed every range gate through requestedEditRanges but
+	// no case reached the authorship gate with an adapter that reports only
+	// `editRanges`: reverting that one call site to the bounding box left the
+	// whole read-guard suite green while a range-only edit of the agent's own
+	// bytes was blocked as "authorship-range".
+	it("judges a range-only adapter edit against the authored ranges (#5762)", () => {
+		const env = setupTestEnvironment("read-guard-authorship-range-only-");
+		try {
+			const filePath = path.join(env.tmpDir, "range-only.ts");
+			fs.writeFileSync(filePath, "one\ntwo\nthree\nfour\n");
+			const guard = createReadGuard("authorship-range-only");
+			fs.writeFileSync(filePath, "one\ntwo\nbridge\nfour\n");
+			guard.recordWritten(filePath, {
+				stampFileTime: false,
+				authoredRanges: [[3, 3]],
+				allowFirstAuthorship: true,
+			});
+
+			expect(guard.checkEdit(filePath, undefined, [[3, 3]]).action).toBe(
+				"allow",
+			);
+			expect(guard.checkEdit(filePath, undefined, [[2, 2]]).action).toBe(
+				"block",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	// #4210 F-4210-2: a partial credit is a license only for the lines its
 	// writer produced. Recurrence: injectCreationRead widened the first
 	// allowed inside edit into a whole-file license.

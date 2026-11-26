@@ -13,13 +13,18 @@
 		"local-5700 (formal/lsp-document-lifecycle: states re-recorded after the #5700 cap-close variables; every config ran in 0.6 s locally, so the new configs take the family's 1.3 s CI figure)",
 		"local-5699 (formal/instance-reaper: PosixQuitStubborn and PosixQuitLedger, TLC 1.7.4 local runs)",
 		"local-5733 (formal/instance-reaper: PosixDescendantHeld, PosixDescendantConfirm and PosixDescendantCrash, TLC 1.7.4 local runs)",
-		"local-5727 (formal/blocker-pending: CarryByServer and MutCarryByServer measured by check-tla-models.mjs in a full local pool)"
+		"local-5727 (formal/blocker-pending: CarryByServer and MutCarryByServer measured by check-tla-models.mjs in a full local pool)",
+		"local-5782-r3 (formal/adopted-root-trust: ManagerAsBuilt and the three ManagerPreFix configs, TLC 1.7.4 local runs)"
 	],
 	"note": "Per-config TLC seconds (median over the source runs), read from `ok|FAIL formal/<family>/<Model>.cfg: ... (Ns)` lines the checker prints. scripts/tla-model-costs.json packs the TLA+ shards with these; a config with no row costs the table's MAX so an unmeasured config can never quietly become the tail.",
 	"files": {
 		"formal/adopted-root-trust/AsBuilt.cfg": 0.918,
 		"formal/adopted-root-trust/LifetimeAsBuilt.cfg": 0.642,
 		"formal/adopted-root-trust/LifetimePreFix.cfg": 0.646,
+		"formal/adopted-root-trust/ManagerAsBuilt.cfg": 0.642,
+		"formal/adopted-root-trust/ManagerPreFixFinder.cfg": 0.653,
+		"formal/adopted-root-trust/ManagerPreFixIdentity.cfg": 0.691,
+		"formal/adopted-root-trust/ManagerPreFixScope.cfg": 0.68,
 		"formal/adopted-root-trust/PreFix.cfg": 0.627,
 		"formal/availability-latch/ClientInstallGenGuard.cfg": 0.8,
 		"formal/availability-latch/ClientInstallStale.cfg": 0.7,
@@ -938,6 +943,10 @@
 		"formal/turn-end-late-scan/TakeUnblocked.cfg": 1.6
 	},
 	"states": {
+		"formal/adopted-root-trust/ManagerAsBuilt.cfg": 264,
+		"formal/adopted-root-trust/ManagerPreFixFinder.cfg": 177,
+		"formal/adopted-root-trust/ManagerPreFixIdentity.cfg": 177,
+		"formal/adopted-root-trust/ManagerPreFixScope.cfg": 177,
 		"formal/availability-latch/ClientInstallGenGuard.cfg": 4869,
 		"formal/availability-latch/ClientInstallStale.cfg": 33,
 		"formal/availability-latch/CwdProbe.cfg": 4501,
