@@ -10,7 +10,13 @@ const safeSpawn = vi.fn();
 const ensureTool = vi.fn();
 
 vi.mock("../../clients/safe-spawn.js", () => ({ safeSpawnAsync, safeSpawn }));
-vi.mock("../../clients/installer/index.js", () => ({ ensureTool }));
+// Biome's command now resolves through the shared checker, whose cached hit
+// asks the installer whether the path still spawns (#5410 r2); the double
+// answers it, since the shims below are empty files.
+vi.mock("../../clients/installer/index.js", () => ({
+	ensureTool,
+	isSpawnableCommand: async () => true,
+}));
 
 // Regression guard for #1247 review P1/P2: the biome autofix surface must
 // (a) place --config-path AFTER the `lint --write` subcommand — biome rejects
