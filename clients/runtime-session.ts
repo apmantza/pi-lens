@@ -3369,15 +3369,19 @@ export async function handleSessionStart(
 	}
 
 	// #5792: stamped with this session's id (`consumeSessionStartGuidance`
-	// compares it), the same id its `context` requests read as.
-	cacheManager.writeCache<SessionStartGuidanceRecord>(
-		"session-start-guidance",
-		{
-			content: agentStartupGuidance.join("\n"),
-			sessionId: deps.runtime.telemetrySessionId,
-		},
-		analysisRoot,
-	);
+	// compares it), the same id its `context` requests read as. A post-await
+	// publish like its siblings, so a start a later one superseded stamps
+	// nothing: the id read here would be the successor's (catalog shape 22).
+	if (runtime.isCurrentSession(sessionGeneration)) {
+		cacheManager.writeCache<SessionStartGuidanceRecord>(
+			"session-start-guidance",
+			{
+				content: agentStartupGuidance.join("\n"),
+				sessionId: runtime.telemetrySessionId,
+			},
+			analysisRoot,
+		);
+	}
 
 	// `sessionGeneration` was captured earlier (#1162's bounded sequence read
 	// needs it before this point) and is stable across this whole call.
