@@ -1814,7 +1814,7 @@ export function formatWithheldBlockerLine(
 	const carriedSettle =
 		diagnosticsTool === undefined
 			? ""
-			: `; ${diagnosticsTool} mode=full settles ${carriedPronoun}`;
+			: `; ${diagnosticsTool} source=lsp path=${display} settles ${carriedPronoun}`;
 	const carriedClause =
 		carried <= 0
 			? ""

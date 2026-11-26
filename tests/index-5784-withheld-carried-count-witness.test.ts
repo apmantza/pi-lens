@@ -166,7 +166,7 @@ describe("#5784 witness: the withheld line counts the findings this write never 
 		expect(second).toContain("withheld:");
 		// ...and only the recorded one was not re-checked.
 		expect(second).toContain(
-			"1 recorded earlier was not re-checked on this write, so fixing the code cannot retire it; lens_diagnostics mode=full settles it.",
+			"1 recorded earlier was not re-checked on this write, so fixing the code cannot retire it; lens_diagnostics source=lsp path=svc.ts settles it.",
 		);
 	}, 120_000);
 

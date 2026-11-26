@@ -47,7 +47,7 @@ describe("formatWithheldBlockerLine, the carried count (#5784)", () => {
 			1,
 		);
 		expect(line).toContain(
-			"1 recorded earlier was not re-checked on this write, so fixing the code cannot retire it; lens_diagnostics mode=full settles it.",
+			"1 recorded earlier was not re-checked on this write, so fixing the code cannot retire it; lens_diagnostics source=lsp path=a.ts settles it.",
 		);
 		// The pointer to the listing call survives: the agent still needs it to
 		// see all of them.
@@ -64,7 +64,7 @@ describe("formatWithheldBlockerLine, the carried count (#5784)", () => {
 			2,
 		);
 		expect(line).toContain(
-			"2 recorded earlier were not re-checked on this write, so fixing the code cannot retire them; lens_diagnostics mode=full settles them.",
+			"2 recorded earlier were not re-checked on this write, so fixing the code cannot retire them; lens_diagnostics source=lsp path=a.ts settles them.",
 		);
 		expect(line).toContain(
 			"this call names the file, but pi-lens could not confirm the call changed it",
@@ -82,7 +82,9 @@ describe("formatWithheldBlockerLine, the carried count (#5784)", () => {
 			"mcp",
 			2,
 		);
-		expect(line).toContain("pilens_diagnostics mode=full settles them");
+		expect(line).toContain(
+			"pilens_diagnostics source=lsp path=a.ts settles them",
+		);
 		expect(line).not.toMatch(/(?<!pi)lens_diagnostics/);
 	});
 });
