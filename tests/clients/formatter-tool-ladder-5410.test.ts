@@ -76,12 +76,6 @@ vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
 	safeSpawnAsync,
 }));
 
-const { logLatencySpy } = vi.hoisted(() => ({ logLatencySpy: vi.fn() }));
-vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../clients/latency-logger.js")>()),
-	logLatency: logLatencySpy,
-}));
-
 const GOOD = "#!/bin/sh\nexit 0\n";
 const BROKEN = "#!/bin/sh\n# BROKEN interpreter\nexit 1\n";
 
@@ -113,7 +107,6 @@ beforeEach(async () => {
 	);
 	spawnCalls.length = 0;
 	safeSpawnAsync.mockClear();
-	logLatencySpy.mockClear();
 });
 
 afterEach(async () => {
@@ -736,18 +729,30 @@ describe("reviewed ladder preservation (#5783)", () => {
 		const client = new BiomeClient() as unknown as {
 			getBiomeBinary(cwd?: string): Promise<{ cmd: string }>;
 		};
-		const biomeRows = () =>
-			logLatencySpy.mock.calls
-				.map((call) => call[0])
+		// The real latency log (no double): test mode writes nothing, so it is
+		// switched off for this case, as tool-binary-resolver.test.ts does.
+		vi.stubEnv("PI_LENS_TEST_MODE", "0");
+		const { flushLatencyLog, getLatencyLogPath } =
+			await import("../../clients/latency-logger.js");
+		const biomeRows = async () => {
+			await flushLatencyLog();
+			const log = getLatencyLogPath();
+			if (!fs.existsSync(log)) return [];
+			return fs
+				.readFileSync(log, "utf8")
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => JSON.parse(line))
 				.filter(
-					(entry) =>
-						entry?.phase === "availability_decision" &&
-						entry.metadata?.tool === "biome",
+					(row) =>
+						row.phase === "availability_decision" &&
+						row.metadata?.tool === "biome",
 				)
-				.map((entry) => entry.metadata);
+				.map((row) => row.metadata);
+		};
 
 		await client.getBiomeBinary(root);
-		expect(biomeRows()).toEqual([
+		expect(await biomeRows()).toEqual([
 			expect.objectContaining({
 				verdict: "unavailable",
 				outcome: "missing",
@@ -756,7 +761,6 @@ describe("reviewed ladder preservation (#5783)", () => {
 			}),
 		]);
 
-		logLatencySpy.mockClear();
 		const managed = plant(
 			path.join(home, "tools", "node_modules", ".bin", "biome"),
 			GOOD,
@@ -764,7 +768,9 @@ describe("reviewed ladder preservation (#5783)", () => {
 		const elsewhere = path.join(root, "other");
 		fs.mkdirSync(elsewhere);
 		expect((await client.getBiomeBinary(elsewhere)).cmd).toBe(managed);
-		expect(biomeRows()).toEqual([
+		// Append order: the hit follows the miss it came after.
+		expect(await biomeRows()).toEqual([
+			expect.objectContaining({ verdict: "unavailable", cause: "not-found" }),
 			expect.objectContaining({
 				verdict: "available",
 				outcome: "success",
