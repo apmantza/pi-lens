@@ -495,9 +495,7 @@ export async function allAvailableGlobalBinDirs(
 	onTransient?: () => void,
 	root: string = process.cwd(),
 ): Promise<string[]> {
-	const refusedRoot =
-		unadmittedSpawnRoot() ??
-		(getProjectTrustState() === "trusted" ? undefined : root);
+	const refusedRoot = refusedRootFor(root);
 	if (refusedRoot !== undefined && unadmittedSpawnRoot() === undefined) {
 		return withUnadmittedRootSpawns(refusedRoot, () =>
 			allAvailableGlobalBinDirs(onTransient, root),
@@ -527,6 +525,17 @@ export async function allAvailableGlobalBinDirs(
 		}
 	}
 	return dirs;
+}
+
+/**
+ * The root a global lookup for `root` refuses: launch's unadmitted root when
+ * this context runs inside one, else `root` unless pi trusts the project.
+ */
+function refusedRootFor(root: string): string | undefined {
+	return (
+		unadmittedSpawnRoot() ??
+		(getProjectTrustState() === "trusted" ? undefined : root)
+	);
 }
 
 /**
@@ -619,6 +628,9 @@ export async function findGlobalBinary(
 	const candidates = onWindows()
 		? [`${command}${windowsExt}`, `${command}.exe`, command]
 		: [command];
+	const refusedRoot = refusedRootFor(root);
+	const inRefusedRoot =
+		refusedRoot === undefined ? undefined : projectSearchJudge(refusedRoot);
 	try {
 		for (const binDir of await allAvailableGlobalBinDirs(undefined, root)) {
 			for (const name of candidates) {
@@ -627,7 +639,12 @@ export async function findGlobalBinary(
 				// #4530: a global bin dir can hold a link into the project (an
 				// `npm link`ed tool), and the spawn follows it. The target is
 				// what runs, so the target is what the trust judgment reads.
-				if (isUntrustedProjectPath(full)) {
+				// #5782 R5: the refused root is judged the same way, by the
+				// target's real directory, as the spawn seam judges a lookup.
+				if (
+					isUntrustedProjectPath(full) ||
+					inRefusedRoot?.(path.dirname(realpathOrResolve(full))) === true
+				) {
 					recordProjectCommandRefusal(full);
 					continue;
 				}

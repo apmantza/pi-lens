@@ -79,6 +79,7 @@ import {
 	projectTrustDenialReason,
 } from "../project-trust.js";
 import {
+	inUnadmittedSpawnRoot,
 	isUntrustedProjectPath,
 	recordProjectCommandRefusal,
 } from "../session-repository.js";
@@ -3821,7 +3822,12 @@ async function firstVerifiedBinary(
 	for (const candidate of candidates) {
 		try {
 			await fs.access(candidate);
-			if (isUntrustedProjectPath(candidate)) {
+			// #5782 R5: an absolute path skips the spawn seam's lookup judgment,
+			// so a link into launch's unadmitted root is judged here too.
+			if (
+				isUntrustedProjectPath(candidate) ||
+				inUnadmittedSpawnRoot(candidate)
+			) {
 				recordProjectCommandRefusal(candidate);
 				continue;
 			}

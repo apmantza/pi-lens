@@ -68,6 +68,7 @@ import {
 	setProjectTrustState,
 } from "../../clients/project-trust.js";
 import { RustClient } from "../../clients/rust-client.js";
+import { withUnadmittedRootSpawns } from "../../clients/session-repository.js";
 import {
 	findCommandAsync,
 	safeSpawnAsync,
@@ -1421,5 +1422,59 @@ describe.skipIf(!POSIX)("package-manager probe root trust (#5689)", () => {
 		await probe("biome-client", root, false);
 		expect(ran(marker)).toBe(false);
 		expect(ran(outsideMarker)).toBe(true);
+	});
+
+	// Recurrence #5782 R5: the candidate a global bin dir held was judged
+	// against the session only, so a tool linked into scan root B came back
+	// from node-tool (the caller then runs it). An outside target still
+	// resolves, and a trusted session admits the link.
+	it("R5: node-tool refuses a global tool linked into the scan root", async () => {
+		const root = path.join(layout.outside, "adopted");
+		const inRoot = writeStandIn(path.join(root, "tools"), "real", "exit 0");
+		const outside = writeStandIn(
+			path.join(layout.root, "outside-tools"),
+			"real",
+			"exit 0",
+		);
+		const binDir = stub.plantManager("npm");
+		const link = path.join(binDir, "pi-lens-5782-tool");
+		const outsideLink = path.join(binDir, "pi-lens-5782-outside");
+		fs.symlinkSync(inRoot, link);
+		fs.symlinkSync(outside, outsideLink);
+		setProjectTrustState("unknown");
+		expect(await findNodeToolBinary("pi-lens-5782-tool", root)).toBeUndefined();
+		expect(trustRefusals()).toContain(
+			truncateForLedger(`project-command:${fs.realpathSync(inRoot)}`),
+		);
+		expect(await findNodeToolBinary("pi-lens-5782-outside", root)).toBe(
+			outsideLink,
+		);
+		_resetPackageManagerCache();
+		setProjectTrustState("trusted");
+		expect(await findNodeToolBinary("pi-lens-5782-tool", root)).toBe(link);
+	});
+
+	// Recurrence #5782 R5: inside launch's scope for an unadmitted root, the
+	// installer's global rung ran `--version` on a link into that root under a
+	// trusted host. Outside the scope the same link verifies and runs.
+	it("R5: the installer never runs a global link into an unadmitted root", async () => {
+		const root = path.join(layout.outside, "adopted");
+		const marker = path.join(layout.root, "r5-installer-marker");
+		const target = writeStandIn(
+			path.join(root, "tools"),
+			"real",
+			`printf ran >> '${marker}'`,
+		);
+		const link = path.join(stub.plantManager("npm"), "oxfmt");
+		fs.symlinkSync(target, link);
+		setProjectTrustState("trusted");
+		expect(
+			await withUnadmittedRootSpawns(root, () => getToolPath("oxfmt")),
+		).not.toBe(link);
+		expect(ran(marker)).toBe(false);
+		_resetPackageManagerCache();
+		resetPathWalkMemo();
+		expect(await getToolPath("oxfmt")).toBe(link);
+		expect(ran(marker)).toBe(true);
 	});
 });
