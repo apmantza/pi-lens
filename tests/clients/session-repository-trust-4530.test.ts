@@ -57,7 +57,11 @@ import {
 	_resetPackageManagerCache,
 	allAvailableGlobalBinDirs,
 	findGlobalBinary,
+	findNodeToolBinary,
 } from "../../clients/package-manager.js";
+import prismaValidateRunner from "../../clients/dispatch/runners/prisma-validate.js";
+import { RUNNERS, TestRunnerClient } from "../../clients/test-runner-client.js";
+import { makeRunnerCtx } from "../support/runner-ctx.js";
 import { GoServer } from "../../clients/lsp/server.js";
 import {
 	resetProjectTrust,
@@ -1176,6 +1180,11 @@ describe.skipIf(!POSIX)("package-manager probe root trust (#5689)", () => {
 		"biome-formatter",
 		"prettier-formatter",
 		"biome-client",
+		// #5782 V3: callers whose local walk judges a scan root other than the
+		// session; the global half judged process.cwd() and ran B's manager.
+		"node-tool",
+		"prisma",
+		"test-runner",
 	] as const;
 	async function probe(
 		member: (typeof members)[number],
@@ -1190,6 +1199,24 @@ describe.skipIf(!POSIX)("package-manager probe root trust (#5689)", () => {
 			).rejects.toThrow();
 		} else if (member === "global-dirs") {
 			await allAvailableGlobalBinDirs(undefined, root);
+		} else if (member === "node-tool") {
+			await findNodeToolBinary("pi-lens-5689-absent", root);
+		} else if (member === "prisma") {
+			const schema = path.join(root, "schema.prisma");
+			fs.writeFileSync(schema, "model A { id Int @id }\n");
+			await prismaValidateRunner.run(
+				makeRunnerCtx(schema, root, {
+					kind: "prisma",
+					pi: { getFlag: () => undefined } as never,
+				}),
+			);
+		} else if (member === "test-runner") {
+			const testFile = path.join(root, "a.test.ts");
+			fs.writeFileSync(testFile, "\n");
+			await new TestRunnerClient(false).runTestFileAsync(testFile, root, {
+				runner: "vitest",
+				config: RUNNERS.vitest,
+			});
 		} else if (member === "biome-client") {
 			await (
 				new BiomeClient() as unknown as {

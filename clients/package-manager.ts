@@ -1002,6 +1002,6 @@ export async function findNodeToolBinary(
 ): Promise<string | undefined> {
 	return (
 		localBinPath(findLocalBinUpwards(tool, cwd, { windowsExt })) ??
-		(await findGlobalBinary(tool, windowsExt))
+		(await findGlobalBinary(tool, windowsExt, cwd))
 	);
 }
