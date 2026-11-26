@@ -1698,11 +1698,6 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<
 		reason:
 			"the rule manager reads the project's rule directory; the runner holds the sg binary",
 	},
-	"biome-client.ts": {
-		ownerKey: "project",
-		reason:
-			"the resolved biome binary is cached per cwd so monorepo sub-packages keep their own",
-	},
 	"blocker-freshness.ts": {
 		ownerKey: "project",
 		reason:
@@ -2381,7 +2376,6 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"agent-behavior-client.ts": 3,
 	"agent-nudge.ts": 1,
 	"ast-grep-client.ts": 2,
-	"biome-client.ts": 1,
 	"blocker-freshness.ts": 4,
 	// #2467: flagged because the file now exports a session_start reset; the
 	// scan counts no module-scope CONTAINER here (the gate is a boolean and the

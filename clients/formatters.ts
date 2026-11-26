@@ -1571,13 +1571,18 @@ export const styluaFormatter: FormatterInfo = {
 	name: "stylua",
 	command: ["stylua", "$FILE"],
 	extensions: [".lua"],
-	resolveCommand: managedFormatterResolver("stylua", []),
+	resolveCommand: managedFormatterResolver("stylua", [], (binary, cwd) =>
+		localBinPath(findLocalBinUpwards(binary, cwd)),
+	),
 	detect: managedToolDetect(
 		"stylua",
 		async (cwd) =>
 			(await findUp(["stylua.toml", ".stylua.toml"], cwd)).length > 0,
 		async (cwd) =>
-			(await resolveInstalledToolCommand(cwd, "stylua")).command !== null,
+			Boolean(
+				localBinPath(findLocalBinUpwards("stylua", cwd)) ||
+				(await which("stylua")),
+			),
 	),
 };
 

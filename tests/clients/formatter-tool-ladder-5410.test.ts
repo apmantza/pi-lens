@@ -111,6 +111,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
 	(await import("../../clients/project-trust.js")).resetProjectTrust();
+	vi.restoreAllMocks();
 	vi.unstubAllEnvs();
 	if (previousHome === undefined) delete process.env.PI_LENS_HOME;
 	else process.env.PI_LENS_HOME = previousHome;
@@ -640,5 +641,207 @@ describe("resolveInstalledToolCommand answers (#5492 r2)", () => {
 		} finally {
 			if (saved) Object.defineProperty(process, "platform", saved);
 		}
+	});
+});
+
+// PR #5783 r1 F1-F5: keep each formatter/client's established lookup contract.
+describe("reviewed ladder preservation (#5783)", () => {
+	it("stylua: an ancestor shim remains detectable and resolves without a version probe", async () => {
+		const shim = plant(path.join(root, "node_modules", ".bin", "stylua"), GOOD);
+		fs.chmodSync(shim, 0o644);
+		const child = path.join(root, "child");
+		fs.mkdirSync(child);
+		fs.writeFileSync(path.join(child, "stylua.toml"), "column_width = 100\n");
+		const file = path.join(child, "init.lua");
+		const { styluaFormatter } = await import("../../clients/formatters.js");
+		expect(await styluaFormatter.detect(child)).toBe(true);
+		expect(await styluaFormatter.resolveCommand?.(file, child)).toEqual([
+			shim,
+			file,
+		]);
+		expect(spawnCalls.some((call) => call.cmd === shim)).toBe(false);
+	});
+
+	it("stylua: config without an installed shim is not detected", async () => {
+		fs.writeFileSync(path.join(root, "stylua.toml"), "column_width = 100\n");
+		const { styluaFormatter } = await import("../../clients/formatters.js");
+		expect(await styluaFormatter.detect(root)).toBe(false);
+	});
+
+	it("shfmt: no installed command is not detected", async () => {
+		const { shfmtFormatter } = await import("../../clients/formatters.js");
+		expect(await shfmtFormatter.detect(root)).toBe(false);
+	});
+
+	it("shfmt: a working project command is detected", async () => {
+		plant(path.join(root, "node_modules", ".bin", "shfmt"), GOOD);
+		const { shfmtFormatter } = await import("../../clients/formatters.js");
+		expect(await shfmtFormatter.detect(root)).toBe(true);
+	});
+
+	// Control: Biome's formatter caller omits the client install handoff and
+	// retains its version-checked PATH-first ladder (#5783 profile isolation).
+	it("biome: the ordinary formatter lookup keeps PATH before managed", async () => {
+		plant(path.join(home, "tools", "node_modules", ".bin", "biome"), GOOD);
+		plant(path.join(pathDir, "biome"), GOOD);
+		const { resolveInstalledToolCommand } =
+			await import("../../clients/dispatch/runners/utils/runner-helpers.js");
+		expect((await resolveInstalledToolCommand(root, "biome")).command).toBe(
+			"biome",
+		);
+		expect(
+			spawnCalls.some(
+				(call) => call.cmd === "biome" && call.args.includes("--version"),
+			),
+		).toBe(true);
+	});
+
+	it("biome: an installed project shim is not version-probed", async () => {
+		const project = plant(
+			path.join(root, "node_modules", ".bin", "biome"),
+			BROKEN,
+		);
+		const { BiomeClient } = await import("../../clients/biome-client.js");
+		const client = new BiomeClient() as unknown as {
+			getBiomeBinary(cwd?: string): Promise<{ cmd: string }>;
+		};
+		expect((await client.getBiomeBinary(root)).cmd).toBe(project);
+		expect(spawnCalls.some((call) => call.cmd === project)).toBe(false);
+	});
+
+	it("biome: a missing presence ladder returns npx without a bare version probe", async () => {
+		const { BiomeClient } = await import("../../clients/biome-client.js");
+		const client = new BiomeClient() as unknown as {
+			getBiomeBinary(cwd?: string): Promise<{ cmd: string; args: string[] }>;
+		};
+		expect(await client.getBiomeBinary(root)).toEqual({
+			cmd: "npx",
+			args: ["@biomejs/biome"],
+		});
+		expect(spawnCalls.some((call) => call.cmd === "biome")).toBe(false);
+	});
+
+	it("biome: Windows managed discovery prefers cmd over the bare shim", async () => {
+		vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+		const managed = plant(
+			path.join(home, "tools", "node_modules", ".bin", "biome.cmd"),
+			GOOD,
+		);
+		plant(path.join(home, "tools", "node_modules", ".bin", "biome"), GOOD);
+		const { BiomeClient } = await import("../../clients/biome-client.js");
+		const client = new BiomeClient() as unknown as {
+			getBiomeBinary(cwd?: string): Promise<{ cmd: string }>;
+		};
+		expect((await client.getBiomeBinary(root)).cmd).toBe(managed);
+	});
+
+	for (const explicit of [true, false]) {
+		it(`biome: managed precedes PATH with cwd ${explicit ? "set" : "unset"}`, async () => {
+			vi.spyOn(process, "cwd").mockReturnValue(root);
+			const managed = plant(
+				path.join(home, "tools", "node_modules", ".bin", "biome"),
+				GOOD,
+			);
+			plant(path.join(pathDir, "biome"), GOOD);
+			const { BiomeClient } = await import("../../clients/biome-client.js");
+			const client = new BiomeClient() as unknown as {
+				getBiomeBinary(cwd?: string): Promise<{ cmd: string }>;
+			};
+			expect(
+				(await client.getBiomeBinary(explicit ? root : undefined)).cmd,
+			).toBe(managed);
+		});
+
+		it(`biome: bun global bin precedes npx with cwd ${explicit ? "set" : "unset"}`, async () => {
+			vi.spyOn(process, "cwd").mockReturnValue(root);
+			plant(path.join(pathDir, "bun"), GOOD);
+			const bunRoot = path.join(home, "bun");
+			vi.stubEnv("BUN_INSTALL", bunRoot);
+			const global = plant(path.join(bunRoot, "bin", "biome"), GOOD);
+			const { BiomeClient } = await import("../../clients/biome-client.js");
+			const client = new BiomeClient() as unknown as {
+				getBiomeBinary(cwd?: string): Promise<{ cmd: string }>;
+			};
+			expect(
+				(await client.getBiomeBinary(explicit ? root : undefined)).cmd,
+			).toBe(global);
+		});
+	}
+
+	it("biome: auto-installed precedes managed and PATH but follows this project's shim", async () => {
+		const managed = plant(
+			path.join(home, "tools", "node_modules", ".bin", "biome"),
+			GOOD,
+		);
+		plant(path.join(pathDir, "biome"), GOOD);
+		const installed = plant(path.join(home, "installed", "biome"), GOOD);
+		const { BiomeClient } = await import("../../clients/biome-client.js");
+		const client = new BiomeClient() as unknown as {
+			autoInstalledBinaryPath: string;
+			getBiomeBinary(cwd?: string): Promise<{ cmd: string }>;
+		};
+		client.autoInstalledBinaryPath = installed;
+		expect((await client.getBiomeBinary(root)).cmd).toBe(installed);
+		const project = plant(
+			path.join(root, "node_modules", ".bin", "biome"),
+			GOOD,
+		);
+		expect((await client.getBiomeBinary(root)).cmd).toBe(project);
+		expect(installed).not.toBe(managed);
+	});
+
+	it("biome: the same client stops returning and spawning the project shim when trust is withdrawn", async () => {
+		const project = plant(
+			path.join(root, "node_modules", ".bin", "biome"),
+			GOOD,
+		);
+		const managed = plant(
+			path.join(home, "tools", "node_modules", ".bin", "biome"),
+			GOOD,
+		);
+		const { BiomeClient } = await import("../../clients/biome-client.js");
+		const trust = await import("../../clients/project-trust.js");
+		const client = new BiomeClient() as unknown as {
+			getBiomeBinary(cwd?: string): Promise<{ cmd: string }>;
+			spawnBiomeAsync(
+				args: string[],
+				timeout: number,
+				cwd: string,
+			): Promise<unknown>;
+		};
+		expect((await client.getBiomeBinary(root)).cmd).toBe(project);
+		await client.spawnBiomeAsync(["lint"], 1000, root);
+		expect(
+			spawnCalls.some(
+				(call) => call.cmd === project && call.args.includes("lint"),
+			),
+		).toBe(true);
+		trust.setProjectTrustState("untrusted");
+		spawnCalls.length = 0;
+		expect((await client.getBiomeBinary(root)).cmd).toBe(managed);
+		await client.spawnBiomeAsync(["lint"], 1000, root);
+		expect(spawnCalls.some((call) => call.cmd === project)).toBe(false);
+		trust.setProjectTrustState("trusted");
+		expect((await client.getBiomeBinary(root)).cmd).toBe(project);
+	});
+
+	it("biome: a managed hit while untrusted does not hide the project after trust is granted", async () => {
+		const project = plant(
+			path.join(root, "node_modules", ".bin", "biome"),
+			GOOD,
+		);
+		const managed = plant(
+			path.join(home, "tools", "node_modules", ".bin", "biome"),
+			GOOD,
+		);
+		const trust = await import("../../clients/project-trust.js");
+		trust.setProjectTrustState("untrusted");
+		const { BiomeClient } = await import("../../clients/biome-client.js");
+		const client = new BiomeClient() as unknown as {
+			getBiomeBinary(cwd?: string): Promise<{ cmd: string }>;
+		};
+		expect((await client.getBiomeBinary(root)).cmd).toBe(managed);
+		trust.setProjectTrustState("trusted");
+		expect((await client.getBiomeBinary(root)).cmd).toBe(project);
 	});
 });

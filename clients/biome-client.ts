@@ -12,12 +12,6 @@ import { createSubsystemLogger } from "./extension-log.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isFileKind } from "./file-kinds.js";
-import { getGlobalPiLensDir } from "./file-utils.js";
-import {
-	findGlobalBinary,
-	findLocalBinAt,
-	localBinPath,
-} from "./package-manager.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { getIsolatedNpxSpawnOptions, probeToolAsync } from "./tool-probe.js";
 import { createSingleFlight } from "./single-flight.js";
@@ -79,14 +73,8 @@ export class BiomeClient {
 	private lastProbeHostStallMs = 0;
 	/** Raw facts from the last probe, carried into the decision record (#1500). */
 	private lastProbeEvidence: ProbeEvidence | undefined;
-	// Per-cwd cache of the resolved biome binary. Keying by cwd matters in
-	// monorepos where different sub-packages each ship their own biome
-	// installation; sharing one slot across the whole client would cause
-	// the first resolution to win and stale across other packages.
-	private localBinaryByCwd = new Map<string, string>();
-	// The binary path written by `ensureTool("biome")` — genuinely global
-	// (lives under ~/.pi-lens/tools), so it's stored separately from the
-	// per-cwd cache and used as a final fallback before npx.
+	// The managed path returned by ensureTool; the shared resolver keeps it
+	// below this project's own shim and above the managed-directory lookup.
 	private autoInstalledBinaryPath: string | null = null;
 	/**
 	 * At-most-one probe/auto-install in flight, via the shared primitive
@@ -112,52 +100,14 @@ export class BiomeClient {
 	private async getBiomeBinary(
 		cwd?: string,
 	): Promise<{ cmd: string; args: string[] }> {
-		const resolveCwd = cwd ?? process.cwd();
-		const cached = this.localBinaryByCwd.get(resolveCwd);
-		if (cached) return { cmd: cached, args: [] };
-		// The availability sweep has no project cwd. Keep its dedicated npx and
-		// install-client path; analysis spawns with a cwd use the shared ladder.
-		if (cwd === undefined) {
-			const isWin = process.platform === "win32";
-			const piLensBin = path.join(
-				getGlobalPiLensDir(),
-				"tools",
-				"node_modules",
-				".bin",
-			);
-			const localBiome = localBinPath(
-				findLocalBinAt("biome", resolveCwd, {
-					windowsExt: ".cmd",
-					isWindows: isWin,
-				}),
-			);
-			if (localBiome) return { cmd: localBiome, args: [] };
-			if (this.autoInstalledBinaryPath) {
-				return { cmd: this.autoInstalledBinaryPath, args: [] };
-			}
-			const managed = isWin
-				? [path.join(piLensBin, "biome.cmd"), path.join(piLensBin, "biome")]
-				: [path.join(piLensBin, "biome")];
-			for (const candidate of managed) {
-				if (fs.existsSync(candidate)) return { cmd: candidate, args: [] };
-			}
-			const global = await findGlobalBinary("biome");
-			if (global) return { cmd: global, args: [] };
-			return { cmd: "npx", args: ["@biomejs/biome"] };
-		}
-
-		// The shared resolver owns the trust-gated project rung, version probe,
-		// managed fallback, and PATH order. Biome keeps only its npx fallback.
-		const resolved = await resolveInstalledToolCommand(resolveCwd, "biome");
-		if (resolved.command) {
-			this.localBinaryByCwd.set(resolveCwd, resolved.command);
-			return { cmd: resolved.command, args: [] };
-		}
-		if (this.autoInstalledBinaryPath) {
-			return { cmd: this.autoInstalledBinaryPath, args: [] };
-		}
-		// Fallback: npx (slower but works anywhere)
-		return { cmd: "npx", args: ["@biomejs/biome"] };
+		const resolved = await resolveInstalledToolCommand(
+			cwd ?? process.cwd(),
+			"biome",
+			this.autoInstalledBinaryPath,
+		);
+		return resolved.command
+			? { cmd: resolved.command, args: [] }
+			: { cmd: "npx", args: ["@biomejs/biome"] };
 	}
 
 	private async spawnBiomeAsync(args: string[], timeout = 15000, cwd?: string) {

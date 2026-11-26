@@ -49,6 +49,7 @@ import { BUILTIN_SERVER_RUNNER_COVERS } from "../../../lsp/server-covers.js";
 // predicate (#1488) costs this file no edge into the registry graph.
 import { isAuxiliary } from "../../../lsp/server-traits.js";
 import {
+	findGlobalBinary,
 	findLocalBinAt,
 	findLocalBinUpwards,
 	isLocalBinTrustRefusal,
@@ -799,7 +800,9 @@ const REJECTED_OUTPUT_CHARS = 2000;
 
 export interface AvailabilityCheckerOptions {
 	probeTimeout?: number;
-	fastPath?: () => string | null | Promise<string | null>;
+	fastPath?: (cwd: string) => string | null | Promise<string | null>;
+	/** Presence-only lookup: its miss is final, without a version probe. */
+	fastPathOnly?: boolean;
 	/** Environment used by both the availability probe and later client spawns. */
 	environment?: (cwd: string) => Promise<NodeJS.ProcessEnv>;
 	/** Compatibility for legacy probes whose test doubles carry no failure kind. */
@@ -1493,7 +1496,7 @@ export function createAvailabilityChecker(
 				inFlightByCwd.get(key)?.promise === promise,
 			);
 		promise = (async () => {
-			const fastPath = await options.fastPath?.();
+			const fastPath = await options.fastPath?.(resolvedCwd);
 			if (fastPath) {
 				note({
 					available: true,
@@ -1506,6 +1509,17 @@ export function createAvailabilityChecker(
 					classifiedBy: "caller",
 				});
 				return true;
+			}
+
+			if (options.fastPathOnly) {
+				note({
+					available: false,
+					outcome: "missing",
+					cause: "not-found",
+					elapsedMs: 0,
+					classifiedBy: "caller",
+				});
+				return false;
 			}
 
 			// A bad/removed workspace must not be mistaken for a missing tool and
@@ -2032,7 +2046,8 @@ const toolBinaryCheckers = new Map<string, AvailabilityChecker>();
  */
 type ToolBinaryOrder =
 	| NonNullable<AvailabilityCheckerOptions["order"]>
-	| "path-only";
+	| "path-only"
+	| "biome-installed";
 
 /**
  * One checker per (tool id, order): a runner (managed before PATH) and a
@@ -2058,7 +2073,36 @@ function toolBinaryChecker(
 			...(spec.probeTimeoutMs !== undefined && {
 				probeTimeout: spec.probeTimeoutMs,
 			}),
-			...(order === "path-only" ? { pathOnly: true } : { order }),
+			...(order === "biome-installed"
+				? {
+						fastPathOnly: true,
+						fastPath: async (cwd: string) => {
+							const local = localBinPath(
+								findLocalBinAt(spec.command, cwd, {
+									windowsExt: ".cmd",
+								}),
+							);
+							if (local) return local;
+							const base = path.join(
+								getGlobalPiLensDir(),
+								"tools",
+								"node_modules",
+								".bin",
+							);
+							const managed =
+								process.platform === "win32"
+									? [path.join(base, "biome.cmd"), path.join(base, "biome")]
+									: [path.join(base, "biome")];
+							return (
+								managed.find((candidate) => fs.existsSync(candidate)) ??
+								(await findGlobalBinary(spec.command)) ??
+								null
+							);
+						},
+					}
+				: order === "path-only"
+					? { pathOnly: true }
+					: { order }),
 		},
 	);
 	toolBinaryCheckers.set(key, checker);
@@ -2156,13 +2200,31 @@ export interface InstalledToolResolution {
  * it writes, so a working PATH binary outranks the managed copy; the runners
  * keep managed before PATH in `resolveToolCommandWithInstallFallback`. A
  * formatter calls this where `shouldAutoInstallTool` decides the install
- * separately.
+ * separately. BiomeClient supplies its auto-installed command (or null) to
+ * select its historical presence-only ladder: exact-cwd project, install
+ * result, managed Node shim, package-manager global bins. An omitted third
+ * argument retains the formatter's version-checked PATH-first ladder.
  */
 export async function resolveInstalledToolCommand(
 	cwd: string,
 	toolId: string,
+	autoInstalledCommand?: string | null,
 ): Promise<InstalledToolResolution> {
-	const checker = toolBinaryChecker(toolId, "path-first");
+	// Biome's established presence ladder differs from the version-checked
+	// formatter ladder. An install result is its second rung, after the
+	// project's own exact-cwd shim, and must not be memoized above trust.
+	if (toolId === "biome" && autoInstalledCommand) {
+		const project = localBinPath(
+			findLocalBinAt("biome", cwd, { windowsExt: ".cmd" }),
+		);
+		return { command: project ?? autoInstalledCommand };
+	}
+	const checker = toolBinaryChecker(
+		toolId,
+		toolId === "biome" && autoInstalledCommand !== undefined
+			? "biome-installed"
+			: "path-first",
+	);
 	if (!checker) return { command: null };
 	if (await checker.isAvailableAsync(cwd)) {
 		return { command: checker.getCommand(cwd) };
