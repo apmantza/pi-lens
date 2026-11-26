@@ -4,11 +4,18 @@
  * (`tests/index-4484-unfixed-blocker-witness.test.ts`) does not reach: the
  * session reset and the file bound.
  *
+ * It also reads back the `blocker-replay-suppressed` record a held-back line
+ * leaves, so a hold that nothing observes cannot ship silently.
+ *
  * Recurrences prevented: a latch that outlives its session would hide the
  * first line a new session owes the agent, and a module-level map with no
  * bound grows with every file a long session touches (AGENTS.md shape 46).
  */
 import { afterEach, describe, expect, it } from "vitest";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
 import type { Diagnostic } from "../../clients/dispatch/types.js";
 import {
 	admitBlockerReplay,
@@ -38,9 +45,28 @@ const replay = (filePath: string) =>
 		blockers: [unconfirmed(filePath)],
 	});
 
-afterEach(() => resetBlockerReplayState());
+afterEach(() => {
+	resetBlockerReplayState();
+	resetDegradationLedger();
+});
 
 describe("admitBlockerReplay lifecycle (#5784)", () => {
+	it("records every held-back replay under one counted row per surface and file", () => {
+		const file = "/project/src/counted.ts";
+		expect(replay(file)).toBe("deliver");
+		expect(replay(file)).toBe("suppress");
+		expect(replay(file)).toBe("suppress");
+		const row = getDegradationSummary().find(
+			(group) => group.kind === "blocker-replay-suppressed",
+		);
+		expect(row?.count).toBe(2);
+		expect(row?.latestReasons).toEqual([
+			expect.objectContaining({
+				subject: expect.stringContaining("withheld-line:"),
+			}),
+		]);
+	});
+
 	it("delivers an unconfirmed line again in a new session", () => {
 		const file = "/project/src/reset.ts";
 		expect(replay(file)).toBe("deliver");
