@@ -2880,18 +2880,11 @@ async function analysePipeline(
 		filePath,
 		blockers: liveBlockers,
 	});
-	const replayLine = allowAutonomousWriters
-		? stillUnfixed.length > 0
-		: liveBlockers.length > 0;
-	const replaySuppressed = replay.shown === "suppress" && replayLine;
-	// #5788 review F4: the latch is written only once the tool result reached
-	// the agent (`clients/runtime-tool-result.ts`), and only for a line this
-	// write rendered, or to forget the file after a verdict.
-	const blockerReplayCommit =
-		replay.commit !== undefined &&
-		(replay.commit.key === undefined || replayLine)
-			? replay.commit
-			: undefined;
+	const replaySuppressed =
+		replay.shown === "suppress" &&
+		(allowAutonomousWriters
+			? stillUnfixed.length > 0
+			: liveBlockers.length > 0);
 	if (stillUnfixed.length > 0 && !replaySuppressed) {
 		output += `\n\n${formatStillUnfixedLine(stillUnfixed, filePath, toRunnerDisplayPath(cwd, filePath))}`;
 	}
@@ -3140,7 +3133,9 @@ async function analysePipeline(
 		// #4484: what a clear must find empty, whatever the authorship.
 		currentBlockerCount: liveBlockers.length,
 		...(withheldBlockerLine !== undefined && { withheldBlockerLine }),
-		...(blockerReplayCommit !== undefined && { blockerReplayCommit }),
+		// #5788 review F4: committed only once the tool result reached the agent
+		// (`clients/runtime-tool-result.ts`).
+		...(replay.commit !== undefined && { blockerReplayCommit: replay.commit }),
 		...(preExisting.length > 0 && {
 			preExistingBlockerCount: preExisting.length,
 		}),
