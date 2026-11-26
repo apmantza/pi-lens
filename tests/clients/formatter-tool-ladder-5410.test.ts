@@ -721,6 +721,24 @@ describe("reviewed ladder preservation (#5783)", () => {
 		expect(spawnCalls.some((call) => call.cmd === "biome")).toBe(false);
 	});
 
+	// Recurrence it prevents (PR #5783 verify r5, thread PRRT_kwDORt8rec68Va6o):
+	// a presence-only miss latched `missing` for the whole session, so an
+	// `npm install` that planted `node_modules/.bin/biome` mid-session was never
+	// read and every later Biome call ran npx. Master re-checked the bin dir on
+	// each resolve. A repeated miss still answers npx.
+	it("biome: a shim an install plants after a miss is picked up in the same session", async () => {
+		const { BiomeClient } = await import("../../clients/biome-client.js");
+		const client = new BiomeClient() as unknown as {
+			getBiomeBinary(cwd?: string): Promise<{ cmd: string; args: string[] }>;
+		};
+		const npx = { cmd: "npx", args: ["@biomejs/biome"] };
+		expect(await client.getBiomeBinary(root)).toEqual(npx);
+		expect(await client.getBiomeBinary(root)).toEqual(npx);
+		const shim = plant(path.join(root, "node_modules", ".bin", "biome"), GOOD);
+		expect((await client.getBiomeBinary(root)).cmd).toBe(shim);
+		expect(spawnCalls.some((call) => call.cmd === shim)).toBe(false);
+	});
+
 	// Recurrence it prevents: the presence-only branch (`fastPathOnly`) returns
 	// before the probe and used to leave no availability decision, so a Biome
 	// that fell through to npx looked identical to one nobody asked about.

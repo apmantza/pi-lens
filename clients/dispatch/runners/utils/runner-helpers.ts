@@ -1462,7 +1462,11 @@ export function createAvailabilityChecker(
 		// trust answer reads as `null` and is probed again (#4530, #5410): the
 		// project venv rung is refused or admitted by trust.
 		const answer = cache.latch.read();
-		if (answer === false) return false;
+		// A presence-only miss goes to the fresh flight below, which re-runs the
+		// fast path: a shim an install put in place after the miss (`npm install`
+		// mid-session, #5783 verify r5) is found on the next resolve. A repeated
+		// miss still ends at npx.
+		if (answer === false && !options.fastPathOnly) return false;
 		if (answer === true) {
 			if (cache.command && (await isSpawnableCommand(cache.command))) {
 				return true;
