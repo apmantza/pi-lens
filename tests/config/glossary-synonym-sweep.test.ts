@@ -1444,7 +1444,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// (`path.isAbsolute`) does not count as reaching the project.
 		// 17 -> 16 (#5674 r4): the per-entry reach check moved to
 		// session-repository.ts as `projectSearchJudge`.
-		"clients/package-manager.ts": 16,
+		// 16 -> 17 (#5782 r5): findGlobalBinary judges a candidate's real
+		// directory (`path.dirname`) against the refused root.
+		"clients/package-manager.ts": 17,
 		"clients/package-root.ts": 4,
 		// #5371: the `paths` glob matcher and its bounded walk arrive from
 		// `clients/lens-engine.ts` with their `node:path` uses — the namespace
