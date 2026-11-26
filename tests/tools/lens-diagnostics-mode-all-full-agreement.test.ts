@@ -307,4 +307,51 @@ describe("lens_diagnostics mode=all agrees with a same-minute mode=full (#1634 c
 		expect(onePath).toContain("suppressed by disposition: 1 finding(s)");
 		expect(errorsOnly).toContain("suppressed by disposition: 1 finding(s)");
 	});
+
+	// #5788 review U09A: mode=full built its unchecked note with no host, so an
+	// MCP caller read `lens_diagnostics`, a tool the MCP server does not
+	// register. mode=all reads the caller's host and names `pilens_diagnostics`.
+	// The word boundary keeps `pilens_diagnostics` from matching the bare name.
+	// Recurrence: #5788 review at 9b0409aa6 (U09A).
+	it("names the MCP caller's settle tool in mode=full, as mode=all does", async () => {
+		recordDiagnostics(
+			file,
+			[
+				{
+					tool: "typescript",
+					rule: "2304",
+					message: KEPT,
+					line: 1,
+					severity: "error",
+					semantic: "blocking",
+					unconfirmedBy: "typescript",
+					serverId: "typescript",
+				} as never,
+			],
+			undefined,
+			undefined,
+			{ reason: IN_FLIGHT_REASON },
+		);
+		const service = makeLspServiceDouble({
+			runWorkspaceDiagnostics: vi.fn(async () => [
+				{ filePath: file, diagnostics: [], count: 0, timedOut: true },
+			]),
+		});
+		const tool = createLensDiagnosticsTool(
+			{ readCache: vi.fn(() => undefined) } as never,
+			() => tmp,
+			() => service as never,
+		);
+		const result = (await tool.execute(
+			"1",
+			{ mode: "full", paths: [file] },
+			new AbortController().signal,
+			null as never,
+			{ cwd: tmp, host: "mcp" } as never,
+		)) as { content: Array<{ text: string }> };
+		const full = result.content.map((c) => c.text).join("\n");
+
+		expect(full).toContain("pilens_diagnostics source=lsp path=a.ts");
+		expect(full).not.toMatch(/\blens_diagnostics source=lsp/);
+	});
 });

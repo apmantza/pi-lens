@@ -3188,7 +3188,10 @@ async function formatFullMode(
 			analyzers: extracted.dispositionSuppressed ?? 0,
 			analyzersByLane: extracted.dispositionSuppressedByLane ?? {},
 		},
-		undefined,
+		// #5788 review U09A: the unchecked note names the caller's settle tool,
+		// as mode=all does. Every stalePaths read sits behind `!isFullMode`, so
+		// only the host changes.
+		{ stalePaths: [], host },
 		// #5258: the sweep's part of the report's clean claim. A swept file is
 		// proven only by a fully covered row; any other row, and the whole sweep
 		// when the abort or the time budget cut it short, proves nothing.
