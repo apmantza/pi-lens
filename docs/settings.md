@@ -218,7 +218,8 @@ A project file honors **only**:
 
 - the three mutation controls — `format.enabled`, `autofix.enabled`,
   `actionableWarnings.autoFix.enabled`;
-- `ignore`, `rules`, `maxProjectFiles`, `reviewGraph`, `trivy`, and `helm`.
+- `ignore`, `rules`, `maxProjectFiles`, `reviewGraph`, `trivy`, and `helm`;
+- `opaqueScan.nonWriterTools`, honored only when the host trusts the project.
 
 ### `helm.renderValidation.enabled` needs trust as well as consent
 
