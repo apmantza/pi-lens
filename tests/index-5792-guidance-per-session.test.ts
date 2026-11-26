@@ -93,11 +93,6 @@ describe("#5792: the session-start guidance reaches only the session that wrote 
 			const { primary, secondary } = await twoSessions(proj);
 			const stored = JSON.parse(fs.readFileSync(recordPath(proj), "utf8"));
 			expect(stored.content).toContain(GUIDANCE);
-			// RECURRENCE GUARDED: #5792, a record with no owner. The stamp is the
-			// writing session's id as the host reports it.
-			expect(stored.sessionId).toBe(
-				primary.session.sessionManager.getSessionId(),
-			);
 
 			await secondary.prompt("secondary goes first");
 			expect(requestText(secondary, 0)).not.toContain(GUIDANCE);
@@ -108,6 +103,11 @@ describe("#5792: the session-start guidance reaches only the session that wrote 
 
 			await primary.prompt("primary goes second");
 			expect(requestText(primary, 0)).toContain(GUIDANCE);
+			// RECURRENCE GUARDED: #5792, a record with no owner. The stamp is the
+			// writing session's id as the host reports it.
+			expect(stored.sessionId).toBe(
+				primary.session.sessionManager.getSessionId(),
+			);
 
 			expect(primary.errors).toEqual([]);
 			expect(secondary.errors).toEqual([]);
