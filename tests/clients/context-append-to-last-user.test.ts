@@ -204,7 +204,7 @@ describe("context injection appends to last user message (#3693)", () => {
 
 			new CacheManager(false).writeCache(
 				"session-start-guidance",
-				{ content: "Guidance text" },
+				{ content: "Guidance text", sessionId: "sess-2" },
 				tmpDir,
 			);
 
@@ -389,7 +389,7 @@ describe("context injection appends to last user message (#3693)", () => {
 
 			new CacheManager(false).writeCache(
 				"session-start-guidance",
-				{ content: "Rule check." },
+				{ content: "Rule check.", sessionId: "sess-4" },
 				tmpDir,
 			);
 
@@ -489,7 +489,7 @@ describe("context injection appends to last user message (#3693)", () => {
 
 			new CacheManager(false).writeCache(
 				"session-start-guidance",
-				{ content: "Empty transcript check." },
+				{ content: "Empty transcript check.", sessionId: "sess-6" },
 				tmpDir,
 			);
 
@@ -517,7 +517,7 @@ describe("context injection appends to last user message (#3693)", () => {
 
 			new CacheManager(false).writeCache(
 				"session-start-guidance",
-				{ content: "Uncoerced test guidance." },
+				{ content: "Uncoerced test guidance.", sessionId: "sess-7" },
 				tmpDir,
 			);
 
