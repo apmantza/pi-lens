@@ -138,6 +138,7 @@ import type {
 } from "../clients/project-diagnostics/types.js";
 import type { ActionableWarningsReport } from "../clients/actionable-warnings.js";
 import type { CodeQualityWarningsReport } from "../clients/code-quality-warnings.js";
+import { applyInlineBlockerPolicy } from "../clients/inline-blocker-dispositions.js";
 import {
 	classifyDiagnosticTier,
 	getFileDiagnosticSummaries,
@@ -672,7 +673,12 @@ export function createLensDiagnosticsTool(
 			params: Record<string, unknown>,
 			signal: AbortSignal | undefined,
 			onUpdate: unknown,
-			ctx: { cwd?: string; signal?: AbortSignal; host?: LensToolHost },
+			ctx: {
+				cwd?: string;
+				signal?: AbortSignal;
+				host?: LensToolHost;
+				sessionManager?: { getSessionId?: () => string };
+			},
 		) {
 			const requestedSource = params.source as string | undefined;
 			const requestedScope = params.scope as string | undefined;
@@ -901,7 +907,11 @@ export function createLensDiagnosticsTool(
 					undefined,
 					{ stalePaths: scopedStalePaths, host: ctx.host ?? "pi" },
 					undefined,
-					blockerRecordsFor(getRuntime?.(), ctx.host ?? "pi"),
+					blockerRecordsFor(getRuntime?.(), {
+						host: ctx.host ?? "pi",
+						cwd,
+						sessionId: ctx.sessionManager?.getSessionId?.(),
+					}),
 				);
 			}
 			if (mode === "full") {
@@ -930,6 +940,7 @@ export function createLensDiagnosticsTool(
 							? params.analysisRoot
 							: undefined,
 					host: ctx.host ?? "pi",
+					sessionId: ctx.sessionManager?.getSessionId?.(),
 					// #4944: the sweep leaves an auxiliary the operator turned off
 					// (`--no-ast-grep`, `astGrep.enabled=false`) unstarted, as the
 					// `source=lsp` probe does; #5287: and an opt-in one they turned on.
@@ -2652,6 +2663,8 @@ async function formatFullMode(
 		analysisRoot?: string;
 		/** Delivery adapter whose callable tool names appear in advisories. */
 		host?: LensToolHost;
+		/** #5788 review N3: the calling session, whose blocker records it reads. */
+		sessionId?: string;
 	} = {},
 ): Promise<{
 	content: [{ type: "text"; text: string }];
@@ -3190,7 +3203,11 @@ async function formatFullMode(
 				...(extracted.aborted ? ["aborted"] : []),
 			],
 		},
-		blockerRecordsFor(options.runtime, options.host ?? "pi"),
+		blockerRecordsFor(options.runtime, {
+			host: options.host ?? "pi",
+			cwd,
+			sessionId: options.sessionId,
+		}),
 	);
 	// #4638 r3 (N2): every return below builds on `result`, so the disclosure of
 	// rows the declaration withheld is added once, here, to text and details.
@@ -3729,9 +3746,14 @@ function uncheckedFilesLine(
 }
 
 /**
- * #5788 review F6: the commit gate's blocker records for the session read's
- * all-clear (`admitSessionAllClear`); none without a runtime (the MCP route
- * before a session, a harness).
+ * #5788 review F6: the blocker records behind the session read's all-clear
+ * (`admitSessionAllClear`); none without a runtime (the MCP route before a
+ * session, a harness). Review N3: only this session's records, as every
+ * turn-end read of the map (#4921). Review N1: only the rows that survive the
+ * agent's dispositions, through the turn end's own policy
+ * (`applyInlineBlockerPolicy`), so a blocker marked false-positive does not
+ * hold back the all-clear; an unstructured record has no rows to mark and
+ * stays held.
  */
 function blockerRecordsFor(
 	runtime:
@@ -3740,9 +3762,21 @@ function blockerRecordsFor(
 				"getInlineBlockersSnapshot"
 		  >
 		| undefined,
-	host: LensToolHost,
+	args: { host: LensToolHost; cwd: string; sessionId: string | undefined },
 ): NonNullable<Parameters<typeof formatAllMode>[9]> {
-	return { records: runtime?.getInlineBlockersSnapshot() ?? [], host };
+	const records = (
+		runtime?.getInlineBlockersSnapshot({ sessionId: args.sessionId }) ?? []
+	).flatMap((held) => {
+		const policy = applyInlineBlockerPolicy(held, args.cwd);
+		if (policy.body === undefined) return [];
+		return [
+			{
+				filePath: held.filePath,
+				...(!policy.unstructured && { diagnostics: policy.keptDiagnostics }),
+			},
+		];
+	});
+	return { records, host: args.host };
 }
 
 // @delivery-surface: lens-diagnostics:mode-all

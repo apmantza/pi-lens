@@ -706,11 +706,26 @@ async function openSession(
 				(injected?.messages ?? []).map((m) => m.content).join("\n\n"),
 			);
 		},
-		async sessionDiagnostics(): Promise<string> {
+		/** `sessionId`: the read of another session on this activation (#5788 N3). */
+		async sessionDiagnostics(sessionId?: string): Promise<string> {
 			const lens = pi.tools.get("lens_diagnostics") as Tool;
 			const out = await lens.execute(
 				`zz-${name}`,
 				{ source: "session", mode: "all" },
+				undefined,
+				null,
+				sessionId === undefined
+					? { cwd: tmpDir }
+					: makeCtx({ cwd: tmpDir, sessionId }),
+			);
+			return scrub((out.content ?? []).map((p) => p.text ?? "").join("\n"));
+		},
+		/** The agent's `lens_diagnostic_mark` call on this file. */
+		async mark(params: Record<string, unknown>): Promise<string> {
+			const tool = pi.tools.get("lens_diagnostic_mark") as Tool;
+			const out = await tool.execute(
+				`zz-mark-${name}`,
+				{ ...params, path: target },
 				undefined,
 				null,
 				{ cwd: tmpDir },
@@ -3184,6 +3199,53 @@ describe("#5784 witness: an unconfirmed carried blocker is not replayed verbatim
 			/confirmed clean/,
 		);
 		expect(await s.sessionDiagnostics()).not.toContain(RECORD_HELD);
+		await s.write(V_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence (#5788 review N1): the session read withheld its all-clear over
+	// a blocker the agent had marked false-positive, while the turn end and the
+	// commit gate honoured the mark.
+	it("lets the all-clear stand over a blocker the agent marked false-positive", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("fp", "src/marked.ts", V_FIXED);
+		expect(await s.write(V1)).toContain("🔴 STOP");
+		await s.mark({
+			line: 2,
+			message: "Cannot find name 'BAD_CALL'.",
+			rule: "ts:2304",
+			tool: "lsp",
+			disposition: "false-positive",
+			reason: "#5788 N1 witness",
+		});
+		const session = await s.sessionDiagnostics();
+		expect(session).toContain("suppressed by disposition");
+		expect(session).not.toContain(RECORD_HELD);
+		await s.write(V_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence (#5788 review N3): the session read judged every session's
+	// blocker records, so another session's record withheld this session's
+	// all-clear and named a file it never touched (#4921's rule for the turn end).
+	it("reads only the calling session's blocker records for the all-clear", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("os", "src/owned.ts", V_FIXED);
+		expect(await s.write(V1)).toContain("🔴 STOP");
+		boundary.lsp.mode = "inconclusive";
+		await s.bash(V_FIXED_OTHER, "node tools/gen.js > src/owned.ts");
+		boundary.lsp.mode = "answer";
+		// A clean sweep empties the session cache; the record stays.
+		const target = path.join(tmpDir, "src/owned.ts");
+		lspDouble.runWorkspaceDiagnostics = async () => [
+			{ filePath: target, diagnostics: [], count: 0 },
+		];
+		await s.settleCall({ mode: "full", waitMs: 30000 });
+		expect(await s.commitBlocked()).toBe(true);
+		expect(await s.sessionDiagnostics()).toContain(RECORD_HELD);
+		expect(await s.sessionDiagnostics("pi-lens-4484-elsewhere")).not.toContain(
+			RECORD_HELD,
+		);
 		await s.write(V_FIXED);
 		await fixAndDrain(s);
 	}, 120_000);

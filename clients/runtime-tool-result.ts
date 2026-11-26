@@ -1352,23 +1352,18 @@ export function recordProjectChange(args: {
 /**
  * #5788 review F4: the replay latch write the pipeline asked for
  * (`PipelineResult.blockerReplayCommit`), made here because this is where the
- * tool result is handed to the host, and only while the host still waits for
- * it (#5165 F1): a result the host's own bound abandoned (`hostDelivery`, an
- * opaque bash write past the 500 ms read-only bound) reached the agent at
- * best through the late advisory. The 10 s bound's abandoned path and the
- * observed-mutation path never reach this point. A run of a session the
- * host replaced (#3596, `resultLive` false) commits nothing either
- * (CodeRabbit C4): finishing after the replacement's first verdict, it
- * carries the replacement's record, and its latch would hold back the
- * replacement's first unconfirmed line, which that agent never saw.
+ * tool result is handed to the host. The 10 s bound's abandoned path and the
+ * observed-mutation path never reach this point. A run of a session the host
+ * replaced (#3596, `resultLive` false) commits nothing (CodeRabbit C4):
+ * finishing after the replacement's first verdict, it carries the
+ * replacement's record, and its latch would hold back the replacement's
+ * first unconfirmed line, which that agent never saw.
  */
 function commitDeliveredBlockerReplay(
 	result: PipelineResult,
 	resultLive: boolean,
-	deps: Pick<ToolResultDeps, "hostDelivery">,
 ): void {
-	if (!resultLive || deps.hostDelivery?.abandoned === true) return;
-	if (result.blockerReplayCommit !== undefined)
+	if (resultLive && result.blockerReplayCommit !== undefined)
 		commitBlockerReplay(result.blockerReplayCommit);
 }
 
@@ -5122,7 +5117,7 @@ export async function handleToolResult(
 	}
 
 	if (result.isError) {
-		commitDeliveredBlockerReplay(result, resultLive, deps);
+		commitDeliveredBlockerReplay(result, resultLive);
 		return {
 			content: [...event.content, { type: "text", text: result.output }],
 			isError: true,
@@ -5290,7 +5285,7 @@ export async function handleToolResult(
 		output = `${output ? `${output}\n\n` : ""}${renderPostAutofixNotice(notice, attachmentDecision)}`;
 	}
 
-	commitDeliveredBlockerReplay(result, resultLive, deps);
+	commitDeliveredBlockerReplay(result, resultLive);
 	if (!output && !result.postMutation) return;
 
 	return {
