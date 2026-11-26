@@ -546,6 +546,7 @@ export const realHarnessInclude = [
 	// SIGTERM, and a quit that cannot confirm it keeps the row the next
 	// session reaps: real pi children, a stubborn server, a second session.
 	"tests/real-harness/lsp-host-exit-5699.test.ts",
+	"tests/real-harness/runner-host-exit-5703.test.ts",
 ];
 
 // #1920: files that assert REAL wall-clock elapsed-time budgets (Date.now()

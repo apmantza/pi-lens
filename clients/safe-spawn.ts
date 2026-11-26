@@ -23,7 +23,11 @@ import {
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { BoundedFifoMap } from "./bounded-cache.js";
-import { provideHeldChildrenLedger } from "./held-children.js";
+import {
+	provideHeldChildrenLedger,
+	recordOwnedChild,
+	removeOwnedChild,
+} from "./held-children.js";
 import { logLatency } from "./latency-logger.js";
 import {
 	incrementDegradationCount,
@@ -41,7 +45,13 @@ import {
 	sessionRepositoryJudge,
 	unadmittedSpawnRoot,
 } from "./session-repository.js";
-import { windowsExe } from "./process-snapshot.js";
+import {
+	OWNER_TAG_ENV,
+	formatOwnerTag,
+	ownProcessStartIfKnown,
+	readProcessStart,
+	windowsExe,
+} from "./process-snapshot.js";
 import { startSpawnUsageSampler } from "./resource-sampler.js";
 import { isToolInstallDisabled } from "./env-utils.js";
 import { DEFAULT_MAX_OUTPUT_BYTES } from "./spawn-output-cap.js";
@@ -53,6 +63,39 @@ import {
 	spawnCooldownScope,
 } from "./spawn-abort-scope.js";
 import { noteSpawnTimeout } from "./spawn-timeout-cooldown.js";
+import { registerBackgroundWriteDrain } from "./background-write-drains.js";
+
+/**
+ * #5745 r7: owned-child ledger work still in flight: a row write waiting on its
+ * child's start read, and a removal chained after that write. Each starts off
+ * the registry tail, so the tail's settle does not join it. A session's
+ * teardown drain joins it through the drain registered below. Before that, a
+ * row landing after the drain found the registry gone, and its
+ * `instance-registry-registration-missing` ledger row re-created the removed
+ * home (CI shard 5, `pi-session-teardown`).
+ */
+const ownedChildLedgerWork = new Set<Promise<void>>();
+
+function trackOwnedChildLedger(work: Promise<void>): Promise<void> {
+	ownedChildLedgerWork.add(work);
+	void work.finally(() => ownedChildLedgerWork.delete(work));
+	return work;
+}
+
+// One drain per evaluation of this module. It resolves only when no ledger
+// work is left. It loops: a spawn while it waits adds another child's row
+// write, and a write that settles may queue its removal. Work a later drain
+// creates after this one returned (the package-manager prime's probes, #5745
+// r10) is the runner's: it repeats passes while the pending signal is true.
+async function settleOwnedChildLedgerForTests(): Promise<string | undefined> {
+	while (ownedChildLedgerWork.size > 0) await Promise.all(ownedChildLedgerWork);
+	return undefined;
+}
+
+registerBackgroundWriteDrain(
+	settleOwnedChildLedgerForTests,
+	() => ownedChildLedgerWork.size > 0,
+);
 
 export interface SpawnResourceUsage {
 	sampleCount: number;
@@ -1910,6 +1953,16 @@ export async function safeSpawnAsync(
 	const cooldown =
 		options?.cooldown ??
 		(options?.ignoreAmbientSignal ? undefined : spawnCooldownScope.getStore());
+	// #5703: every safe-spawn child carries the host incarnation that the
+	// shared orphan reaper can verify after this host crashes. This is derived
+	// once per call, before the child exists, and is not inherited from a
+	// possibly stale PI_LENS_OWNER supplied by a parent host.
+	const ownerStart =
+		process.platform === "win32" ? undefined : ownProcessStartIfKnown();
+	const ownerTag =
+		ownerStart === undefined
+			? undefined
+			: formatOwnerTag({ pid: process.pid, start: ownerStart });
 
 	const result = await new Promise<SpawnResult>((resolve) => {
 		// Check for early abort
@@ -2167,7 +2220,10 @@ export async function safeSpawnAsync(
 			resolve(trustRefusalResult(command, admission.executable));
 			return;
 		}
-		const spawnEnv = admission.env;
+		const spawnEnv = {
+			...admission.env,
+			...(ownerTag === undefined ? {} : { [OWNER_TAG_ENV]: ownerTag }),
+		};
 		// The cwd handed to the CHILD process doesn't need OUR validation —
 		// Windows resolves it natively, exactly as it did before #817 ever
 		// touched this file. A drive-relative cwd (`D:work`) without a
@@ -2346,6 +2402,50 @@ export async function safeSpawnAsync(
 			usageSampler = { stop: () => null };
 		}
 		const resourceLabel = options?.resourceLabel ?? command;
+		// #5703 r4: only a child the spawn-time ownership check accepted gets a
+		// row. A pid that is alive under another parent (a test double's
+		// invented pid, #2042) would otherwise be written to `instances.json`
+		// with that process's real start, for the next session's reaper.
+		const registryChildPid = ownsChildPid ? child.pid : undefined;
+		const noteOwnedChildLedgerFailure = (
+			operation: "record" | "remove",
+			err: unknown,
+		): void => {
+			recordDegradationOnce({
+				kind: "safe-spawn-owned-child-registry-failed",
+				subject: "owned-child-registry",
+				reason: `${operation} failed: ${String(err)}`,
+			});
+		};
+		// Settles once the row write has landed or failed; it never rejects.
+		const registryChildRecorded =
+			registryChildPid === undefined
+				? Promise.resolve()
+				: trackOwnedChildLedger(
+						readProcessStart(registryChildPid, { timeoutMs: 1_000 })
+							.then((processStart) =>
+								recordOwnedChild({
+									pid: registryChildPid,
+									serverId: `safe-spawn:${resourceLabel}`,
+									command: spawnCmd,
+									...(processStart === undefined ? {} : { processStart }),
+								}),
+							)
+							.catch((err) => noteOwnedChildLedgerFailure("record", err)),
+					);
+		let registryChildRemoved = false;
+		const removeRegistryChild = (): void => {
+			if (registryChildPid === undefined || registryChildRemoved) return;
+			registryChildRemoved = true;
+			// #5745 r6 (CodeRabbit): after the record. A child that closes before
+			// its start read settles would otherwise queue this removal first,
+			// find no row, and leave the record to write a finished child's row.
+			void trackOwnedChildLedger(
+				registryChildRecorded
+					.then(() => removeOwnedChild(registryChildPid))
+					.catch((err) => noteOwnedChildLedgerFailure("remove", err)),
+			);
+		};
 
 		// #3375 round 2 (H3384-1). `killTree`'s promise is AWAITED by `finalize`
 		// from a `void finalize(...)` callback, FIRED AND FORGOTTEN by `onAbort`
@@ -2797,6 +2897,7 @@ export async function safeSpawnAsync(
 			// widening it to the whole wait.
 			resolved = true;
 			await waitForPipeIdle();
+			removeRegistryChild();
 			const resourceUsage = finishResourceUsage();
 
 			const outputInfo = {
@@ -2905,6 +3006,10 @@ export async function safeSpawnAsync(
 
 		child.on("exit", onChildSettle);
 		child.on("close", onChildSettle);
+		// An asynchronous spawn failure emits `error` before `close`, and the
+		// error callback resolves the public result immediately. Keep its row
+		// until `close` proves the child handle has terminated.
+		child.once("close", removeRegistryChild);
 
 		child.on("error", (err) => {
 			// Capture unconditionally — even when `close` already resolved, this

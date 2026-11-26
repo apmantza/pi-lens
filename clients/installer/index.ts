@@ -2552,9 +2552,9 @@ export async function flushProbeCache(): Promise<ProbeCacheFlushResult> {
 		clearTimeout(_probeCacheFlushTimer);
 		_probeCacheFlushTimer = null;
 	}
-	// #946 review F4: if the 300ms timer's write already started, the dirty
-	// flag is false but the write may still be in flight — an immediate
-	// process.exit would truncate it. Always await the in-flight write.
+	// #946 review F4: the 300ms timer may have started a write that is
+	// still in flight. An immediate process.exit would truncate it, so
+	// always await that write before checking whether another is needed.
 	if (_probeCacheWriteInFlight) {
 		await _probeCacheWriteInFlight;
 		if (!_probeCacheDirty) return "written";
@@ -2595,7 +2595,16 @@ async function settleProbeCacheForTests(): Promise<string | undefined> {
 // the tier-2 harness's loaded extension copy owns one the test's own import
 // cannot reach, so its write lands after the fixture root is removed. The
 // harness joins it through the registry (`clients/background-write-drains.ts`).
-registerBackgroundWriteDrain(settleProbeCacheForTests);
+// Pending: an update that has not marked its change yet, or a change the flush
+// above would write. An armed timer and a write in flight both keep the change
+// dirty until a write publishes it, so they need no term of their own; a dirty
+// change with no loaded cache is not pending, the flush answers it `idle`.
+registerBackgroundWriteDrain(
+	settleProbeCacheForTests,
+	() =>
+		_probeCacheUpdatesPending.size > 0 ||
+		(_probeCacheDirty && _probeCache !== null),
+);
 
 function isAstGrepVersionOutput(output: string): boolean {
 	return /\bast[- ]grep\b/i.test(output);

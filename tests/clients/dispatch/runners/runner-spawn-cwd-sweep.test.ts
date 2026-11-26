@@ -696,7 +696,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"analysePipeline forwards its language `cwd` into runAutofix and separately passes the authoritative session root for adopted-writer admission (#4309)",
 	],
 	[
-		"clients/safe-spawn.ts#safeSpawnAsync:f7eca8ca~e39f490b",
+		"clients/safe-spawn.ts#safeSpawnAsync:f7eca8ca~f21f810b",
 		"this IS the spawn seam: `spawnCwd` is the cwd its own caller passed in options, so the origin rule applies to the callers, not here",
 	],
 	[
