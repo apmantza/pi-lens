@@ -444,13 +444,6 @@ export const DEPENDENCY_DRIFT_MAX_DELIVERIES = 3;
  */
 export const SELF_DRIFT_MAX_DELIVERIES = 3;
 
-/** #5784: the blocker lines whose repeat this gate decides. */
-export type BlockerReplaySurface =
-	| "withheld-line"
-	| "still-unfixed-line"
-	| "turn-end-replay"
-	| "turn-end-demoted";
-
 /** The per-write surfaces, whose latch this module keeps. */
 type PerWriteSurface = "withheld-line" | "still-unfixed-line";
 
