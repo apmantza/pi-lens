@@ -7,7 +7,6 @@
 	"tests/clients/availability-latching-clients.test.ts:../../clients/safe-spawn.js:[\"safeSpawn\",\"safeSpawnAsync\"]": 23,
 	"tests/clients/availability-latching-siblings.test.ts:../../clients/installer/index.js:[\"TOOLS\",\"ensureTool\",\"findManagedToolBinary\",\"getInstallAttempt\",\"getToolEnvironment\",\"isSpawnableCommand\",\"resetPathWalkMemo\"]": 46,
 	"tests/clients/availability-latching-siblings.test.ts:../../clients/safe-spawn.js:[\"isCommandAvailableAsync\",\"safeSpawn\",\"safeSpawnAsync\"]": 14,
-	"tests/clients/biome-autofix-argv.test.ts:../../clients/installer/index.js:[\"ensureTool\"]": 52,
 	"tests/clients/biome-autofix-argv.test.ts:../../clients/safe-spawn.js:[\"safeSpawn\",\"safeSpawnAsync\"]": 13,
 	"tests/clients/biome-client-dedupe.test.ts:../../clients/installer/index.js:[\"TOOLS\",\"ensureTool\",\"getInstallAttempt\"]": 50,
 	"tests/clients/biome-client-dedupe.test.ts:../../clients/safe-spawn.js:[\"safeSpawn\",\"safeSpawnAsync\"]": 13,
