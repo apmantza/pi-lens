@@ -595,6 +595,20 @@ async function openSession(
 	let helmAfter: string | undefined;
 	const session = {
 		target,
+		/** #5788 C4: the host replaces this session with another (`/new`). */
+		async replace(sessionId: string): Promise<void> {
+			await pi.emit(
+				"session_shutdown",
+				{ type: "session_shutdown", reason: "new" },
+				makeCtx({ cwd: tmpDir, sessionId: `pi-lens-4484-${name}` }),
+			);
+			await pi.emit(
+				"session_start",
+				makeSessionStartEvent({ reason: "new" }),
+				makeCtx({ cwd: tmpDir, sessionId }),
+			);
+			await pi.emit("turn_start", {}, ctx());
+		},
 		/** Round 8 (P39): flip a host flag mid-session. */
 		setFlag(flag: string, value: boolean) {
 			pi.setFlag(flag, value);
@@ -3195,6 +3209,38 @@ describe("#5784 witness: an unconfirmed carried blocker is not replayed verbatim
 		expect(carried()).toBeGreaterThan(before);
 		// Its line never reached the agent, so the next write's is delivered.
 		expect(await s.write(withTail(21))).toMatch(STILL_UNFIXED);
+		boundary.lsp.mode = "answer";
+		await s.write(V_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence (CodeRabbit C4 on #5788): a run of a session the host replaced
+	// (`/new`) finished after the replacement's first verdict, carried the
+	// replacement's record, and latched its unconfirmed line, so the
+	// replacement's own first unconfirmed line was held back from an agent
+	// that never saw it.
+	it("leaves the latch unwritten by a run whose session was replaced", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("sa", "src/replaced.ts", V_FIXED);
+		expect(await s.write(V1)).toContain("🔴 STOP");
+		boundary.lsp.mode = "hold";
+		let held!: () => void;
+		const holding = new Promise<void>((resolve) => {
+			held = resolve;
+		});
+		boundary.lsp.onHold = () => held();
+		const stale = s.write(withTail(50));
+		await holding;
+		boundary.lsp.onHold = undefined;
+		await s.replace("pi-lens-4484-sb");
+		// The replacement's first write gets a verdict while the old run is held.
+		boundary.lsp.mode = "answer";
+		expect(await s.write(V1)).toContain("🔴 STOP");
+		boundary.lsp.mode = "inconclusive";
+		for (const release of boundary.lsp.held.splice(0)) release(true);
+		// The old run finishes with an unconfirmed line for a host that left.
+		expect(await stale).toMatch(STILL_UNFIXED);
+		expect(await s.write(withTail(51))).toMatch(STILL_UNFIXED);
 		boundary.lsp.mode = "answer";
 		await s.write(V_FIXED);
 		await fixAndDrain(s);
