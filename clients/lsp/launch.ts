@@ -25,6 +25,8 @@ import {
 	isSessionRepositoryPath,
 	isUntrustedProjectPath,
 	projectSearchJudge,
+	withUnadmittedRootSpawns,
+	unadmittedSpawnRoot,
 	recordProjectCommandRefusal,
 } from "../session-repository.js";
 import {
@@ -1081,6 +1083,11 @@ export async function launchLSP(
 	} = {},
 ): Promise<LSPProcess> {
 	const cwd = String(options.cwd ?? process.cwd());
+	if (!isLspProjectCodeAdmitted() && unadmittedSpawnRoot() === undefined) {
+		return withUnadmittedRootSpawns(cwd, () =>
+			launchLSP(command, args, options),
+		);
+	}
 	const mergedEnv = { ...process.env, ...options.env };
 	const augmentedPath = await buildAugmentedPath(resolvePathValue(mergedEnv));
 	// #3539: the child names this process's incarnation, so the orphan
@@ -1134,7 +1141,7 @@ export async function launchLSP(
 
 	// First, try to find in npm global if it's a simple command name
 	if (isBareCommand) {
-		const globalBinPath = await findGlobalBinary(command, ".cmd", reachesRoot);
+		const globalBinPath = await findGlobalBinary(command, ".cmd", cwd);
 		if (globalBinPath) {
 			spawnCommand = globalBinPath;
 		}
@@ -1230,11 +1237,7 @@ export async function launchLSP(
 	} catch (err) {
 		// If spawn failed with simple command, try npm global
 		if (isBareCommand) {
-			const globalBinPath = await findGlobalBinary(
-				command,
-				".cmd",
-				reachesRoot,
-			);
+			const globalBinPath = await findGlobalBinary(command, ".cmd", cwd);
 			if (globalBinPath && globalBinPath !== spawnCommand) {
 				launched = trySpawn(globalBinPath, args, cwd, env);
 			} else {

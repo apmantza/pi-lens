@@ -50,6 +50,12 @@
     chokepoint refuses a bare name that resolves into the root, which covers a
     link in a global bin dir.
   An admitted root is unchanged.
+  Global manager discovery (`allAvailableGlobalBinDirs`) derives admission by
+  default, including its session-start prime. Its finder and query share the
+  scoped environment and refused-root spawn scope; availability and directory
+  evidence are reused only for the same trust, root, cwd, and environment.
+  `tests/clients/session-repository-trust-4530.test.ts` pins the file-link,
+  planted-finder, warm-answer, and concurrent-root controls.
   `tests/clients/lsp/managed-fallback-after-trust-refusal-4515.test.ts` and
   `tests/clients/project-search-judge-5674.test.ts` pin it.
 - Under pi, project trust is consumed through `isProjectTrusted`; pi-lens never

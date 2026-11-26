@@ -4,4 +4,4 @@ audience: user
 area: lsp
 ---
 
-- **Package-manager probes respect project trust.** Global-bin discovery for language servers and Biome or Prettier ignores PATH entries inside a root that has not been admitted to run project code. (refs #5689)
+- **Global package-manager discovery gates probes by root admission.** Discovery scopes both the manager finder and the manager query, refuses executable links into a refused root, and keeps cached answers separate across execution contexts. (refs #5689)

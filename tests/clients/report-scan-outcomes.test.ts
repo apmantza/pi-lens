@@ -465,9 +465,10 @@ describe.each(SCANNERS)("the shared report scan through $name", (scanner) => {
 			const r = result as { findings?: unknown[]; clones?: unknown[] };
 			expect(r.findings ?? r.clones).toHaveLength(1);
 		}
-		expect(recordCounts()).toEqual(
-			cell.verdict === "failed" ? { [scanner.recordKind]: 1 } : {},
-		);
+		expect(recordCounts()).toEqual({
+			...(scanner.name === "jscpd" ? { "trust-refusal": 1 } : {}),
+			...(cell.verdict === "failed" ? { [scanner.recordKind]: 1 } : {}),
+		});
 		if (cell.expectReason) {
 			expect(reasonText()).toContain(cell.expectReason);
 		}

@@ -820,7 +820,7 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	// the same eight handlers remain, with no new silent handler admitted.
 	"clients/lsp/launch.ts": {
 		silent: 8,
-		identities: "745cb0873291991f",
+		identities: "90ffb75b45e463ca",
 		reason: PRE_RULE,
 	}, // :244, :564, :942, :948, :1199, :1424, :1435, :1446
 	"clients/lsp/lombok.ts": {

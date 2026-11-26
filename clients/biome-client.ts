@@ -18,8 +18,6 @@ import {
 	findLocalBinAt,
 	localBinPath,
 } from "./package-manager.js";
-import { projectSearchJudge } from "./session-repository.js";
-import { getProjectTrustState } from "./project-trust.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { getIsolatedNpxSpawnOptions, probeToolAsync } from "./tool-probe.js";
 import { createSingleFlight } from "./single-flight.js";
@@ -170,13 +168,7 @@ export class BiomeClient {
 		}
 		// Any package manager's global bin dir (npm/pnpm/yarn/bun) before npx —
 		// catches `pnpm add -g @biomejs/biome` installs that PATH misses (#375).
-		const global = await findGlobalBinary(
-			"biome",
-			".cmd",
-			getProjectTrustState() === "trusted"
-				? undefined
-				: projectSearchJudge(resolveCwd),
-		);
+		const global = await findGlobalBinary("biome", ".cmd", resolveCwd);
 		if (global) {
 			this.localBinaryByCwd.set(resolveCwd, global);
 			return { cmd: global, args: [] };

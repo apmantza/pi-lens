@@ -47,6 +47,8 @@ import {
 	projectSearchJudge,
 	recordProjectCommandRefusal,
 	sessionRepositoryJudge,
+	withUnadmittedRootSpawns,
+	unadmittedSpawnRoot,
 } from "./session-repository.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { logExtension } from "./extension-log.js";
@@ -161,26 +163,45 @@ const PROBE_TIMEOUT_MS = 5_000;
  * finder that cannot spawn, ENOENT included, and a timeout, abort or host
  * stall expire on a cooldown and are re-probed.
  */
-const availabilityLatches = new Map<NodePackageManager, AvailabilityLatch>();
+const availabilityLatches = new Map<
+	NodePackageManager,
+	{ scope: string; latch: AvailabilityLatch }
+>();
 
-function getLatch(pm: NodePackageManager): AvailabilityLatch {
-	let latch = availabilityLatches.get(pm);
-	if (!latch) {
-		latch = createAvailabilityLatch();
-		availabilityLatches.set(pm, latch);
+function getLatch(pm: NodePackageManager, scope: string): AvailabilityLatch {
+	let entry = availabilityLatches.get(pm);
+	if (!entry || entry.scope !== scope) {
+		entry = { scope, latch: createAvailabilityLatch() };
+		availabilityLatches.set(pm, entry);
 	}
-	return latch;
+	return entry.latch;
 }
 
-async function probeAvailability(pm: NodePackageManager): Promise<boolean> {
-	const latch = getLatch(pm);
+// A bounded per-manager slot holds only evidence from this execution context.
+function probeScope(env: NodeJS.ProcessEnv): string {
+	return JSON.stringify([
+		getProjectTrustState(),
+		unadmittedSpawnRoot(),
+		process.cwd(),
+		env,
+	]);
+}
+
+async function probeAvailability(
+	pm: NodePackageManager,
+	env: NodeJS.ProcessEnv,
+	latch: AvailabilityLatch,
+): Promise<boolean> {
 	const startedAt = Date.now();
 	const finder = onWindows() ? "where" : "which";
 	const sampler = startHostStallSampler();
 	let result: Awaited<ReturnType<typeof safeSpawnAsync>>;
 	let hostStallMs: number;
 	try {
-		result = await probeToolAsync(finder, [pm], { timeout: PROBE_TIMEOUT_MS });
+		result = await probeToolAsync(finder, [pm], {
+			timeout: PROBE_TIMEOUT_MS,
+			env,
+		});
 	} finally {
 		hostStallMs = sampler.stop();
 	}
@@ -240,8 +261,10 @@ async function probeAvailability(pm: NodePackageManager): Promise<boolean> {
 function isAvailable(
 	pm: NodePackageManager,
 	onTransient?: () => void,
+	env: NodeJS.ProcessEnv = trustScopedEnvironment(process.env),
 ): Promise<boolean> {
-	const latch = getLatch(pm);
+	const scope = probeScope(env);
+	const latch = getLatch(pm, scope);
 
 	const reportIfTransient = (result: boolean): boolean => {
 		if (!result && isTransientDecision({ outcome: latch.getOutcome() })) {
@@ -255,8 +278,9 @@ function isAvailable(
 
 	// A verdict can now expire, so concurrent callers arriving just after a
 	// cooldown must share ONE probe rather than each spawning their own.
-	const shared = packageManagerProbeFlights.run(`package-manager:${pm}`, () =>
-		probeAvailability(pm),
+	const shared = packageManagerProbeFlights.run(
+		`package-manager:${pm}:${scope}`,
+		() => probeAvailability(pm, env, latch),
 	);
 	return shared.promise.then(reportIfTransient);
 }
@@ -380,7 +404,7 @@ export function updateArgs(
  * a session reset cannot repopulate the fresh memo. Reset clears the flight
  * map separately, so later callers cannot share the pre-reset probe.
  */
-const globalBinDirCache = new Map<string, string[]>();
+const globalBinDirCache = new Map<string, { scope: string; dirs: string[] }>();
 const packageManagerCacheGeneration = createGenerationSource(
 	"package-manager-global-bin",
 );
@@ -391,20 +415,19 @@ async function globalBinDirsFor(
 	pm: NodePackageManager,
 	env: NodeJS.ProcessEnv,
 ): Promise<string[]> {
-	// #4530: keyed by trust scope too. Since #5632 every query runs from HOME, so
-	// the answer does not depend on trust, but the scope stays in the key: no
-	// trust change may serve an answer made under another trust after
-	// `turn_start` re-adopts it. The scope is captured with the key, before the
-	// await (defect shape 58).
+	// #5689: fixed per-manager slots retain only answers from the same trust,
+	// refused root, cwd, and environment. Capture that scope before awaiting;
+	// a prime under another root cannot authorize a later caller (shape 58).
 	const scoped = getProjectTrustState() !== "trusted";
 	const key = `${scoped ? "scoped" : "trusted"}:${pm}`;
+	const scope = probeScope(env);
 	const cached = globalBinDirCache.get(key);
-	if (cached) return cached;
+	if (cached?.scope === scope) return cached.dirs;
 	const generation = packageManagerCacheGeneration.capture();
 
 	// Concurrent callers (dispatch runs several tools per edit) must share ONE
 	// probe rather than each spawning their own `npm config get prefix` (#1602).
-	const shared = globalBinDirProbeFlights.run(key, () =>
+	const shared = globalBinDirProbeFlights.run(`${key}:${scope}`, () =>
 		probeGlobalBinDirs(pm, key, generation, env),
 	);
 	return shared.promise;
@@ -416,12 +439,13 @@ async function probeGlobalBinDirs(
 	generation: GenerationHandle,
 	env: NodeJS.ProcessEnv,
 ): Promise<string[]> {
+	const scope = probeScope(env);
 	if (pm === "bun") {
 		// bun has no per-call query cost — the global bin dir is deterministic.
 		const base = process.env.BUN_INSTALL || path.join(os.homedir(), ".bun");
 		const dirs = [path.join(base, "bin")];
 		generation.guardedWrite(key, () => {
-			globalBinDirCache.set(key, dirs);
+			globalBinDirCache.set(key, { scope, dirs });
 		});
 		return dirs;
 	}
@@ -451,7 +475,7 @@ async function probeGlobalBinDirs(
 	const dirs =
 		pm === "npm" ? [onWindows() ? out : path.join(out, "bin")] : [out];
 	generation.guardedWrite(key, () => {
-		globalBinDirCache.set(key, dirs);
+		globalBinDirCache.set(key, { scope, dirs });
 	});
 	return dirs;
 }
@@ -469,27 +493,20 @@ async function probeGlobalBinDirs(
  */
 export async function allAvailableGlobalBinDirs(
 	onTransient?: () => void,
-	rootEntry?: (entry: string) => boolean,
+	root: string = process.cwd(),
 ): Promise<string[]> {
-	// #5689: HOME prevents project configuration reads, but does not make a
-	// manager on the caller's PATH safe. The caller supplies its root judgment.
+	const refusedRoot =
+		unadmittedSpawnRoot() ??
+		(getProjectTrustState() === "trusted" ? undefined : root);
+	if (refusedRoot !== undefined && unadmittedSpawnRoot() === undefined) {
+		return withUnadmittedRootSpawns(refusedRoot, () =>
+			allAvailableGlobalBinDirs(onTransient, root),
+		);
+	}
 	const scopedEnv = trustScopedEnvironment(
 		process.env,
 		process.cwd(),
-		rootEntry === undefined
-			? undefined
-			: (entry) => {
-					try {
-						return rootEntry(entry) !== false;
-					} catch {
-						recordDegradationOnce({
-							kind: "trust-refusal",
-							subject: "package-manager-path-classification",
-							reason: "package-manager PATH judge failed; entry refused",
-						});
-						return true;
-					}
-				},
+		refusedRoot === undefined ? undefined : projectSearchJudge(refusedRoot),
 	);
 	// safeSpawn merges ambient env underneath overrides. Preserve a deleted
 	// PATH as an explicit undefined override, including Windows key spellings.
@@ -499,7 +516,7 @@ export async function allAvailableGlobalBinDirs(
 	const dirs: string[] = [];
 	const seen = new Set<string>();
 	for (const pm of PREFERENCE) {
-		if (!(await isAvailable(pm, onTransient))) continue;
+		if (!(await isAvailable(pm, onTransient, env))) continue;
 		for (const dir of await globalBinDirsFor(pm, env)) {
 			// #5632 F1: a relative answer resolves against HOME, the cwd the query
 			// ran from, not against the session cwd.
@@ -594,16 +611,13 @@ registerBackgroundWriteDrain(settlePrimedGlobalBinDirsForTests);
 export async function findGlobalBinary(
 	command: string,
 	windowsExt = ".cmd",
-	rootEntry?: (entry: string) => boolean,
+	root: string = process.cwd(),
 ): Promise<string | undefined> {
 	const candidates = onWindows()
 		? [`${command}${windowsExt}`, `${command}.exe`, command]
 		: [command];
 	try {
-		for (const binDir of await allAvailableGlobalBinDirs(
-			undefined,
-			rootEntry,
-		)) {
+		for (const binDir of await allAvailableGlobalBinDirs(undefined, root)) {
 			for (const name of candidates) {
 				const full = path.join(binDir, name);
 				if (!fs.existsSync(full)) continue;

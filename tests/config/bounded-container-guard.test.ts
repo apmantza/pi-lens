@@ -528,9 +528,9 @@ describe("#2981 long-lived containers are bounded or admitted", () => {
 		"clients/lsp/server.ts#directLspCommandUnavailableUntil:831316db",
 		"clients/opaque-mutation-scan.ts#getOpaqueBaselineStore:feff1538",
 		"clients/opaque-mutation-scan.ts#isGitWorktree:97337298",
-		"clients/package-manager.ts#PROBE_TIMEOUT_MS:ab1ec294",
+		"clients/package-manager.ts#PROBE_TIMEOUT_MS:0e789c76",
 		// #4530: `globalBinDirCache` keys on trust scope × manager, 2 × 4 keys.
-		"clients/package-manager.ts#updateArgs:e94f9156",
+		"clients/package-manager.ts#updateArgs:85b1ae12",
 		"clients/package-root.ts#1f3e8efd",
 		"clients/project-lens-config.ts#configCache:77a8d572",
 		"clients/project-report.ts#computeDeadWeight:7e342b62",

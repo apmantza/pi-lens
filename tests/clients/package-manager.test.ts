@@ -482,6 +482,87 @@ describe("findGlobalBinary", () => {
 		expect(npmQueries.length).toBe(1);
 	});
 
+	// #5689: safeSpawn merges ambient environment under overrides. Omitting a
+	// deleted key silently restores the refused PATH at the process boundary.
+	it("sends explicit PATH deletion to both finder and query", async () => {
+		setPlatform("linux");
+		setProjectTrustState("unknown");
+		const root = tmpDir();
+		const bin = path.join(root, "bin");
+		fs.mkdirSync(bin);
+		const previousPath = process.env.PATH;
+		process.env.PATH = bin;
+		onlyAvailable("npm");
+		setQueryResponder(async () => ({
+			stdout: `${root}\n`,
+			stderr: "",
+			status: 0,
+		}));
+		try {
+			await allAvailableGlobalBinDirs(undefined, root);
+			for (const command of ["which", "npm"]) {
+				const call = vi
+					.mocked(safeSpawnAsync)
+					.mock.calls.find(([cmd]) => cmd === command);
+				expect(call, command).toBeDefined();
+				expect(Object.hasOwn(call![2]!.env!, "PATH")).toBe(true);
+				expect(call![2]!.env!.PATH).toBeUndefined();
+			}
+		} finally {
+			if (previousPath === undefined) delete process.env.PATH;
+			else process.env.PATH = previousPath;
+		}
+	});
+
+	// #5782 F1: concurrent roots can select different npm executables from
+	// the same ambient PATH; their directory queries must not share a flight.
+	it("keeps concurrent root-specific manager queries separate", async () => {
+		setPlatform("linux");
+		setProjectTrustState("unknown");
+		const rootA = tmpDir();
+		const rootB = tmpDir();
+		const binA = path.join(rootA, "bin");
+		const binB = path.join(rootB, "bin");
+		fs.mkdirSync(binA);
+		fs.mkdirSync(binB);
+		const previousPath = process.env.PATH;
+		process.env.PATH = `${binA}:${binB}`;
+		const first = gatedPromise<{
+			stdout: string;
+			stderr: string;
+			status: number;
+		}>();
+		let queries = 0;
+		vi.mocked(safeSpawnAsync).mockImplementation(async (cmd, args, options) => {
+			if (cmd === "which")
+				return { stdout: "", stderr: "", status: args?.[0] === "npm" ? 0 : 1 };
+			queries++;
+			if (options?.env?.PATH === binA) return first.promise;
+			return { stdout: `${rootB}\n`, stderr: "", status: 0 };
+		});
+		const oldLookup = allAvailableGlobalBinDirs(undefined, rootB);
+		let newLookup: Promise<string[]> | undefined;
+		try {
+			await waitFor(
+				() => queries,
+				(count) => count === 1,
+			);
+			newLookup = allAvailableGlobalBinDirs(undefined, rootA);
+			await waitFor(
+				() => queries,
+				(count) => count === 2,
+				{ timeoutMs: 500 },
+			);
+			expect(await newLookup).toEqual([path.join(rootB, "bin")]);
+		} finally {
+			first.resolve({ stdout: `${rootA}\n`, stderr: "", status: 0 });
+			await oldLookup;
+			await newLookup;
+			if (previousPath === undefined) delete process.env.PATH;
+			else process.env.PATH = previousPath;
+		}
+	});
+
 	/**
 	 * #1602 review — the memo must not latch a transient bin-dir lookup
 	 * failure the way a genuine absence would: npm already passed

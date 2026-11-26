@@ -39,6 +39,7 @@
     "ipc-endpoint-identity"
   ],
   "map": {
+    "clients/package-manager.ts": ["availability-latch", "adopted-root-trust"],
     "clients/read-guard.ts": [
       "read-guard",
       "session-lifecycle"

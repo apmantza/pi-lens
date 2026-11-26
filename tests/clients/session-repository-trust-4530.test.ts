@@ -82,12 +82,7 @@ import {
 	flushExtensionLog,
 	getExtensionLogPath,
 } from "../../clients/extension-log.js";
-import {
-	flushLatencyLog,
-	getLatencyLogPath,
-} from "../../clients/latency-logger.js";
 import { BiomeClient } from "../../clients/biome-client.js";
-import { projectSearchJudge } from "../../clients/session-repository.js";
 
 const TOOL = "pi-lens-4530-tool";
 const POSIX = process.platform !== "win32";
@@ -973,14 +968,14 @@ describe.skipIf(!POSIX)("package-manager global lookups (#4530)", () => {
 		expect(await findGlobalBinary(TOOL)).toBe(honestTool);
 	});
 
-	it("F11: two session cwds share one manager probe (no cwd in the key)", async () => {
+	it("F11: distinct refused session roots require separately judged manager probes", async () => {
 		stub.plantManager("npm");
 
 		await findGlobalBinary(TOOL);
 		enterSession(layout.wt);
 		await findGlobalBinary(TOOL);
 
-		expect(stub.queries()).toEqual(["config get prefix"]);
+		expect(stub.queries()).toEqual(["config get prefix", "config get prefix"]);
 	});
 
 	/**
@@ -1194,7 +1189,7 @@ describe.skipIf(!POSIX)("package-manager probe root trust (#5689)", () => {
 				),
 			).rejects.toThrow();
 		} else if (member === "global-dirs") {
-			await allAvailableGlobalBinDirs(undefined, projectSearchJudge(root));
+			await allAvailableGlobalBinDirs(undefined, root);
 		} else if (member === "biome-client") {
 			await (
 				new BiomeClient() as unknown as {
@@ -1246,6 +1241,122 @@ describe.skipIf(!POSIX)("package-manager probe root trust (#5689)", () => {
 			expect(ran(marker)).toBe(true);
 		},
 	);
+	it("R3 F1: default discovery and its warm cache never execute a session manager", async () => {
+		const marker = path.join(layout.root, "r3-default-marker");
+		const bin = path.join(layout.main, "bin");
+		writeStandIn(bin, "pnpm", `printf ran >> '${marker}'`);
+		cleanups.push(
+			withEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH}` }),
+		);
+		setProjectTrustState("unknown");
+		await allAvailableGlobalBinDirs();
+		await allAvailableGlobalBinDirs();
+		expect(ran(marker)).toBe(false);
+	});
+	it.each(members)(
+		"R3 F2/F5: %s refuses a manager file link into an adopted root",
+		async (member) => {
+			const root = path.join(layout.outside, "adopted");
+			const marker = path.join(layout.root, "r3-link-marker");
+			const bin = path.join(root, "bin");
+			writeStandIn(bin, "pnpm", `printf ran >> '${marker}'`);
+			const outsideBin = path.join(layout.root, "linked-bin");
+			fs.mkdirSync(outsideBin);
+			fs.symlinkSync(path.join(bin, "pnpm"), path.join(outsideBin, "pnpm"));
+			cleanups.push(
+				withEnv({ PATH: `${outsideBin}${path.delimiter}${process.env.PATH}` }),
+			);
+			setProjectTrustState("unknown");
+			await probe(member, root, false);
+			expect(ran(marker)).toBe(false);
+		},
+	);
+	it("R3 F6: discovery scopes the finder and still runs an outside manager", async () => {
+		const finderMarker = path.join(layout.root, "r3-finder-marker");
+		const managerMarker = path.join(layout.root, "r3-manager-marker");
+		const root = path.join(layout.outside, "adopted");
+		const bin = path.join(root, "bin");
+		writeStandIn(bin, "which", `printf ran >> '${finderMarker}'; exit 1`);
+		stub.plantOnPath("pnpm", `printf ran >> '${managerMarker}'`);
+		cleanups.push(
+			withEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH}` }),
+		);
+		setProjectTrustState("unknown");
+		await allAvailableGlobalBinDirs(undefined, root);
+		expect(ran(finderMarker)).toBe(false);
+		expect(ran(managerMarker)).toBe(true);
+	});
+
+	// Recurrence #5782 F6: a scoped finder can cache absence; that evidence
+	// must not suppress an outside manager under the next root's PATH view.
+	it("R3 F6: a scoped absence cannot suppress a later outside manager", async () => {
+		const root = path.join(layout.outside, "adopted");
+		const marker = path.join(layout.root, "r3-availability-marker");
+		const bin = path.join(root, "bin");
+		writeStandIn(bin, "pnpm", `printf ran >> '${marker}'`);
+		cleanups.push(
+			withEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH}` }),
+		);
+		setProjectTrustState("unknown");
+		await allAvailableGlobalBinDirs(undefined, root);
+		expect(ran(marker)).toBe(false);
+		await allAvailableGlobalBinDirs();
+		expect(ran(marker)).toBe(true);
+	});
+
+	it("R3 F1: identical PATH views still separate executable identity by root", async () => {
+		const root = path.join(layout.outside, "adopted");
+		const otherRoot = path.join(layout.outside, "other");
+		const bin = path.join(root, "bin");
+		const outsideBin = path.join(layout.root, "shared-link-bin");
+		const answer = path.join(layout.outside, "identity-answer");
+		writeStandIn(bin, "pnpm", `printf '%s\\n' '${answer}'`);
+		fs.mkdirSync(outsideBin);
+		fs.symlinkSync(path.join(bin, "pnpm"), path.join(outsideBin, "pnpm"));
+		cleanups.push(
+			withEnv({ PATH: `${outsideBin}${path.delimiter}${process.env.PATH}` }),
+		);
+		setProjectTrustState("unknown");
+		expect(await allAvailableGlobalBinDirs(undefined, otherRoot)).toContain(
+			answer,
+		);
+		expect(await allAvailableGlobalBinDirs(undefined, root)).not.toContain(
+			answer,
+		);
+	});
+	it("R3 F6: concurrent root views do not share finder absence", async () => {
+		const root = path.join(layout.outside, "adopted");
+		const otherRoot = path.join(layout.outside, "other");
+		const bin = path.join(root, "bin");
+		const answer = path.join(layout.outside, "concurrent-answer");
+		writeStandIn(bin, "pnpm", `printf '%s\\n' '${answer}'`);
+		cleanups.push(
+			withEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH}` }),
+		);
+		setProjectTrustState("unknown");
+		const [refused, outside] = await Promise.all([
+			allAvailableGlobalBinDirs(undefined, root),
+			allAvailableGlobalBinDirs(undefined, otherRoot),
+		]);
+		expect(refused).not.toContain(answer);
+		expect(outside).toContain(answer);
+	});
+
+	it("R3 F1: an unscoped warm answer cannot bypass a later root refusal", async () => {
+		const root = path.join(layout.outside, "adopted");
+		const bin = path.join(root, "bin");
+		const answer = path.join(layout.outside, "poisoned-answer");
+		writeStandIn(bin, "pnpm", `printf '%s\\n' '${answer}'`);
+		cleanups.push(
+			withEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH}` }),
+		);
+		setProjectTrustState("unknown");
+		expect(await allAvailableGlobalBinDirs()).toContain(answer);
+		expect(await allAvailableGlobalBinDirs(undefined, root)).not.toContain(
+			answer,
+		);
+	});
+
 	it("launch refuses an adopted manager even when host trust is trusted", async () => {
 		const root = path.join(layout.outside, "adopted");
 		const marker = path.join(layout.root, "5689-marker");
@@ -1275,64 +1386,4 @@ describe.skipIf(!POSIX)("package-manager probe root trust (#5689)", () => {
 		expect(ran(marker)).toBe(false);
 		expect(ran(outsideMarker)).toBe(true);
 	});
-	it("records throwing PATH classification once per session and rearms after reset", async () => {
-		// #5689 r1b: a trust judge failure must refuse with a bounded record.
-		cleanups.push(withEnv({ PI_LENS_TEST_MODE: "0" }));
-		const marker = path.join(layout.root, "5689-marker");
-		stub.plantOnPath("pnpm", `printf ran >> '${marker}'`);
-		setProjectTrustState("trusted");
-		const judge = () => {
-			throw new Error("classification unavailable");
-		};
-		await flushLatencyLog();
-		const before = readNdjsonRows(getLatencyLogPath());
-		expect(before.skipped).toBe(0);
-		for (let i = 0; i < 2; i++)
-			await allAvailableGlobalBinDirs(undefined, judge);
-		expect(ran(marker)).toBe(false);
-		await flushLatencyLog();
-		const written = readNdjsonRows<{
-			phase?: string;
-			metadata?: Record<string, unknown>;
-		}>(getLatencyLogPath());
-		expect(written.skipped).toBe(0);
-		const records = written.rows
-			.slice(before.rows.length)
-			.filter(
-				(row) =>
-					row.phase === "degradation_ledger" &&
-					row.metadata?.kind === "trust-refusal" &&
-					row.metadata?.subject === "package-manager-path-classification",
-			);
-		expect(records).toHaveLength(1);
-		resetDegradationLedger();
-		await allAvailableGlobalBinDirs(undefined, judge);
-		await flushLatencyLog();
-		const resetRows = readNdjsonRows<{ metadata?: Record<string, unknown> }>(
-			getLatencyLogPath(),
-		);
-		expect(resetRows.skipped).toBe(0);
-		expect(
-			resetRows.rows
-				.slice(before.rows.length)
-				.filter(
-					(row) =>
-						row.metadata?.kind === "trust-refusal" &&
-						row.metadata?.subject === "package-manager-path-classification",
-				),
-		).toHaveLength(2);
-	});
-	it.each(["throws", "unknown"])(
-		"refuses a manager when PATH classification %s",
-		async (mode) => {
-			const marker = path.join(layout.root, "5689-marker");
-			stub.plantOnPath("pnpm", `printf ran >> '${marker}'`);
-			setProjectTrustState("trusted");
-			await allAvailableGlobalBinDirs(undefined, () => {
-				if (mode === "throws") throw new Error("classification unavailable");
-				return undefined as unknown as boolean;
-			});
-			expect(ran(marker)).toBe(false);
-		},
-	);
 });
