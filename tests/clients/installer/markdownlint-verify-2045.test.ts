@@ -8,7 +8,10 @@ import { describe, expect, it, vi } from "vitest";
 
 const safeSpawnAsync = vi.hoisted(() => vi.fn());
 const sessionLog = vi.hoisted(() => vi.fn());
-vi.mock("../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
+vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../clients/safe-spawn.js")>()),
+	safeSpawnAsync,
+}));
 vi.mock("../../../clients/sessionstart-logger.js", () => ({
 	logSessionStart: sessionLog,
 }));

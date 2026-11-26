@@ -22,7 +22,8 @@ import {
 import { setupTestEnvironment } from "./test-utils.js";
 import { setProjectTrustState } from "../../clients/project-trust.js";
 
-vi.mock("../../clients/safe-spawn.js", () => ({
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
 	safeSpawnAsync: vi.fn(async () => ({
 		error: null,
 		status: 0,

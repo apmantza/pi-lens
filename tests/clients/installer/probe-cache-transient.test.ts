@@ -49,7 +49,8 @@ vi.mock("../../../clients/atomic-write.js", () => ({
 // SELECTION must remember that a candidate along the way was never confirmed
 // broken — only unlucky.
 const spawnCalls = vi.hoisted(() => [] as string[]);
-vi.mock("../../../clients/safe-spawn.js", () => ({
+vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../clients/safe-spawn.js")>()),
 	safeSpawn: vi.fn(() => ({ stdout: "", stderr: "", status: 0 })),
 	safeSpawnAsync: async (command: string) => {
 		const cmd = String(command);

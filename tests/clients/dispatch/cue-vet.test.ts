@@ -284,7 +284,10 @@ const { safeSpawnAsync, readFileSync } = vi.hoisted(() => ({
 	}),
 }));
 
-vi.mock("../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
+vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../clients/safe-spawn.js")>()),
+	safeSpawnAsync,
+}));
 
 vi.mock("node:fs", async () => {
 	const actual = await vi.importActual<typeof import("node:fs")>("node:fs");

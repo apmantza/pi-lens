@@ -16,7 +16,8 @@ import { TRANSIENT_BASE_COOLDOWN_MS } from "../../clients/dispatch/runners/utils
 
 const { safeSpawnAsync } = vi.hoisted(() => ({ safeSpawnAsync: vi.fn() }));
 
-vi.mock("../../clients/safe-spawn.js", () => ({
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
 	safeSpawnAsync,
 	safeSpawn: vi.fn(),
 	isCommandAvailableAsync: vi.fn(async () => false),
