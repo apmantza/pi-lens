@@ -224,7 +224,7 @@ describe("runLogCleanup retention rows (#5702)", () => {
 		expect(result.report).toMatch(/spill log/);
 	});
 
-	describe.each(["0", "off", "Unlimited"])(
+	describe.each(["0", "000", "off", "Unlimited"])(
 		"PI_LENS_LOG_RETENTION_DAYS=%s",
 		(value) => {
 			it("keeps every aged file instead of falling back to 7 days", async () => {
@@ -734,6 +734,11 @@ describe("readLimitFromEnv", () => {
 		["30", 30, undefined],
 		[" 30 ", 30, undefined],
 		["0", Number.POSITIVE_INFINITY, undefined],
+		// Every spelling the integer pattern reads as zero is "no limit", never a
+		// literal zero (#5772 review F1: `000` deleted a 40-day-old spill log at
+		// "retention: 0d").
+		["000", Number.POSITIVE_INFINITY, undefined],
+		["00", Number.POSITIVE_INFINITY, undefined],
 		["off", Number.POSITIVE_INFINITY, undefined],
 		["UNLIMITED", Number.POSITIVE_INFINITY, undefined],
 		["-1", 7, `${NAME}=-1`],
@@ -746,5 +751,17 @@ describe("readLimitFromEnv", () => {
 		const reading = readLimitFromEnv(NAME, 7);
 		expect(reading.value).toBe(value);
 		expect(reading.invalid).toBe(invalid);
+	});
+
+	// A 400-digit integer parses to Infinity; it is an unusable value that names
+	// itself and takes the default, not a silent "no limit" (#5772 review F1: it
+	// printed "1e+276d" unflagged).
+	it("reads a 400-digit integer as unusable and applies the default", () => {
+		const huge = "9".repeat(400);
+		vi.stubEnv(NAME, huge);
+		expect(readLimitFromEnv(NAME, 7)).toEqual({
+			value: 7,
+			invalid: NAME + "=" + huge,
+		});
 	});
 });

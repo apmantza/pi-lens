@@ -190,6 +190,30 @@ describe.each([
 	});
 });
 
+// The five byte caps read through `getLogLimit`, so one logger proves the
+// reader's zero and overflow handling reaches the siblings (#5772 review F1:
+// `000` read as a literal 0 and a 400-digit value as Infinity, both unflagged).
+describe("dead-code-logger byte cap, zero and overflow spellings", () => {
+	const envName = "PI_LENS_DEAD_CODE_LOG_MAX_BYTES";
+
+	it("never rotates when the value is 000", async () => {
+		vi.stubEnv(envName, "000");
+		expect(await rotatesAfter("dead-code-logger", DEFAULT_BYTES * 1.5)).toBe(
+			false,
+		);
+		expect(unusableLogLimitEnv()).toEqual([]);
+	});
+
+	it("uses the default for a 400-digit value and names it", async () => {
+		const huge = "9".repeat(400);
+		vi.stubEnv(envName, huge);
+		expect(await rotatesAfter("dead-code-logger", DEFAULT_BYTES * 1.5)).toBe(
+			true,
+		);
+		expect(unusableLogLimitEnv()).toEqual([envName + "=" + huge]);
+	});
+});
+
 describe("unusableLogLimitEnv", () => {
 	it("is empty when every log-limit variable is unset or usable", () => {
 		vi.stubEnv("PI_LENS_LOG_RETENTION_DAYS", "30");

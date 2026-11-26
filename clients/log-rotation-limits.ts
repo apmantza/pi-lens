@@ -23,10 +23,11 @@ export interface LimitReading {
 
 /**
  * Read a numeric limit from the environment. Unset or empty is the default;
- * `0`, `off` or `unlimited` is no limit; a positive integer is itself.
- * Anything else falls back to the default and says so in `invalid`, so the
- * caller can report it instead of silently running with a number the user did
- * not write.
+ * `0` (however many zeros), `off` or `unlimited` is no limit; a positive
+ * integer is itself. Anything else, including an integer too long to be
+ * finite, falls back to the default and says so in `invalid`, so the caller
+ * can report it instead of silently running with a number the user did not
+ * write.
  */
 export function readLimitFromEnv(
 	name: string,
@@ -35,10 +36,15 @@ export function readLimitFromEnv(
 	const raw = process.env[name]?.trim();
 	if (raw === undefined || raw === "") return { value: defaultValue };
 	const word = raw.toLowerCase();
-	if (word === "0" || word === "off" || word === "unlimited") {
-		return { value: UNLIMITED };
+	if (word === "off" || word === "unlimited") return { value: UNLIMITED };
+	if (/^\d+$/.test(raw)) {
+		const parsed = Number.parseInt(raw, 10);
+		// A 400-digit integer parses to Infinity: unusable, not "no limit".
+		if (Number.isFinite(parsed)) {
+			// `000` is zero too: every spelling of zero means no limit.
+			return { value: parsed === 0 ? UNLIMITED : parsed };
+		}
 	}
-	if (/^\d+$/.test(raw)) return { value: Number.parseInt(raw, 10) };
 	return { value: defaultValue, invalid: `${name}=${raw}` };
 }
 
