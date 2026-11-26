@@ -24,19 +24,50 @@ export interface HeldChildrenLedger {
 	end(): boolean;
 }
 
+export interface OwnedChildLedger {
+	write(entry: {
+		pid: number;
+		serverId: string;
+		command: string;
+		processStart?: string;
+	}): Promise<void>;
+	remove(pid: number): Promise<void>;
+}
+
 const FAMILY = "held-children.ledger";
 /** Bump when the cell's shape changes. */
 const VERSION = 1;
 
-function cell(): { ledger: HeldChildrenLedger | undefined } {
+function cell(): {
+	ledger: HeldChildrenLedger | undefined;
+	owned: OwnedChildLedger | undefined;
+} {
 	return getProcessSingleton(FAMILY, VERSION, () => ({
 		ledger: undefined as HeldChildrenLedger | undefined,
+		owned: undefined as OwnedChildLedger | undefined,
 	}));
 }
 
 /** Called once by `safe-spawn.ts` at load. */
 export function provideHeldChildrenLedger(ledger: HeldChildrenLedger): void {
 	cell().ledger = ledger;
+}
+
+export function provideOwnedChildLedger(ledger: OwnedChildLedger): void {
+	cell().owned = ledger;
+}
+
+export function recordOwnedChild(entry: {
+	pid: number;
+	serverId: string;
+	command: string;
+	processStart?: string;
+}): Promise<void> {
+	return cell().owned?.write(entry) ?? Promise.resolve();
+}
+
+export function removeOwnedChild(pid: number): Promise<void> {
+	return cell().owned?.remove(pid) ?? Promise.resolve();
 }
 
 export function holdsChildren(): boolean {

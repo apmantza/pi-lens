@@ -89,6 +89,7 @@ import {
 	setupTestEnvironment,
 } from "./clients/test-utils.js";
 import { waitFor } from "./clients/interleaving-kit.js";
+import { drainRegisteredBackgroundWritesForTests } from "./support/background-write-drains.js";
 import { scaledTestTimeout } from "./support/test-timeout-scale.js";
 
 const FLAGS = new Map<string, boolean>([
@@ -153,6 +154,12 @@ afterEach(async () => {
 	try {
 		for (const runtime of runtimes.splice(0)) await runtime.dispose();
 		await drainBackgroundWritesForTests();
+		// Every session_start primes the global-bin-dir lookup without waiting
+		// for it (#5261): `npm config get prefix`, a spawn that outlives the
+		// session. Its settle is a `package-manager-global-bin` write into the
+		// process-wide fence tally, so a lookup this case left running landed in
+		// the next case's rollup (the O5 cap case read guardedTotal 21, not 20).
+		await drainRegisteredBackgroundWritesForTests();
 		expect(extensionErrors.splice(0)).toEqual([]);
 	} finally {
 		vi.restoreAllMocks();

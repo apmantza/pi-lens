@@ -15,6 +15,7 @@ import { setProjectTrustState } from "../clients/project-trust.js";
 import { logExtension } from "../clients/extension-log.js";
 import { analyzeFile } from "../clients/mcp/analyze.js";
 import { initLSPConfig } from "../clients/lsp/config.js";
+import { settleRegistryWritesBeforeExit } from "../clients/instance-registry.js";
 
 function arg(name: string): string | undefined {
 	const prefix = `--${name}=`;
@@ -69,6 +70,13 @@ async function main(): Promise<void> {
 	}
 
 	const result = await analyzeFile(file, cwd, { flags });
+	// #5745 r4: let the runner rows' queued registry writes land, so the exit
+	// hook can take the lock and remove this worker's entry. Bounded; a fired
+	// bound is recorded in the degradation ledger and noted here.
+	if (!(await settleRegistryWritesBeforeExit()))
+		process.stderr.write(
+			"worker: registry writes still pending at exit; this worker's instances.json entry may outlive it\n",
+		);
 	// Flush before exiting — a bare process.exit can truncate a piped write. The
 	// explicit exit is needed because spawned LSP/runner handles would otherwise
 	// keep the event loop alive.

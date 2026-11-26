@@ -547,7 +547,10 @@ function settlePrimedGlobalBinDirsForTests(): Promise<string | undefined> {
 // The prime runs in whichever copy of this module `session_start` loaded; the
 // tier-2 harness joins every copy's prime through the registry
 // (`clients/background-write-drains.ts`).
-registerBackgroundWriteDrain(settlePrimedGlobalBinDirsForTests);
+registerBackgroundWriteDrain(
+	settlePrimedGlobalBinDirsForTests,
+	() => primesRunning > 0,
+);
 
 /**
  * Locate a globally-installed tool binary across every installed manager's
