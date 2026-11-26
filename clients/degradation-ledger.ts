@@ -211,7 +211,7 @@ export type DegradationKind =
 	 * point, a full pass after which no drain reports pending work, before its
 	 * deadline. The runner stops scheduling passes and rejects, naming the
 	 * drains still pending, so the fixture root is not removed under them.
-	 * Subject: `fixed-point`; once per process.
+	 * Subject: `fixed-point`; once per ledger session.
 	 */
 	| "background-write-drain-deadline"
 	| "bash-view-clipped"

@@ -717,9 +717,9 @@ describe("kill-by-pid ownership (#2042)", () => {
 					}),
 				remove: async () => {},
 			});
-			const pendings: Promise<unknown>[] = [];
+			const pendingWrites: Promise<unknown>[] = [];
 			try {
-				pendings.push(
+				pendingWrites.push(
 					safeSpawnAsync(process.execPath, ["-e", "0"], { timeout: 50_000 }),
 				);
 				await writeFor(firstOwned.pid).called;
@@ -737,7 +737,7 @@ describe("kill-by-pid ownership (#2042)", () => {
 				await new Promise<void>((resolve) => setImmediate(resolve));
 				expect(drained).toBe(false);
 
-				pendings.push(
+				pendingWrites.push(
 					safeSpawnAsync(process.execPath, ["-e", "0"], { timeout: 50_000 }),
 				);
 				await writeFor(secondOwned.pid).called;
@@ -752,7 +752,7 @@ describe("kill-by-pid ownership (#2042)", () => {
 			} finally {
 				for (const entry of writes.values()) entry.release();
 				for (const child of spawned) child.emit("close", 0, null);
-				await Promise.all(pendings);
+				await Promise.all(pendingWrites);
 				// The ledger cell is a process singleton: a fresh registry module
 				// provides the production ledger again.
 				vi.resetModules();

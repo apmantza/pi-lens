@@ -23,7 +23,6 @@ import {
 } from "../../clients/project-snapshot.js";
 import type { ProjectSnapshot } from "../../clients/project-snapshot.js";
 import { registerBackgroundWriteDrain } from "../../clients/background-write-drains.js";
-import { getDegradationSummary } from "../../clients/degradation-ledger.js";
 import { drainRegisteredBackgroundWritesForTests } from "../support/background-write-drains.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
@@ -276,6 +275,10 @@ describe("background write drains across module copies (#4937)", () => {
 	// teardown until the hook timeout cut it, with no record of why. The
 	// deadline ends the passes, rejects, and records the event once.
 	it("a fixed point the deadline cuts rejects, stops its passes and records once", async () => {
+		// Read the writer's current module after the earlier resetModules calls.
+		const { getDegradationSummary, resetDegradationLedger } =
+			await import("../../clients/degradation-ledger.js");
+		resetDegradationLedger();
 		let stuck = true;
 		let pendingReads = 0;
 		async function neverIdleWriterForTests(): Promise<string | undefined> {
@@ -291,6 +294,11 @@ describe("background write drains across module copies (#4937)", () => {
 			).rejects.toThrow(
 				/^background-write drains did not reach a fixed point within 50 ms; still pending: .*neverIdleWriterForTests/,
 			);
+			expect(
+				getDegradationSummary().find(
+					(entry) => entry.kind === "background-write-drain-deadline",
+				)?.count,
+			).toBe(1);
 			// The abandoned passes stop: nothing reads the signal any more.
 			const readsAtDeadline = pendingReads;
 			for (let turn = 0; turn < 3; turn += 1)

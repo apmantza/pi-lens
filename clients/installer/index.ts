@@ -2552,9 +2552,9 @@ export async function flushProbeCache(): Promise<ProbeCacheFlushResult> {
 		clearTimeout(_probeCacheFlushTimer);
 		_probeCacheFlushTimer = null;
 	}
-	// #946 review F4: if the 300ms timer's write already started, the dirty
-	// flag is false but the write may still be in flight — an immediate
-	// process.exit would truncate it. Always await the in-flight write.
+	// #946 review F4: the 300ms timer may have started a write that is
+	// still in flight. An immediate process.exit would truncate it, so
+	// always await that write before checking whether another is needed.
 	if (_probeCacheWriteInFlight) {
 		await _probeCacheWriteInFlight;
 		if (!_probeCacheDirty) return "written";

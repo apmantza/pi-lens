@@ -23,8 +23,6 @@
  * drains still pending. It never resolves as settled.
  */
 import { registeredBackgroundWriteDrainsForTests } from "../../clients/background-write-drains.js";
-import { withDeadline } from "../../clients/deadline-utils.js";
-import { recordDegradationOnce } from "../../clients/degradation-ledger.js";
 
 /**
  * Longest the passes may take together. Above the prime drain's own 10 s
@@ -46,6 +44,11 @@ function pendingDrainNames(): string[] {
 export async function drainRegisteredBackgroundWritesForTests(
 	options: { deadlineMs?: number } = {},
 ): Promise<void> {
+	// Tier 2 pins its fixture home before loading the logger graph. These
+	// owners reach latency-logger, whose sink binds at module load (#5745 r11).
+	const { withDeadline } = await import("../../clients/deadline-utils.js");
+	const { recordDegradationOnce } =
+		await import("../../clients/degradation-ledger.js");
 	const deadlineMs = options.deadlineMs ?? FIXED_POINT_DEADLINE_MS;
 	let expired = false;
 	const passes = async (): Promise<{ remaining: string | undefined }> => {
