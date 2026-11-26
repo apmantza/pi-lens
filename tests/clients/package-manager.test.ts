@@ -26,6 +26,7 @@ vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
 	safeSpawnAsync: vi.fn(),
 }));
 import { SpawnFailureError, safeSpawnAsync } from "../../clients/safe-spawn.js";
+import { unadmittedSpawnRoot } from "../../clients/session-repository.js";
 import {
 	_resetPackageManagerCache,
 	allAvailableGlobalBinDirs,
@@ -498,6 +499,11 @@ describe("findGlobalBinary", () => {
 			stderr: "",
 			status: 0,
 		}));
+		const spawnDouble = vi.mocked(safeSpawnAsync).getMockImplementation()!;
+		vi.mocked(safeSpawnAsync).mockImplementation((...args) => {
+			expect(unadmittedSpawnRoot()).toBe(root);
+			return spawnDouble(...args);
+		});
 		try {
 			await allAvailableGlobalBinDirs(undefined, root);
 			for (const command of ["which", "npm"]) {
@@ -558,6 +564,38 @@ describe("findGlobalBinary", () => {
 			first.resolve({ stdout: `${rootA}\n`, stderr: "", status: 0 });
 			await oldLookup;
 			await newLookup;
+			if (previousPath === undefined) delete process.env.PATH;
+			else process.env.PATH = previousPath;
+		}
+	});
+
+	// #5782 F1 recurrence: the fixed per-manager slot answered a lookup made
+	// under another PATH view, so a warm slot served an answer the new view
+	// might have resolved differently.
+	it("re-queries when the PATH view changes under a warm slot", async () => {
+		setPlatform("linux");
+		setProjectTrustState("unknown");
+		const first = tmpDir();
+		const second = tmpDir();
+		const previousPath = process.env.PATH;
+		onlyAvailable("npm");
+		let answer = first;
+		setQueryResponder(async () => ({
+			stdout: `${answer}\n`,
+			stderr: "",
+			status: 0,
+		}));
+		try {
+			process.env.PATH = path.join(first, "view");
+			expect(await allAvailableGlobalBinDirs()).toEqual([
+				path.join(first, "bin"),
+			]);
+			answer = second;
+			process.env.PATH = path.join(second, "view");
+			expect(await allAvailableGlobalBinDirs()).toEqual([
+				path.join(second, "bin"),
+			]);
+		} finally {
 			if (previousPath === undefined) delete process.env.PATH;
 			else process.env.PATH = previousPath;
 		}

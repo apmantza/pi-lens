@@ -1141,7 +1141,7 @@ export async function launchLSP(
 
 	// First, try to find in npm global if it's a simple command name
 	if (isBareCommand) {
-		const globalBinPath = await findGlobalBinary(command, ".cmd", cwd);
+		const globalBinPath = await findGlobalBinary(command, ".cmd");
 		if (globalBinPath) {
 			spawnCommand = globalBinPath;
 		}
@@ -1237,7 +1237,7 @@ export async function launchLSP(
 	} catch (err) {
 		// If spawn failed with simple command, try npm global
 		if (isBareCommand) {
-			const globalBinPath = await findGlobalBinary(command, ".cmd", cwd);
+			const globalBinPath = await findGlobalBinary(command, ".cmd");
 			if (globalBinPath && globalBinPath !== spawnCommand) {
 				launched = trySpawn(globalBinPath, args, cwd, env);
 			} else {

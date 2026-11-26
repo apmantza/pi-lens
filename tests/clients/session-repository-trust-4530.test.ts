@@ -1241,10 +1241,18 @@ describe.skipIf(!POSIX)("package-manager probe root trust (#5689)", () => {
 			expect(ran(marker)).toBe(true);
 		},
 	);
+	// Recurrence #5782 F1/F6: the unjudged session_start prime ran a planted
+	// finder and manager from the session root. The owner derives the refusal
+	// with no caller input, and a warm second call stays refused. The session
+	// sits at HOME, where the spawn seam's session-repository judge refuses
+	// nothing, so only the owner's default admission can refuse the plant.
 	it("R3 F1: default discovery and its warm cache never execute a session manager", async () => {
 		const marker = path.join(layout.root, "r3-default-marker");
-		const bin = path.join(layout.main, "bin");
+		const finderMarker = path.join(layout.root, "r3-default-finder");
+		const bin = path.join(layout.home, "bin");
+		process.chdir(layout.home);
 		writeStandIn(bin, "pnpm", `printf ran >> '${marker}'`);
+		writeStandIn(bin, "which", `printf ran >> '${finderMarker}'; exit 1`);
 		cleanups.push(
 			withEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH}` }),
 		);
@@ -1252,6 +1260,7 @@ describe.skipIf(!POSIX)("package-manager probe root trust (#5689)", () => {
 		await allAvailableGlobalBinDirs();
 		await allAvailableGlobalBinDirs();
 		expect(ran(marker)).toBe(false);
+		expect(ran(finderMarker)).toBe(false);
 	});
 	it.each(members)(
 		"R3 F2/F5: %s refuses a manager file link into an adopted root",

@@ -11,9 +11,9 @@ Init == /\ admitted \in BOOLEAN
         /\ executed = FALSE
         /\ finderRan = FALSE
 Probe == /\ ~executed /\ ~finderRan
-         /\ executed' = admitted \/ (linked /\ ~IdentityGuard)
-                             \/ (warm /\ ~ScopeGuard)
-         /\ finderRan' = planted /\ (admitted \/ ~FinderGuard)
+         /\ executed' = (admitted \/ (linked /\ ~IdentityGuard)
+                              \/ (warm /\ ~ScopeGuard))
+         /\ finderRan' = (planted /\ (admitted \/ ~FinderGuard))
          /\ UNCHANGED <<admitted, linked, warm, planted, caller>>
 Next == Probe
 Spec == Init /\ [][Next]_vars
