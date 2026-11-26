@@ -29,6 +29,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readNdjsonRows } from "../support/ndjson-rows.js";
 import { removeTempDirSync } from "./test-utils.js";
 
 const { safeSpawnAsync, spawnCalls } = vi.hoisted(() => {
@@ -737,6 +738,59 @@ describe("reviewed ladder preservation (#5783)", () => {
 		const shim = plant(path.join(root, "node_modules", ".bin", "biome"), GOOD);
 		expect((await client.getBiomeBinary(root)).cmd).toBe(shim);
 		expect(spawnCalls.some((call) => call.cmd === shim)).toBe(false);
+	});
+
+	// Recurrence it prevents (PR #5783, follow-up to the cell above): each repeat
+	// miss re-ran the fresh flight, which noted `missing` again, so every Biome
+	// call wrote one more `availability_decision` row. A latched miss already holds
+	// its verdict, so a session writes one row for the misses, then one for the hit
+	// that changes the answer. Read through the real latency sink, no double.
+	it("biome: repeat misses in one session write one decision row, and the hit a second", async () => {
+		vi.stubEnv("PI_LENS_TEST_MODE", "0");
+		const { flushLatencyLog, getLatencyLogPath } =
+			await import("../../clients/latency-logger.js");
+		const { BiomeClient } = await import("../../clients/biome-client.js");
+		const client = new BiomeClient() as unknown as {
+			getBiomeBinary(cwd?: string): Promise<{ cmd: string; args: string[] }>;
+		};
+		const biomeRows = async () => {
+			await flushLatencyLog();
+			const written = readNdjsonRows<{
+				phase?: string;
+				metadata?: Record<string, unknown>;
+			}>(getLatencyLogPath());
+			expect(written.skipped).toBe(0);
+			return written.rows
+				.filter(
+					(row) =>
+						row.phase === "availability_decision" &&
+						row.metadata?.tool === "biome",
+				)
+				.map((row) => row.metadata);
+		};
+
+		await client.getBiomeBinary(root);
+		await client.getBiomeBinary(root);
+		expect(await biomeRows()).toEqual([
+			expect.objectContaining({
+				verdict: "unavailable",
+				outcome: "missing",
+				cause: "not-found",
+				classifiedBy: "caller",
+			}),
+		]);
+
+		const shim = plant(path.join(root, "node_modules", ".bin", "biome"), GOOD);
+		expect((await client.getBiomeBinary(root)).cmd).toBe(shim);
+		expect(await biomeRows()).toEqual([
+			expect.objectContaining({ verdict: "unavailable", outcome: "missing" }),
+			expect.objectContaining({
+				verdict: "available",
+				outcome: "success",
+				cause: "fast-path",
+				classifiedBy: "caller",
+			}),
+		]);
 	});
 
 	// Recurrence it prevents: the presence-only branch (`fastPathOnly`) returns

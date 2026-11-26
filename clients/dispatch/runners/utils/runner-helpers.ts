@@ -1516,13 +1516,18 @@ export function createAvailabilityChecker(
 			}
 
 			if (options.fastPathOnly) {
-				note({
-					available: false,
-					outcome: "missing",
-					cause: "not-found",
-					elapsedMs: 0,
-					classifiedBy: "caller",
-				});
+				// A repeat miss changes nothing: the latch already holds this verdict, so
+				// it writes no second decision row. One row per distinct event, as the
+				// remembered miss did before the re-ask.
+				if (getOutcome(resolvedCwd) !== "missing") {
+					note({
+						available: false,
+						outcome: "missing",
+						cause: "not-found",
+						elapsedMs: 0,
+						classifiedBy: "caller",
+					});
+				}
 				return false;
 			}
 
