@@ -37,12 +37,6 @@ const cueFixture = (LSP_FIXTURES as LspFixture[]).find(
 );
 
 describe("CUE tool-smoke fixture (#1520 F2)", () => {
-	// Without this the lane falls through to the bare "handshook" pass, which
-	// treats zero diagnostics as success — backwards for this fixture.
-	it("binds its verdict to the diagnostic message", () => {
-		expect(cueFixture?.expectMessageMatch).toBeTruthy();
-	});
-
 	it("keeps the package clause on line 1 so cuelsp publishes at all", () => {
 		const source = readFileSync(
 			path.join(repoRoot, cueFixture?.dir ?? "", cueFixture?.file ?? ""),
@@ -102,6 +96,10 @@ describe("expectMessageMatch decides on message text, not handshake", () => {
 		).toHaveLength(0);
 	});
 
+	// Without a pattern on the fixture the lane falls through to the bare
+	// "handshook" pass, which treats zero diagnostics as success — backwards for
+	// this fixture. Matching the real message also reds a dropped or wrong
+	// pattern (#1520 F2).
 	it("uses the fixture's own pattern against the real message", () => {
 		expect(
 			matchDiagnosticMessages(cueFixture?.expectMessageMatch ?? "$^", [
