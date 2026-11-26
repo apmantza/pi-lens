@@ -1557,6 +1557,15 @@
       "spawn:npm via tests/index-5261-global-bin-prime.test.ts:39"
     ]
   },
+  "index-5784-withheld-carried-count-witness.test.ts": {
+    "reason": "starts real `git` and `bash` child process(es) (execFileSync, spawn) plus `which` (spawnSync), called from the file itself (tests/support/git-fixture-env.ts:118) and through the pi session harness it drives (tests/support/pi-session.ts:1173). The subject is what a REAL bash tool call writes into a REAL git checkout and what the model receives for it: the recovery dispatch that reads the opaque write back is git's own `status --porcelain`, and the authorship decision that makes the run withhold is about the real command text, so a stubbed shell or a mocked git could not say whether the bytes landed or whether the write was opaque.",
+    "routes": [
+      "execFileSync:git via tests/support/git-fixture-env.ts:118",
+      "spawn:git via tests/support/pi-session.ts:1173",
+      "spawnSync:which via tests/support/pi-session.ts:1173",
+      "spawn:bash via tests/support/pi-session.ts:1173"
+    ]
+  },
   "index-vanished-instance-wiring.test.ts": {
     "reason": "starts real `ps` child process(es) (spawn), called from the file itself (tests/index-vanished-instance-wiring.test.ts:121), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
     "routes": [
