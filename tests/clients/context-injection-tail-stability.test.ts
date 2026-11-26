@@ -29,6 +29,7 @@ import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
+	hostModule,
 	type PiProviderRequest,
 	type PiSession,
 	piAiModule,
@@ -417,6 +418,90 @@ describe("request N+1 keeps the exact prefix request N sent", () => {
 			expect((await contextRows(handle))[atThird]).toMatchObject({
 				retention: { retainedNew: false, declined: "entry-cap" },
 			});
+		});
+	});
+
+	// #5770 F5. Recurrence prevented: `session_shutdown` cleared the cache
+	// prefix and the turn records of the ending session but never its ledger
+	// entries, so with `retainMaxSessions: 0` (no LRU eviction) a long-lived
+	// activation kept every ended session's retained injections forever.
+	// pi's own entry points never put two live sessions on one activation, so
+	// the second one is an embedder's, built from the first one's
+	// `ResourceLoader` (the shape of tests/index-4723).
+	it("a session's shutdown forgets its retained injections and keeps a live sibling's", async () => {
+		const SIBLING = "TAIL_SHUTDOWN_SIBLING_FINDING";
+		const ENDED = "TAIL_SHUTDOWN_ENDED_FINDING";
+		await withRetainConfig({ retainMaxSessions: 0 }, async () => {
+			const live = await session("tail-shutdown-live", [
+				fauxAssistantMessage("unused"),
+			]);
+			interface EmbeddedRunner {
+				emit(event: Record<string, unknown>): Promise<unknown>;
+				emitContext(
+					messages: Array<{ role: string; content: unknown }>,
+				): Promise<Array<{ role: string; content: unknown }>>;
+			}
+			interface EmbeddedSession {
+				readonly model: unknown;
+				readonly modelRuntime: unknown;
+				readonly settingsManager: unknown;
+				readonly resourceLoader: unknown;
+				readonly sessionManager: { getSessionId(): string };
+				readonly extensionRunner: EmbeddedRunner;
+				bindExtensions(bindings: {
+					onError: (error: unknown) => void;
+				}): Promise<void>;
+				dispose(): void;
+			}
+			const liveSession = live.session as unknown as EmbeddedSession;
+			const endedCwd = path.join(fixture.root, "tail-shutdown-ended", "proj");
+			fs.mkdirSync(path.join(endedCwd, ".git"), { recursive: true });
+			const host = hostModule();
+			const created = await host.createAgentSessionFromServices({
+				services: {
+					cwd: endedCwd,
+					agentDir: path.join(fixture.root, "agent"),
+					modelRuntime: liveSession.modelRuntime,
+					settingsManager: liveSession.settingsManager,
+					resourceLoader: liveSession.resourceLoader,
+				},
+				sessionManager: host.SessionManager.inMemory(endedCwd),
+				model: liveSession.model,
+			} as unknown as Parameters<
+				typeof host.createAgentSessionFromServices
+			>[0]);
+			const ended = created.session as unknown as EmbeddedSession;
+			try {
+				await ended.bindExtensions({ onError: () => undefined });
+				expect(ended.sessionManager.getSessionId()).not.toBe(
+					liveSession.sessionManager.getSessionId(),
+				);
+				// The same transcript on both: the ledger keys by session id.
+				const transcript = () => [{ role: "user", content: "question" }];
+				const sent = async (runner: EmbeddedRunner, text: string) =>
+					count(
+						(await runner.emitContext(transcript())) as PiProviderRequest,
+						text,
+					);
+				stage(live.cwd, SIBLING);
+				expect(await sent(liveSession.extensionRunner, SIBLING)).toBe(1);
+				stage(endedCwd, ENDED);
+				expect(await sent(ended.extensionRunner, ENDED)).toBe(1);
+				// Control: with nothing newly staged, a retained entry is re-sent.
+				expect(await sent(liveSession.extensionRunner, SIBLING)).toBe(1);
+				expect(await sent(ended.extensionRunner, ENDED)).toBe(1);
+
+				await ended.extensionRunner.emit({
+					type: "session_shutdown",
+					reason: "quit",
+				});
+
+				expect(await sent(ended.extensionRunner, ENDED)).toBe(0);
+				expect(await sent(liveSession.extensionRunner, SIBLING)).toBe(1);
+				expect(live.errors).toEqual([]);
+			} finally {
+				ended.dispose();
+			}
 		});
 	});
 

@@ -4675,6 +4675,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 			clearCachePrefixSession(stableSessionId, localRole);
 			// #3613: its per-turn records end with it.
 			runtime.forgetTurnSession(stableSessionId);
+			// #5770: so do its retained injections; with `retainMaxSessions: 0` no
+			// LRU eviction would ever drop them while the activation lives on.
+			injectionLedger.clearSession(stableSessionId);
 			// The counter counts LIVE secondaries; a primary leaving first is not a
 			// secondary departure.
 			if (shutdownClassification === "secondary")
