@@ -1068,7 +1068,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/bash-file-access.ts": 13,
 		// 10 -> 7 (#4268): the hand-built `path.join` candidate list folds onto the
 		// shared `findLocalBinAt` trust seam, one construction site for the shim.
-		"clients/biome-client.ts": 7,
+		// 7 -> 3 (#5410 r2): the managed `.bin` join (`path.join` x4) moved to the
+		// shared resolver, leaving only the import, `path.resolve` and `path.basename`.
+		"clients/biome-client.ts": 3,
 		"clients/blocker-freshness.ts": 4,
 		// 5 -> 6 (#3594): the remembered-holder skip's degradation `subject`,
 		// `path.resolve(dir)`, mirroring `withGenerationLockSync`'s own (#3578).
@@ -1193,7 +1195,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// (the existing VenvResolution shape).
 		// 19 -> 20 (#5492 r2): the path-first project rung's `{ path, rung }`
 		// value, the same VenvResolution shape.
-		"clients/dispatch/runners/utils/runner-helpers.ts": 20,
+		// 20 -> 24 (#5410 r2): the biome presence rung joins the managed `.bin`
+		// directory and its `biome.cmd`/`biome` candidates (`path.join` x4), the
+		// same path-operation sense as the joins BiomeClient dropped.
+		"clients/dispatch/runners/utils/runner-helpers.ts": 24,
 		// 7 -> 3 (#4689 item 6): `findValeConfig` delegates to
 		// `findLocalToolConfig`, dropping its hand-rolled `path` loop.
 		"clients/dispatch/runners/vale.ts": 3,
