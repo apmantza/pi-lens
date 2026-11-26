@@ -877,7 +877,7 @@ describe("which calls pay for git status (#4732)", () => {
 			);
 		}
 
-		it("answers the gate by the listed name alone, and never for a shell or a built-in", () => {
+		it("gate: the listed name only, never a shell", () => {
 			setGlobalConfig({
 				opaqueScan: {
 					nonWriterTools: [
@@ -908,7 +908,7 @@ describe("which calls pay for git status (#4732)", () => {
 				);
 		});
 
-		it("takes no baseline and no recovery for a tool the global config lists, and still diffs the default", async () => {
+		it("global list: a listed tool takes no baseline", async () => {
 			const runtime = runtimeFor("5793-global");
 			// The default, unlisted: unchanged, the control for the cost below.
 			expect(await callThrough(runtime, "todo", "5793-g-control")).toEqual({
@@ -931,7 +931,7 @@ describe("which calls pay for git status (#4732)", () => {
 			expect(ignoredConfigSubjects()).toEqual([]);
 		});
 
-		it("honors a project list under host trust, and ignores it with one notice per session otherwise", async () => {
+		it("project list: trust gates it, one notice per session", async () => {
 			const runtime = runtimeFor("5793-project");
 			writeProjectConfig({ opaqueScan: { nonWriterTools: ["todo"] } });
 			setProjectTrustState("trusted");
@@ -966,7 +966,7 @@ describe("which calls pay for git status (#4732)", () => {
 			}
 		});
 
-		it("honors the global list while a project list is untrusted", async () => {
+		it("global list holds while a project list is untrusted", async () => {
 			const runtime = runtimeFor("5793-both");
 			setGlobalConfig({ opaqueScan: { nonWriterTools: ["todo"] } });
 			writeProjectConfig({ opaqueScan: { nonWriterTools: ["other_tool"] } });
@@ -981,7 +981,7 @@ describe("which calls pay for git status (#4732)", () => {
 			});
 		});
 
-		it("refuses a listed shell and still diffs it, naming the entry once", async () => {
+		it("a listed shell is refused and still diffed", async () => {
 			const runtime = runtimeFor("5793-shell");
 			setGlobalConfig({
 				opaqueScan: { nonWriterTools: ["bash", "powershell"] },
@@ -998,7 +998,7 @@ describe("which calls pay for git status (#4732)", () => {
 			);
 		});
 
-		it("leaves a tool opaque for an entry that is not an exact tool name, and keeps the good ones", async () => {
+		it("a malformed entry leaves its tool opaque", async () => {
 			const runtime = runtimeFor("5793-malformed");
 			setGlobalConfig({
 				opaqueScan: { nonWriterTools: ["", " todo ", "a b", "todo*", "note"] },
@@ -1019,7 +1019,7 @@ describe("which calls pay for git status (#4732)", () => {
 			);
 		});
 
-		it("reads the global list once per session, and again at the next one", async () => {
+		it("global list is read once per session", async () => {
 			const runtime = runtimeFor("5793-memo");
 			setGlobalConfig({ opaqueScan: { nonWriterTools: ["todo"] } });
 			expect((await callThrough(runtime, "todo", "5793-memo-1")).spawns).toBe(
@@ -1037,7 +1037,7 @@ describe("which calls pay for git status (#4732)", () => {
 			);
 		});
 
-		it("records a non-string member and a misspelled sub-key through the config seam, and honors the rest", async () => {
+		it("schema drops a non-string member and a typo'd key", async () => {
 			const runtime = runtimeFor("5793-typed");
 			setGlobalConfig({
 				opaqueScan: { nonWriterTools: [5, "todo"], nonWriterTool: ["x"] },
