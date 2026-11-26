@@ -22,7 +22,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { safeSpawnAsync } = vi.hoisted(() => ({ safeSpawnAsync: vi.fn() }));
 
-vi.mock("../../clients/safe-spawn.js", () => ({
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
 	safeSpawnAsync,
 	safeSpawn: vi.fn(() => ({ stdout: "", stderr: "", status: 1 })),
 }));

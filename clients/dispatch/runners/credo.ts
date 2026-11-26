@@ -250,7 +250,6 @@ const credoRunner: RunnerDefinition = {
 			return skipped("not-configured");
 		}
 
-		// Credo ships as a mix dependency — cached per-cwd probe (see probeCredo).
 		if (!(await probeCredo(cwd))) {
 			return toolAbsentSkip(cwd, { checker: probeCredo });
 		}

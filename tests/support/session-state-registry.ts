@@ -94,6 +94,11 @@ import {
 	resetLSPCaseSensitivityState,
 } from "../../clients/lsp/server.js";
 import {
+	admitBlockerReplay,
+	commitBlockerReplay,
+	resetBlockerReplayState,
+} from "../../clients/finding-delivery-gate.js";
+import {
 	hasAnyDispositionMarks,
 	isDeferredThisSession,
 	markDisposition,
@@ -293,6 +298,36 @@ const scratchDirs: string[] = [];
 let observedRunnerProbeRoot: string | undefined;
 
 /** Throwaway cwd for probes that need a project root on disk. */
+/**
+ * #5784 probe: one identical unconfirmed replay of a fixed probe file. The
+ * first call after a reset delivers; a second one is held back. The gate has no
+ * read-only accessor, so `isArmed` itself makes the first delivery and `arm`
+ * the held-back second: armed means the next call delivers. Each delivered
+ * call commits its latch write, as the tool result's delivered return does
+ * (#5788 review F4).
+ */
+function admitBlockerReplayProbe(): "deliver" | "suppress" {
+	const filePath = path.join(os.tmpdir(), "session-state-replay-probe.ts");
+	const decision = admitBlockerReplay({
+		surface: "withheld-line",
+		filePath,
+		blockers: [
+			{
+				id: "probe:1",
+				message: "armed by the #1635 conformance probe",
+				filePath,
+				line: 1,
+				severity: "error",
+				semantic: "blocking",
+				tool: "lsp",
+				unconfirmedBy: "probe",
+			},
+		],
+	});
+	if (decision.commit !== undefined) commitBlockerReplay(decision.commit);
+	return decision.shown;
+}
+
 function scratchCwd(): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-session-state-"));
 	scratchDirs.push(dir);
@@ -707,6 +742,25 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 		resetName: "resetProjectDataDirSessionState",
 		reason:
 			"Migration notices belong to the session that resolves the project data directory; clearing the bounded queue at session_start prevents a prior session's migration from being emitted again.",
+	},
+	{
+		id: "finding-delivery-gate:deliveredUnconfirmedReplay",
+		module: "finding-delivery-gate.ts",
+		state: "deliveredUnconfirmedReplay",
+		policy: "session_start",
+		ownerKey: "session",
+		sessionSeamException:
+			"one process LRU map capped at 256 files, keyed by file with no session in the key, so a second live session in the process shares which unconfirmed blocker lines were delivered (shape 72 member, no open issue)",
+		resetName: "resetBlockerReplayState",
+		reason:
+			"#5784: the latch holds back an identical unconfirmed blocker line the session already delivered; carried into the next session it would hide the first line that session owes its agent. `resetSessionScopedState` (reached from `handleSessionStart`) calls the reset.",
+		probe: {
+			arm: () => {
+				admitBlockerReplayProbe();
+			},
+			isArmed: () => admitBlockerReplayProbe() === "deliver",
+			reset: () => resetBlockerReplayState(),
+		},
 	},
 	{
 		id: "formatters:runtimeState",
@@ -1698,11 +1752,6 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<
 		reason:
 			"the rule manager reads the project's rule directory; the runner holds the sg binary",
 	},
-	"biome-client.ts": {
-		ownerKey: "project",
-		reason:
-			"the resolved biome binary is cached per cwd so monorepo sub-packages keep their own",
-	},
 	"blocker-freshness.ts": {
 		ownerKey: "project",
 		reason:
@@ -2381,7 +2430,6 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"agent-behavior-client.ts": 3,
 	"agent-nudge.ts": 1,
 	"ast-grep-client.ts": 2,
-	"biome-client.ts": 1,
 	"blocker-freshness.ts": 4,
 	// #2467: flagged because the file now exports a session_start reset; the
 	// scan counts no module-scope CONTAINER here (the gate is a boolean and the
@@ -2512,6 +2560,8 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// to register. This pin counts all three module-level containers, not the
 	// migration queue array.
 	"file-utils.ts": 3,
+	// #5784: the unconfirmed-blocker replay latch (registered above).
+	"finding-delivery-gate.ts": 1,
 	"format-events-publish.ts": 0,
 	"format-service.ts": 1,
 	// #2442 review F2: the container regex now recognises BoundedFifoMap /
@@ -2762,7 +2812,13 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// #5699: back to 3. The held store moved onto the process singleton
 	// (`lifetimeState.held`), because it is also the host-exit ledger the
 	// once-per-process exit handler reads; the scan sees no container for it.
-	"safe-spawn.ts": 3,
+	//
+	// #5745 r7: 3 -> 4 with `ownedChildLedgerWork`, the owned-child ledger
+	// chains still in flight, which the module's background-write drain joins.
+	// Not reset at session_start: each entry is a registry write about an OS
+	// child, not session state, and it deletes itself when it settles. A reset
+	// would hide running work from the drain that exists to wait for it.
+	"safe-spawn.ts": 4,
 	"security-scan-client.ts": 1,
 	// #2146 moved the four registration fields onto the process singleton, so the
 	// scan sees no module-scope container here either.

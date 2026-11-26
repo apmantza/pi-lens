@@ -272,6 +272,14 @@ instead of rebuilding the probe.
   `// flake-shape: <detector> — <reason>` header and `wallClockBudgetInclude`
   membership (#2547). A pinned file whose count falls below its pin needs its
   baseline tightened; a stale ceiling re-admits regrowth.
+- **Self-judging gate.** CI runs the governance suite from the PR head, so a
+  diff that touches a ratchet baseline, a governance test, a shape scanner or a
+  gate script (`scripts/hooks/`, `scripts/governance-rules/`, a `scripts/check-*`
+  gate) can loosen the gate that judges it while staying green (#5753). Name
+  each such change in the review and judge whether it loosens the gate (a
+  raised ceiling, a new exemption, a narrowed scan, a removed row); a review
+  that does not name it is incomplete. Record the verdict in `gateChanges`
+  (`FINDINGS_<pr>.json`, below): one row per gate file the diff touches.
 - **Hot-path timing.** When the diff touches dispatch, `session_start`, LSP
   diagnostics, a cache lookup or turn-end, re-run the body's before/after
   timing on the real path, at a small and a large input (file size, file
@@ -390,13 +398,16 @@ never commit it. The orchestrator's validator reads it before routing the
 round. Shape:
 
 ```json
-{"pr": 4710, "head": "<40-hex sha reviewed>", "verdict": "merge-ready|needs changes|redesign|conflicted", "oneWayDoors": ["..."], "findings": [{"id": "F1", "severity": "<one of the five severity words>", "file": "path", "line": 1, "claim": "one sentence", "probe": "command or probe name whose output proves it", "remedy": "the prescribed change, or null", "addsMechanism": true, "class": "fold|accepted residual|file", "source": "reviewer|greptile|coderabbit|qodo|sourcery", "matched": ["<other sources>"], "status": "confirmed|refuted"}]}
+{"pr": 4710, "head": "<40-hex sha reviewed>", "verdict": "merge-ready|needs changes|redesign|conflicted", "oneWayDoors": ["..."], "gateChanges": [{"file": "<gate file the diff touches>", "verdict": "tightens|neutral|loosens-justified", "note": "one sentence"}], "findings": [{"id": "F1", "severity": "<one of the five severity words>", "file": "path", "line": 1, "claim": "one sentence", "probe": "command or probe name whose output proves it", "remedy": "the prescribed change, or null", "addsMechanism": true, "class": "fold|accepted residual|file", "source": "reviewer|greptile|coderabbit|qodo|sourcery", "matched": ["<other sources>"], "status": "confirmed|refuted"}]}
 ```
 
 Write one entry per finding, with the same ids as the prose. `remedy: null`
 means the fixer must design the change. `addsMechanism` is true when the
 remedy adds a guard, branch, state, record, or lifecycle step, rather than a
-fix to an existing line. `source` is `reviewer` for your blind pass, or the
+fix to an existing line. `gateChanges` carries one row per gate file the diff
+touches (see **Self-judging gate**), and `[]` when it touches none; the
+orchestrator's `land.sh` refuses a review artifact that changes a gate file
+without a row. `source` is `reviewer` for your blind pass, or the
 exact bot name (`greptile`, `coderabbit`, `qodo`, `sourcery`) for a row you
 added from a bot finding. The names stand for the GitHub logins
 `greptile-apps`, `coderabbitai`, `qodo-code-review` and `sourcery-ai`, in that

@@ -56,8 +56,11 @@ import {
 } from "./dispatch/runner-context.js";
 import { getKnipIgnorePatterns } from "./file-utils.js";
 import {
+	admitBlockerReplay,
 	admitsProjectWideFindings,
+	DEPENDENCY_DRIFT_MAX_DELIVERIES,
 	formatCacheAgeLabel,
+	unconfirmedBlockerNote,
 } from "./finding-delivery-gate.js";
 import {
 	getFullScanWallClockMs,
@@ -138,11 +141,7 @@ import {
 	advisoryPathKey,
 	snapshotAdvisoryProvenance,
 } from "./advisory-provenance.js";
-import {
-	DEPENDENCY_DRIFT_MAX_DELIVERIES,
-	SELF_DRIFT_MAX_DELIVERIES,
-	sweepInlineBlockerFreshness,
-} from "./blocker-freshness.js";
+import { sweepInlineBlockerFreshness } from "./blocker-freshness.js";
 import { sweepInlineBlockerPastEof } from "./blocker-past-eof.js";
 // #2001/#2002: collect-later delivery for slow auxiliary LSP servers.
 import { getLSPService } from "./lsp/capabilities.js";
@@ -1150,22 +1149,40 @@ function resyncCommitGateForReadOnlyTurn(args: {
 }
 
 /**
- * #1950/#4990: the delivery cap for a demoted record's OWN drift axis, or
- * `undefined` for a `past-eof` demotion (#1944 retires that after one delivery
- * and keeps no count) and for a record a sibling gate demoted.
+ * #1950/#4990: a demotion's own drift axis, if it has one. `past-eof` retires
+ * after its own single delivery (#1944) and has no count, and a record a
+ * sibling gate demoted has no axis here.
  */
-function driftDeliveryCap(
-	staleReason: "dependency-drift" | "past-eof" | "self-drift" | undefined,
-): { axis: "dependency-drift" | "self-drift"; cap: number } | undefined {
-	if (staleReason !== "dependency-drift" && staleReason !== "self-drift")
-		return undefined;
-	return {
-		axis: staleReason,
-		cap:
-			staleReason === "self-drift"
-				? SELF_DRIFT_MAX_DELIVERIES
-				: DEPENDENCY_DRIFT_MAX_DELIVERIES,
-	};
+function driftAxisOf(
+	staleReason: string | undefined,
+): "dependency-drift" | "self-drift" | undefined {
+	return staleReason === "dependency-drift" || staleReason === "self-drift"
+		? staleReason
+		: undefined;
+}
+
+/**
+ * #1950/#4990: a drift demotion is recoverable (its coordinates are still in
+ * bounds), so it does not retire after one delivery like the past-EOF case;
+ * the delivery gate's cap stops the repeat re-serve of a record that never
+ * heals, and this is the note on the delivery that reaches it. The count is a
+ * PEEK (fix-round F1): the hold's `onDelivered` commits it only once the
+ * content reaches the agent, so a suppressed turn or a part the cap cut never
+ * advances it.
+ */
+function driftCapNote(
+	runtime: Pick<RuntimeCoordinator, "peekInlineBlockerStaleDeliveryCount">,
+	bPath: string,
+	axis: "dependency-drift" | "self-drift",
+): string | undefined {
+	const staleDeliveries = runtime.peekInlineBlockerStaleDeliveryCount(bPath);
+	return admitBlockerReplay({
+		surface: "turn-end-demoted",
+		axis,
+		staleDeliveries,
+	}).shown === "retire-note"
+		? formatDeliveryCapNote(staleDeliveries + 1)
+		: undefined;
 }
 
 /**
@@ -1892,11 +1909,18 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			bPath: string,
 			displayPath: string,
 			reason: "dependency-drift" | "self-drift",
-			cap: number,
 		) =>
 		(): void => {
 			const deliveryCount = runtime.incrementInlineBlockerStaleDelivery(bPath);
-			if (deliveryCount < cap) return;
+			// The gate's rule, asked about the delivery just counted.
+			if (
+				admitBlockerReplay({
+					surface: "turn-end-demoted",
+					axis: reason,
+					staleDeliveries: deliveryCount - 1,
+				}).shown !== "retire-note"
+			)
+				return;
 			if (!runtime.retireDemotedDriftBlocker(bPath, reason)) return;
 			runtime.updateGitGuardStatus(false, "");
 			demotedFindingsRetired += 1;
@@ -1995,25 +2019,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				bPath,
 				deadLines,
 			);
-			// #1950/#4990: which axis's delivery cap applies, if this demotion has
-			// one. `past-eof` retires after its own single delivery (#1944) and has
-			// no count.
-			const drift = driftDeliveryCap(staleReason);
+			const driftAxis = driftAxisOf(staleReason);
 			let retirementNote: string | undefined;
 			if (retires) {
 				retirementNote = formatRetirementNote(deadLines);
-			} else if (drift !== undefined) {
-				// #1950/#4990: a drift demotion is recoverable (its coordinates are
-				// still in bounds), so it does not retire after one delivery like the
-				// past-EOF case; the cap stops the repeat re-serve of a record that
-				// never heals. The count is a PEEK (fix-round F1): the hold's
-				// `onDelivered` commits it only once the content reaches the agent,
-				// so a suppressed turn or a part the cap cut never advances it.
-				const tentativeCount =
-					runtime.peekInlineBlockerStaleDeliveryCount(bPath) + 1;
-				if (tentativeCount >= drift.cap) {
-					retirementNote = formatDeliveryCapNote(tentativeCount);
-				}
+			} else if (driftAxis !== undefined) {
+				retirementNote = driftCapNote(runtime, bPath, driftAxis);
 			}
 			const advisoryPart =
 				`${STALE_LINE_MARKER} ${displayPath}${suppressedByDispositionNote(policy.suppressed)}:\n${degraded.body}` +
@@ -2028,14 +2039,13 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					part: advisoryPart,
 					onDelivered: retirePastEofOnDelivery(bPath, deadLines, displayPath),
 				});
-			} else if (drift !== undefined) {
+			} else if (driftAxis !== undefined) {
 				deliveryHolds.push({
 					part: advisoryPart,
 					onDelivered: countDriftDeliveryOnDelivery(
 						bPath,
 						displayPath,
-						drift.axis,
-						drift.cap,
+						driftAxis,
 					),
 					skipOnSuppressed: true,
 				});
@@ -2057,7 +2067,15 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				policySuppressedPaths.push(bPath);
 				continue;
 			}
-			const replayPart = `Unresolved from this turn — ${displayPath}${suppressedByDispositionNote(policy.suppressed)}:\n${policy.body}`;
+			// #5784: the gate's sentence for blockers carried without a verdict,
+			// indented so `clients/git-guard.ts` parses it as section body. Built
+			// from the rows the policy kept (#5788 round 3 R3-3): a row the agent
+			// marked is out of the block, so it is out of the note too.
+			const note = unconfirmedBlockerNote(policy.keptDiagnostics, displayPath, {
+				on: "its latest write",
+				host,
+			});
+			const replayPart = `Unresolved from this turn — ${displayPath}${suppressedByDispositionNote(policy.suppressed)}:\n${policy.body}${note === undefined ? "" : `\n  ${note}`}`;
 			// @delivery-surface: runtime-turn:unresolved-inline-blocker
 			blockerParts.push(replayPart);
 			// #4617: the replay is about this file, which a no-write turn did not
@@ -2068,7 +2086,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			// commit gate's blocker text and the key of the stamp's citations. Only
 			// a pi delivery counts (`blockerDeliveries`), so an MCP count stays 0.
 			replayedBlockers.set(replayPart, { filePath: bPath, displayPath });
-			if (runtime.blockerFullDeliveryCapped(bPath))
+			if (
+				admitBlockerReplay({
+					surface: "turn-end-replay",
+					fullDeliveries: runtime.peekBlockerFullDeliveryCount(bPath),
+				}).shown === "collapse"
+			)
 				cappedBlockerText.set(replayPart, cappedBlockerLine(displayPath));
 		}
 	}

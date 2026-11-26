@@ -27,7 +27,10 @@ const safeSpawnAsync = vi.fn(
 		stderr: string;
 	}> => ({ error: null, status: 0, stdout: "", stderr: "" }),
 );
-vi.mock("../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
+	safeSpawnAsync,
+}));
 
 describe("PythonDeadCodeClient (vulture) — project-first resolution (#1731)", () => {
 	const tmpDirs: string[] = [];

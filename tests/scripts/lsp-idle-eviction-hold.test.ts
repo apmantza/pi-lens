@@ -344,7 +344,9 @@ describe("the pending flips live in the refresh-state block (#5667)", () => {
 			});
 			const after = fs.readFileSync(matrixPath, "utf8");
 			expect(pendingOf(after).csharp.runs).toBe(1);
-			expect(parseRefreshState(after)[IDLE_EVICTION_KEY]).toBeUndefined();
+			expect(
+				Object.keys(parseRefreshState(after)[IDLE_EVICTION_KEY] ?? {}),
+			).toEqual(["dart", "go"]);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}

@@ -489,7 +489,7 @@ const WRITE_SITES: Record<string, SiteRow> = {
 		why: "bounded installer download temporary files",
 	},
 	"clients/installer/managed-tool-refresh.ts": {
-		sites: 7,
+		sites: 6,
 		cls: "install",
 		why: "managed tool downloads and their atomic swap into place",
 	},

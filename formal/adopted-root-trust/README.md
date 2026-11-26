@@ -13,3 +13,9 @@ load, rejection/resolution, deadline, registry retirement, and detached rereads
 after saved trust changes. LifetimeAsBuilt checks all three lifetime invariants;
 LifetimePreFix exposes the held-load violation. Owning-turn memo reuse is covered
 by the runtime suite; the lifetime model focuses on the detached cell.
+
+ManagerProbe enumerates the eleven global-discovery callers, admission, file
+links, warm answers, and planted finders. ManagerAsBuilt checks RefusedRoot;
+the three ManagerPreFix configs expose independent cache-scope, finder-PATH,
+and executable-identity violations. Outside-manager availability is a runtime
+control; the model tracks execution of root-owned bytes only.

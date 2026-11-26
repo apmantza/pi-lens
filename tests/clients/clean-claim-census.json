@@ -103,7 +103,6 @@
 			"`\\n\\n⚠ Scan exceeded its ${Math.round((options.wallClockMs ?? 0) / 1000)}s time budget and was stopped — results are partial. `": 1,
 			"\"\\n\\n⚠ Scan cancelled before completion — results are partial. \"": 1,
 			"`${toProjectRelativePath(s.filePath, cwd)}: ${s.uncheckedReason}`": 1,
-			"`⚠ ${unchecked.length} file${unchecked.length === 1 ? \"\" : \"s\"} not checked, so no findings is not a clean result: ${named.join(\"; \")}${more > 0 ? `; +${more} more` : \"\"}.`": 1,
 			"` (${dependencyDemoted} blocking finding${dependencyDemoted === 1 ? \"\" : \"s\"} demoted to [stale] — an imported file changed since; re-run to confirm)`": 1,
 			"` (${footerCapped} demoted finding${footerCapped === 1 ? \"\" : \"s\"} capped after ${DEPENDENCY_DRIFT_MAX_DELIVERIES} unconfirmed deliveries — no longer shown in the pi-lens footer, still listed here; re-run to confirm)`": 1,
 			"`\\n${uncheckedLine}`": 1,
@@ -124,7 +123,11 @@
 			"` 🔴 ${totalBlocking} blocking error${totalBlocking === 1 ? \"\" : \"s\"}`": 1,
 			"` ${totalErrors} error${totalErrors === 1 ? \"\" : \"s\"}`": 1,
 			"` ${totalWarnings} warning${totalWarnings === 1 ? \"\" : \"s\"}`": 1,
-			"` ${totalAdvisories} hint/info (style — not counted as warnings)`": 1
+			"` ${totalAdvisories} hint/info (style — not counted as warnings)`": 1,
+			"`\\n ${display}: ${note}`": 1,
+			"`⚠ ${unchecked.length} file${unchecked.length === 1 ? \"\" : \"s\"} not checked, so no findings is not a clean result: ${named.join(\"; \")}${more > 0 ? `; +${more} more` : \"\"}.${notes.join(\"\")}`": 1,
+			"`${recordsHeld.line}\\n`": 1,
+			"`\\n${recordsHeld.line}`": 1
 		},
 		"neutral": {
 			"\"refreshRunners not requested this call (quick mode) — pass \"": 1,
@@ -137,7 +140,7 @@
 			"\"diagnostic\"": 1,
 			"\"diagnostics\"": 1,
 			"` ${path.basename(filePath)}`": 1,
-			"\"\"": 52,
+			"\"\"": 55,
 			"` across ${files} files`": 1,
 			"`lens_diagnostics${scope} — too large: ${tooLargeLines.join(\"; \")}`": 1,
 			"`lens_diagnostics${scope} — ${count} ${noun} · ${notConfirmed} checks not confirmed`": 1,
@@ -172,7 +175,7 @@
 			"\"lens_diagnostics_lsp_route\"": 1,
 			"`Unknown severity \"${severity}\". Accepted tiers: ${LSP_SEVERITY_FILTERS.join(\", \")}.`": 1,
 			"\"mode=all\"": 1,
-			"\"pi\"": 4,
+			"\"pi\"": 7,
 			"\"○\"": 1,
 			"\"ℹ\"": 1,
 			"`L${diagnostic.line ?? \"?\"}`": 1,
@@ -250,7 +253,8 @@
 			"\"past-eof\"": 1,
 			"`L${d.line ?? \"?\"}`": 1,
 			"` … ${matching.length - shown.length} more in this file (showing ${shown.length} of ${matching.length})`": 1,
-			"`\\nSummary (${visibleSummaries.length} files diagnosed this session):`": 1
+			"`\\nSummary (${visibleSummaries.length} files diagnosed this session):`": 1,
+			"\"its latest write\"": 1
 		}
 	},
 	"tools/lsp-diagnostics.ts": {
@@ -944,7 +948,6 @@
 			"`\\u26a0 ${langLabel} unconfirmed — ${verdict.reason} · ${elapsed}ms`": 1,
 			"`L${place.line} ${shortBlockerRule(place.rule)}`": 1,
 			"`; ${unplaced.movedLine} whose line could not be re-placed in these bytes`": 1,
-			"`🔴 Still unfixed: ${count} blocker${count === 1 ? \"\" : \"s\"} reported earlier${formatBlockerPlaces(blockers, filePath)}.`": 1,
 			"`ℹ Pre-existing: ${count} linter error${count === 1 ? \"\" : \"s\"} already in this file before its first edit this session${formatBlockerPlaces(findings, filePath)}; not blocking.`": 1,
 			"\"project tool agreement could not be established\"": 1,
 			"\"formatter-unavailable\"": 1,
@@ -974,9 +977,11 @@
 			"\"review graph degraded — tree-sitter wasm runtime failure\"": 1,
 			"\"cascade computation failed\"": 1,
 			"\"blocking\"": 1,
-			"`\\u26a0 ${count} blocking finding${count === 1 ? \"\" : \"s\"} in ${display}${formatBlockerPlaces(blockers, filePath)} withheld: ${known}. If this call wrote it, fix ${them}.${pointer}`": 1,
 			"\"the file changed while this call ran, but pi-lens cannot confirm this call wrote it\"": 1,
-			"\"this call names the file, but pi-lens could not confirm the call changed it\"": 1
+			"\"this call names the file, but pi-lens could not confirm the call changed it\"": 1,
+			"`🔴 Still unfixed: ${count} blocker${count === 1 ? \"\" : \"s\"} reported earlier${formatBlockerPlaces(blockers, filePath)}.${noteSuffix(unconfirmedBlockerNote(blockers, display))}`": 1,
+			"` ${note}`": 1,
+			"`\\u26a0 ${count} blocking finding${count === 1 ? \"\" : \"s\"} in ${display}${formatBlockerPlaces(blockers, filePath)} withheld: ${known}.${noteSuffix(unconfirmedBlockerNote(blockers, display, { host }))} If this call wrote it, fix ${them}.${pointer}`": 1
 		},
 		"neutral": {
 			"\"phase\"": 4,
@@ -1083,7 +1088,7 @@
 			"\"aborted (Escape)\"": 1,
 			"`LSP resync ${cause} for ${filePath}`": 1,
 			"\"abandoned\"": 1,
-			"\"\"": 14,
+			"\"\"": 15,
 			"`+${more} more`": 1,
 			"` (${shown.join(\", \")})`": 1,
 			"`; ${unplaced.noLineInThisFile} with no line in this file`": 1,
@@ -1123,18 +1128,20 @@
 			"\":\"": 1,
 			"\"dispatch_lint\"": 2,
 			"`dispatch: running lint tools for ${filePath}`": 1,
-			"\"unknown\"": 6,
+			"\"unknown\"": 7,
 			"\"|\"": 1,
 			"`\\n\\n${gatedOut}`": 1,
 			"`\\n\\n${deliveredOutput}`": 1,
-			"`\\n\\n${formatStillUnfixedLine(stillUnfixed, filePath)}`": 1,
 			"`\\n\\n${formatPreExistingLine(preExisting, filePath)}`": 1,
 			"` (${autofixTools.join(\", \")})`": 1,
 			"\"graph_degraded\"": 1,
 			"\"lsp\"": 1,
 			"` ${diagnosticsTool} mode=all lists ${them}.`": 1,
 			"\"it\"": 1,
-			"\"them\"": 1
+			"\"them\"": 1,
+			"\"still-unfixed-line\"": 1,
+			"\"withheld-line\"": 1,
+			"`\\n\\n${formatStillUnfixedLine(stillUnfixed, filePath, toRunnerDisplayPath(cwd, filePath))}`": 1
 		}
 	},
 	"clients/runtime-turn.ts": {
@@ -1346,7 +1353,6 @@
 			"`capped after ${deliveryCount} deliveries of a ${reason} advisory with no re-run; re-run can still confirm`": 1,
 			"\"dependency-drift\"": 1,
 			"`\\n${retirementNote}`": 1,
-			"`Unresolved from this turn — ${displayPath}${suppressedByDispositionNote(policy.suppressed)}:\\n${policy.body}`": 1,
 			"\"settleCascadeRuns\"": 1,
 			"\"cascade_settle_wait\"": 1,
 			"\"turn-end:cascade-runs\"": 1,
@@ -1522,7 +1528,11 @@
 			"\"full\"": 1,
 			"\"affected\"": 1,
 			"\"cited\"": 1,
-			"\"repeat\"": 1
+			"\"repeat\"": 1,
+			"\"its latest write\"": 1,
+			"`Unresolved from this turn — ${displayPath}${suppressedByDispositionNote(policy.suppressed)}:\\n${policy.body}${note === undefined ? \"\" : `\\n ${note}`}`": 1,
+			"\"turn-end-demoted\"": 2,
+			"\"turn-end-replay\"": 1
 		}
 	},
 	"clients/runtime-tool-result.ts": {

@@ -17,6 +17,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IN_FLIGHT_REASON } from "../../clients/dispatch/types.js";
+import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import {
 	clearWidgetState,
 	exportWidgetState,
@@ -306,5 +307,104 @@ describe("lens_diagnostics mode=all agrees with a same-minute mode=full (#1634 c
 		expect(everything).toContain("suppressed by disposition: 2 finding(s)");
 		expect(onePath).toContain("suppressed by disposition: 1 finding(s)");
 		expect(errorsOnly).toContain("suppressed by disposition: 1 finding(s)");
+	});
+
+	// Seeds one file whose check timed out, with a carried typescript row, and
+	// reads it through the MCP caller's host. Shared by the U09A and C5.1 cells.
+	async function runUncheckedThroughMcp(
+		params: Record<string, unknown>,
+	): Promise<string> {
+		recordDiagnostics(
+			file,
+			[
+				{
+					tool: "typescript",
+					rule: "2304",
+					message: KEPT,
+					line: 1,
+					severity: "error",
+					semantic: "blocking",
+					unconfirmedBy: "typescript",
+					serverId: "typescript",
+				} as never,
+			],
+			undefined,
+			undefined,
+			{ reason: IN_FLIGHT_REASON },
+		);
+		const service = makeLspServiceDouble({
+			runWorkspaceDiagnostics: vi.fn(async () => [
+				{ filePath: file, diagnostics: [], count: 0, timedOut: true },
+			]),
+		});
+		const tool = createLensDiagnosticsTool(
+			{ readCache: vi.fn(() => undefined) } as never,
+			() => tmp,
+			() => service as never,
+		);
+		const result = (await tool.execute(
+			"1",
+			params,
+			new AbortController().signal,
+			null as never,
+			{ cwd: tmp, host: "mcp" } as never,
+		)) as { content: Array<{ text: string }> };
+		return result.content.map((c) => c.text).join("\n");
+	}
+
+	// #5788 review U09A: mode=full built its unchecked note with no host, so an
+	// MCP caller read `lens_diagnostics`, a tool the MCP server does not
+	// register. mode=all reads the caller's host and names `pilens_diagnostics`.
+	// The word boundary keeps `pilens_diagnostics` from matching the bare name.
+	// Recurrence: #5788 review at 9b0409aa6 (U09A).
+	it("names the MCP caller's settle tool in mode=full, as mode=all does", async () => {
+		const full = await runUncheckedThroughMcp({ mode: "full", paths: [file] });
+
+		expect(full).toContain("pilens_diagnostics source=lsp path=a.ts");
+		expect(full).not.toMatch(/\blens_diagnostics source=lsp/);
+	});
+
+	// #5788 review C5.1 (U09A's sibling): the default delta route built the same
+	// unchecked note with no host, so an MCP caller read `lens_diagnostics`.
+	// Recurrence: #5788 final review at bc191dde3 (C5.1).
+	it("names the MCP caller's settle tool in mode=delta, as mode=full does", async () => {
+		const delta = await runUncheckedThroughMcp({
+			mode: "delta",
+			paths: [file],
+		});
+
+		expect(delta).toContain("pilens_diagnostics source=lsp path=a.ts");
+		expect(delta).not.toMatch(/\blens_diagnostics source=lsp/);
+	});
+
+	// #5788 review C8.1 (the R3-4 sibling): a held blocker record withholds the
+	// all-clear, but `validationStatus` came from the widget alone. A checked,
+	// finding-free file then reported `no-matching-findings` beside `clean: false`.
+	// Recurrence: #5788 final review at bc191dde3 (C8.1).
+	it("reports a held blocker record as findings, never as no-matching-findings", async () => {
+		recordDiagnostics(file, []);
+		const runtime = new RuntimeCoordinator();
+		runtime.recordInlineBlockers(file, "🔴 STOP cors-wildcard", 1, [
+			"ast-grep",
+		]);
+		const tool = createLensDiagnosticsTool(
+			{ readCache: vi.fn(() => undefined) } as never,
+			() => tmp,
+			() => makeLspServiceDouble({}) as never,
+			undefined,
+			undefined,
+			undefined,
+			() => runtime as never,
+		);
+		const result = (await tool.execute(
+			"1",
+			{ mode: "all" },
+			new AbortController().signal,
+			null as never,
+			{ cwd: tmp } as never,
+		)) as { details: { clean: boolean; validationStatus: string } };
+
+		expect(result.details.clean).toBe(false);
+		expect(result.details.validationStatus).toBe("findings");
 	});
 });

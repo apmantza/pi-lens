@@ -7,7 +7,10 @@ import { setupTestEnvironment } from "../../test-utils.js";
 const safeSpawn = vi.fn();
 const safeSpawnAsync = vi.fn();
 
-vi.mock("../../../../clients/safe-spawn.js", () => ({
+vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/safe-spawn.js")
+	>()),
 	safeSpawn,
 	safeSpawnAsync,
 }));

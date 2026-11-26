@@ -535,6 +535,115 @@ describe("instance-registry", () => {
 		);
 	});
 
+	it("a spawned command's row and its removal never re-create a removed registry home", async () => {
+		// #5745 r6 (CI shard 1, tmp-fixture hygiene): a runner row's removal
+		// landed after index-lsp-config-root-eviction removed its pinned home,
+		// and the registry lock's directory create re-made pi-lens-2518-idx-home-*.
+		const { recordOwnedChild, removeOwnedChild } =
+			await import("../../clients/held-children.js");
+		await import("../../clients/instance-registry.js");
+		removeTempDirSync(dir);
+
+		await recordOwnedChild({
+			pid: 4243,
+			serverId: "safe-spawn:which",
+			command: "which",
+			processStart: "4243-start",
+		});
+		await removeOwnedChild(4243);
+
+		expect(fs.existsSync(dir)).toBe(false);
+	});
+
+	it("a spawned command's row joins this process's entry and never creates one", async () => {
+		// #5745 r5 (CI shard 1, index-4704): a `which` row that landed after
+		// the session deregistered re-created this pid's entry at the process
+		// cwd, so the session looked live after it left.
+		const { registerInstance, readInstanceRegistry } =
+			await import("../../clients/instance-registry.js");
+		const { recordOwnedChild } = await import("../../clients/held-children.js");
+		const { getDegradationSummary } =
+			await import("../../clients/degradation-ledger.js");
+		const row = {
+			pid: 4242,
+			serverId: "safe-spawn:which",
+			command: "which",
+			processStart: "4242-start",
+		};
+		const ownEntries = async () =>
+			(await readInstanceRegistry()).filter(
+				(entry) => entry.pid === process.pid,
+			);
+
+		await recordOwnedChild(row);
+		expect(await ownEntries()).toEqual([]);
+		expect(
+			getDegradationSummary().find(
+				(group) => group.kind === "instance-registry-registration-missing",
+			)?.latestReasons[0]?.reason,
+		).toMatch(/spawned command's row/);
+
+		await registerInstance("/some/project");
+		await recordOwnedChild(row);
+		const own = await ownEntries();
+		expect(own.map((entry) => entry.lspChildren.map((c) => c.pid))).toEqual([
+			[4242],
+		]);
+	});
+
+	it("joins queued registry writes before exit, and records one degradation when the bound fires", async () => {
+		// #5745 r5 F5: the MCP worker's exit join wrote only stderr when its
+		// bound fired, and replacing the join with a promise that never settles
+		// left every test green.
+		const { settleRegistryWritesBeforeExit } =
+			await import("../../clients/instance-registry.js");
+		const { queueRegistryMutation } =
+			await import("../../clients/instance-registry-tail.js");
+		const { getDegradationSummary } =
+			await import("../../clients/degradation-ledger.js");
+		const settleTimeouts = () =>
+			getDegradationSummary().filter(
+				(group) => group.kind === "instance-registry-exit-settle-timeout",
+			);
+		let release: () => void = () => {};
+		vi.useFakeTimers();
+		try {
+			// An idle tail joins inside the bound, with no record.
+			const idle = settleRegistryWritesBeforeExit();
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(await idle).toBe(true);
+			expect(settleTimeouts()).toEqual([]);
+
+			// A stalled write holds the tail, as a hung lock holder does.
+			const stalled = queueRegistryMutation(
+				() =>
+					new Promise<void>((resolve) => {
+						release = resolve;
+					}),
+			);
+			let settledAt: number | undefined;
+			const started = Date.now();
+			const first = settleRegistryWritesBeforeExit().then((settled) => {
+				settledAt = Date.now() - started;
+				return settled;
+			});
+			await vi.advanceTimersByTimeAsync(1_999);
+			expect(settledAt).toBeUndefined();
+			await vi.advanceTimersByTimeAsync(1);
+			expect(await first).toBe(false);
+			expect(settledAt).toBe(2_000);
+			const second = settleRegistryWritesBeforeExit();
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(await second).toBe(false);
+			expect(settleTimeouts()).toEqual([expect.objectContaining({ count: 1 })]);
+			release();
+			await stalled;
+		} finally {
+			release();
+			vi.useRealTimers();
+		}
+	});
+
 	// #3447: a registration can be dropped for good -- the registry lock's
 	// bounded wait ran out (recorded as instance-registry-lock-timeout), or
 	// the file was reaped. The heartbeat used to skip a missing entry, so the

@@ -382,7 +382,7 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"`gem install <gem> --bindir <pi-lens bin>` — installs into pi-lens's own bin directory",
 	],
 	[
-		"clients/mcp/review.ts#analyzeFileFresh:3ac7e2fe",
+		"clients/mcp/review.ts#analyzeFileFresh:12cbe8fa",
 		"forks the review worker with `process.execPath`; the project it must analyse is passed explicitly as the `--cwd=<dir>` argv flag, so the child's own directory is not the channel",
 	],
 	[
@@ -588,7 +588,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"cwd is runCommand's own `cwd` parameter; its three call sites in this file are the checked ones",
 	],
 	[
-		"clients/package-manager.ts#probeGlobalBinDirs:7a499d5e~eef5e504",
+		"clients/package-manager.ts#probeGlobalBinDirs:40511879~eef5e504",
 		"`npm config get prefix` / `pnpm bin -g` / `yarn global bin`, global install-location queries, run from HOME under every trust (#4530, #5632): the managers read project configuration and create their bin dir from their cwd, so a project `.npmrc` cannot redirect them and a relative PNPM_HOME cannot write into the repository (the same rule as probeUserBase)",
 	],
 	[
@@ -696,7 +696,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"analysePipeline forwards its language `cwd` into runAutofix and separately passes the authoritative session root for adopted-writer admission (#4309)",
 	],
 	[
-		"clients/safe-spawn.ts#safeSpawnAsync:f7eca8ca~e39f490b",
+		"clients/safe-spawn.ts#safeSpawnAsync:f7eca8ca~f21f810b",
 		"this IS the spawn seam: `spawnCwd` is the cwd its own caller passed in options, so the origin rule applies to the callers, not here",
 	],
 	[

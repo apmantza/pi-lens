@@ -192,8 +192,8 @@ details in [agent-tools.md](agent-tools.md)). The check is the one seam in
         latency.log schema — lsp cold-spawn 5.5s visible, exactly the #203 cost)
 - [x] Phase 3: fresh worker + `pilens_rebuild` (honest review loop) + project_scan/health
       ↳ `mcp/worker.ts` (forked child loads freshly-built code from disk)
-      ↳ `clients/mcp/review.ts` — `analyzeFileFresh` (direct node fork, space-safe
-        on Windows), `runRebuild` (safeSpawnAsync npm), `resolveRebuildScript`
+      ↳ `clients/mcp/review.ts` — `analyzeFileFresh` (node fork through `safeSpawnAsync`,
+        space-safe on Windows), `runRebuild` (safeSpawnAsync npm), `resolveRebuildScript`
         (dist→build:dist, in-place→build, matched to the server's own layout)
       ↳ tools added: `pilens_analyze mode=warm|fresh`, `pilens_rebuild`,
         `pilens_project_scan`, `pilens_health`

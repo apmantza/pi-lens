@@ -61,7 +61,11 @@ import {
 	pendingAuxiliaryCoverageSize,
 	resetPendingAuxiliaryCoverage,
 } from "../../clients/lsp/pending-aux-coverage.js";
-import { DEPENDENCY_DRIFT_MAX_DELIVERIES } from "../../clients/blocker-freshness.js";
+import {
+	admitBlockerReplay,
+	BLOCKER_FULL_DELIVERY_CAP,
+	DEPENDENCY_DRIFT_MAX_DELIVERIES,
+} from "../../clients/finding-delivery-gate.js";
 import {
 	_resetStateCacheForTests,
 	markDisposition,
@@ -79,10 +83,7 @@ import {
 	consumeTurnEndFindings,
 } from "../../clients/runtime-context.js";
 import { RUNTIME_CONFIG } from "../../clients/runtime-config.js";
-import {
-	BLOCKER_FULL_DELIVERY_CAP,
-	RuntimeCoordinator,
-} from "../../clients/runtime-coordinator.js";
+import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { beginScope, retireScope } from "../../clients/session-scope.js";
 import {
 	cancelLSPIdleReset,
@@ -2627,9 +2628,12 @@ describe("#5240: a duplicate turn end stages a repeat of its live blockers", () 
 						expect(shown, `stuck-${index}.ts`).toBe(BLOCKER_FULL_DELIVERY_CAP);
 					if (text.includes(section)) shown += 1;
 				}
-				expect(rig.runtime.blockerFullDeliveryCapped(file)).toBe(
-					shown >= BLOCKER_FULL_DELIVERY_CAP,
-				);
+				expect(
+					admitBlockerReplay({
+						surface: "turn-end-replay",
+						fullDeliveries: rig.runtime.peekBlockerFullDeliveryCount(file),
+					}).shown === "collapse",
+				).toBe(shown >= BLOCKER_FULL_DELIVERY_CAP);
 			}
 			// The cap freed room: the blockers the first deliveries cut were shown.
 			expect(texts.at(-1)).toContain(blockers[11]?.section);

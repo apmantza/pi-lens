@@ -71,7 +71,7 @@ async function resolvePrisma(
 ): Promise<{ cmd: string; args: string[] }> {
 	const resolved = await resolveToolCommandWithInstallFallback(cwd, "prisma");
 	if (resolved) return { cmd: resolved, args: [] };
-	const globalBin = await findGlobalBinary("prisma");
+	const globalBin = await findGlobalBinary("prisma", ".cmd", cwd);
 	if (globalBin) return { cmd: globalBin, args: [] };
 	return { cmd: "npx", args: ["--no", "prisma"] };
 }

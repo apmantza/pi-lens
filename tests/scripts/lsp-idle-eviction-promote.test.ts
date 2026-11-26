@@ -134,13 +134,17 @@ describe("consecutive-night hysteresis (#3989)", () => {
 	it("counts one qualifying night as pending, two as promotable", () => {
 		const one = nights([D1], () => [row("json")]);
 		expect(one.json.nights).toHaveLength(1);
-		expect(selectPromotions(one, FIXTURE_HOLD).promote).toEqual([]);
-		expect(selectPromotions(one, FIXTURE_HOLD).skipped[0].reason).toContain(
-			"1/2",
+		expect(selectPromotions(one, FIXTURE_HOLD, [row("json")]).promote).toEqual(
+			[],
 		);
+		expect(
+			selectPromotions(one, FIXTURE_HOLD, [row("json")]).skipped[0].reason,
+		).toContain("1/2");
 		const two = nights([D1, D2], () => [row("json")]);
 		expect(
-			selectPromotions(two, FIXTURE_HOLD).promote.map((p) => p.serverId),
+			selectPromotions(two, FIXTURE_HOLD, [row("json")]).promote.map(
+				(p) => p.serverId,
+			),
 		).toEqual(["json"]);
 	});
 
@@ -157,7 +161,9 @@ describe("consecutive-night hysteresis (#3989)", () => {
 	it("counts two runs on one UTC day once (a manual dispatch is not a second night)", () => {
 		const state = nights([D1, D1], () => [row("json")]);
 		expect(state.json.nights).toHaveLength(1);
-		expect(selectPromotions(state, FIXTURE_HOLD).promote).toEqual([]);
+		expect(
+			selectPromotions(state, FIXTURE_HOLD, [row("json")]).promote,
+		).toEqual([]);
 	});
 
 	// An unavailable, inconclusive, vetoed, narrowed, or absent night is not a
@@ -180,7 +186,9 @@ describe("consecutive-night hysteresis (#3989)", () => {
 		);
 		expect(state.json.nights).toHaveLength(1);
 		expect(state.json.nights[0].day).toBe(D3);
-		expect(selectPromotions(state, FIXTURE_HOLD).promote).toEqual([]);
+		expect(
+			selectPromotions(state, FIXTURE_HOLD, [row("json")]).promote,
+		).toEqual([]);
 	});
 
 	// A settled (two-night) entry is the one a bad night must still drop: a
@@ -237,43 +245,51 @@ describe("RSS floor, cold-start cap and hold list (#3989)", () => {
 	it("promotes at the floor and skips below it, judging the lower of the two nights", () => {
 		const floorMb = IDLE_EVICTION_MIN_RSS_BYTES / MB;
 		expect(
-			selectPromotions(pair({ rssMb: floorMb }, {}), FIXTURE_HOLD).promote,
+			selectPromotions(pair({ rssMb: floorMb }, {}), FIXTURE_HOLD, [
+				row("json"),
+			]).promote,
 		).toHaveLength(1);
 		const below = selectPromotions(
 			pair({}, { rssMb: floorMb - 1 }),
 			FIXTURE_HOLD,
+			[row("json")],
 		);
 		expect(below.promote).toEqual([]);
 		expect(below.skipped[0].reason).toContain("below the 50 MB floor");
 	});
 
 	it("skips a server whose idle RSS was not measured on a night", () => {
-		const out = selectPromotions(pair({ rssMb: null }, {}), FIXTURE_HOLD);
+		const out = selectPromotions(pair({ rssMb: null }, {}), FIXTURE_HOLD, [
+			row("json"),
+		]);
 		expect(out.promote).toEqual([]);
 		expect(out.skipped[0].reason).toContain("not measured");
 	});
 
 	it("promotes at the cold-start cap and skips above it, judging the worse of the two nights", () => {
 		expect(
-			selectPromotions(pair({ coldMs: COLD_START_MAX_MS }, {}), FIXTURE_HOLD)
-				.promote,
+			selectPromotions(pair({ coldMs: COLD_START_MAX_MS }, {}), FIXTURE_HOLD, [
+				row("json"),
+			]).promote,
 		).toHaveLength(1);
 		const over = selectPromotions(
 			pair({ coldMs: 1000 }, { coldMs: COLD_START_MAX_MS + 1 }),
 			FIXTURE_HOLD,
+			[row("json")],
 		);
 		expect(over.promote).toEqual([]);
 		expect(over.skipped[0].reason).toContain("exceeds the 3000 ms cap");
 		const first = selectPromotions(
 			pair({ coldMs: COLD_START_MAX_MS + 1 }, { coldMs: 1000 }),
 			FIXTURE_HOLD,
+			[row("json")],
 		);
 		expect(first.promote).toEqual([]);
 	});
 
 	it("never promotes a held server, and names why", () => {
 		const state = nights([D1, D2], () => [row("indexer")]);
-		const out = selectPromotions(state, FIXTURE_HOLD);
+		const out = selectPromotions(state, FIXTURE_HOLD, [row("indexer")]);
 		expect(out.promote).toEqual([]);
 		expect(out.skipped[0].reason).toContain("HOLD_INDEXER");
 	});
@@ -528,6 +544,53 @@ describe("planPromotions (#3989)", () => {
 		expect(plan.serverSource).toBe(FIXTURE_SERVER_TS);
 		expect(plan.state).toEqual({});
 	});
+
+	// #5747 F2: retaining a settled pair across a non-qualifying night keeps
+	// durable evidence, never an eligibility to promote on the failing night.
+	it("retains a settled pair without promoting when tonight's row fails, then promotes on a qualifying night", () => {
+		const settled: NightState = {
+			json: {
+				nights: [
+					{ day: "2026-11-19", rssMb: 236, coldMs: 2942 },
+					{ day: "2026-11-20", rssMb: 237, coldMs: 2951 },
+				],
+			},
+		};
+		for (const failing of [
+			row("json", { coldStartMs: 4721 }),
+			row("json", { rssBytes: IDLE_EVICTION_MIN_RSS_BYTES - 1 }),
+			row("json", { result: "unavailable", reason: "budget-exhausted" }),
+			row("json", { result: "inconclusive", reason: "no-baseline" }),
+		]) {
+			const plan = planPromotions({
+				rows: [failing],
+				prior: settled,
+				today: "2026-11-23",
+				serverSource: FIXTURE_SERVER_TS,
+				reasonsText,
+				registrySource: FIXTURE_REGISTRY_TS,
+			});
+			expect(plan.state).toEqual(settled);
+			expect(plan.promoted).toEqual([]);
+			expect(plan.skipped).toEqual([
+				{
+					serverId: "json",
+					reason: expect.stringContaining("did not qualify"),
+				},
+			]);
+			expect(plan.serverSource).toBe(FIXTURE_SERVER_TS);
+			expect(plan.body).toBeNull();
+		}
+		const qualifiedAgain = planPromotions({
+			rows: [row("json")],
+			prior: settled,
+			today: "2026-11-24",
+			serverSource: FIXTURE_SERVER_TS,
+			reasonsText,
+			registrySource: FIXTURE_REGISTRY_TS,
+		});
+		expect(qualifiedAgain.promoted.map((p) => p.serverId)).toEqual(["json"]);
+	});
 });
 
 describe("the refresh-state seam (#3989)", () => {
@@ -746,6 +809,161 @@ describe("the nightly driver, end to end on files (#3989)", () => {
 		).toEqual([]);
 		expect(logged[0]).toContain("idle-eviction promotion:");
 	});
+
+	// #5747 F1 & F2: the settled pair is evidence the policy already earned, so a
+	// night that could not qualify neither erases it nor promotes on that night.
+	it("keeps a settled pair through a night that could not qualify without promoting", () => {
+		for (const failing of [
+			row("json", { coldStartMs: COLD_START_MAX_MS + 1 }),
+			row("json", { rssBytes: IDLE_EVICTION_MIN_RSS_BYTES - 1 }),
+		]) {
+			const ws = workspace();
+			const settled = setRefreshStateKey(
+				fs.readFileSync(ws.matrixPath, "utf8"),
+				IDLE_EVICTION_KEY,
+				{
+					json: {
+						nights: [
+							{ day: "2026-11-19", rssMb: 236, coldMs: 2942 },
+							{ day: "2026-11-20", rssMb: 237, coldMs: 2951 },
+						],
+					},
+				},
+			);
+			fs.writeFileSync(ws.matrixPath, settled);
+			const promoted = promoteFromSummary({
+				summaryPath: ws.summary([failing]),
+				bodyPath: ws.bodyPath,
+				matrixPath: ws.matrixPath,
+				serverPath: ws.serverPath,
+				reasonsPath: ws.reasonsPath,
+				registryPath: ws.registryPath,
+				changelogPath: ws.changelogPath,
+				today: "2026-11-23",
+				log: () => {},
+			});
+			const text = fs.readFileSync(ws.matrixPath, "utf8");
+			expect(
+				parseRefreshState(text)[IDLE_EVICTION_KEY]?.json?.nights.map(
+					(n) => n.day,
+				),
+			).toEqual(["2026-11-19", "2026-11-20"]);
+			// The night could not qualify, so the block is byte-identical and nothing promotes.
+			expect(text).toBe(settled);
+			expect(promoted).toEqual([]);
+			expect(fs.readFileSync(ws.serverPath, "utf8")).toBe(FIXTURE_SERVER_TS);
+		}
+	});
+
+	it("missing summary keeps settled pairs (C1.1)", () => {
+		const ws = workspace();
+		const settledJson = {
+			nights: [
+				{ day: "2026-11-19", rssMb: 236, coldMs: 2942 },
+				{ day: "2026-11-20", rssMb: 237, coldMs: 2951 },
+			],
+		};
+		fs.writeFileSync(
+			ws.matrixPath,
+			setRefreshStateKey(
+				fs.readFileSync(ws.matrixPath, "utf8"),
+				IDLE_EVICTION_KEY,
+				{
+					json: settledJson,
+					toml: { nights: [{ day: "2026-11-22", rssMb: 120, coldMs: 1500 }] },
+				},
+			),
+		);
+		const logged: string[] = [];
+		const promoted = promoteFromSummary({
+			summaryPath: path.join(ws.dir, "absent.json"),
+			bodyPath: ws.bodyPath,
+			matrixPath: ws.matrixPath,
+			serverPath: ws.serverPath,
+			reasonsPath: ws.reasonsPath,
+			registryPath: ws.registryPath,
+			changelogPath: ws.changelogPath,
+			today: "2026-11-23",
+			log: (l) => logged.push(l),
+		});
+		expect(promoted).toEqual([]);
+		expect(fs.readFileSync(ws.serverPath, "utf8")).toBe(FIXTURE_SERVER_TS);
+		expect(
+			parseRefreshState(fs.readFileSync(ws.matrixPath, "utf8"))[
+				IDLE_EVICTION_KEY
+			],
+		).toEqual({ json: settledJson });
+		expect(logged[0]).toContain("no readable measurement summary");
+
+		const unparseable = workspace();
+		fs.appendFileSync(
+			unparseable.matrixPath,
+			"\n## Capability matrix refresh state (nightly-generated)\n\n```json\n{corrupt\n```\n",
+		);
+		const corruptLogged: string[] = [];
+		expect(
+			promoteFromSummary({
+				summaryPath: path.join(unparseable.dir, "absent.json"),
+				matrixPath: unparseable.matrixPath,
+				serverPath: unparseable.serverPath,
+				reasonsPath: unparseable.reasonsPath,
+				registryPath: unparseable.registryPath,
+				today: "2026-11-23",
+				log: (l) => corruptLogged.push(l),
+			}),
+		).toEqual([]);
+		expect(
+			parseRefreshState(fs.readFileSync(unparseable.matrixPath, "utf8"))[
+				IDLE_EVICTION_KEY
+			],
+		).toBeUndefined();
+		expect(fs.readFileSync(unparseable.matrixPath, "utf8")).not.toContain(
+			"{corrupt",
+		);
+		expect(corruptLogged[0]).toContain("no readable measurement summary");
+	});
+
+	it("empties a settled pair on a hard veto or once the policy is no longer unmeasured", () => {
+		for (const night of [
+			row("csharp", {
+				result: "vetoed",
+				reason: "respawn-failed",
+				respawn: "failed",
+			}),
+			row("csharp", { declared: "resident" }),
+		] as const) {
+			const ws = workspace();
+			fs.writeFileSync(
+				ws.matrixPath,
+				setRefreshStateKey(
+					fs.readFileSync(ws.matrixPath, "utf8"),
+					IDLE_EVICTION_KEY,
+					{
+						csharp: {
+							nights: [
+								{ day: "2026-11-19", rssMb: 236, coldMs: 2942 },
+								{ day: "2026-11-20", rssMb: 237, coldMs: 2951 },
+							],
+						},
+					},
+				),
+			);
+			promoteFromSummary({
+				summaryPath: ws.summary([night]),
+				matrixPath: ws.matrixPath,
+				serverPath: ws.serverPath,
+				reasonsPath: ws.reasonsPath,
+				registryPath: ws.registryPath,
+				today: "2026-11-23",
+				log: () => {},
+			});
+			expect(
+				parseRefreshState(fs.readFileSync(ws.matrixPath, "utf8"))[
+					IDLE_EVICTION_KEY
+				],
+			).toBeUndefined();
+		}
+	});
 });
 
 describe("calendar adjacency of nights (#3989 F2)", () => {
@@ -758,7 +976,9 @@ describe("calendar adjacency of nights (#3989 F2)", () => {
 		};
 		const next = advanceNights(prior, [row("json")], D1);
 		expect(next.json.nights).toEqual([{ day: D1, rssMb: 120, coldMs: 1500 }]);
-		expect(selectPromotions(next, FIXTURE_HOLD).promote).toEqual([]);
+		expect(selectPromotions(next, FIXTURE_HOLD, [row("json")]).promote).toEqual(
+			[],
+		);
 	});
 
 	it("keeps a night held from the previous UTC day, across a month boundary", () => {

@@ -270,6 +270,17 @@ export interface WidgetDiagnostic {
 	 * fact about what the row cites, not a verdict about one session's disk.
 	 */
 	citedFile?: string;
+	/**
+	 * #5788 review F1: the carry's marker (`Diagnostic.unconfirmedBy`,
+	 * `recheckRunning`) and the row's language server, so the session read
+	 * words this row through the delivery gate as the per-write lines do, and
+	 * a row a check found fresh gets no "not re-checked" note. Additive and
+	 * optional like `citedFile`: a row persisted by an older build has none and
+	 * reads as a row with a verdict, so it gets no note.
+	 */
+	unconfirmedBy?: string;
+	recheckRunning?: true;
+	serverId?: string;
 }
 
 /**
@@ -1190,6 +1201,9 @@ interface RawWidgetDiagnostic {
 	semantic?: string;
 	/** The file the row cites (`Diagnostic.filePath`); see `citedFile`. */
 	filePath?: string;
+	unconfirmedBy?: string;
+	recheckRunning?: true;
+	serverId?: string;
 }
 
 /** Map the raw diagnostic shape callers pass into stored {@link WidgetDiagnostic}s.
@@ -1216,6 +1230,12 @@ function normalizeDiagnostics(
 			...(d.filePath !== undefined && isCrossFileBlocker(d, filePath)
 				? { citedFile: d.filePath }
 				: {}),
+			// #5788 review F1: only a carried row has the marker.
+			...(d.unconfirmedBy !== undefined && {
+				unconfirmedBy: d.unconfirmedBy,
+				...(d.recheckRunning === true && { recheckRunning: true as const }),
+				...(d.serverId !== undefined && { serverId: d.serverId }),
+			}),
 		} satisfies WidgetDiagnostic;
 	});
 }

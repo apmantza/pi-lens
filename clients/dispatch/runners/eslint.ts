@@ -153,8 +153,6 @@ const eslintRunner: RunnerDefinition = {
 		}
 
 		const cmd = resolveToolCommand(packageDir, "eslint") ?? "eslint";
-
-		// Verify ESLint is actually executable (cached per directory, see getEslintProbe).
 		const eslintProbe = getEslintProbe(cmd);
 		if (!(await eslintProbe(packageDir))) {
 			return toolAbsentSkip(packageDir, { checker: eslintProbe });

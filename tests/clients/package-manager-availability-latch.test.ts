@@ -27,7 +27,8 @@ const { safeSpawnAsync } = vi.hoisted(() => ({ safeSpawnAsync: vi.fn() }));
 // probes through `isCommandAvailableAsync`; post-fix code calls
 // `safeSpawnAsync` directly. Routing both through the same hoisted mock lets
 // one test file exercise both at the same boundary.
-vi.mock("../../clients/safe-spawn.js", () => ({
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal()),
 	safeSpawnAsync,
 	safeSpawn: vi.fn(),
 	isCommandAvailableAsync: async (command: string) => {
