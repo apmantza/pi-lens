@@ -76,6 +76,12 @@ vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
 	safeSpawnAsync,
 }));
 
+const { logLatencySpy } = vi.hoisted(() => ({ logLatencySpy: vi.fn() }));
+vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/latency-logger.js")>()),
+	logLatency: logLatencySpy,
+}));
+
 const GOOD = "#!/bin/sh\nexit 0\n";
 const BROKEN = "#!/bin/sh\n# BROKEN interpreter\nexit 1\n";
 
@@ -107,6 +113,7 @@ beforeEach(async () => {
 	);
 	spawnCalls.length = 0;
 	safeSpawnAsync.mockClear();
+	logLatencySpy.mockClear();
 });
 
 afterEach(async () => {
@@ -719,6 +726,52 @@ describe("reviewed ladder preservation (#5783)", () => {
 			args: ["@biomejs/biome"],
 		});
 		expect(spawnCalls.some((call) => call.cmd === "biome")).toBe(false);
+	});
+
+	// Recurrence it prevents: the presence-only branch (`fastPathOnly`) returns
+	// before the probe and used to leave no availability decision, so a Biome
+	// that fell through to npx looked identical to one nobody asked about.
+	it("biome: the presence ladder records its hit and its miss as caller-classified decisions", async () => {
+		const { BiomeClient } = await import("../../clients/biome-client.js");
+		const client = new BiomeClient() as unknown as {
+			getBiomeBinary(cwd?: string): Promise<{ cmd: string }>;
+		};
+		const biomeRows = () =>
+			logLatencySpy.mock.calls
+				.map((call) => call[0])
+				.filter(
+					(entry) =>
+						entry?.phase === "availability_decision" &&
+						entry.metadata?.tool === "biome",
+				)
+				.map((entry) => entry.metadata);
+
+		await client.getBiomeBinary(root);
+		expect(biomeRows()).toEqual([
+			expect.objectContaining({
+				verdict: "unavailable",
+				outcome: "missing",
+				cause: "not-found",
+				classifiedBy: "caller",
+			}),
+		]);
+
+		logLatencySpy.mockClear();
+		const managed = plant(
+			path.join(home, "tools", "node_modules", ".bin", "biome"),
+			GOOD,
+		);
+		const elsewhere = path.join(root, "other");
+		fs.mkdirSync(elsewhere);
+		expect((await client.getBiomeBinary(elsewhere)).cmd).toBe(managed);
+		expect(biomeRows()).toEqual([
+			expect.objectContaining({
+				verdict: "available",
+				outcome: "success",
+				cause: "fast-path",
+				classifiedBy: "caller",
+			}),
+		]);
 	});
 
 	it("biome: Windows managed discovery prefers cmd over the bare shim", async () => {
