@@ -230,6 +230,7 @@
  *     `tests/mcp/server.smoke.test.ts`.
  */
 
+import { BoundedLruCache } from "./bounded-cache.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
 import type { Diagnostic } from "./dispatch/types.js";
 import { findingIdentity } from "./finding-identity.js";
@@ -361,11 +362,11 @@ export type BlockerReplaySurface = "withheld-line" | "still-unfixed-line";
  * session. Bounded: past {@link BLOCKER_REPLAY_FILES_MAX} files the oldest is
  * dropped, which only lets its next replay through once more.
  */
-const deliveredUnconfirmedReplay = new Map<
+const BLOCKER_REPLAY_FILES_MAX = 256;
+const deliveredUnconfirmedReplay = new BoundedLruCache<
 	string,
 	Partial<Record<BlockerReplaySurface, string>>
->();
-const BLOCKER_REPLAY_FILES_MAX = 256;
+>(BLOCKER_REPLAY_FILES_MAX);
 
 /** The identity and the coordinates of one blocker, as the replay key reads it. */
 function replayIdentity(d: Diagnostic): string {
@@ -406,12 +407,7 @@ export function admitBlockerReplay(args: {
 		});
 		return "suppress";
 	}
-	deliveredUnconfirmedReplay.delete(file);
 	deliveredUnconfirmedReplay.set(file, { ...delivered, [args.surface]: key });
-	if (deliveredUnconfirmedReplay.size > BLOCKER_REPLAY_FILES_MAX) {
-		const oldest = deliveredUnconfirmedReplay.keys().next().value;
-		if (oldest !== undefined) deliveredUnconfirmedReplay.delete(oldest);
-	}
 	return "deliver";
 }
 

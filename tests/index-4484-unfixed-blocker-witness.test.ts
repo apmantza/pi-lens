@@ -1465,6 +1465,11 @@ describe("#4484 witness, round 3: position, verdict and owed lines", () => {
 			await s.write(AG_FIXED);
 			await s.endTurn();
 		};
+		// #5784: a runner's no-verdict carry names the runner, and no
+		// language-server probe, which would not re-check it.
+		expect(w2).toMatch(
+			/1 recorded earlier was not re-checked on this write \([\w-]+ gave no verdict\), so only a later write its check answers can retire it\./,
+		);
 		await fixAndDrain(s);
 	}, 120_000);
 
@@ -3023,6 +3028,20 @@ describe("#5784 witness: an unconfirmed carried blocker is not replayed verbatim
 		expect(session).toContain(
 			`src/replay.ts: 1 recorded earlier was not re-checked on its latest write, so fixing the code cannot retire it; ${SETTLE}`,
 		);
+		boundary.lsp.mode = "answer";
+		await fixAndDrain(s);
+	}, 120_000);
+
+	it("names no earlier finding on the session read for an unanswered file that holds none", async () => {
+		// The other direction of the session read's note: a silent server on a
+		// file with no blocker leaves the file unchecked, and nothing earlier.
+		boundary.lsp.enabled = true;
+		boundary.lsp.mode = "inconclusive";
+		const s = await openSession("rn", "src/replay-clean.ts", V_FIXED);
+		await s.write(V_FIXED_OTHER);
+		const session = await s.sessionDiagnostics();
+		expect(session).toContain("typescript silent");
+		expect(session).not.toContain(NOT_RECHECKED);
 		boundary.lsp.mode = "answer";
 		await fixAndDrain(s);
 	}, 120_000);
