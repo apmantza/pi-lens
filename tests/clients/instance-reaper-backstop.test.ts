@@ -143,7 +143,10 @@ vi.mock("node:child_process", () => ({
 	),
 }));
 
-vi.mock("../../clients/instance-registry.js", () => ({
+vi.mock("../../clients/instance-registry.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../clients/instance-registry.js")
+	>()),
 	isInstanceRegistryEnabled: () => h.state.enabled,
 	readInstanceRegistry: async () => h.state.registry,
 }));

@@ -63,9 +63,14 @@ import {
 	type ProcessTableOptions,
 	readProcessStart,
 } from "./process-snapshot.js";
+import { withDeadline } from "./deadline-utils.js";
 import { queueRegistryMutation } from "./instance-registry-tail.js";
 import { getProcessSingleton } from "./process-singletons.js";
-import { endHeldChildren, holdsChildren } from "./held-children.js";
+import {
+	endHeldChildren,
+	holdsChildren,
+	provideOwnedChildLedger,
+} from "./held-children.js";
 import { getSubagentIdentity, isSubagentSession } from "./subagent-mode.js";
 
 export interface LspChildEntry {
@@ -787,6 +792,7 @@ export interface RecordLspChildInput {
 	serverId: string;
 	command: string;
 	marker?: string;
+	processStart?: string;
 	/** Session identity used if this child arrives before host registration. */
 	sessionIdentity?: {
 		projectRoot: string;
@@ -876,23 +882,75 @@ function rememberRegistrationRoot(root: string | undefined): void {
 // without loading this module's import graph (#3703).
 export { _settleRegistryMutationsForTests } from "./instance-registry-tail.js";
 
+/**
+ * What a child row does when this process has no entry yet: an LSP child
+ * synthesizes one (#3071), a spawned command's row is dropped (#5745 r5).
+ */
+type MissingHostEntry = "synthesize" | "drop";
+
 /** Append/replace (by pid) an LSP child under this process's entry. */
 export function recordLspChild(entry: RecordLspChildInput): Promise<void> {
+	return queueChildRow(entry, "synthesize");
+}
+
+function queueChildRow(
+	entry: RecordLspChildInput,
+	missingHost: MissingHostEntry,
+): Promise<void> {
 	const generation = registrationGeneration().capture();
-	return queueRegistryMutation(() => recordLspChildNow(entry, generation));
+	return queueRegistryMutation(() =>
+		recordLspChildNow(entry, generation, missingHost),
+	);
+}
+
+// #5745 r5: a `safeSpawnAsync` child joins this process's entry and never
+// creates one. Every process spawns commands, including one that never
+// registered (an MCP host, a CLI) and a session whose entry is already gone (a
+// `which` probe whose row lands after `deregisterInstance`); a synthesized
+// entry made each of them look like a live session at its cwd.
+provideOwnedChildLedger({
+	write: (entry) => queueChildRow(entry, "drop"),
+	remove: removeLspChild,
+});
+
+/**
+ * #5745 r6: whether the registry file exists. A write that only edits this
+ * process's existing entry (a spawned command's row, a child's removal) has
+ * nothing to do without it, and taking the lock would create the directory:
+ * a runner row's removal landed after a test removed its pinned home and
+ * re-created it (CI shard 1, tmp-fixture hygiene).
+ */
+function registryFileExists(): boolean {
+	return fs.existsSync(registryPath());
+}
+
+function noteDroppedOwnedRow(): void {
+	recordDegradationOnce({
+		kind: "instance-registry-registration-missing",
+		subject: `owned-child:${process.pid}`,
+		reason:
+			"dropping a spawned command's row: this process has no registry entry",
+	});
 }
 
 async function recordLspChildNow(
 	entry: RecordLspChildInput,
 	generation: GenerationHandle,
+	missingHost: MissingHostEntry,
 ): Promise<void> {
 	if (!isInstanceRegistryEnabled()) return;
+	if (missingHost === "drop" && !registryFileExists()) {
+		noteDroppedOwnedRow();
+		return;
+	}
 	armExitRemoval();
 	const pid = process.pid;
 	const now = new Date().toISOString();
 	const [selfStart, childStart] = await Promise.all([
 		ownProcessStart(startReadOptions()),
-		readProcessStart(entry.pid, startReadOptions()),
+		entry.processStart === undefined
+			? readProcessStart(entry.pid, startReadOptions())
+			: Promise.resolve(entry.processStart),
 	]);
 	const childEntry: LspChildEntry = {
 		pid: entry.pid,
@@ -908,6 +966,10 @@ async function recordLspChildNow(
 			const idx = file.instances.findIndex((inst) =>
 				isOwnEntry(inst, selfStart),
 			);
+			if (idx === -1 && missingHost === "drop") {
+				noteDroppedOwnedRow();
+				return undefined;
+			}
 			if (idx === -1) {
 				// #3498: a child recorded before the session ended must not
 				// re-create the ended session's entry. Its own shutdown path kills
@@ -1005,7 +1067,7 @@ async function removeLspChildNow(
 	pid: number,
 	expectedMarker?: string,
 ): Promise<void> {
-	if (!isInstanceRegistryEnabled()) return;
+	if (!isInstanceRegistryEnabled() || !registryFileExists()) return;
 	const selfStart = await ownProcessStart(startReadOptions());
 	await withInstanceRegistryLock(registryPath(), async () => {
 		const file = await readRegistryAsync();
@@ -1113,6 +1175,34 @@ function removeOwnEntryAtExit(target: string, code: number): void {
 		if (next) writeRegistrySync(next, target);
 		return true;
 	});
+}
+
+/** Four lock waits (`LOCK_WAIT_MS`, 500 ms) of queued registry writes. */
+const EXIT_SETTLE_MS = 2_000;
+
+/**
+ * Join this process's queued registry writes before an explicit
+ * `process.exit` (#5745 r4). The exit removal above is synchronous and does
+ * not run while this process's own queued write holds the lock, so a worker
+ * that exits mid-write leaves its entry behind. A no-op queued on the tail
+ * lands after every write queued before it.
+ *
+ * Bounded so a hung lock holder or a stalled write cannot keep the process
+ * alive. When the bound fires it resolves `false` and records one degradation
+ * per process (r5 F5): the entry may outlive the process.
+ */
+export async function settleRegistryWritesBeforeExit(): Promise<boolean> {
+	const settled = await withDeadline(
+		queueRegistryMutation(async () => {}).then(() => true),
+		{ ms: EXIT_SETTLE_MS, onTimeout: "undefined" },
+	);
+	if (settled === true) return true;
+	recordDegradationOnce({
+		kind: "instance-registry-exit-settle-timeout",
+		subject: String(process.pid),
+		reason: `queued registry writes still pending after ${EXIT_SETTLE_MS}ms; this process's entry may outlive it`,
+	});
+	return false;
 }
 
 /**

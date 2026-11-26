@@ -2681,7 +2681,12 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// hook, and each network/spawn await carries its own timeout
 	// (PACK_FETCH_TIMEOUT_MS, PACK_VALIDATE_TIMEOUT_MS); none can take the hook's
 	// signal until #2523 AC4 threads it, so this records the measured increase.
-	"clients/installer/managed-tool-refresh.ts": 56,
+	// 56 -> 53 (#5701): the streaming downloader removes the fetch reader,
+	// cancellation, and destination read awaits; its one bounded-resource
+	// download await remains. This refresh is timer-launched, never inline in a
+	// hook, so its network and spawn ceilings remain the owner of its waits until
+	// #2523 AC4 threads a hook signal through installer dependencies.
+	"clients/installer/managed-tool-refresh.ts": 53,
 	// #3538/#3539 add five in each. The reaper reads start times and owner
 	// tags before its backstop decision and asks again before every signal
 	// (the identity query, its re-check, and the kill's own confirm await);
@@ -2707,7 +2712,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// hook; each is a local file operation or the registry lock's own
 	// bounded wait, and none can take the hook's signal until #2523 AC4
 	// threads it.
-	"clients/instance-registry.ts": 37,
+	// 37 → 38 (#5745 r5): settleRegistryWritesBeforeExit awaits withDeadline,
+	// a 2 s bound this count does not tell from an unbounded wait. Only the
+	// MCP `fresh` worker calls it, just before its own process.exit; no hook
+	// awaits it.
+	"clients/instance-registry.ts": 38,
 	"clients/language-profile.ts": 3,
 	// 1 → 2 (#1634): `projectScan` now awaits the cheap project scan it used
 	// to return unawaited, to pass its rows through the finding policy before
@@ -2879,7 +2888,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// #5413: 8 -> 9. `safeSpawnAsync` awaits its own spawn promise to arm the
 	// timeout cooldown after the child settles; that promise is bounded by the
 	// spawn's own timeout, the same budget it already carried.
-	"clients/safe-spawn.ts": 9,
+	// #5745 r7: 9 -> 10. The module's registered background-write drain awaits
+	// its in-flight owned-child ledger work (a start read bounded at 1 s, then a
+	// lock-bounded registry write). Only the test helper registry calls it; no
+	// hook handler reaches it.
+	"clients/safe-spawn.ts": 10,
 	// #3612: `adoptHandoff` awaits the own and parent sidecar loads and each
 	// store's restore: the session_start sidecar I/O that read-guard-branch.ts
 	// and index.ts held before.

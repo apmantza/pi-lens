@@ -2762,7 +2762,13 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// #5699: back to 3. The held store moved onto the process singleton
 	// (`lifetimeState.held`), because it is also the host-exit ledger the
 	// once-per-process exit handler reads; the scan sees no container for it.
-	"safe-spawn.ts": 3,
+	//
+	// #5745 r7: 3 -> 4 with `ownedChildLedgerWork`, the owned-child ledger
+	// chains still in flight, which the module's background-write drain joins.
+	// Not reset at session_start: each entry is a registry write about an OS
+	// child, not session state, and it deletes itself when it settles. A reset
+	// would hide running work from the drain that exists to wait for it.
+	"safe-spawn.ts": 4,
 	"security-scan-client.ts": 1,
 	// #2146 moved the four registration fields onto the process singleton, so the
 	// scan sees no module-scope container here either.
