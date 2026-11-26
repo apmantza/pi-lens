@@ -63,6 +63,7 @@ vi.mock("../../clients/safe-spawn.js", async (importOriginal) => {
 });
 
 import { CacheManager } from "../../clients/cache-manager.js";
+import { resetIgnoredConfigWarnCache } from "../../clients/config-warn.js";
 import {
 	getDegradationSummary,
 	resetDegradationLedger,
@@ -83,10 +84,16 @@ import {
 import { hasPendingObservation } from "../../clients/observed-mutation.js";
 import { countFileLines } from "../../clients/read-guard-tool-lines.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { resetProjectLensConfigCache } from "../../clients/project-lens-config.js";
+import {
+	resetProjectTrust,
+	setProjectTrustState,
+} from "../../clients/project-trust.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import { handleToolResult } from "../../clients/runtime-tool-result.js";
 import { syncGitGuardRecord } from "../../clients/git-guard.js";
 import { execSync } from "../support/git-fixture-env.js";
+import { useGlobalConfig } from "../support/global-config.js";
 import { runHandlerExpectingNoThrow } from "../support/handler-verdict.js";
 import { readNdjsonRows } from "../support/ndjson-rows.js";
 import { removeTempDirSync } from "./test-utils.js";
@@ -793,5 +800,252 @@ describe("which calls pay for git status (#4732)", () => {
 		expect(refused?.latestReasons.map((entry) => entry.subject)).toEqual([
 			"no-tool-call-id",
 		]);
+	});
+	describe("a configured non-writer list (#5793)", () => {
+		// RECURRENCE GUARDED: a known non-writing tool (pi's `todo`, a task-list
+		// extension) paid two `git status` children per call because the gate has
+		// no user-declared admission (21.64 s of `opaque_mutation_prescan` in one
+		// session); and the first cut of such a list would have let a cloned
+		// repository's `.pi-lens.json` switch write detection off for a tool, or a
+		// listed shell be exempted. Real here: the handlers, the config loaders,
+		// the trust latch and the ledger.
+		const setGlobalConfig = useGlobalConfig();
+		const NOTICE_KEY = "opaqueScan.nonWriterTools";
+
+		afterEach(() => {
+			resetProjectTrust();
+			resetProjectLensConfigCache();
+			resetIgnoredConfigWarnCache();
+		});
+
+		function commitProjectConfig(config: unknown): void {
+			fs.writeFileSync(
+				path.join(repoDir, ".pi-lens.json"),
+				JSON.stringify(config),
+			);
+			execSync("git add -A && git commit -qm project-config", {
+				cwd: repoDir,
+			});
+		}
+
+		/** One whole call through the real handlers: its cost and its prescan rows. */
+		async function callThrough(
+			runtime: RuntimeCoordinator,
+			toolName: string,
+			id: string,
+			input: Record<string, unknown> = { query: "x" },
+		): Promise<{ spawns: number; prescan: string[] }> {
+			spawned.argv.length = 0;
+			const offset = await latencyOffset();
+			const event = { toolName, toolCallId: id, input };
+			await runHandlerExpectingNoThrow(() =>
+				handleToolCall(callDeps(runtime, event)),
+			);
+			await handleToolResult(resultDeps(runtime, event));
+			return {
+				spawns: gitStatusSpawns(),
+				prescan: (await phaseRowsSince(offset, "opaque_mutation_prescan")).map(
+					(row) => row.filePath ?? "",
+				),
+			};
+		}
+
+		/** The ledger rows the list's own notices left, as subject and reason. */
+		function listNotices(): Array<{ subject: string; reason: string }> {
+			return getDegradationSummary()
+				.filter((group) => group.kind === "config-ignored")
+				.flatMap((group) => group.latestReasons)
+				.filter((entry) => entry.subject.endsWith(`\0${NOTICE_KEY}`));
+		}
+
+		function captureRefusals() {
+			return getDegradationSummary().filter(
+				(group) => group.kind === "opaque-capture-refused",
+			);
+		}
+
+		it("answers the gate by the listed name alone, and never for a shell or a built-in", () => {
+			setGlobalConfig({
+				opaqueScan: {
+					nonWriterTools: [
+						"todo",
+						"bash",
+						"powershell",
+						"write",
+						"read",
+						"symbol_search",
+					],
+				},
+			});
+			// Written out, not derived: the list admits `todo` and nothing else.
+			for (const [toolName, expected] of [
+				["todo", false],
+				["some_ext_tool", true],
+				["todo2", true],
+				["to", true],
+				["TODO", true],
+				["bash", true],
+				["powershell", true],
+				["write", false],
+				["read", false],
+				["symbol_search", false],
+			] as const)
+				expect(shouldRunOpaqueRecovery(toolName, repoDir), toolName).toBe(
+					expected,
+				);
+		});
+
+		it("takes no baseline and no recovery for a tool the global config lists, and still diffs the default", async () => {
+			const runtime = runtimeFor("5793-global");
+			// The default, unlisted: unchanged, the control for the cost below.
+			expect(await callThrough(runtime, "todo", "5793-g-control")).toEqual({
+				spawns: 2,
+				prescan: ["todo"],
+			});
+			resetOpaqueMutationState();
+			setGlobalConfig({ opaqueScan: { nonWriterTools: ["todo"] } });
+			expect(await callThrough(runtime, "todo", "5793-g-listed")).toEqual({
+				spawns: 0,
+				prescan: [],
+			});
+			// No prefix, substring or neighbour match: another name still pays.
+			expect(
+				await callThrough(runtime, "some_ext_tool", "5793-g-other"),
+			).toEqual({ spawns: 2, prescan: ["some_ext_tool"] });
+			// An honored list is not a failure: no refusal, no ignored-config row.
+			expect(captureRefusals()).toEqual([]);
+			expect(listNotices()).toEqual([]);
+		});
+
+		it("honors a project list under host trust, and ignores it with one notice per session otherwise", async () => {
+			const runtime = runtimeFor("5793-project");
+			commitProjectConfig({ opaqueScan: { nonWriterTools: ["todo"] } });
+			setProjectTrustState("trusted");
+			expect(await callThrough(runtime, "todo", "5793-p-trusted")).toEqual({
+				spawns: 0,
+				prescan: [],
+			});
+			expect(listNotices()).toEqual([]);
+
+			// A cloned repository must not switch write detection off: not trusted,
+			// and a host that gave no answer, both leave the tool opaque.
+			for (const state of ["untrusted", "unknown"] as const) {
+				resetOpaqueMutationState();
+				resetDegradationLedger();
+				setProjectTrustState(state);
+				for (const call of [1, 2])
+					expect(
+						await callThrough(runtime, "todo", `5793-p-${state}-${call}`),
+						state,
+					).toEqual({ spawns: 2, prescan: ["todo"] });
+				const notices = listNotices();
+				expect(notices.map((entry) => entry.reason)).toEqual([
+					expect.stringContaining(
+						`only when pi trusts the project (trust is ${state})`,
+					),
+				]);
+				// The next session records it again: the config is still ignored.
+				resetOpaqueMutationState();
+				resetDegradationLedger();
+				await callThrough(runtime, "todo", `5793-p-${state}-next`);
+				expect(listNotices()).toHaveLength(1);
+			}
+		});
+
+		it("honors the global list while a project list is untrusted", async () => {
+			const runtime = runtimeFor("5793-both");
+			setGlobalConfig({ opaqueScan: { nonWriterTools: ["todo"] } });
+			commitProjectConfig({ opaqueScan: { nonWriterTools: ["other_tool"] } });
+			setProjectTrustState("untrusted");
+			expect(await callThrough(runtime, "todo", "5793-b-todo")).toEqual({
+				spawns: 0,
+				prescan: [],
+			});
+			expect(await callThrough(runtime, "other_tool", "5793-b-other")).toEqual({
+				spawns: 2,
+				prescan: ["other_tool"],
+			});
+		});
+
+		it("refuses a listed shell and still diffs it, naming the entry once", async () => {
+			const runtime = runtimeFor("5793-shell");
+			setGlobalConfig({
+				opaqueScan: { nonWriterTools: ["bash", "powershell"] },
+			});
+			expect(
+				await callThrough(runtime, "bash", "5793-s-bash", {
+					command: "node -e ''",
+				}),
+			).toEqual({ spawns: 2, prescan: ["node -e ''"] });
+			const notices = listNotices();
+			expect(notices).toHaveLength(1);
+			expect(notices[0]?.reason).toContain(
+				'"bash" (pi or pi-lens already decides it), "powershell" (pi or pi-lens already decides it)',
+			);
+		});
+
+		it("leaves a tool opaque for an entry that is not an exact tool name, and keeps the good ones", async () => {
+			const runtime = runtimeFor("5793-malformed");
+			setGlobalConfig({
+				opaqueScan: { nonWriterTools: ["", " todo ", "a b", "todo*", "note"] },
+			});
+			expect(await callThrough(runtime, "todo", "5793-m-todo")).toEqual({
+				spawns: 2,
+				prescan: ["todo"],
+			});
+			// The valid sibling of the refused entries is honored.
+			expect(await callThrough(runtime, "note", "5793-m-note")).toEqual({
+				spawns: 0,
+				prescan: [],
+			});
+			const notices = listNotices();
+			expect(notices).toHaveLength(1);
+			expect(notices[0]?.reason).toContain(
+				'"" (not a tool name), " todo " (not a tool name), "a b" (not a tool name) and 1 more',
+			);
+		});
+
+		it("reads the global list once per session, and again at the next one", async () => {
+			const runtime = runtimeFor("5793-memo");
+			setGlobalConfig({ opaqueScan: { nonWriterTools: ["todo"] } });
+			expect((await callThrough(runtime, "todo", "5793-memo-1")).spawns).toBe(
+				0,
+			);
+			// An edit mid-session is not read per call: the answer holds.
+			setGlobalConfig({});
+			expect((await callThrough(runtime, "todo", "5793-memo-2")).spawns).toBe(
+				0,
+			);
+			// The session boundary (`resetOpaqueMutationState`) reads it again.
+			resetOpaqueMutationState();
+			expect((await callThrough(runtime, "todo", "5793-memo-3")).spawns).toBe(
+				2,
+			);
+		});
+
+		it("records a non-string member and a misspelled sub-key through the config seam, and honors the rest", async () => {
+			const runtime = runtimeFor("5793-typed");
+			setGlobalConfig({
+				opaqueScan: { nonWriterTools: [5, "todo"], nonWriterTool: ["x"] },
+			});
+			expect(await callThrough(runtime, "todo", "5793-t-todo")).toEqual({
+				spawns: 0,
+				prescan: [],
+			});
+			const rejected = getDegradationSummary()
+				.filter((group) => group.kind === "config-ignored")
+				.flatMap((group) => group.latestReasons)
+				.map((entry) => entry.subject);
+			expect(
+				rejected.some((subject) =>
+					subject.includes("/opaqueScan/nonWriterTools/0"),
+				),
+			).toBe(true);
+			expect(
+				rejected.some((subject) =>
+					subject.includes("/opaqueScan/nonWriterTool"),
+				),
+			).toBe(true);
+		});
 	});
 });

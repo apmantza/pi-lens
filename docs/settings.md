@@ -170,6 +170,7 @@ add a denial but never re-enable one. See
 | `dispatch.runnerTimeoutFloorMs` | global | none (no floor) | Minimum wall-clock budget per dispatch runner |
 | `lsp.queryMaxFileLines` | global | `5000` | Line limit of the explicit single-file `lens_diagnostics source=lsp` query only; a whole number from `5000` to `40000` (suggested `20000`). See [globalconfig](globalconfig.md#explicit-diagnostics-query-line-limit) |
 | `dispatch.disabledRunners` | global + project | `[]` | Dispatch runner ids that never run (for example `["dotnet-build"]`). A denial: the union of every tier, so a project can add but never re-enable. Unknown ids are dropped with a warning. See [configuration](configuration.md#dispatchdisabledrunners--turning-a-dispatch-runner-off) |
+| `opaqueScan.nonWriterTools` | global + project | `[]` | Tool names you know never write, so a call to one skips the before/after working-tree comparison (two `git status` runs in a repository). Exact names; a shell or pi-lens tool is refused. A project file's list counts only when pi trusts the project. See [configuration](configuration.md#opaquescannonwritertools--telling-pi-lens-a-tool-never-writes) |
 | `format.mode` | global | `"deferred"` | `"deferred"` (at `agent_end`) or `"immediate"` |
 | `actionableWarnings.autoFix.maxFixes` | global | `5` | Cap on quickfixes applied per turn (`0` = report only) |
 | `rules.high-complexity.threshold` | global + project | `15` | Cyclomatic-complexity threshold. Read per file from its nearest `.pi-lens.json` field by field, like `rules.<id>.disable`, so a nested file governs the files under it and a global file applies where no project file sets one. See [configuration](configuration.md#rulesid--read-from-each-files-own-config) |
@@ -189,7 +190,7 @@ add a denial but never re-enable one. See
 User-level. The file is selected by the [global-location table](configuration.md#global-config-location)
 and applies to **every** project. It honors **all** flag keys from the
 table above plus the non-flag global knobs (`ignore`, `widget.visible`,
-`widget.position`, `widget.hideWhenClean`, `dispatch.runnerTimeoutFloorMs`, `dispatch.disabledRunners`, `format.mode`,
+`widget.position`, `widget.hideWhenClean`, `dispatch.runnerTimeoutFloorMs`, `dispatch.disabledRunners`, `opaqueScan.nonWriterTools`, `format.mode`,
 `actionableWarnings.autoFix.maxFixes`, `lsp.queryMaxFileLines`). On Windows the path is
 `%USERPROFILE%\.pi-lens\config.json`.
 
