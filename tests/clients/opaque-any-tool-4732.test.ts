@@ -1052,7 +1052,7 @@ describe("which calls pay for git status (#4732)", () => {
 			).toBe(true);
 			expect(
 				rejected.some((subject) =>
-					subject.includes("/opaqueScan/nonWriterTool"),
+					/\/opaqueScan\/nonWriterTool(?!s)/.test(subject),
 				),
 			).toBe(true);
 		});
