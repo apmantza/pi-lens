@@ -139,7 +139,7 @@
 			"\"diagnostic\"": 1,
 			"\"diagnostics\"": 1,
 			"` ${path.basename(filePath)}`": 1,
-			"\"\"": 52,
+			"\"\"": 54,
 			"` across ${files} files`": 1,
 			"`lens_diagnostics${scope} — too large: ${tooLargeLines.join(\"; \")}`": 1,
 			"`lens_diagnostics${scope} — ${count} ${noun} · ${notConfirmed} checks not confirmed`": 1,

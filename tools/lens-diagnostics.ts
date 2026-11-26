@@ -4123,13 +4123,14 @@ async function formatAllMode(
 			findings: heldRecords.length,
 		});
 		const text =
-			(!recordsHeld.clean
-				? `${recordsHeld.line}\n`
-				: visibleSummaries.length === 0
+			(visibleSummaries.length === 0
+				? recordsHeld.clean
 					? "No files diagnosed yet this session.\n"
-					: !clean
-						? ""
-						: `No ${severity === "all" ? "" : severity + " "}issues across ${provenCount} file${provenCount === 1 ? "" : "s"} diagnosed this session. ✓\n`) +
+					: ""
+				: !clean
+					? ""
+					: `No ${severity === "all" ? "" : severity + " "}issues across ${provenCount} file${provenCount === 1 ? "" : "s"} diagnosed this session. ✓\n`) +
+			(recordsHeld.clean ? "" : `${recordsHeld.line}\n`) +
 			(uncheckedLine ? `${uncheckedLine}\n` : "") +
 			validationNote +
 			staleNote +
