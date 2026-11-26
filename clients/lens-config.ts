@@ -111,6 +111,14 @@ export interface PiLensGlobalConfig {
 		 */
 		runnerTimeoutFloorMs?: number;
 	};
+	/**
+	 * #5793: tool names the user declares never write, so the opaque
+	 * before/after diff skips them. Always honored from this file; a project
+	 * `.pi-lens.json` carries the same key, honored only when pi trusts the
+	 * project. Entries are checked where they are used
+	 * (`clients/opaque-mutation-scan.ts`), not here.
+	 */
+	opaqueScan?: { nonWriterTools?: string[] };
 	widget?: {
 		/** Whether the diagnostics widget is visible when a session starts. */
 		visible?: boolean;
@@ -478,6 +486,12 @@ export function loadPiLensGlobalConfig(
 				config.dispatch = { runnerTimeoutFloorMs: undefined };
 			}
 		}
+
+		// #5793: the schema (`config-schema.ts`) already dropped a non-array and a
+		// non-string member with a record, so only a typed list reaches here.
+		const nonWriterTools = asConfigObject(raw.opaqueScan)?.nonWriterTools;
+		if (Array.isArray(nonWriterTools))
+			config.opaqueScan = { nonWriterTools: nonWriterTools as string[] };
 
 		const autoFix = asConfigObject(
 			asConfigObject(raw.actionableWarnings)?.autoFix,

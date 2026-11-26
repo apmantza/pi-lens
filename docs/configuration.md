@@ -343,6 +343,37 @@ $ pilens_effective_config path=src/Program.cs
 Putting it in a project `.pi-lens.json` logs the usual one-time "global-only"
 notice.
 
+### `opaqueScan.nonWriterTools` — telling pi-lens a tool never writes
+
+pi-lens does not know what an extension's tool writes, so it compares the
+working tree before and after every call to a tool it does not recognize (pi's
+`todo`, a task-list or MCP tool). In a git repository that is two
+`git status` runs per call. A tool you know never writes can opt out:
+
+```jsonc
+// ~/.pi-lens/config.json (or a project .pi-lens.json)
+{ "opaqueScan": { "nonWriterTools": ["todo"] } }
+```
+
+- **No list ships.** Every tool is compared until you name it. A name you list
+  that does write has its writes go unobserved, so list only a tool you have
+  checked.
+- **Exact names.** An entry is one tool name, matched whole: no pattern, no
+  prefix, no case folding. An entry that is not a tool name (empty, padded,
+  with a space or a `*`) is refused.
+- **Shells and pi-lens tools are never exempted.** `bash`, `powershell`, pi's
+  `write`, `edit`, `read`, `grep`, `find`, `ls` and pi-lens's own tools are
+  decided by pi-lens; listing one is refused and the call is treated as before.
+- **A project list needs project trust.** `.pi-lens.json` ships with a
+  repository, so its list counts only when pi has trusted the project. Without
+  trust (or on a host that gives no answer) the list is ignored and the tools
+  stay compared. The global list always counts, and the two are added together.
+- **A refusal is never silent.** A refused entry, or an ignored project list,
+  is reported once per session as `PILENS_CFG_0005` or `PILENS_CFG_0004`
+  naming the entry or the key.
+- **Edits apply next session.** The global list is read once per session; a
+  project list is read per call.
+
 ### `rules.<id>` — read from each file's own config
 
 `rules.<id>.threshold`, `disable`, `select`, and `ignorePaths` are resolved for
