@@ -220,8 +220,6 @@ const NON_WRITER_TOOL_NAME = /^[A-Za-z0-9_.:/-]{1,128}$/;
 /** Refused entries one notice names before it counts the rest. */
 const NON_WRITER_NOTICE_ENTRIES = 3;
 
-const NO_NON_WRITERS: ReadonlySet<string> = new Set();
-
 /**
  * The names a list admits. A refused entry (not a name, or a name pi or
  * pi-lens already decides: a shell, a structured writer, a read-only built-in,
@@ -232,15 +230,15 @@ function admitNonWriters(
 	entries: readonly unknown[],
 	subsystem: "lens-config" | "project-lens-config",
 	file: string,
-): ReadonlySet<string> {
-	const admitted = new Set<string>();
+): readonly string[] {
+	const admitted: string[] = [];
 	const refused: string[] = [];
 	for (const entry of entries) {
 		if (typeof entry !== "string" || !NON_WRITER_TOOL_NAME.test(entry)) {
 			refused.push(`${JSON.stringify(entry)?.slice(0, 40)} (not a tool name)`);
 		} else if (PI_BUILTIN_TOOL_WRITES.has(entry) || isPiLensToolName(entry)) {
 			refused.push(`"${entry}" (pi or pi-lens already decides it)`);
-		} else admitted.add(entry);
+		} else if (!admitted.includes(entry)) admitted.push(entry);
 	}
 	if (refused.length > 0) {
 		const named = refused.slice(0, NON_WRITER_NOTICE_ENTRIES).join(", ");
@@ -261,7 +259,7 @@ function admitNonWriters(
  * at the session boundary, which is also when the ledger resets, so a refused
  * entry is recorded again in the next session.
  */
-let globalNonWriters: ReadonlySet<string> | undefined;
+let globalNonWriters: readonly string[] | undefined;
 
 /**
  * The project list, read per call through the loader's own file cache. It is
@@ -269,10 +267,10 @@ let globalNonWriters: ReadonlySet<string> | undefined;
  * for a tool with it: honored only while pi trusts the project. Anything else
  * (untrusted, or a host that gave no answer) ignores it with one notice.
  */
-function projectNonWriterTools(workspaceRoot: string): ReadonlySet<string> {
+function projectNonWriterTools(workspaceRoot: string): readonly string[] {
 	const project = loadPiLensProjectConfig(workspaceRoot);
 	const entries = project.opaqueScan?.nonWriterTools;
-	if (entries === undefined || entries.length === 0) return NO_NON_WRITERS;
+	if (entries === undefined || entries.length === 0) return [];
 	const file = project.configPath ?? workspaceRoot;
 	const trust = getProjectTrustState();
 	if (trust !== "trusted") {
@@ -283,7 +281,7 @@ function projectNonWriterTools(workspaceRoot: string): ReadonlySet<string> {
 			code: "PILENS_CFG_0004",
 			reason: `opaqueScan.nonWriterTools is honored in a project .pi-lens.json only when pi trusts the project (trust is ${trust}); ignored, so those tools stay opaque`,
 		});
-		return NO_NON_WRITERS;
+		return [];
 	}
 	return admitNonWriters(entries, "project-lens-config", file);
 }
@@ -296,8 +294,8 @@ function isDeclaredNonWriter(toolName: string, workspaceRoot: string): boolean {
 		getPiLensGlobalConfigPath(),
 	);
 	return (
-		globalNonWriters.has(toolName) ||
-		projectNonWriterTools(workspaceRoot).has(toolName)
+		globalNonWriters.includes(toolName) ||
+		projectNonWriterTools(workspaceRoot).includes(toolName)
 	);
 }
 

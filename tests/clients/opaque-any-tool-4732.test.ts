@@ -818,14 +818,19 @@ describe("which calls pay for git status (#4732)", () => {
 			resetIgnoredConfigWarnCache();
 		});
 
-		function commitProjectConfig(config: unknown): void {
+		/**
+		 * A project `.pi-lens.json` the repository's own status never lists, so it
+		 * is not a working-tree change of the call under test.
+		 */
+		function writeProjectConfig(config: unknown): void {
+			fs.appendFileSync(
+				path.join(repoDir, ".git", "info", "exclude"),
+				".pi-lens.json\n",
+			);
 			fs.writeFileSync(
 				path.join(repoDir, ".pi-lens.json"),
 				JSON.stringify(config),
 			);
-			execSync("git add -A && git commit -qm project-config", {
-				cwd: repoDir,
-			});
 		}
 
 		/** One whole call through the real handlers: its cost and its prescan rows. */
@@ -928,7 +933,7 @@ describe("which calls pay for git status (#4732)", () => {
 
 		it("honors a project list under host trust, and ignores it with one notice per session otherwise", async () => {
 			const runtime = runtimeFor("5793-project");
-			commitProjectConfig({ opaqueScan: { nonWriterTools: ["todo"] } });
+			writeProjectConfig({ opaqueScan: { nonWriterTools: ["todo"] } });
 			setProjectTrustState("trusted");
 			expect(await callThrough(runtime, "todo", "5793-p-trusted")).toEqual({
 				spawns: 0,
@@ -964,7 +969,7 @@ describe("which calls pay for git status (#4732)", () => {
 		it("honors the global list while a project list is untrusted", async () => {
 			const runtime = runtimeFor("5793-both");
 			setGlobalConfig({ opaqueScan: { nonWriterTools: ["todo"] } });
-			commitProjectConfig({ opaqueScan: { nonWriterTools: ["other_tool"] } });
+			writeProjectConfig({ opaqueScan: { nonWriterTools: ["other_tool"] } });
 			setProjectTrustState("untrusted");
 			expect(await callThrough(runtime, "todo", "5793-b-todo")).toEqual({
 				spawns: 0,
