@@ -858,6 +858,14 @@ describe("which calls pay for git status (#4732)", () => {
 				.filter((entry) => entry.subject.endsWith(`\0${NOTICE_KEY}`));
 		}
 
+		/** Every ignored-config row of the session, whatever key it names. */
+		function ignoredConfigSubjects(): string[] {
+			return getDegradationSummary()
+				.filter((group) => group.kind === "config-ignored")
+				.flatMap((group) => group.latestReasons)
+				.map((entry) => entry.subject);
+		}
+
 		function captureRefusals() {
 			return getDegradationSummary().filter(
 				(group) => group.kind === "opaque-capture-refused",
@@ -912,9 +920,10 @@ describe("which calls pay for git status (#4732)", () => {
 			expect(
 				await callThrough(runtime, "some_ext_tool", "5793-g-other"),
 			).toEqual({ spawns: 2, prescan: ["some_ext_tool"] });
-			// An honored list is not a failure: no refusal, no ignored-config row.
+			// An honored list is not a failure: no refusal, and neither loader calls
+			// the section an unknown key.
 			expect(captureRefusals()).toEqual([]);
-			expect(listNotices()).toEqual([]);
+			expect(ignoredConfigSubjects()).toEqual([]);
 		});
 
 		it("honors a project list under host trust, and ignores it with one notice per session otherwise", async () => {
@@ -925,7 +934,7 @@ describe("which calls pay for git status (#4732)", () => {
 				spawns: 0,
 				prescan: [],
 			});
-			expect(listNotices()).toEqual([]);
+			expect(ignoredConfigSubjects()).toEqual([]);
 
 			// A cloned repository must not switch write detection off: not trusted,
 			// and a host that gave no answer, both leave the tool opaque.
