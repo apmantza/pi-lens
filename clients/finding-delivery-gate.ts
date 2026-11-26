@@ -149,6 +149,33 @@
  * surface that has re-served it, never from every surface at once, unless no
  * re-run could ever confirm it (case 1).
  *
+ * ── Unconfirmed blockers and their replay (#5784) ─────────────────────────
+ * A recorded blocker whose runner or language server gave no verdict on a
+ * write is carried, not re-checked (`carryRecordedBlockers`, #4484), and the
+ * carry marks it `Diagnostic.unconfirmedBy`. Two rules for it live here and
+ * nowhere else:
+ *
+ * - Wording. `formatUnconfirmedBlockerNote` is the one sentence every
+ *   blocker surface uses for such a blocker: who gave no verdict, that it is
+ *   from an earlier check, and what settles it (a budgeted `lens_diagnostics`
+ *   probe for a language server's finding, the next answered write for the
+ *   rest). Callers: the withheld and `Still unfixed` lines
+ *   (`clients/pipeline.ts`), the turn-end replay (`clients/runtime-turn.ts`)
+ *   and the `lens_diagnostics` session read (`tools/lens-diagnostics.ts`).
+ * - Replay. `admitBlockerReplay` decides whether a per-write blocker line is
+ *   delivered or held back. A write that reached a verdict on any of the
+ *   file's blockers delivers, as before. A line whose blockers are all
+ *   unconfirmed is delivered once per session for its (surface, file,
+ *   identity and coordinates) set; an identical replay is held back and
+ *   counted (`blocker-replay-suppressed`). A changed set or any verdict
+ *   re-arms it. The suppression is of the LINE only: the record, the commit
+ *   gate, the widget and `lens_diagnostics` still hold the blocker.
+ *
+ * Not decided here yet: the turn-end replay's delivery cap (#5532,
+ * `RuntimeCoordinator.blockerFullDeliveryCapped`) and the drift caps (#1950,
+ * #4990). Their counts are per-record state committed only once a staged
+ * turn-end message reaches the model, which a render-time latch cannot see.
+ *
  * ── Explicit lag labels (the non-gated escape hatch) ──────────────────────
  * A store that cannot afford the freshness/disposition stack — because it
  * has no cited per-file path to stat (a package-pinned finding like a trivy
@@ -185,6 +212,9 @@
  *   - `demoted-finding-retired` (degradation ledger): every retirement above.
  *     Pinned by `tests/clients/demoted-blocker-render-retirement.test.ts` and
  *     `tests/clients/widget-dependency-drift-delivery-cap.test.ts`.
+ *   - `blocker-replay-suppressed` (degradation ledger, counted): a per-write
+ *     blocker line held back as an identical replay (`admitBlockerReplay`).
+ *     Pinned by `tests/index-4484-unfixed-blocker-witness.test.ts`.
  *   - What a disposition dropped is also told to the agent, never only
  *     logged: "suppressed by disposition: N finding(s)". The tool results
  *     that filter at delivery word it through `dispositionSuppressedLine`
@@ -199,6 +229,13 @@
  *     `tests/tools/lens-diagnostics-mode-all-full-agreement.test.ts` and
  *     `tests/mcp/server.smoke.test.ts`.
  */
+
+import { incrementDegradationCount } from "./degradation-ledger.js";
+import type { Diagnostic } from "./dispatch/types.js";
+import { findingIdentity } from "./finding-identity.js";
+import { normalizeEphemeralMapKey } from "./path-utils.js";
+import { RUNTIME_CONFIG } from "./runtime-config.js";
+import { resolveLensToolName, type LensToolHost } from "./tool-config.js";
 
 const MS_PER_MINUTE = 60_000;
 
@@ -264,6 +301,123 @@ export function dispositionSuppressedLine(
 		"comment. Not a clean verdict for those locations — they were found, " +
 		"then intentionally hidden."
 	);
+}
+
+/**
+ * #5784: the one no-verdict sentence for blockers that are from an earlier
+ * check (see the module doc). The phrasing follows PR #5786 (yxlimo).
+ * `sources` names the runners or language servers that gave no verdict
+ * (`Diagnostic.unconfirmedBy`); empty when the caller knows only that the
+ * file's latest check gave none. `runnerOnly` says no language server is among
+ * them, so the probe, which asks the language servers, would not settle them.
+ * The probe is named only on a host that has the tool (#2535 F3: never a dead
+ * name). `on` is the write the sentence speaks of.
+ */
+export function formatUnconfirmedBlockerNote(args: {
+	sources: readonly string[];
+	count: number;
+	displayPath: string;
+	runnerOnly?: boolean;
+	on?: "this write" | "its latest write";
+	host?: LensToolHost;
+}): string {
+	const ids = [...new Set(args.sources)];
+	const one = args.count === 1;
+	const them = one ? "it" : "them";
+	const who = ids.length > 0 ? ` (${ids.join(", ")} gave no verdict)` : "";
+	const head = `${args.count} recorded earlier ${one ? "was" : "were"} not re-checked on ${args.on ?? "this write"}${who}`;
+	const tool = resolveLensToolName("lens_diagnostics", args.host ?? "pi");
+	if (args.runnerOnly === true || tool === undefined)
+		return `${head}, so only a later write its check answers can retire ${them}.`;
+	return `${head}, so fixing the code cannot retire ${them}; ${tool} source=lsp path=${args.displayPath} waitMs=${RUNTIME_CONFIG.pipeline.lspExplicitQueryMaxWaitMs} settles ${them}.`;
+}
+
+/**
+ * #5784: {@link formatUnconfirmedBlockerNote} for the blockers of one line or
+ * section that a carry marked `unconfirmedBy`; `undefined` when every one of
+ * them reached a verdict.
+ */
+export function unconfirmedBlockerNote(
+	blockers: readonly Pick<Diagnostic, "unconfirmedBy" | "serverId">[],
+	displayPath: string,
+	options: { on?: "this write" | "its latest write"; host?: LensToolHost } = {},
+): string | undefined {
+	const unconfirmed = blockers.filter((d) => d.unconfirmedBy !== undefined);
+	if (unconfirmed.length === 0) return undefined;
+	return formatUnconfirmedBlockerNote({
+		sources: unconfirmed.flatMap((d) => d.unconfirmedBy ?? []),
+		count: unconfirmed.length,
+		displayPath,
+		runnerOnly: unconfirmed.every((d) => d.serverId === undefined),
+		...options,
+	});
+}
+
+/** #5784: the per-write blocker lines whose identical replay may be held back. */
+export type BlockerReplaySurface = "withheld-line" | "still-unfixed-line";
+
+/**
+ * #5784: per file, the unconfirmed set each surface last delivered this
+ * session. Bounded: past {@link BLOCKER_REPLAY_FILES_MAX} files the oldest is
+ * dropped, which only lets its next replay through once more.
+ */
+const deliveredUnconfirmedReplay = new Map<
+	string,
+	Partial<Record<BlockerReplaySurface, string>>
+>();
+const BLOCKER_REPLAY_FILES_MAX = 256;
+
+/** The identity and the coordinates of one blocker, as the replay key reads it. */
+function replayIdentity(d: Diagnostic): string {
+	const at = d.positionStale ? "moved" : String(d.line ?? "none");
+	return `${findingIdentity(d)}@${at}@${d.filePath ?? ""}@${d.unconfirmedBy ?? ""}`;
+}
+
+/**
+ * #5784: whether `surface`'s line for `filePath`, rendering `blockers` (the
+ * file's live blocking set on this write), is delivered. A set with any
+ * blocker that reached a verdict, or an empty one, delivers and forgets the
+ * file. A set of unconfirmed blockers only (`unconfirmedBy`) delivers when it
+ * differs from what this surface last delivered for this file, and is
+ * otherwise held back and counted. Called on every write, so a verdict re-arms
+ * the file even when no line renders.
+ */
+export function admitBlockerReplay(args: {
+	surface: BlockerReplaySurface;
+	filePath: string;
+	blockers: readonly Diagnostic[];
+}): "deliver" | "suppress" {
+	const file = normalizeEphemeralMapKey(args.filePath);
+	if (
+		args.blockers.length === 0 ||
+		args.blockers.some((d) => d.unconfirmedBy === undefined)
+	) {
+		deliveredUnconfirmedReplay.delete(file);
+		return "deliver";
+	}
+	const key = args.blockers.map(replayIdentity).sort().join("\n");
+	const delivered = deliveredUnconfirmedReplay.get(file) ?? {};
+	if (delivered[args.surface] === key) {
+		incrementDegradationCount({
+			kind: "blocker-replay-suppressed",
+			subject: `${args.surface}:${file}`,
+			reason:
+				"the same unconfirmed blockers were already delivered on this surface this session, and no source has answered since (#5784)",
+		});
+		return "suppress";
+	}
+	deliveredUnconfirmedReplay.delete(file);
+	deliveredUnconfirmedReplay.set(file, { ...delivered, [args.surface]: key });
+	if (deliveredUnconfirmedReplay.size > BLOCKER_REPLAY_FILES_MAX) {
+		const oldest = deliveredUnconfirmedReplay.keys().next().value;
+		if (oldest !== undefined) deliveredUnconfirmedReplay.delete(oldest);
+	}
+	return "deliver";
+}
+
+/** #5784: a new session hears every unconfirmed blocker line once again. */
+export function resetBlockerReplayState(): void {
+	deliveredUnconfirmedReplay.clear();
 }
 
 interface DeliverySurfaceBase {

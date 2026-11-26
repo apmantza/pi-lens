@@ -45,6 +45,7 @@ import {
 import {
 	dispositionSuppressedLine,
 	formatCacheAgeLabel,
+	formatUnconfirmedBlockerNote,
 	markUnreconciledFindings,
 } from "../clients/finding-delivery-gate.js";
 import {
@@ -3696,16 +3697,32 @@ const MAX_UNCHECKED_NAMED = 5;
 function uncheckedFilesLine(
 	summaries: readonly FileDiagnosticSummary[],
 	cwd: string,
+	host: LensToolHost = "pi",
 ): string {
 	const unchecked = summaries.filter((s) => s.uncheckedReason !== undefined);
 	if (unchecked.length === 0) return "";
-	const named = unchecked
-		.slice(0, MAX_UNCHECKED_NAMED)
-		.map(
-			(s) => `${toProjectRelativePath(s.filePath, cwd)}: ${s.uncheckedReason}`,
-		);
+	const shown = unchecked.slice(0, MAX_UNCHECKED_NAMED);
+	const named = shown.map(
+		(s) => `${toProjectRelativePath(s.filePath, cwd)}: ${s.uncheckedReason}`,
+	);
 	const more = unchecked.length - named.length;
-	return `⚠ ${unchecked.length} file${unchecked.length === 1 ? "" : "s"} not checked, so no findings is not a clean result: ${named.join("; ")}${more > 0 ? `; +${more} more` : ""}.`;
+	// #5784: a coverable file whose latest check gave no verdict yet holds
+	// blockers holds them from an earlier check; the delivery gate's sentence
+	// says so and names what settles them. A file no check can cover has no
+	// settle to name.
+	const notes = shown.flatMap((s) => {
+		if (s.blocking === 0 || s.uncheckedInapplicable === true) return [];
+		const display = toProjectRelativePath(s.filePath, cwd);
+		const note = formatUnconfirmedBlockerNote({
+			sources: [],
+			count: s.blocking,
+			displayPath: display,
+			on: "its latest write",
+			host,
+		});
+		return [`\n  ${display}: ${note}`];
+	});
+	return `⚠ ${unchecked.length} file${unchecked.length === 1 ? "" : "s"} not checked, so no findings is not a clean result: ${named.join("; ")}${more > 0 ? `; +${more} more` : ""}.${notes.join("")}`;
 }
 
 // @delivery-surface: lens-diagnostics:mode-all
@@ -3867,7 +3884,11 @@ async function formatAllMode(
 	});
 
 	// #5287: the files no check completed on are not part of "No issues".
-	const uncheckedLine = uncheckedFilesLine(visibleSummaries, cwd);
+	const uncheckedLine = uncheckedFilesLine(
+		visibleSummaries,
+		cwd,
+		sessionEvidence?.host,
+	);
 	const uncheckedNote = uncheckedLine ? `\n${uncheckedLine}` : "";
 	const uncheckedCount = visibleSummaries.filter(
 		(s) => s.uncheckedReason !== undefined,

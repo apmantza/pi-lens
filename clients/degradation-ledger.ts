@@ -259,6 +259,15 @@ export type DegradationKind =
 	 */
 	| "blocker-repeat-capped"
 	/**
+	 * `blocker-replay-suppressed`: #5784: a per-write blocker line (the withheld line, `Still unfixed`)
+	 * whose blockers were all carried without a verdict, and which this
+	 * session already delivered for the same file, surface and blocker set, was
+	 * held back (`admitBlockerReplay`). The blockers stay in the record, the
+	 * commit gate and `lens_diagnostics`. Subject is `<surface>:<file>`;
+	 * counted.
+	 */
+	| "blocker-replay-suppressed"
+	/**
 	 * `bounded-pid-lock-wait-skipped`: #3594: `acquireBoundedPidFileLock`'s wait (the durable-store sync
 	 * waiter) was skipped because the same top-generation holder an earlier
 	 * wait ran out on is still there. The call falls back at once, same as

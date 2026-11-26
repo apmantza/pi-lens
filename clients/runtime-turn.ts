@@ -58,6 +58,7 @@ import { getKnipIgnorePatterns } from "./file-utils.js";
 import {
 	admitsProjectWideFindings,
 	formatCacheAgeLabel,
+	unconfirmedBlockerNote,
 } from "./finding-delivery-gate.js";
 import {
 	getFullScanWallClockMs,
@@ -2057,7 +2058,14 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				policySuppressedPaths.push(bPath);
 				continue;
 			}
-			const replayPart = `Unresolved from this turn — ${displayPath}${suppressedByDispositionNote(policy.suppressed)}:\n${policy.body}`;
+			// #5784: the gate's sentence for blockers carried without a verdict,
+			// indented so `clients/git-guard.ts` parses it as section body.
+			const note = unconfirmedBlockerNote(
+				record.diagnostics ?? [],
+				displayPath,
+				{ on: "its latest write" },
+			);
+			const replayPart = `Unresolved from this turn — ${displayPath}${suppressedByDispositionNote(policy.suppressed)}:\n${policy.body}${note === undefined ? "" : `\n  ${note}`}`;
 			// @delivery-surface: runtime-turn:unresolved-inline-blocker
 			blockerParts.push(replayPart);
 			// #4617: the replay is about this file, which a no-write turn did not

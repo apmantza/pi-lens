@@ -165,6 +165,15 @@ export interface Diagnostic {
 	 */
 	positionStale?: true;
 	/**
+	 * #5784: a recorded blocker this write kept because its source gave no
+	 * verdict for it (`carryRecordedBlockers`' `keepUnobserved` arm): the id of
+	 * that language server, else that runner. Only a carry sets it, so an
+	 * observed copy never has it. The delivery gate
+	 * (`clients/finding-delivery-gate.ts`) reads it to word the blocker as
+	 * unconfirmed and to suppress an identical replay. Never part of identity.
+	 */
+	unconfirmedBy?: string;
+	/**
 	 * #4130: the diagnostic reports the runner's own failure (`faultResult`), not
 	 * a finding about the code. Turn end delivers that fault once, as the
 	 * failure note, so the deferred verdict drops this row. Never part of

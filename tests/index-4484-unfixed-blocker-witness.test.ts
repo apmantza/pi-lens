@@ -650,6 +650,24 @@ async function openSession(
 			)) as { content?: Array<{ text?: string }> } | undefined;
 			return scrub((r?.content ?? []).map((p) => p.text ?? "").join("\n"));
 		},
+		/**
+		 * #5784: a host `bash` call that rewrote the file through a script the
+		 * parser cannot credit, so its synthetic write runs without authorship
+		 * and ends with the withheld line, not the STOP block.
+		 */
+		async bash(content: string, command: string): Promise<string> {
+			fs.writeFileSync(target, content);
+			const r = (await pi.emit(
+				"tool_result",
+				{
+					toolName: "bash",
+					input: { command },
+					content: [{ type: "text", text: "" }],
+				},
+				ctx(),
+			)) as { content?: Array<{ text?: string }> } | undefined;
+			return scrub((r?.content ?? []).map((p) => p.text ?? "").join("\n"));
+		},
 		async commitBlocked(): Promise<boolean> {
 			const v = ((await pi.emit(
 				"tool_call",
@@ -676,6 +694,18 @@ async function openSession(
 			const out = await lens.execute(
 				`zz-${name}`,
 				{ source: "session", mode: "all" },
+				undefined,
+				null,
+				{ cwd: tmpDir },
+			);
+			return scrub((out.content ?? []).map((p) => p.text ?? "").join("\n"));
+		},
+		/** #5784: the call the no-verdict sentence names, on this file. */
+		async settleCall(params: Record<string, unknown>): Promise<string> {
+			const lens = pi.tools.get("lens_diagnostics") as Tool;
+			const out = await lens.execute(
+				`zz-settle-${name}`,
+				{ ...params, path: target },
 				undefined,
 				null,
 				{ cwd: tmpDir },
@@ -1120,10 +1150,13 @@ describe("#4484 witness, round 2: only evidence retires a recorded blocker", () 
 			"Still unfixed: 1 blocker reported earlier",
 		);
 		expect(await unalignedRows("blocker-position-unaligned")).toEqual([]);
-		// The next write has nothing to place that stale record against.
-		expect(await s.write(V1_LINE_REWRITTEN_OTHER_LINE)).toContain(
-			"Still unfixed: 1 blocker reported earlier",
-		);
+		// The next write has nothing to place that stale record against. #5784:
+		// the same unconfirmed blocker again, so its line is held back, and no
+		// all-clear stands in for it; the commit gate still holds it.
+		const w3 = await s.write(V1_LINE_REWRITTEN_OTHER_LINE);
+		expect(w3).not.toContain("Still unfixed");
+		expect(w3).not.toMatch(/clean/);
+		expect(await s.commitBlocked()).toBe(true);
 		expect(await unalignedRows("blocker-position-unaligned")).toContainEqual(
 			expect.objectContaining({ count: 1 }),
 		);
@@ -2270,9 +2303,14 @@ describe("#4509 witness: a recorded blocker is judged by a run of its own runner
 			/STOP[^]*no-unknown-returns|STOP[^]*Function returns 'unknown'/,
 		);
 		expect(await s.commitBlocked()).toBe(true);
-		expect(
-			await s.edit(`${AG_PRE}export const tail = 2;\n${OVER_CAP}\n`, [7]),
-		).toMatch(/Still unfixed: 1 blocker reported earlier/);
+		// #5784: the same unconfirmed blocker on the next write: its line is held
+		// back as an identical replay, and the blocker stays pending.
+		const w3 = await s.edit(
+			`${AG_PRE}export const tail = 2;\n${OVER_CAP}\n`,
+			[7],
+		);
+		expect(w3).not.toMatch(/Still unfixed|clean/);
+		expect(await s.commitBlocked()).toBe(true);
 		expect(w2).toMatch(
 			/Still unfixed: 1 blocker reported earlier; 1 whose line could not be re-placed in these bytes\./,
 		);
@@ -2862,6 +2900,156 @@ describe("#5727 witness: an auxiliary's answer judges its own recorded blocker",
 		expect(await s.commitBlocked()).toBe(false);
 		expect(await s.endTurn()).not.toContain("Unresolved from this turn");
 		boundary.lsp.primarySilent = undefined;
+		await fixAndDrain(s);
+	}, 120_000);
+});
+
+/**
+ * #5784 witness: a blocker carried because its source gave no verdict says so
+ * and names what settles it, and its per-write line is not replayed verbatim.
+ *
+ * Recurrence prevented: a subagent session on pi-lens 4.5.2, where the
+ * classic typescript-language-server (push-only, silent on a clean re-check)
+ * never answered after the first write, and every later write ended with the
+ * same `withheld` line for 30 minutes. Nothing in the line said the check had
+ * no verdict, and nothing named the budgeted probe that settles it.
+ */
+describe("#5784 witness: an unconfirmed carried blocker is not replayed verbatim", () => {
+	/** The V1 shape with a varying last line, so each write is new bytes. */
+	const withTail = (n: number, above = "") =>
+		`${above}const a = 1;\nBAD_CALL();\nconst b = ${n};\n`;
+	const SCRIPT = "node tools/gen.js > src/replay.ts";
+	const NOT_RECHECKED = "not re-checked on";
+	const NO_VERDICT =
+		"1 recorded earlier was not re-checked on this write (typescript gave no verdict), so fixing the code cannot retire it;";
+	const SETTLE =
+		"lens_diagnostics source=lsp path=src/replay.ts waitMs=30000 settles it.";
+	const WITHHELD = /withheld: this call names the file/;
+
+	const suppressedCount = async (subject: string): Promise<number> =>
+		(await degradationRows("blocker-replay-suppressed")).filter((row) =>
+			String(row.subject ?? "").includes(subject),
+		).length;
+
+	it("names the missing verdict and the probe on the withheld line, then holds back its identical replay", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("rp", "src/replay.ts", V_FIXED);
+		expect(await s.write(V1)).toContain("🔴 STOP");
+		boundary.lsp.mode = "inconclusive";
+		// (a) the first replay says why, and what settles it.
+		const b1 = await s.bash(withTail(10), SCRIPT);
+		expect(b1).toMatch(WITHHELD);
+		expect(b1).toContain(NO_VERDICT);
+		expect(b1).toContain(SETTLE);
+		// (b) the same set again: no second line, and no clean claim in its place.
+		const b2 = await s.bash(withTail(11), SCRIPT);
+		expect(b2).not.toMatch(WITHHELD);
+		expect(b2).not.toContain(NOT_RECHECKED);
+		expect(b2).not.toMatch(/clean|unconfirmed —/);
+		expect(await suppressedCount("withheld-line:")).toBeGreaterThan(0);
+		// The blocker itself is still held everywhere a pull or a gate reads it.
+		expect(await s.commitBlocked()).toBe(true);
+		expect(await s.sessionDiagnostics()).toContain(
+			"Cannot find name 'BAD_CALL'",
+		);
+		boundary.lsp.mode = "answer";
+		await fixAndDrain(s);
+	}, 120_000);
+
+	it("delivers the line again when the unconfirmed set moves or a verdict arrives", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("rm", "src/replay.ts", V_FIXED);
+		expect(await s.write(V1)).toContain("🔴 STOP");
+		boundary.lsp.mode = "inconclusive";
+		expect(await s.bash(withTail(20), SCRIPT)).toMatch(WITHHELD);
+		expect(await s.bash(withTail(21), SCRIPT)).not.toMatch(WITHHELD);
+		// (c1) a line inserted above moves the carried blocker: a new set.
+		const moved = await s.bash(withTail(22, "const z = 0;\n"), SCRIPT);
+		expect(moved).toMatch(WITHHELD);
+		expect(moved).toMatch(/\(L3 ts:2304\)/);
+		expect(await s.bash(withTail(23, "const z = 0;\n"), SCRIPT)).not.toMatch(
+			WITHHELD,
+		);
+		// (c2) the server answers and still sees the error: a verdict, delivered
+		// as before, with no no-verdict sentence.
+		boundary.lsp.mode = "answer";
+		const answered = await s.bash(withTail(24, "const z = 0;\n"), SCRIPT);
+		expect(answered).toMatch(WITHHELD);
+		expect(answered).not.toContain(NOT_RECHECKED);
+		// The verdict re-armed the file: the next silent write says it once more.
+		boundary.lsp.mode = "inconclusive";
+		const rearmed = await s.bash(withTail(25, "const z = 0;\n"), SCRIPT);
+		expect(rearmed).toMatch(WITHHELD);
+		expect(rearmed).toContain(NO_VERDICT);
+		boundary.lsp.mode = "answer";
+		await fixAndDrain(s);
+	}, 120_000);
+
+	it("keeps delivering a blocker whose source reached a verdict on every write", async () => {
+		// The control (brief point 5): only an identical unconfirmed replay is
+		// held back. A blocker the server reports on each write is a verdict.
+		boundary.lsp.enabled = true;
+		const s = await openSession("rv", "src/replay.ts", V_FIXED);
+		expect(await s.write(V1)).toContain("🔴 STOP");
+		for (const n of [30, 31, 32]) {
+			const out = await s.bash(withTail(n), SCRIPT);
+			expect(out).toMatch(WITHHELD);
+			expect(out).not.toContain(NOT_RECHECKED);
+		}
+		await fixAndDrain(s);
+	}, 120_000);
+
+	it("words the Still unfixed line, the turn end and the session read the same way, once per set", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("ru", "src/replay.ts", V_FIXED);
+		expect(await s.write(V1)).toContain("🔴 STOP");
+		boundary.lsp.mode = "inconclusive";
+		const w2 = await s.write(withTail(40));
+		expect(w2).toMatch(STILL_UNFIXED);
+		expect(w2).toContain(NO_VERDICT);
+		expect(w2).toContain(SETTLE);
+		const w3 = await s.write(withTail(41));
+		expect(w3).not.toMatch(STILL_UNFIXED);
+		expect(w3).not.toMatch(/clean|unconfirmed —/);
+		expect(await suppressedCount("still-unfixed-line:")).toBeGreaterThan(0);
+		const turnEnd = await s.endTurn();
+		expect(turnEnd).toContain("Unresolved from this turn — src/replay.ts:");
+		expect(turnEnd).toContain(
+			"  1 recorded earlier was not re-checked on its latest write (typescript gave no verdict), so fixing the code cannot retire it;",
+		);
+		// The session read names the probe for the file its check left unanswered.
+		const session = await s.sessionDiagnostics();
+		expect(session).toContain("typescript silent");
+		expect(session).toContain(
+			`src/replay.ts: 1 recorded earlier was not re-checked on its latest write, so fixing the code cannot retire it; ${SETTLE}`,
+		);
+		boundary.lsp.mode = "answer";
+		await fixAndDrain(s);
+	}, 120_000);
+
+	it("settles a fixed file through the probe the sentence names", async () => {
+		// The incident's own sequence: the fix lands while the server stays
+		// silent, so the passive path keeps the blocker; the named probe answers.
+		boundary.lsp.enabled = true;
+		const s = await openSession("rs", "src/replay.ts", V_FIXED);
+		expect(await s.write(V1)).toContain("🔴 STOP");
+		boundary.lsp.mode = "inconclusive";
+		const line = await s.bash(V_FIXED_OTHER, SCRIPT);
+		expect(line).toContain(NO_VERDICT);
+		expect(await s.sessionDiagnostics()).toContain("BAD_CALL");
+		// The call is read off the line itself, so the sentence and the action
+		// it names cannot drift apart.
+		const named =
+			/lens_diagnostics source=(\w+) path=(\S+) waitMs=(\d+) settles/.exec(
+				line,
+			);
+		expect(named?.[2]).toBe("src/replay.ts");
+		boundary.lsp.mode = "answer";
+		expect(
+			await s.settleCall({ source: named?.[1], waitMs: Number(named?.[3]) }),
+		).toMatch(/confirmed clean/);
+		expect(await s.sessionDiagnostics()).not.toContain("BAD_CALL");
+		expect(await s.commitBlocked()).toBe(false);
 		await fixAndDrain(s);
 	}, 120_000);
 });
