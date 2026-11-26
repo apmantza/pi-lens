@@ -126,7 +126,8 @@
 			"` ${totalAdvisories} hint/info (style — not counted as warnings)`": 1,
 			"`\\n ${display}: ${note}`": 1,
 			"`⚠ ${unchecked.length} file${unchecked.length === 1 ? \"\" : \"s\"} not checked, so no findings is not a clean result: ${named.join(\"; \")}${more > 0 ? `; +${more} more` : \"\"}.${notes.join(\"\")}`": 1,
-			"`${recordsHeld.line}\\n`": 1
+			"`${recordsHeld.line}\\n`": 1,
+			"`\\n${recordsHeld.line}`": 1
 		},
 		"neutral": {
 			"\"refreshRunners not requested this call (quick mode) — pass \"": 1,
@@ -139,7 +140,7 @@
 			"\"diagnostic\"": 1,
 			"\"diagnostics\"": 1,
 			"` ${path.basename(filePath)}`": 1,
-			"\"\"": 54,
+			"\"\"": 55,
 			"` across ${files} files`": 1,
 			"`lens_diagnostics${scope} — too large: ${tooLargeLines.join(\"; \")}`": 1,
 			"`lens_diagnostics${scope} — ${count} ${noun} · ${notConfirmed} checks not confirmed`": 1,

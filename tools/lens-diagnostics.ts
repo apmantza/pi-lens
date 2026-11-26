@@ -4138,20 +4138,24 @@ async function formatAllMode(
 	const cleanEvidence = { scope: claimKeys.size, proven: provenCount };
 	const proofDetails = isFullMode ? { provenFiles: provenCount } : {};
 
+	// #5788 review F6: a blocker record no check retired is a finding this read
+	// speaks for, so it withholds the all-clear. Admitted before the branch
+	// (round 3 R3-4): a hint-only file sends the read to the listing below,
+	// which must name the record and count it as well.
+	const heldRecords = (blockerRecords?.records ?? []).flatMap((held) =>
+		includeFile(held.filePath)
+			? [
+					{
+						displayPath: toProjectRelativePath(held.filePath, cwd),
+						blockers: held.diagnostics ?? [],
+					},
+				]
+			: [],
+	);
+	const recordsHeld = admitSessionAllClear(heldRecords, blockerRecords?.host);
+	const recordsHeldNote = recordsHeld.clean ? "" : `\n${recordsHeld.line}`;
+
 	if (withIssues.length === 0) {
-		// #5788 review F6: a blocker record no check retired is a finding this
-		// read speaks for, so it withholds the all-clear.
-		const heldRecords = (blockerRecords?.records ?? []).flatMap((held) =>
-			includeFile(held.filePath)
-				? [
-						{
-							displayPath: toProjectRelativePath(held.filePath, cwd),
-							blockers: held.diagnostics ?? [],
-						},
-					]
-				: [],
-		);
-		const recordsHeld = admitSessionAllClear(heldRecords, blockerRecords?.host);
 		const clean = cleanVerdict({
 			...cleanEvidence,
 			findings: heldRecords.length,
@@ -4308,6 +4312,7 @@ async function formatAllMode(
 					validationNote +
 					lines.join("\n") +
 					summary +
+					recordsHeldNote +
 					uncheckedNote +
 					staleNote +
 					suppressedNote,
@@ -4329,7 +4334,8 @@ async function formatAllMode(
 			// with the same proof as the line above.
 			clean: cleanVerdict({
 				...cleanEvidence,
-				findings: totalBlocking + totalErrors + totalWarnings,
+				findings:
+					totalBlocking + totalErrors + totalWarnings + heldRecords.length,
 			}),
 			...proofDetails,
 		},

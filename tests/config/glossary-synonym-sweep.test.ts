@@ -1838,9 +1838,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 6 -> 8 (#3218): the resolved-blocker filter keys each current blocker
 		// record.
 		// 8 -> 9 (#4990): the demoted channel names the mark's demoted record.
-		// 9 -> 10 (#5784): the turn-end replay reads `record.diagnostics` for the
-		// gate's unconfirmed-blocker sentence.
-		"clients/runtime-turn.ts": 10,
+		"clients/runtime-turn.ts": 9,
 		"clients/search-read-registration.ts": 1,
 		"clients/test-runner-client.ts": 4,
 		// 15 -> 16 (#5259): the stage-time idle read writes its failure through

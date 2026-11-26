@@ -1353,18 +1353,24 @@ export function recordProjectChange(args: {
  * #5788 review F4: the replay latch write the pipeline asked for
  * (`PipelineResult.blockerReplayCommit`), made here because this is where the
  * tool result is handed to the host. The 10 s bound's abandoned path and the
- * observed-mutation path never reach this point. A run of a session the host
- * replaced (#3596, `resultLive` false) commits nothing (CodeRabbit C4):
- * finishing after the replacement's first verdict, it carries the
- * replacement's record, and its latch would hold back the replacement's
- * first unconfirmed line, which that agent never saw.
+ * observed-mutation path never reach this point. Two deliveries that do reach
+ * it commit nothing:
+ * - the host stopped waiting (`hostDelivery.abandoned`, round 3 R3-1): a
+ *   credited script write is read-only class with a 500 ms bound, and a line
+ *   the host never received must not hold back the next write's;
+ * - the host replaced the session (#3596, CodeRabbit C4). `live` is read here,
+ *   not before the pipeline's last await (round 3 R3-2): a `/new` during the
+ *   complexity adviser's read would otherwise let the replaced run latch a
+ *   line and hold back the replacement's first one, which that agent never saw.
  */
 function commitDeliveredBlockerReplay(
 	result: PipelineResult,
-	resultLive: boolean,
+	live: () => boolean,
+	deps: Pick<ToolResultDeps, "hostDelivery">,
 ): void {
-	if (resultLive && result.blockerReplayCommit !== undefined)
-		commitBlockerReplay(result.blockerReplayCommit);
+	if (deps.hostDelivery?.abandoned === true) return;
+	if (result.blockerReplayCommit === undefined || !live()) return;
+	commitBlockerReplay(result.blockerReplayCommit);
 }
 
 export function recordTurnSummary(args: {
@@ -4868,7 +4874,8 @@ export async function handleToolResult(
 	// #3596: the pipeline awaited. A replaced session's handler queues,
 	// summarises and latches nothing in the live session; pi-lens' own writes
 	// still reach the change log below, because they landed on disk.
-	const resultLive = writeSession.guardedWrite(filePath, () => true) === true;
+	const isLive = () => writeSession.guardedWrite(filePath, () => true) === true;
+	const resultLive = isLive();
 
 	// #4689 item 9: `deferMutation` refuses a root the session may not write
 	// (an adopted project) and queues nothing, so no queue claim (the phase
@@ -5117,7 +5124,7 @@ export async function handleToolResult(
 	}
 
 	if (result.isError) {
-		commitDeliveredBlockerReplay(result, resultLive);
+		commitDeliveredBlockerReplay(result, isLive, deps);
 		return {
 			content: [...event.content, { type: "text", text: result.output }],
 			isError: true,
@@ -5285,7 +5292,7 @@ export async function handleToolResult(
 		output = `${output ? `${output}\n\n` : ""}${renderPostAutofixNotice(notice, attachmentDecision)}`;
 	}
 
-	commitDeliveredBlockerReplay(result, resultLive);
+	commitDeliveredBlockerReplay(result, isLive, deps);
 	if (!output && !result.postMutation) return;
 
 	return {

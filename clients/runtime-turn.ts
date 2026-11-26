@@ -2068,12 +2068,13 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				continue;
 			}
 			// #5784: the gate's sentence for blockers carried without a verdict,
-			// indented so `clients/git-guard.ts` parses it as section body.
-			const note = unconfirmedBlockerNote(
-				record.diagnostics ?? [],
-				displayPath,
-				{ on: "its latest write", host },
-			);
+			// indented so `clients/git-guard.ts` parses it as section body. Built
+			// from the rows the policy kept (#5788 round 3 R3-3): a row the agent
+			// marked is out of the block, so it is out of the note too.
+			const note = unconfirmedBlockerNote(policy.keptDiagnostics, displayPath, {
+				on: "its latest write",
+				host,
+			});
 			const replayPart = `Unresolved from this turn — ${displayPath}${suppressedByDispositionNote(policy.suppressed)}:\n${policy.body}${note === undefined ? "" : `\n  ${note}`}`;
 			// @delivery-surface: runtime-turn:unresolved-inline-blocker
 			blockerParts.push(replayPart);

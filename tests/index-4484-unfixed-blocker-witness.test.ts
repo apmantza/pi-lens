@@ -52,7 +52,7 @@ const boundary = vi.hoisted(() => {
 		published: false,
 		diag: false,
 		cutoff: false,
-		other: 0 as 0 | 1 | 2,
+		other: 0 as 0 | 1 | 2 | 4,
 	};
 	/** Round 8 (P39): with `silent`, the bash server does not answer a
 	 *  `.sh` touch; `runs` counts shellcheck's CLI scans. */
@@ -407,7 +407,27 @@ const boundary = vi.hoisted(() => {
 			status: items.length ? 1 : 0,
 		};
 	}
-	function run(command: string, args: readonly string[] = []) {
+	/**
+	 * #5788 round 4: a cell's answer for git, given the call's args and cwd. A
+	 * returned promise holds an async caller (the complexity adviser's ref
+	 * read) until the cell settles it. Unset, git reads as no repository.
+	 */
+	const git = {
+		answer: undefined as
+			| ((
+					args: readonly string[],
+					cwd: string | undefined,
+			  ) => SpawnAnswer | Promise<SpawnAnswer>)
+			| undefined,
+	};
+	type SpawnAnswer = { stdout: string; stderr: string; status: number };
+	function run(
+		command: string,
+		args: readonly string[] = [],
+		options?: { cwd?: string },
+	) {
+		if (command === "git" && git.answer !== undefined)
+			return git.answer(args, options?.cwd);
 		if (/shellcheck/.test(command) && args.includes("--format")) {
 			sh.runs += 1;
 			const file = args[args.length - 1] ?? "";
@@ -452,14 +472,17 @@ const boundary = vi.hoisted(() => {
 			status: 0,
 		};
 	}
-	return { lsp, helm, isHelm, isDoubled, run, ag, sh };
+	return { lsp, helm, isHelm, isDoubled, run, ag, sh, git };
 });
 
 vi.mock("../clients/safe-spawn.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../clients/safe-spawn.js")>()),
 	safeSpawn: boundary.run,
-	safeSpawnAsync: async (command: string, args: readonly string[] = []) =>
-		boundary.run(command, args),
+	safeSpawnAsync: async (
+		command: string,
+		args: readonly string[] = [],
+		options?: { cwd?: string },
+	) => boundary.run(command, args, options),
 	isCommandAvailableAsync: async (command: string) =>
 		boundary.isDoubled(command),
 	findCommandAsync: async (command: string) =>
@@ -540,6 +563,7 @@ afterEach(async () => {
 	boundary.lsp.silentAux = false;
 	boundary.lsp.primarySilent = undefined;
 	boundary.lsp.onHold = undefined;
+	boundary.git.answer = undefined;
 	for (const release of boundary.lsp.held.splice(0)) release();
 	resetObservedRunnerLatency();
 	// #5146: end the cell's session once its held boundaries are released.
@@ -719,6 +743,37 @@ async function openSession(
 					: makeCtx({ cwd: tmpDir, sessionId }),
 			);
 			return scrub((out.content ?? []).map((p) => p.text ?? "").join("\n"));
+		},
+		/** The session read's text and its `details` (#5788 round 4). */
+		async sessionReport(): Promise<{
+			text: string;
+			details: { clean?: boolean };
+		}> {
+			const lens = pi.tools.get("lens_diagnostics") as Tool;
+			const out = (await lens.execute(
+				`zz-report-${name}`,
+				{ source: "session", mode: "all" },
+				undefined,
+				null,
+				{ cwd: tmpDir },
+			)) as {
+				content?: Array<{ text?: string }>;
+				details?: { clean?: boolean };
+			};
+			return {
+				text: scrub((out.content ?? []).map((p) => p.text ?? "").join("\n")),
+				details: out.details ?? {},
+			};
+		},
+		/** A host event with a call id the cell chooses (tool_call, tool_result). */
+		async emit(
+			kind: string,
+			payload: Record<string, unknown>,
+		): Promise<string> {
+			const r = (await pi.emit(kind, payload, ctx())) as
+				| { content?: Array<{ text?: string }> }
+				| undefined;
+			return scrub((r?.content ?? []).map((p) => p.text ?? "").join("\n"));
 		},
 		/** The agent's `lens_diagnostic_mark` call on this file. */
 		async mark(params: Record<string, unknown>): Promise<string> {
@@ -3218,9 +3273,72 @@ describe("#5784 witness: an unconfirmed carried blocker is not replayed verbatim
 			disposition: "false-positive",
 			reason: "#5788 N1 witness",
 		});
-		const session = await s.sessionDiagnostics();
-		expect(session).toContain("suppressed by disposition");
-		expect(session).not.toContain(RECORD_HELD);
+		const session = await s.sessionReport();
+		expect(session.text).toContain("suppressed by disposition");
+		expect(session.text).not.toContain(RECORD_HELD);
+		// #5788 round 3 R3-5: the verdict itself, not only the missing line.
+		expect(session.text).toContain(
+			"No issues across 1 file diagnosed this session. ✓",
+		);
+		expect(session.details.clean).toBe(true);
+		await s.write(V_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence (#5788 round 3 R3-3, CodeRabbit TQxF): the turn-end note was
+	// built from the whole record, so a typescript row the agent marked
+	// false-positive still drew "not re-checked … source=lsp settles it"
+	// beside the fresh ast-grep blocker that survived the policy (N1's sibling).
+	it("leaves a marked unconfirmed row out of the turn-end note", async () => {
+		boundary.lsp.enabled = true;
+		boundary.ag.diag = true;
+		const MIX =
+			"const a = 1;\nBAD_CALL();\nfunction f(): unknown {\n  return 1;\n}\n";
+		const s = await openSession("tm", "src/turn-marked.ts", V_FIXED);
+		expect(await s.write(MIX)).toContain("🔴 STOP");
+		boundary.lsp.primarySilent = { reason: "diagnostics-wait" };
+		expect(await s.write(MIX + "// t\n")).toMatch(NOT_RECHECKED);
+		await s.mark({
+			line: 2,
+			message: "Cannot find name 'BAD_CALL'.",
+			rule: "ts:2304",
+			tool: "lsp",
+			disposition: "false-positive",
+			reason: "#5788 R3-3 witness",
+		});
+		const end = await s.endTurn();
+		expect(end).toContain("no-unknown-returns");
+		expect(end).not.toMatch(NOT_RECHECKED);
+		boundary.lsp.primarySilent = undefined;
+		boundary.ag.diag = false;
+		await s.write(V_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence (#5788 round 3 R3-4, CodeRabbit TQxZ): the held-record
+	// admission sat in the no-issues branch only, so a hint-only file in the
+	// session sent the read down the listing branch, which said clean:true and
+	// never named the held record while the commit gate blocked.
+	it("names a held record when a hint-only file shares the session read", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("hh", "src/held-hint.ts", V_FIXED);
+		expect(await s.write(V1)).toContain("🔴 STOP");
+		boundary.lsp.mode = "inconclusive";
+		await s.bash(V_FIXED_OTHER, "node tools/gen.js > src/held-hint.ts");
+		boundary.lsp.mode = "answer";
+		const target = path.join(tmpDir, "src/held-hint.ts");
+		lspDouble.runWorkspaceDiagnostics = async () => [
+			{ filePath: target, diagnostics: [], count: 0 },
+		];
+		await s.settleCall({ mode: "full", waitMs: 30000 });
+		boundary.ag.other = 4;
+		const hint = await openSession("hi", "src/hint-only.py", "x = 1\n");
+		await hint.write("def g(): unknown {\n    return 1\n");
+		boundary.ag.other = 0;
+		expect(await s.commitBlocked()).toBe(true);
+		const session = await s.sessionReport();
+		expect(session.text).toContain(RECORD_HELD);
+		expect(session.details.clean).not.toBe(true);
 		await s.write(V_FIXED);
 		await fixAndDrain(s);
 	}, 120_000);
@@ -3274,6 +3392,124 @@ describe("#5784 witness: an unconfirmed carried blocker is not replayed verbatim
 		expect(await waitFor(carried, (n) => n > before)).toBeGreaterThan(before);
 		// Its line never reached the agent, so the next write's is delivered.
 		expect(await s.write(withTail(21))).toMatch(STILL_UNFIXED);
+		boundary.lsp.mode = "answer";
+		await s.write(V_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence (#5788 round 3 R3-1, CodeRabbit TQw1): round 3 dropped the
+	// host-abandon arm of the latch commit. A credited script write is
+	// read-only class, so the host waits 500 ms; the run outlasted it, its
+	// Still unfixed line never reached the agent, and the latch still
+	// committed, holding back the next write's line. The git double answers
+	// the opaque recovery as a repository whose base holds V1.
+	it("leaves the latch unwritten when the 500 ms script bound abandons the delivery", async () => {
+		const carried = () =>
+			getDegradationSummary().find(
+				(group) => group.kind === "blocker-carried-unobserved",
+			)?.count ?? 0;
+		boundary.lsp.enabled = true;
+		const s = await openSession("sb", "src/script-bound.ts", V_FIXED);
+		const target = path.join(tmpDir, "src/script-bound.ts");
+		expect(await s.write(V1)).toContain("🔴 STOP");
+		boundary.git.answer = (args) => {
+			const ok = (stdout: string) => ({ stdout, stderr: "", status: 0 });
+			const changed = fs.readFileSync(target, "utf8") !== V1;
+			if (args[0] === "rev-parse" && args[1] === "--is-inside-work-tree")
+				return ok("true\n");
+			if (args[0] === "status")
+				return ok(changed ? " M src/script-bound.ts\0" : "");
+			if (args[0] === "ls-files")
+				return ok(args.includes("--others") ? "" : "src/script-bound.ts\n");
+			if (args[0] === "for-each-ref") return ok("refs/heads/master\t\n");
+			if (args[0] === "show") return ok(V1);
+			return { stdout: "", stderr: "fatal: not a git repository", status: 128 };
+		};
+		const command =
+			"node - <<'JS'\nrequire('fs').appendFileSync('src/script-bound.ts', '// s')\nJS";
+		await s.emit("tool_call", {
+			toolName: "bash",
+			toolCallId: "sb-script",
+			input: { command },
+		});
+		fs.writeFileSync(target, V1 + "// s\n");
+		boundary.lsp.mode = "hold";
+		const before = carried();
+		// The held server outlasts the 500 ms bound: the host sees nothing.
+		expect(
+			await s.emit("tool_result", {
+				toolName: "bash",
+				toolCallId: "sb-script",
+				input: { command },
+				content: [{ type: "text", text: "" }],
+			}),
+		).not.toMatch(STILL_UNFIXED);
+		boundary.lsp.mode = "inconclusive";
+		for (const release of boundary.lsp.held.splice(0)) release(true);
+		// The abandoned run finishes on its own and carries the blocker.
+		expect(await waitFor(carried, (n) => n > before)).toBeGreaterThan(before);
+		// Its line never reached the agent, so the next write's is delivered.
+		expect(await s.write(V1 + "// next\n")).toMatch(STILL_UNFIXED);
+		boundary.lsp.mode = "answer";
+		await s.write(V_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence (#5788 round 3 R3-2, CodeRabbit TQw5): the latch commit read
+	// a liveness captured before the complexity adviser's await. A /new during
+	// that await left it true, so the replaced run latched its line and held
+	// back the replacement's first Still unfixed line. The git double holds
+	// the adviser's ref read across the replacement.
+	it("leaves the latch unwritten when the session is replaced during the adviser's read", async () => {
+		boundary.lsp.enabled = true;
+		const F =
+			"export function q(n: number): number {\n  return n;\n}\nBAD_CALL();\n";
+		const s = await openSession(
+			"ra",
+			"src/adviser.ts",
+			"export const z = 1;\n",
+		);
+		expect(await s.write(F)).toContain("🔴 STOP");
+		let reached!: () => void;
+		const atRead = new Promise<void>((resolve) => {
+			reached = resolve;
+		});
+		let release!: () => void;
+		boundary.git.answer = (args) => {
+			const none = {
+				stdout: "",
+				stderr: "fatal: not a git repository",
+				status: 128,
+			};
+			if (args[0] !== "for-each-ref") return none;
+			boundary.git.answer = undefined;
+			reached();
+			return new Promise((resolve) => {
+				release = () => resolve(none);
+			});
+		};
+		// The complexity adviser compares against the content its call saw.
+		await s.emit("tool_call", {
+			toolName: "write",
+			toolCallId: "ra-seed",
+			input: {
+				path: path.join(tmpDir, "src/adviser.ts"),
+				content: F + "// t\n",
+			},
+		});
+		boundary.lsp.mode = "inconclusive";
+		const stale = s.write(F + "// t\n");
+		expect(
+			await Promise.race([atRead.then(() => "held"), stale.then(() => "done")]),
+		).toBe("held");
+		await s.replace("pi-lens-4484-rb");
+		boundary.lsp.mode = "answer";
+		expect(await s.write(F)).toContain("🔴 STOP");
+		boundary.lsp.mode = "inconclusive";
+		release();
+		// The replaced run finishes with its line for a host that left.
+		expect(await stale).toMatch(STILL_UNFIXED);
+		expect(await s.write(F + "// u\n")).toMatch(STILL_UNFIXED);
 		boundary.lsp.mode = "answer";
 		await s.write(V_FIXED);
 		await fixAndDrain(s);
