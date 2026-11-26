@@ -2081,8 +2081,14 @@ function carryRecordedBlockers(
 	positionOf: (d: Diagnostic) => number | undefined | typeof ANY_POSITION,
 	matchesAnywhere: (prior: Diagnostic, observed: Diagnostic) => boolean,
 	editRanges: readonly { start: number; end: number }[] | undefined,
-): { carried: Diagnostic[]; matched: ReadonlySet<Diagnostic> } {
-	if (prior.length === 0) return { carried: [], matched: new Set() };
+): {
+	carried: Diagnostic[];
+	/** The half of `carried` this write did not observe at all (#5784). */
+	carriedUnobserved: Diagnostic[];
+	matched: ReadonlySet<Diagnostic>;
+} {
+	if (prior.length === 0)
+		return { carried: [], carriedUnobserved: [], matched: new Set() };
 	const runnerIds = new Set(dispatchResult.inconclusiveSources?.runnerIds);
 	const serverIds = new Set(dispatchResult.inconclusiveSources?.serverIds);
 	const answered = dispatchResult.inconclusiveSources?.answeredServerIds;
@@ -2129,7 +2135,15 @@ function carryRecordedBlockers(
 			return [d.positionStale ? d : { ...d, positionStale: true as const }];
 		return [at === d.line ? d : { ...d, line: at }];
 	});
-	if (carried.some((d) => !dispatchResult.stillObserved?.includes(d))) {
+	// #5784: the half of `carried` that this write did not observe at all. A
+	// carried finding can also be one the run DID observe and the delta held back
+	// as already reported (`stillObserved`); that one was re-checked, so only
+	// this half may be described as not re-checked. The degradation record below
+	// asks the same question, so it asks it here once.
+	const unobservedCarried = carried.filter(
+		(d) => !dispatchResult.stillObserved?.includes(d),
+	);
+	if (unobservedCarried.length > 0) {
 		incrementDegradationCount({
 			kind: "blocker-carried-unobserved",
 			subject: normalizeMapKey(filePath),
@@ -2137,7 +2151,7 @@ function carryRecordedBlockers(
 				"a recorded blocker's source reached no verdict on this write, so the blocker stays pending (#4484)",
 		});
 	}
-	return { carried, matched };
+	return { carried, carriedUnobserved: unobservedCarried, matched };
 }
 
 /**
@@ -2645,24 +2659,27 @@ async function analysePipeline(
 	// #4483: linter errors the file held before its first edit this session.
 	const seededFindings = dispatchResult.preExisting ?? [];
 	const ownFile = normalizeEphemeralMapKey(filePath);
-	const { carried: carriedBlockers, matched: matchedBlockers } =
-		carryRecordedBlockers(
-			ctx.priorInlineBlockers?.() ?? [],
-			[...dispatchResult.blockers, ...heldBackBlockers, ...seededFindings],
-			dispatchResult,
-			filePath,
-			(d) =>
-				d.line === undefined ||
-				(d.filePath && normalizeEphemeralMapKey(d.filePath) !== ownFile)
-					? d.line
-					: anchoring.positionOf({
-							line: d.line,
-							lineHash: d.lineHash,
-							positionStale: d.positionStale,
-						}),
-			anchoring.matchesAnywhere,
-			ctx.modifiedRanges,
-		);
+	const {
+		carried: carriedBlockers,
+		carriedUnobserved: carriedUnobservedBlockers,
+		matched: matchedBlockers,
+	} = carryRecordedBlockers(
+		ctx.priorInlineBlockers?.() ?? [],
+		[...dispatchResult.blockers, ...heldBackBlockers, ...seededFindings],
+		dispatchResult,
+		filePath,
+		(d) =>
+			d.line === undefined ||
+			(d.filePath && normalizeEphemeralMapKey(d.filePath) !== ownFile)
+				? d.line
+				: anchoring.positionOf({
+						line: d.line,
+						lineHash: d.lineHash,
+						positionStale: d.positionStale,
+					}),
+		anchoring.matchesAnywhere,
+		ctx.modifiedRanges,
+	);
 	// #4484 round 3 (F4): a held-back blocker no recorded blocker matched was
 	// never delivered (a new error that took a fixed one's line-bound id), so
 	// it renders in the STOP block, not as still unfixed.
@@ -2869,9 +2886,13 @@ async function analysePipeline(
 	// can render over them.
 	// #5784: how many of the withheld findings this write did not re-check. They
 	// are still on the file, so the line must say a fix alone cannot clear them.
+	// A carried finding the run observed and the delta held back as already
+	// reported is not one of them: `carriedUnobserved` holds only the unobserved
+	// half (#5786 review).
 	const carriedLive =
-		carriedBlockers.length > 0
-			? liveBlockers.filter((held) => carriedBlockers.includes(held)).length
+		carriedUnobservedBlockers.length > 0
+			? liveBlockers.filter((held) => carriedUnobservedBlockers.includes(held))
+					.length
 			: 0;
 	const withheldBlockerLine =
 		!allowAutonomousWriters && liveBlockers.length > 0

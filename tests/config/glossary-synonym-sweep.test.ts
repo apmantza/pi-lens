@@ -800,10 +800,12 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `Array.prototype.filter` calls, not a delivery filter.
 		// 6 -> 8 (#4483): the seeded findings split into pre-existing and
 		// recorded ones, two `Array.prototype.filter` calls.
-		// 8 -> 9 (#5784): the withheld blockers are narrowed to the ones this
-		// write did not re-check, an `Array.prototype.filter` call, not a
-		// delivery filter.
-		"clients/pipeline.ts": 9,
+		// 8 -> 10 (#5784): the withheld blockers are narrowed to the ones this
+		// write did not re-check (`carryRecordedBlockers` splits the carried half
+		// the write never observed, then the line keeps the intersection with the
+		// withheld set), two `Array.prototype.filter` calls, not delivery
+		// filters.
+		"clients/pipeline.ts": 10,
 		"clients/process-snapshot.ts": 5,
 		"clients/project-changes.ts": 3,
 		"clients/project-diagnostics/cache.ts": 2,
