@@ -951,7 +951,7 @@ export function createLensDiagnosticsTool(
 					}),
 				});
 			}
-			return formatDeltaMode(cacheManager, cwd, severity, pathsScope);
+			return formatDeltaMode(cacheManager, cwd, severity, pathsScope, ctx.host);
 		},
 	};
 }
@@ -1427,6 +1427,7 @@ function formatDeltaMode(
 	cwd: string,
 	severity: string,
 	pathsScope?: PathsScope,
+	host?: LensToolHost,
 ): { content: [{ type: "text"; text: string }]; details: object } {
 	const actionableEntry = cacheManager.readCache<ActionableWarningsReport>(
 		"actionable-warnings",
@@ -1626,7 +1627,11 @@ function formatDeltaMode(
 		const uncheckedSummaries = getFileDiagnosticSummaries().filter(
 			(f) => includeFile(f.filePath) && f.uncheckedReason !== undefined,
 		);
-		const uncheckedDeltaLine = uncheckedFilesLine(uncheckedSummaries, cwd);
+		const uncheckedDeltaLine = uncheckedFilesLine(
+			uncheckedSummaries,
+			cwd,
+			host,
+		);
 		if (uncheckedDeltaLine) text += `\n${uncheckedDeltaLine}`;
 		text += pathsScopeCacheOnlyNote(pathsScope);
 		return {
@@ -3972,6 +3977,20 @@ async function formatAllMode(
 	const checkedCount = visibleSummaries.length - uncheckedCount;
 	const uncheckedDetails =
 		uncheckedCount > 0 ? { uncheckedFileCount: uncheckedCount } : {};
+	// #5788 review F6: a blocker record no check retired is a finding this read
+	// speaks for, so it withholds the all-clear. Admitted before the branch
+	// (round 3 R3-4): a hint-only file sends the read to the listing below,
+	// which must name the record and count it as well.
+	const heldRecords = (blockerRecords?.records ?? []).flatMap((held) =>
+		includeFile(held.filePath)
+			? [
+					{
+						displayPath: toProjectRelativePath(held.filePath, cwd),
+						blockers: held.diagnostics ?? [],
+					},
+				]
+			: [],
+	);
 	let validationStatus: string | undefined;
 	let validationNote = "";
 	let evidenceDetails: Record<string, unknown> = {};
@@ -4023,7 +4042,7 @@ async function formatAllMode(
 				? "inconclusive"
 				: visibleSummaries.length === 0 || unverified.length > 0
 					? "unverified"
-					: withIssues.length > 0
+					: withIssues.length > 0 || heldRecords.length > 0
 						? "findings"
 						: // #5287: no finding in a file a check can cover but did not is not
 							// the ✓ status, nor is a session in which nothing was checked. A
@@ -4141,20 +4160,6 @@ async function formatAllMode(
 	const cleanEvidence = { scope: claimKeys.size, proven: provenCount };
 	const proofDetails = isFullMode ? { provenFiles: provenCount } : {};
 
-	// #5788 review F6: a blocker record no check retired is a finding this read
-	// speaks for, so it withholds the all-clear. Admitted before the branch
-	// (round 3 R3-4): a hint-only file sends the read to the listing below,
-	// which must name the record and count it as well.
-	const heldRecords = (blockerRecords?.records ?? []).flatMap((held) =>
-		includeFile(held.filePath)
-			? [
-					{
-						displayPath: toProjectRelativePath(held.filePath, cwd),
-						blockers: held.diagnostics ?? [],
-					},
-				]
-			: [],
-	);
 	const recordsHeld = admitSessionAllClear(heldRecords, blockerRecords?.host);
 	const recordsHeldNote = recordsHeld.clean ? "" : `\n${recordsHeld.line}`;
 
