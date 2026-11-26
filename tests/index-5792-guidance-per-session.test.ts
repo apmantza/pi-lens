@@ -22,6 +22,10 @@ import { describe, expect, it } from "vitest";
 import { CacheManager } from "../clients/cache-manager.js";
 import { getProjectDataDir } from "../clients/file-utils.js";
 import {
+	_resetMcpSessionContext,
+	runSessionStart,
+} from "../clients/mcp/session.js";
+import {
 	fauxAssistantMessage,
 	fauxText,
 	piSessionFixture,
@@ -89,6 +93,11 @@ describe("#5792: the session-start guidance reaches only the session that wrote 
 			const { primary, secondary } = await twoSessions(proj);
 			const stored = JSON.parse(fs.readFileSync(recordPath(proj), "utf8"));
 			expect(stored.content).toContain(GUIDANCE);
+			// RECURRENCE GUARDED: #5792, a record with no owner. The stamp is the
+			// writing session's id as the host reports it.
+			expect(stored.sessionId).toBe(
+				primary.session.sessionManager.getSessionId(),
+			);
 
 			await secondary.prompt("secondary goes first");
 			expect(requestText(secondary, 0)).not.toContain(GUIDANCE);
@@ -167,6 +176,31 @@ describe("#5792: the session-start guidance reaches only the session that wrote 
 			expect(requestText(reloaded, 0)).toContain(GUIDANCE);
 			expect(reloaded.errors).toEqual([]);
 			await reloaded.dispose();
+		},
+	);
+
+	it(
+		"hands the MCP host the guidance its own session start wrote",
+		{ timeout: TWO_SESSION_TIMEOUT_MS },
+		async () => {
+			// RECURRENCE GUARDED: #5792, the MCP caller of the same consumer. It
+			// writes and reads in one call as one identity; a reader id that
+			// differs from the stamp drops the orientation the host asked for.
+			const proj = project("mcp");
+			const primary = await startPiSession({
+				root: fixture.root,
+				cwd: proj,
+				startupMode: "full",
+				responses: [READY],
+			});
+			_resetMcpSessionContext();
+			try {
+				const outcome = await runSessionStart(proj);
+				expect(outcome.guidance).toContain(GUIDANCE);
+			} finally {
+				_resetMcpSessionContext();
+			}
+			await primary.dispose();
 		},
 	);
 });
