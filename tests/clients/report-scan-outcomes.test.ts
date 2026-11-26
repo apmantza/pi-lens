@@ -396,6 +396,11 @@ describe.each(SCANNERS)("the shared report scan through $name", (scanner) => {
 		);
 		fs.mkdirSync(reportParent, { recursive: true });
 		vi.stubEnv("PI_LENS_TEST_SCANNER_TMPDIR", reportParent);
+		// #5782 V2: jscpd's global lookup judges PATH against the session and
+		// the scan root. `npm run` puts this repo's `node_modules/.bin` on PATH
+		// and a direct vitest run does not, so the ledger counts followed the
+		// invocation. One PATH entry outside both makes the counts the scan's.
+		vi.stubEnv("PATH", path.join(env.tmpDir, "path"));
 		safeSpawnAsync.mockReset();
 		reportDirs = [];
 		resetDegradationLedger();
@@ -465,10 +470,9 @@ describe.each(SCANNERS)("the shared report scan through $name", (scanner) => {
 			const r = result as { findings?: unknown[]; clones?: unknown[] };
 			expect(r.findings ?? r.clones).toHaveLength(1);
 		}
-		expect(recordCounts()).toEqual({
-			...(scanner.name === "jscpd" ? { "trust-refusal": 1 } : {}),
-			...(cell.verdict === "failed" ? { [scanner.recordKind]: 1 } : {}),
-		});
+		expect(recordCounts()).toEqual(
+			cell.verdict === "failed" ? { [scanner.recordKind]: 1 } : {},
+		);
 		if (cell.expectReason) {
 			expect(reasonText()).toContain(cell.expectReason);
 		}
