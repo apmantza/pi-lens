@@ -1779,6 +1779,10 @@ export type WithheldEvidence = "changed" | "named";
  * line is (#5008), states the one fact pi-lens holds (`evidence`), and asks for
  * a fix only if the agent's call wrote the file. An agent that read "not your
  * edit" left its own script's blockers in place.
+ *
+ * #5784: `carried` is the count of withheld findings an earlier check recorded
+ * and this write did not re-check, so the line says that fixing the code cannot
+ * retire them and names the probe that can.
  */
 export function formatWithheldBlockerLine(
 	blockers: readonly Diagnostic[],
@@ -1786,6 +1790,7 @@ export function formatWithheldBlockerLine(
 	display: string,
 	evidence: WithheldEvidence = "changed",
 	host: LensToolHost = "pi",
+	carried = 0,
 ): string {
 	const count = blockers.length;
 	const them = count === 1 ? "it" : "them";
@@ -1798,7 +1803,17 @@ export function formatWithheldBlockerLine(
 		evidence === "changed"
 			? "the file changed while this call ran, but pi-lens cannot confirm this call wrote it"
 			: "this call names the file, but pi-lens could not confirm the call changed it";
-	return `\u26a0 ${count} blocking finding${count === 1 ? "" : "s"} in ${display}${formatBlockerPlaces(blockers, filePath)} withheld: ${known}. If this call wrote it, fix ${them}.${pointer}`;
+	// #5784: `carried` counts the findings an earlier check recorded that this
+	// write did not re-check — its runner or server reached no verdict, or its
+	// edit-range gate kept the finding outside these bytes. Fixing the code
+	// cannot retire those: only a run that re-checks the file judges them, so the
+	// line names that action (#5108 shape 10 — a withheld verdict must not send
+	// an agent to re-read a file the passive path will never answer for).
+	const carriedClause =
+		carried <= 0
+			? ""
+			: ` ${carried} recorded earlier ${carried === 1 ? "was" : "were"} not re-checked on this write, so fixing the code cannot retire ${carried === 1 ? "it" : "them"}${diagnosticsTool ? `; ${diagnosticsTool} mode=full settles ${carried === 1 ? "it" : "them"}` : ""}.`;
+	return `\u26a0 ${count} blocking finding${count === 1 ? "" : "s"} in ${display}${formatBlockerPlaces(blockers, filePath)} withheld: ${known}.${carriedClause} If this call wrote it, fix ${them}.${pointer}`;
 }
 
 /**
@@ -2846,6 +2861,12 @@ async function analysePipeline(
 	// #5108: a run without authorship records and delivers no blocker, but the
 	// ones it withheld are still on the file. Say so before the all-clear below
 	// can render over them.
+	// #5784: how many of the withheld findings this write did not re-check. They
+	// are still on the file, so the line must say a fix alone cannot clear them.
+	const carriedLive =
+		carriedBlockers.length > 0
+			? liveBlockers.filter((held) => carriedBlockers.includes(held)).length
+			: 0;
 	const withheldBlockerLine =
 		!allowAutonomousWriters && liveBlockers.length > 0
 			? formatWithheldBlockerLine(
@@ -2853,6 +2874,8 @@ async function analysePipeline(
 					filePath,
 					toRunnerDisplayPath(cwd, filePath),
 					ctx.withheldEvidence,
+					undefined,
+					carriedLive,
 				)
 			: undefined;
 	if (withheldBlockerLine) {
