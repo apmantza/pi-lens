@@ -528,6 +528,32 @@ describe("#3484 — diagnostics fence for version-less servers", () => {
 		await touch;
 	});
 
+	it("a fence-dropped empty first publish on a server outside the indexing class spends and records nothing", async () => {
+		// Recurrence this guards: the fence-drop producer shares
+		// spendEmptyFirstPublishHold with the stored path. Its class gate must
+		// hold on this side too, or every fenced server's first empty publish
+		// would burn the one-shot hold a class server needs (the stored-path
+		// cells alone do not exercise the fence-drop caller's gate).
+		const h = harness({ serverId: "yaml" });
+		const touch = handleNotifyOpen(h.state, FILE, "content 1", "yaml");
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.state.diagnosticFences.size).toBe(1);
+
+		h.publish({ uri: URI, diagnostics: [] });
+
+		expect(h.state.diagnosticFences.get(KEY)?.dropped).toBe(1);
+		expect(h.state.emptyFirstPublishHoldSpent).toBe(false);
+		expect(
+			logLatency.mock.calls.filter(
+				([entry]) =>
+					(entry as { phase?: string }).phase ===
+					"lsp_empty_first_publish_held",
+			),
+		).toEqual([]);
+		h.change.resolve();
+		await touch;
+	});
+
 	// #3482: a publish received but never stored still answers one send, so the
 	// late-auxiliary backlog must count it; the fence drop is such a return.
 	it("counts a publish the fence dropped toward the path's publications (#3482)", async () => {

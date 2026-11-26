@@ -3148,6 +3148,68 @@ function retractUnscannedEmptyPublications(state: LSPClientState): number {
 	return retracted;
 }
 
+/**
+ * #3310: the one-shot hold on an asynchronously-indexing server's EMPTY first
+ * publish (`emptyFirstPublish: "indexing"`). Spends the hold and records it
+ * when the publish has that shape, and returns whether it did: the stored
+ * path drops the publish, and the fence-drop path (#3484) has dropped it
+ * already and only needs the spend, since holding the next publish as well
+ * would swallow the server's real answer.
+ *
+ * Three conditions, all required: the server is in the measured class, the
+ * hold is not spent yet, and the publish is the document's FIRST — empty,
+ * with no cached push and no pending debounce timer (an empty publish that
+ * clears an earlier finding is never held). A dropped non-empty publish
+ * leaves the hold armed (a timeout, never a false clean).
+ *
+ * Bounded by construction: one `lsp_empty_first_publish_held` row per client
+ * session, because the hold itself is one-shot. `via` names the fence-drop
+ * producer; the stored path carries none.
+ */
+function spendEmptyFirstPublishHold(
+	state: LSPClientState,
+	normalizedPath: string,
+	emptyFirstPublish: string | undefined,
+	diagnosticCount: number,
+	publishReceivedAt: number,
+	docVersion: number | undefined,
+	via?: "fence-drop",
+): boolean {
+	if (
+		emptyFirstPublish !== "indexing" ||
+		state.emptyFirstPublishHoldSpent ||
+		diagnosticCount !== 0 ||
+		state.pushDiagnostics.has(normalizedPath) ||
+		state.pendingDiagnostics.has(normalizedPath)
+	) {
+		return false;
+	}
+	state.emptyFirstPublishHoldSpent = true;
+	logLatency({
+		type: "phase",
+		phase: "lsp_empty_first_publish_held",
+		filePath: normalizedPath,
+		// Time from didOpen to the server's first publish: an age, not work
+		// this row did (#5379).
+		ageMs: Math.max(
+			0,
+			publishReceivedAt -
+				(state.documentOpenedAt.get(normalizedPath) ?? publishReceivedAt),
+		),
+		metadata: {
+			serverId: state.serverId,
+			emptyFirstPublish,
+			...(via ? { via } : {}),
+			// `pubVersion`, the `[lsp-pub]` trace's own field name for the
+			// publish's LSP document version — not a lifecycle identity, and
+			// not the retired glossary spelling (docs/defect-shapes.md "session, turn or
+			// generation lifecycle").
+			pubVersion: docVersion ?? "push-unversioned",
+		},
+	});
+	return true;
+}
+
 export function setupIncomingHandlers(
 	state: LSPClientState,
 	initialization: Record<string, unknown> | undefined,
@@ -3232,37 +3294,15 @@ export function setupIncomingHandlers(
 				// next one as well would swallow the server's real answer. Only the
 				// hold's own shape spends it: a dropped non-empty publish leaves the
 				// hold armed (a timeout, never a false clean).
-				if (
-					getStrategy(state.serverId, state.launchVariant).emptyFirstPublish ===
-						"indexing" &&
-					!state.emptyFirstPublishHoldSpent &&
-					newDiags.length === 0 &&
-					!state.pushDiagnostics.has(normalizedPath) &&
-					!state.pendingDiagnostics.has(normalizedPath)
-				) {
-					state.emptyFirstPublishHoldSpent = true;
-					// One record per client session, as for the held path: without it
-					// a hold spent here reads as a hold that never engaged.
-					logLatency({
-						type: "phase",
-						phase: "lsp_empty_first_publish_held",
-						filePath: normalizedPath,
-						// Time from didOpen to the server's first publish: an age, not
-						// work this row did (#5379).
-						ageMs: Math.max(
-							0,
-							publishReceivedAt -
-								(state.documentOpenedAt.get(normalizedPath) ??
-									publishReceivedAt),
-						),
-						metadata: {
-							serverId: state.serverId,
-							emptyFirstPublish: "indexing",
-							via: "fence-drop",
-							pubVersion: "push-unversioned",
-						},
-					});
-				}
+				spendEmptyFirstPublishHold(
+					state,
+					normalizedPath,
+					getStrategy(state.serverId, state.launchVariant).emptyFirstPublish,
+					newDiags.length,
+					publishReceivedAt,
+					docVersion,
+					"fence-drop",
+				);
 				return;
 			}
 			if (
@@ -3480,36 +3520,15 @@ export function setupIncomingHandlers(
 			//    debounce timer. An empty publish that CLEARS an earlier non-empty
 			//    one (a fix landing) is never held, in either arrival order.
 			if (
-				strategy.emptyFirstPublish === "indexing" &&
-				!state.emptyFirstPublishHoldSpent &&
-				newDiags.length === 0 &&
-				!state.pushDiagnostics.has(normalizedPath) &&
-				!state.pendingDiagnostics.has(normalizedPath)
+				spendEmptyFirstPublishHold(
+					state,
+					normalizedPath,
+					strategy.emptyFirstPublish,
+					newDiags.length,
+					publishReceivedAt,
+					docVersion,
+				)
 			) {
-				state.emptyFirstPublishHoldSpent = true;
-				// Bounded by construction: one record per client session, because
-				// the hold itself is one-shot.
-				logLatency({
-					type: "phase",
-					phase: "lsp_empty_first_publish_held",
-					filePath: normalizedPath,
-					// Time from didOpen to the server's first publish: an age, not work
-					// this row did (#5379).
-					ageMs: Math.max(
-						0,
-						publishReceivedAt -
-							(state.documentOpenedAt.get(normalizedPath) ?? publishReceivedAt),
-					),
-					metadata: {
-						serverId: state.serverId,
-						emptyFirstPublish: strategy.emptyFirstPublish,
-						// `pubVersion`, the `[lsp-pub]` trace's own field name for the
-						// publish's LSP document version — not a lifecycle identity, and
-						// not the retired glossary spelling (docs/defect-shapes.md "session, turn or
-						// generation lifecycle").
-						pubVersion: docVersion ?? "push-unversioned",
-					},
-				});
 				return;
 			}
 
