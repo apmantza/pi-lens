@@ -3138,6 +3138,14 @@ describe("#5784 witness: an unconfirmed carried blocker is not replayed verbatim
 		const session = await s.sessionDiagnostics();
 		expect(session).toContain(IN_FLIGHT);
 		expect(session).not.toContain("cannot retire");
+		// The server is back inline and gives no verdict: the next carry is its
+		// own, so the earlier carry's running mark is not restated.
+		resetObservedRunnerLatency();
+		boundary.lsp.mode = "inconclusive";
+		const w3 = await s.write(withTail(70));
+		expect(w3).toMatch(STILL_UNFIXED);
+		expect(w3).not.toContain(IN_FLIGHT);
+		expect(w3).toContain("cannot retire");
 		for (const release of boundary.lsp.held.splice(0)) release();
 		await settlePendingRunnerFindingsForTests();
 		boundary.lsp.mode = "answer";
