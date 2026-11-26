@@ -2930,6 +2930,8 @@ describe("#5784 witness: an unconfirmed carried blocker is not replayed verbatim
 	const SETTLE =
 		"lens_diagnostics source=lsp path=src/replay.ts waitMs=30000 settles it.";
 	const WITHHELD = /withheld: this call names the file/;
+	const IN_FLIGHT = "re-check is still running";
+	const RECORD_HELD = "no check has retired";
 
 	const suppressedCount = async (subject: string): Promise<number> =>
 		(await degradationRows("blocker-replay-suppressed")).filter((row) =>
@@ -3026,7 +3028,7 @@ describe("#5784 witness: an unconfirmed carried blocker is not replayed verbatim
 		const session = await s.sessionDiagnostics();
 		expect(session).toContain("typescript silent");
 		expect(session).toContain(
-			`src/replay.ts: 1 recorded earlier was not re-checked on its latest write, so fixing the code cannot retire it; ${SETTLE}`,
+			`src/replay.ts: 1 recorded earlier was not re-checked on its latest write (typescript gave no verdict), so fixing the code cannot retire it; ${SETTLE}`,
 		);
 		boundary.lsp.mode = "answer";
 		await fixAndDrain(s);
@@ -3069,6 +3071,132 @@ describe("#5784 witness: an unconfirmed carried blocker is not replayed verbatim
 		).toMatch(/confirmed clean/);
 		expect(await s.sessionDiagnostics()).not.toContain("BAD_CALL");
 		expect(await s.commitBlocked()).toBe(false);
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence (#5788 review F1, CodeRabbit C6): the session read built its
+	// note from the file's unchecked reason and blocking count, so an
+	// ast-grep blocker found fresh on the latest write was told fixing the
+	// code could not retire it, and sent to a probe of the silent primary.
+	it("gives no not-re-checked note on the session read to a blocker found fresh on the latest write", async () => {
+		const PY_BAD =
+			"import json\n\n\ndef load(raw):\n    data = json.loads(raw)\n    return data\n";
+		const PY_FIXED =
+			"import json\n\n\ndef load(raw):\n    try:\n        data = json.loads(raw)\n    except ValueError:\n        data = None\n    return data\n";
+		boundary.lsp.enabled = true;
+		boundary.ag.diag = true;
+		boundary.lsp.primarySilent = { reason: "diagnostics-wait" };
+		const s = await openSession(
+			"fr",
+			"src/fresh.py",
+			`${PY_FIXED}\n# checked\n`,
+		);
+		expect(await s.write(PY_BAD)).toContain("🔴 STOP");
+		const session = await s.sessionDiagnostics();
+		expect(session).toContain("unchecked-throwing-call-python");
+		expect(session).toContain("python silent");
+		expect(session).not.toContain(NOT_RECHECKED);
+		expect(session).not.toContain("source=lsp");
+		// The fix retires it on the next write, as a fresh blocker can be.
+		await s.write(PY_FIXED);
+		expect(await s.commitBlocked()).toBe(false);
+		boundary.lsp.primarySilent = undefined;
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence (#5788 review F2): a carry whose collect-later re-check was
+	// still running was told fixing the code could not retire it, while the
+	// held run then retired the fix at turn end with no probe.
+	it("says a re-check is still running, never that fixing cannot retire it, while it runs", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("if", "src/inflight.ts", V_FIXED);
+		expect(await s.write(V1)).toContain("🔴 STOP");
+		observeRunnerLatency({
+			projectRoot: tmpDir,
+			runnerId: "lsp",
+			durationMs: 6_000,
+		});
+		boundary.lsp.mode = "hold";
+		const w2 = await s.write(V2_OTHER_LINE);
+		expect(w2).toMatch(STILL_UNFIXED);
+		expect(w2).toContain(IN_FLIGHT);
+		expect(w2).not.toContain("cannot retire");
+		const session = await s.sessionDiagnostics();
+		expect(session).toContain(IN_FLIGHT);
+		expect(session).not.toContain("cannot retire");
+		for (const release of boundary.lsp.held.splice(0)) release();
+		await settlePendingRunnerFindingsForTests();
+		boundary.lsp.mode = "answer";
+		await s.write(V_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence (#5788 review F6, session-read half): mode=full cleared the
+	// session cache while the blocker record still held the commit gate, and
+	// the session read said "No issues ... ✓" over it.
+	it("prints no all-clear on the session read while a blocker record is unresolved, mode=full included", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("af", "src/allclear.ts", V_FIXED);
+		expect(await s.write(V1)).toContain("🔴 STOP");
+		boundary.lsp.mode = "inconclusive";
+		await s.bash(V_FIXED_OTHER, "node tools/gen.js > src/allclear.ts");
+		boundary.lsp.mode = "answer";
+		const target = path.join(tmpDir, "src/allclear.ts");
+		// The production service's sweep shape, answering clean for the file.
+		await installLspServiceDouble({
+			supportsLSP: () => boundary.lsp.enabled,
+			hasLSP: async () => boundary.lsp.enabled,
+			touchFile: boundary.lsp.touch,
+			hasServerPublishedForFileRoot: async () => false,
+			runWorkspaceDiagnostics: async () => [
+				{ filePath: target, diagnostics: [], count: 0 },
+			],
+		} as never);
+		const full = await s.settleCall({ mode: "full", waitMs: 30000 });
+		expect(await s.commitBlocked()).toBe(true);
+		const session = await s.sessionDiagnostics();
+		for (const read of [full, session]) {
+			expect(read).not.toContain("✓");
+			expect(read).not.toMatch(/No issues across/);
+			expect(read).toContain(RECORD_HELD);
+		}
+		// source=lsp retires the record, and the all-clear may stand again.
+		expect(await s.settleCall({ source: "lsp", waitMs: 30000 })).toMatch(
+			/confirmed clean/,
+		);
+		expect(await s.sessionDiagnostics()).not.toContain(RECORD_HELD);
+		await s.write(V_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence (#5788 review F4, CodeRabbit C4): the per-write latch was
+	// written when the line rendered, so a run whose delivery the 10 s bound
+	// abandoned latched a line the agent never saw, and every later identical
+	// replay was held back. This cell waits out the real bound once: the
+	// abandonment under test is a production wall deadline, as in
+	// tests/index-5108-opaque-blocker-disclosure-witness.test.ts.
+	it("leaves the latch unwritten when the 10 s bound abandons the delivery", async () => {
+		const carried = () =>
+			getDegradationSummary().find(
+				(group) => group.kind === "blocker-carried-unobserved",
+			)?.count ?? 0;
+		boundary.lsp.enabled = true;
+		const s = await openSession("ab", "src/abandon.ts", V_FIXED);
+		expect(await s.write(V1)).toContain("🔴 STOP");
+		boundary.lsp.mode = "hold";
+		const before = carried();
+		// The held server outlasts the bound: the tool result shows nothing.
+		expect(await s.write(withTail(20))).not.toMatch(STILL_UNFIXED);
+		boundary.lsp.mode = "inconclusive";
+		for (const release of boundary.lsp.held.splice(0)) release(true);
+		// The abandoned run finishes on its own and carries the blocker.
+		for (let i = 0; i < 2_000 && carried() === before; i += 1)
+			await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(carried()).toBeGreaterThan(before);
+		// Its line never reached the agent, so the next write's is delivered.
+		expect(await s.write(withTail(21))).toMatch(STILL_UNFIXED);
+		boundary.lsp.mode = "answer";
+		await s.write(V_FIXED);
 		await fixAndDrain(s);
 	}, 120_000);
 });

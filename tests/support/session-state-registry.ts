@@ -95,6 +95,7 @@ import {
 } from "../../clients/lsp/server.js";
 import {
 	admitBlockerReplay,
+	commitBlockerReplay,
 	resetBlockerReplayState,
 } from "../../clients/finding-delivery-gate.js";
 import {
@@ -301,11 +302,13 @@ let observedRunnerProbeRoot: string | undefined;
  * #5784 probe: one identical unconfirmed replay of a fixed probe file. The
  * first call after a reset delivers; a second one is held back. The gate has no
  * read-only accessor, so `isArmed` itself makes the first delivery and `arm`
- * the held-back second: armed means the next call delivers.
+ * the held-back second: armed means the next call delivers. Each delivered
+ * call commits its latch write, as the tool result's delivered return does
+ * (#5788 review F4).
  */
 function admitBlockerReplayProbe(): "deliver" | "suppress" {
 	const filePath = path.join(os.tmpdir(), "session-state-replay-probe.ts");
-	return admitBlockerReplay({
+	const decision = admitBlockerReplay({
 		surface: "withheld-line",
 		filePath,
 		blockers: [
@@ -321,6 +324,8 @@ function admitBlockerReplayProbe(): "deliver" | "suppress" {
 			},
 		],
 	});
+	if (decision.commit !== undefined) commitBlockerReplay(decision.commit);
+	return decision.shown;
 }
 
 function scratchCwd(): string {

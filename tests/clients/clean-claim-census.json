@@ -125,7 +125,8 @@
 			"` ${totalWarnings} warning${totalWarnings === 1 ? \"\" : \"s\"}`": 1,
 			"` ${totalAdvisories} hint/info (style — not counted as warnings)`": 1,
 			"`\\n ${display}: ${note}`": 1,
-			"`⚠ ${unchecked.length} file${unchecked.length === 1 ? \"\" : \"s\"} not checked, so no findings is not a clean result: ${named.join(\"; \")}${more > 0 ? `; +${more} more` : \"\"}.${notes.join(\"\")}`": 1
+			"`⚠ ${unchecked.length} file${unchecked.length === 1 ? \"\" : \"s\"} not checked, so no findings is not a clean result: ${named.join(\"; \")}${more > 0 ? `; +${more} more` : \"\"}.${notes.join(\"\")}`": 1,
+			"`${recordsHeld.line}\\n`": 1
 		},
 		"neutral": {
 			"\"refreshRunners not requested this call (quick mode) — pass \"": 1,
@@ -173,7 +174,7 @@
 			"\"lens_diagnostics_lsp_route\"": 1,
 			"`Unknown severity \"${severity}\". Accepted tiers: ${LSP_SEVERITY_FILTERS.join(\", \")}.`": 1,
 			"\"mode=all\"": 1,
-			"\"pi\"": 5,
+			"\"pi\"": 7,
 			"\"○\"": 1,
 			"\"ℹ\"": 1,
 			"`L${diagnostic.line ?? \"?\"}`": 1,
@@ -1528,7 +1529,9 @@
 			"\"cited\"": 1,
 			"\"repeat\"": 1,
 			"\"its latest write\"": 1,
-			"`Unresolved from this turn — ${displayPath}${suppressedByDispositionNote(policy.suppressed)}:\\n${policy.body}${note === undefined ? \"\" : `\\n ${note}`}`": 1
+			"`Unresolved from this turn — ${displayPath}${suppressedByDispositionNote(policy.suppressed)}:\\n${policy.body}${note === undefined ? \"\" : `\\n ${note}`}`": 1,
+			"\"turn-end-demoted\"": 2,
+			"\"turn-end-replay\"": 1
 		}
 	},
 	"clients/runtime-tool-result.ts": {

@@ -40,6 +40,7 @@ import {
 	resolveToolCallFilePath,
 } from "./path-utils.js";
 import { detectFileKind } from "./file-kinds.js";
+import { commitBlockerReplay } from "./finding-delivery-gate.js";
 import { isSessionBookkeepingRoot } from "./analysis-root.js";
 import {
 	extractReadPathsFromCommand,
@@ -1346,6 +1347,24 @@ export function recordProjectChange(args: {
 		onAppendError: (err) =>
 			args.dbg(`project change log append failed for ${args.filePath}: ${err}`),
 	});
+}
+
+/**
+ * #5788 review F4: the replay latch write the pipeline asked for
+ * (`PipelineResult.blockerReplayCommit`), made here because this is where
+ * the tool result is handed to the host: a run still in the live session
+ * (#3596) whose result the host is still waiting for (#5165 F1). The 10 s
+ * bound's abandoned path, its late advisory and the observed-mutation path
+ * never reach it, so a line the agent did not see is never latched.
+ */
+function commitDeliveredBlockerReplay(
+	result: PipelineResult,
+	resultLive: boolean,
+	deps: Pick<ToolResultDeps, "hostDelivery">,
+): void {
+	if (!resultLive || deps.hostDelivery?.abandoned === true) return;
+	if (result.blockerReplayCommit !== undefined)
+		commitBlockerReplay(result.blockerReplayCommit);
 }
 
 export function recordTurnSummary(args: {
@@ -5098,6 +5117,7 @@ export async function handleToolResult(
 	}
 
 	if (result.isError) {
+		commitDeliveredBlockerReplay(result, resultLive, deps);
 		return {
 			content: [...event.content, { type: "text", text: result.output }],
 			isError: true,
@@ -5265,6 +5285,7 @@ export async function handleToolResult(
 		output = `${output ? `${output}\n\n` : ""}${renderPostAutofixNotice(notice, attachmentDecision)}`;
 	}
 
+	commitDeliveredBlockerReplay(result, resultLive, deps);
 	if (!output && !result.postMutation) return;
 
 	return {

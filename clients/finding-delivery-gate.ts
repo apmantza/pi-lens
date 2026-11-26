@@ -155,26 +155,26 @@
  * carry marks it `Diagnostic.unconfirmedBy`. Two rules for it live here and
  * nowhere else:
  *
- * - Wording. `formatUnconfirmedBlockerNote` is the one sentence every
- *   blocker surface uses for such a blocker: who gave no verdict, that it is
- *   from an earlier check, and what settles it (a budgeted `lens_diagnostics`
- *   probe for a language server's finding, the next answered write for the
- *   rest). Callers: the withheld and `Still unfixed` lines
- *   (`clients/pipeline.ts`), the turn-end replay (`clients/runtime-turn.ts`)
- *   and the `lens_diagnostics` session read (`tools/lens-diagnostics.ts`).
- * - Replay. `admitBlockerReplay` decides whether a per-write blocker line is
- *   delivered or held back. A write that reached a verdict on any of the
- *   file's blockers delivers, as before. A line whose blockers are all
- *   unconfirmed is delivered once per session for its (surface, file,
- *   identity and coordinates) set; an identical replay is held back and
- *   counted (`blocker-replay-suppressed`). A changed set or any verdict
- *   re-arms it. The suppression is of the LINE only: the record, the commit
- *   gate, the widget and `lens_diagnostics` still hold the blocker.
- *
- * Not decided here yet: the turn-end replay's delivery cap (#5532,
- * `RuntimeCoordinator.blockerFullDeliveryCapped`) and the drift caps (#1950,
- * #4990). Their counts are per-record state committed only once a staged
- * turn-end message reaches the model, which a render-time latch cannot see.
+ * - Wording. `unconfirmedBlockerNote` is the one sentence every blocker
+ *   surface uses for such a blocker: who gave no verdict, that it is from an
+ *   earlier check, and each settle path the set holds (a re-check still
+ *   running, a budgeted `lens_diagnostics source=lsp` probe for a language
+ *   server's finding, the next answered write for a runner's). Callers: the
+ *   withheld and `Still unfixed` lines (`clients/pipeline.ts`), the turn-end
+ *   replay (`clients/runtime-turn.ts`) and the `lens_diagnostics` session
+ *   read (`tools/lens-diagnostics.ts`), which reads it off each row's marker.
+ * - Repeat. `admitBlockerReplay` is the one decision on whether a blocker line
+ *   is shown again, for the per-write withheld and `Still unfixed` lines
+ *   (once per session per unconfirmed set, an identical replay held back and
+ *   counted as `blocker-replay-suppressed`), the turn-end replay's #5532 cap
+ *   and the demoted replay's #1950/#4990 drift caps. Callers bring the counts;
+ *   nothing is committed at render: the per-write latch by
+ *   `commitBlockerReplay` from the tool result's delivered return, the
+ *   turn-end counts by the coordinator's delivery hooks. The suppression is
+ *   of the LINE only: the record, the commit gate, the widget and
+ *   `lens_diagnostics` still hold the blocker.
+ * - All-clear. `admitSessionAllClear` withholds the session read's "no
+ *   issues" while a commit-gate record still holds a blocker (#5788 F6).
  *
  * ── Explicit lag labels (the non-gated escape hatch) ──────────────────────
  * A store that cannot afford the freshness/disposition stack — because it
@@ -230,7 +230,7 @@
  *     `tests/mcp/server.smoke.test.ts`.
  */
 
-import { BoundedLruCache } from "./bounded-cache.js";
+import { BoundedFifoMap } from "./bounded-cache.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
 import type { Diagnostic } from "./dispatch/types.js";
 import { findingIdentity } from "./finding-identity.js";
@@ -304,111 +304,290 @@ export function dispositionSuppressedLine(
 	);
 }
 
-/**
- * #5784: the one no-verdict sentence for blockers that are from an earlier
- * check (see the module doc). The phrasing follows PR #5786 (yxlimo).
- * `sources` names the runners or language servers that gave no verdict
- * (`Diagnostic.unconfirmedBy`); empty when the caller knows only that the
- * file's latest check gave none. `runnerOnly` says no language server is among
- * them, so the probe, which asks the language servers, would not settle them.
- * The probe is named only on a host that has the tool (#2535 F3: never a dead
- * name). `on` is the write the sentence speaks of.
- */
-export function formatUnconfirmedBlockerNote(args: {
-	sources: readonly string[];
-	count: number;
-	displayPath: string;
-	runnerOnly?: boolean;
-	on?: "this write" | "its latest write";
-	host?: LensToolHost;
-}): string {
-	const ids = [...new Set(args.sources)];
-	const one = args.count === 1;
-	const them = one ? "it" : "them";
-	const who = ids.length > 0 ? ` (${ids.join(", ")} gave no verdict)` : "";
-	const head = `${args.count} recorded earlier ${one ? "was" : "were"} not re-checked on ${args.on ?? "this write"}${who}`;
-	const tool = resolveLensToolName("lens_diagnostics", args.host ?? "pi");
-	if (args.runnerOnly === true || tool === undefined)
-		return `${head}, so only a later write its check answers can retire ${them}.`;
-	return `${head}, so fixing the code cannot retire ${them}; ${tool} source=lsp path=${args.displayPath} waitMs=${RUNTIME_CONFIG.pipeline.lspExplicitQueryMaxWaitMs} settles ${them}.`;
+/** #5784: what the gate's sentence reads off one blocker the carry kept. */
+export type UnconfirmedBlockerRow = Pick<
+	Diagnostic,
+	"unconfirmedBy" | "serverId" | "recheckInFlight"
+>;
+
+/** "it" or "them" for a count. */
+function pronoun(count: number): string {
+	return count === 1 ? "it" : "them";
 }
 
 /**
- * #5784: {@link formatUnconfirmedBlockerNote} for the blockers of one line or
- * section that a carry marked `unconfirmedBy`; `undefined` when every one of
- * them reached a verdict.
+ * #5784: the one no-verdict sentence for the blockers of one line, section or
+ * file that a carry marked `unconfirmedBy` (see the module doc), or
+ * `undefined` when none of them is marked. The phrasing follows PR #5786
+ * (yxlimo). Each marked blocker takes one of three settle paths, and the
+ * sentence names each path the set holds:
+ *
+ * - its re-check is still running (`recheckInFlight`, a collect-later run):
+ *   that answer retires or keeps it, so nothing is asked of the agent;
+ * - a language server gave no verdict (`serverId`): fixing the code cannot
+ *   retire it, and the `lens_diagnostics source=lsp` probe, which asks that
+ *   server, settles it (named only on a host that has the tool, #2535 F3);
+ * - a runner gave no verdict: only a later write its check answers retires it,
+ *   so no probe of a language server is named.
+ *
+ * `on` is the write the sentence speaks of.
  */
 export function unconfirmedBlockerNote(
-	blockers: readonly Pick<Diagnostic, "unconfirmedBy" | "serverId">[],
+	blockers: readonly UnconfirmedBlockerRow[],
 	displayPath: string,
 	options: { on?: "this write" | "its latest write"; host?: LensToolHost } = {},
 ): string | undefined {
 	const unconfirmed = blockers.filter((d) => d.unconfirmedBy !== undefined);
 	if (unconfirmed.length === 0) return undefined;
-	return formatUnconfirmedBlockerNote({
-		sources: unconfirmed.flatMap((d) => d.unconfirmedBy ?? []),
-		count: unconfirmed.length,
-		displayPath,
-		runnerOnly: unconfirmed.every((d) => d.serverId === undefined),
-		...options,
-	});
+	const count = unconfirmed.length;
+	const ids = [...new Set(unconfirmed.flatMap((d) => d.unconfirmedBy ?? []))];
+	const head = `${count} recorded earlier ${count === 1 ? "was" : "were"} not re-checked on ${options.on ?? "this write"} (${ids.join(", ")} gave no verdict)`;
+	const tool = resolveLensToolName("lens_diagnostics", options.host ?? "pi");
+	const probe = (n: number) =>
+		`${tool} source=lsp path=${displayPath} waitMs=${RUNTIME_CONFIG.pipeline.lspExplicitQueryMaxWaitMs} settles ${pronoun(n)}`;
+	const running = unconfirmed.filter((d) => d.recheckInFlight === true).length;
+	// A server's blocker on a host without the tool can only wait for a write.
+	const server =
+		tool === undefined
+			? 0
+			: unconfirmed.filter(
+					(d) => d.recheckInFlight !== true && d.serverId !== undefined,
+				).length;
+	const runner = count - running - server;
+	if (running === count)
+		return `${head}; ${count === 1 ? "its" : "their"} re-check is still running, and its answer retires or keeps ${pronoun(count)}.`;
+	if (server === count)
+		return `${head}, so fixing the code cannot retire ${pronoun(count)}; ${probe(count)}.`;
+	if (runner === count)
+		return `${head}, so only a later write its check answers can retire ${pronoun(count)}.`;
+	const parts = [
+		...(running > 0
+			? [
+					`the re-check of ${running} is still running, and its answer retires or keeps ${pronoun(running)}`,
+				]
+			: []),
+		...(server > 0
+			? [
+					`fixing the code cannot retire the ${server} from a language server; ${probe(server)}`,
+				]
+			: []),
+		...(runner > 0
+			? [
+					`only a later write its check answers can retire the ${runner} from ${runner === 1 ? "a runner" : "runners"}`,
+				]
+			: []),
+	];
+	return `${head}: ${parts.join("; ")}.`;
 }
 
-/** #5784: the per-write blocker lines whose identical replay may be held back. */
-export type BlockerReplaySurface = "withheld-line" | "still-unfixed-line";
+/**
+ * #5784, #5788 review F6: whether the session read may say "no issues" while
+ * the commit gate's records still hold blockers. A record no check has
+ * retired is an unresolved blocker even after a scan cleared the session
+ * cache (`mode=full` reconciles the widget, never the record), so the
+ * all-clear is withheld and the line names each such file, with the gate's
+ * sentence where the record's rows carry the carry's marker.
+ */
+export function admitSessionAllClear(
+	records: readonly {
+		displayPath: string;
+		blockers: readonly UnconfirmedBlockerRow[];
+	}[],
+	host: LensToolHost = "pi",
+): { clean: true } | { clean: false; line: string } {
+	if (records.length === 0) return { clean: true };
+	// A record without structured rows (`InlineBlockerRecord.diagnostics`) has
+	// no count to name.
+	const names = records.map((r) =>
+		r.blockers.length > 0
+			? `${r.displayPath} (${r.blockers.length})`
+			: r.displayPath,
+	);
+	const notes = records.flatMap((r) => {
+		const note = unconfirmedBlockerNote(r.blockers, r.displayPath, {
+			on: "its latest write",
+			host,
+		});
+		return note === undefined ? [] : [`\n  ${r.displayPath}: ${note}`];
+	});
+	const n = records.length;
+	return {
+		clean: false,
+		line: `⚠ ${n} file${n === 1 ? "" : "s"} still hold${n === 1 ? "s" : ""} a recorded blocker no check has retired, so no findings here is not a clean result: ${names.join(", ")}.${notes.join("")}`,
+	};
+}
 
 /**
- * #5784: per file, the unconfirmed set each surface last delivered this
- * session. Bounded: past {@link BLOCKER_REPLAY_FILES_MAX} files the oldest is
- * dropped, which only lets its next replay through once more.
+ * #5532: a live blocker's full turn-end section is delivered at most this many
+ * times (the first delivery included); later deliveries render a one-line
+ * pointer. The count is the coordinator's (`fullDeliveryCount`).
+ */
+export const BLOCKER_FULL_DELIVERY_CAP = 3;
+
+/**
+ * #1950: deliveries a `"dependency-drift"` demotion may re-serve before it
+ * retires (`clients/blocker-freshness.ts` module doc, "Delivery cap"). Moved
+ * here with the decision that reads it (#5784).
+ */
+export const DEPENDENCY_DRIFT_MAX_DELIVERIES = 3;
+
+/**
+ * #4990: deliveries a `"self-drift"` demotion may re-serve before
+ * `runtime-turn.ts` retires it, the self axis's sibling of
+ * {@link DEPENDENCY_DRIFT_MAX_DELIVERIES}.
+ *
+ * The self axis is re-arming, so a record whose bytes come back is un-demoted
+ * and never reaches this cap. A record the agent fixed by rewriting the file
+ * does not come back, and re-served dead coordinates on every turn end for the
+ * rest of the session; the cap's ledger reason keeps #1950's distinction
+ * ("capped, a re-run can still confirm") rather than #1944's "unrecoverable".
+ */
+export const SELF_DRIFT_MAX_DELIVERIES = 3;
+
+/** #5784: the blocker lines whose repeat this gate decides. */
+export type BlockerReplaySurface =
+	| "withheld-line"
+	| "still-unfixed-line"
+	| "turn-end-replay"
+	| "turn-end-demoted";
+
+/** The per-write surfaces, whose latch this module keeps. */
+type PerWriteSurface = "withheld-line" | "still-unfixed-line";
+
+/**
+ * #5788 review F4: the latch write a per-write decision asks for, applied by
+ * {@link commitBlockerReplay} only once the line reached the agent. `key`
+ * undefined forgets the file (a verdict re-arms it).
+ */
+export interface BlockerReplayCommit {
+	surface: PerWriteSurface;
+	file: string;
+	key: string | undefined;
+}
+
+/**
+ * #5784: per file, the unconfirmed set each per-write surface last DELIVERED
+ * this session. Bounded: past {@link BLOCKER_REPLAY_FILES_MAX} files the
+ * oldest committed one is dropped, which only lets its next replay through
+ * once more. A FIFO map, so a read at render never reorders it; the commit
+ * re-inserts.
  */
 const BLOCKER_REPLAY_FILES_MAX = 256;
-const deliveredUnconfirmedReplay = new BoundedLruCache<
+const deliveredUnconfirmedReplay = new BoundedFifoMap<
 	string,
-	Partial<Record<BlockerReplaySurface, string>>
+	Partial<Record<PerWriteSurface, string>>
 >(BLOCKER_REPLAY_FILES_MAX);
 
 /** The identity and the coordinates of one blocker, as the replay key reads it. */
 function replayIdentity(d: Diagnostic): string {
 	const at = d.positionStale ? "moved" : String(d.line ?? "none");
-	return `${findingIdentity(d)}@${at}@${d.filePath ?? ""}@${d.unconfirmedBy ?? ""}`;
+	return `${findingIdentity(d)}@${at}@${d.filePath ?? ""}@${d.unconfirmedBy ?? ""}@${d.recheckInFlight === true ? "running" : ""}`;
 }
 
 /**
- * #5784: whether `surface`'s line for `filePath`, rendering `blockers` (the
- * file's live blocking set on this write), is delivered. A set with any
- * blocker that reached a verdict, or an empty one, delivers and forgets the
- * file. A set of unconfirmed blockers only (`unconfirmedBy`) delivers when it
- * differs from what this surface last delivered for this file, and is
- * otherwise held back and counted. Called on every write, so a verdict re-arms
- * the file even when no line renders.
+ * #5784: the one decision on whether a blocker line is shown again. Each
+ * surface brings what its repeat depends on, and none keeps a rule of its own:
+ *
+ * - `withheld-line`, `still-unfixed-line` (per write): a set with any blocker
+ *   that reached a verdict, or an empty one, delivers, and its commit forgets
+ *   the file. A set of unconfirmed blockers only delivers when it differs from
+ *   what this surface last delivered for the file, its commit recording it;
+ *   an identical replay is held back and counted
+ *   (`blocker-replay-suppressed`). The suppression is of the LINE only: the
+ *   record, the commit gate, the widget and `lens_diagnostics` still hold it.
+ * - `turn-end-replay` (#5532): the coordinator's count of full deliveries;
+ *   at {@link BLOCKER_FULL_DELIVERY_CAP} the section collapses to a pointer.
+ * - `turn-end-demoted` (#1950, #4990): the drift axis and the coordinator's
+ *   count of deliveries so far; the delivery that reaches the axis's cap
+ *   carries the retirement note.
+ *
+ * Every count is committed only once the line reached the agent: the
+ * per-write latch by {@link commitBlockerReplay} from the tool result's
+ * delivered return, the turn-end counts by the coordinator's own delivery
+ * hooks (`recordBlockerDelivery`, the drift hold's `onDelivered`).
  */
 export function admitBlockerReplay(args: {
-	surface: BlockerReplaySurface;
+	surface: PerWriteSurface;
 	filePath: string;
 	blockers: readonly Diagnostic[];
-}): "deliver" | "suppress" {
+}): { shown: "deliver" | "suppress"; commit?: BlockerReplayCommit };
+export function admitBlockerReplay(args: {
+	surface: "turn-end-replay";
+	fullDeliveries: number;
+}): { shown: "deliver" | "collapse" };
+export function admitBlockerReplay(args: {
+	surface: "turn-end-demoted";
+	axis: "dependency-drift" | "self-drift";
+	staleDeliveries: number;
+}): { shown: "deliver" | "retire-note" };
+export function admitBlockerReplay(
+	args:
+		| {
+				surface: PerWriteSurface;
+				filePath: string;
+				blockers: readonly Diagnostic[];
+		  }
+		| { surface: "turn-end-replay"; fullDeliveries: number }
+		| {
+				surface: "turn-end-demoted";
+				axis: "dependency-drift" | "self-drift";
+				staleDeliveries: number;
+		  },
+): {
+	shown: "deliver" | "collapse" | "suppress" | "retire-note";
+	commit?: BlockerReplayCommit;
+} {
+	if (args.surface === "turn-end-replay")
+		return {
+			shown:
+				args.fullDeliveries >= BLOCKER_FULL_DELIVERY_CAP
+					? "collapse"
+					: "deliver",
+		};
+	if (args.surface === "turn-end-demoted") {
+		const cap =
+			args.axis === "self-drift"
+				? SELF_DRIFT_MAX_DELIVERIES
+				: DEPENDENCY_DRIFT_MAX_DELIVERIES;
+		return {
+			shown: args.staleDeliveries + 1 >= cap ? "retire-note" : "deliver",
+		};
+	}
 	const file = normalizeEphemeralMapKey(args.filePath);
 	if (
 		args.blockers.length === 0 ||
 		args.blockers.some((d) => d.unconfirmedBy === undefined)
-	) {
-		deliveredUnconfirmedReplay.delete(file);
-		return "deliver";
-	}
+	)
+		return {
+			shown: "deliver",
+			commit: { surface: args.surface, file, key: undefined },
+		};
 	const key = args.blockers.map(replayIdentity).sort().join("\n");
-	const delivered = deliveredUnconfirmedReplay.get(file) ?? {};
-	if (delivered[args.surface] === key) {
+	if (deliveredUnconfirmedReplay.get(file)?.[args.surface] === key) {
 		incrementDegradationCount({
 			kind: "blocker-replay-suppressed",
 			subject: `${args.surface}:${file}`,
 			reason:
 				"the same unconfirmed blockers were already delivered on this surface this session, and no source has answered since (#5784)",
 		});
-		return "suppress";
+		return { shown: "suppress" };
 	}
-	deliveredUnconfirmedReplay.set(file, { ...delivered, [args.surface]: key });
-	return "deliver";
+	return { shown: "deliver", commit: { surface: args.surface, file, key } };
+}
+
+/**
+ * #5788 review F4: record a per-write decision's line as delivered. Called
+ * only where the line reached the agent; an abandoned delivery never calls it,
+ * so the next identical line is delivered again.
+ */
+export function commitBlockerReplay(commit: BlockerReplayCommit): void {
+	const delivered = deliveredUnconfirmedReplay.get(commit.file);
+	deliveredUnconfirmedReplay.delete(commit.file);
+	if (commit.key === undefined) return;
+	deliveredUnconfirmedReplay.set(commit.file, {
+		...delivered,
+		[commit.surface]: commit.key,
+	});
 }
 
 /** #5784: a new session hears every unconfirmed blocker line once again. */

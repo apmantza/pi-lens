@@ -687,7 +687,7 @@ describe("clean-claim census (#5258)", () => {
 		const file = "tools/lens-diagnostics.ts";
 		const original = readCensusSource(file);
 		const source = original.replace(
-			"const clean = cleanVerdict({ ...cleanEvidence, findings: 0 });",
+			"const clean = cleanVerdict({\n\t\t\t...cleanEvidence,\n\t\t\tfindings: heldRecords.length,\n\t\t});",
 			"const clean = visibleSummaries.length > 0;",
 		);
 		expect(source).not.toBe(original);

@@ -27,7 +27,6 @@ import {
 	type CachedAnchorMarks,
 	type DispositionCandidate,
 } from "../clients/diagnostic-dispositions.js";
-import { DEPENDENCY_DRIFT_MAX_DELIVERIES } from "../clients/blocker-freshness.js";
 import {
 	applyFindingPolicy,
 	loadProjectRulePolicy,
@@ -43,10 +42,13 @@ import {
 	parseScannedAtMs,
 } from "../clients/advisory-provenance.js";
 import {
+	admitSessionAllClear,
+	DEPENDENCY_DRIFT_MAX_DELIVERIES,
 	dispositionSuppressedLine,
 	formatCacheAgeLabel,
-	formatUnconfirmedBlockerNote,
 	markUnreconciledFindings,
+	type UnconfirmedBlockerRow,
+	unconfirmedBlockerNote,
 } from "../clients/finding-delivery-gate.js";
 import {
 	detectPythonTargetVersion,
@@ -141,6 +143,7 @@ import {
 	getFileDiagnosticSummaries,
 	getSuppressedDiagnostics,
 	type FileDiagnosticSummary,
+	isBlocking,
 	reconcileCorrelatedScanDiagnostics,
 	reconcileScanDiagnostics,
 	reconcileStaleWidgetDependencyBlockers,
@@ -897,6 +900,8 @@ export function createLensDiagnosticsTool(
 					pathsScope,
 					undefined,
 					{ stalePaths: scopedStalePaths, host: ctx.host ?? "pi" },
+					undefined,
+					blockerRecordsFor(getRuntime?.(), ctx.host ?? "pi"),
 				);
 			}
 			if (mode === "full") {
@@ -3185,6 +3190,7 @@ async function formatFullMode(
 				...(extracted.aborted ? ["aborted"] : []),
 			],
 		},
+		blockerRecordsFor(options.runtime, options.host ?? "pi"),
 	);
 	// #4638 r3 (N2): every return below builds on `result`, so the disclosure of
 	// rows the declaration withheld is added once, here, to text and details.
@@ -3706,23 +3712,37 @@ function uncheckedFilesLine(
 		(s) => `${toProjectRelativePath(s.filePath, cwd)}: ${s.uncheckedReason}`,
 	);
 	const more = unchecked.length - named.length;
-	// #5784: a coverable file whose latest check gave no verdict yet holds
-	// blockers holds them from an earlier check; the delivery gate's sentence
-	// says so and names what settles them. A file no check can cover has no
-	// settle to name.
+	// #5784, #5788 review F1: the delivery gate's sentence for the file's
+	// blocking rows a carry marked as from an earlier check, read off each
+	// row's marker: a row a check found fresh on the latest write gets none,
+	// and each marked row names its own settle path.
 	const notes = shown.flatMap((s) => {
-		if (s.blocking === 0 || s.uncheckedInapplicable === true) return [];
 		const display = toProjectRelativePath(s.filePath, cwd);
-		const note = formatUnconfirmedBlockerNote({
-			sources: [],
-			count: s.blocking,
-			displayPath: display,
-			on: "its latest write",
-			host,
-		});
-		return [`\n  ${display}: ${note}`];
+		const note = unconfirmedBlockerNote(
+			s.diagnostics.filter(isBlocking),
+			display,
+			{ on: "its latest write", host },
+		);
+		return note === undefined ? [] : [`\n  ${display}: ${note}`];
 	});
 	return `⚠ ${unchecked.length} file${unchecked.length === 1 ? "" : "s"} not checked, so no findings is not a clean result: ${named.join("; ")}${more > 0 ? `; +${more} more` : ""}.${notes.join("")}`;
+}
+
+/**
+ * #5788 review F6: the commit gate's blocker records for the session read's
+ * all-clear (`admitSessionAllClear`); none without a runtime (the MCP route
+ * before a session, a harness).
+ */
+function blockerRecordsFor(
+	runtime:
+		| Pick<
+				import("../clients/runtime-coordinator.js").RuntimeCoordinator,
+				"getInlineBlockersSnapshot"
+		  >
+		| undefined,
+	host: LensToolHost,
+): NonNullable<Parameters<typeof formatAllMode>[9]> {
+	return { records: runtime?.getInlineBlockersSnapshot() ?? [], host };
 }
 
 // @delivery-surface: lens-diagnostics:mode-all
@@ -3755,6 +3775,19 @@ async function formatAllMode(
 		stopped: boolean;
 		/** Analyzer lanes that failed, ran partially or were aborted. */
 		incompleteLanes: readonly string[];
+	},
+	/**
+	 * #5788 review F6: the commit gate's blocker records
+	 * (`RuntimeCoordinator.getInlineBlockersSnapshot`) and the host that words
+	 * them. A scan can clear the session cache while a record still holds a
+	 * blocker, so the delivery gate withholds the all-clear over one.
+	 */
+	blockerRecords?: {
+		records: readonly {
+			filePath: string;
+			diagnostics?: readonly UnconfirmedBlockerRow[];
+		}[];
+		host: LensToolHost;
 	},
 ): Promise<{ content: [{ type: "text"; text: string }]; details: object }> {
 	// mode=full already actively scanned exactly the requested paths, so a zero
@@ -4072,13 +4105,31 @@ async function formatAllMode(
 	const proofDetails = isFullMode ? { provenFiles: provenCount } : {};
 
 	if (withIssues.length === 0) {
-		const clean = cleanVerdict({ ...cleanEvidence, findings: 0 });
+		// #5788 review F6: a blocker record no check retired is a finding this
+		// read speaks for, so it withholds the all-clear.
+		const heldRecords = (blockerRecords?.records ?? []).flatMap((held) =>
+			includeFile(held.filePath)
+				? [
+						{
+							displayPath: toProjectRelativePath(held.filePath, cwd),
+							blockers: held.diagnostics ?? [],
+						},
+					]
+				: [],
+		);
+		const recordsHeld = admitSessionAllClear(heldRecords, blockerRecords?.host);
+		const clean = cleanVerdict({
+			...cleanEvidence,
+			findings: heldRecords.length,
+		});
 		const text =
-			(visibleSummaries.length === 0
-				? "No files diagnosed yet this session.\n"
-				: !clean
-					? ""
-					: `No ${severity === "all" ? "" : severity + " "}issues across ${provenCount} file${provenCount === 1 ? "" : "s"} diagnosed this session. ✓\n`) +
+			(!recordsHeld.clean
+				? `${recordsHeld.line}\n`
+				: visibleSummaries.length === 0
+					? "No files diagnosed yet this session.\n"
+					: !clean
+						? ""
+						: `No ${severity === "all" ? "" : severity + " "}issues across ${provenCount} file${provenCount === 1 ? "" : "s"} diagnosed this session. ✓\n`) +
 			(uncheckedLine ? `${uncheckedLine}\n` : "") +
 			validationNote +
 			staleNote +

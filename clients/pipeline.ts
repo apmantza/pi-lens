@@ -15,6 +15,7 @@
 import { resolveLensToolName, type LensToolHost } from "./tool-config.js";
 import {
 	admitBlockerReplay,
+	type BlockerReplayCommit,
 	unconfirmedBlockerNote,
 } from "./finding-delivery-gate.js";
 import * as nodeFs from "node:fs";
@@ -501,6 +502,13 @@ export interface PipelineResult {
 	 * agent's next context. Absent when nothing was withheld.
 	 */
 	withheldBlockerLine?: string;
+	/**
+	 * #5788 review F4: the replay latch write this run's blocker line asks for
+	 * (`admitBlockerReplay`). The tool result commits it only when it is
+	 * delivered (`commitBlockerReplay`), so an abandoned delivery latches
+	 * nothing.
+	 */
+	blockerReplayCommit?: BlockerReplayCommit;
 	/**
 	 * #4733 r5 G3: how many blocking findings the observation still holds that
 	 * the #4483 seed called pre-existing (`DispatchResult.preExisting`). Absent
@@ -2075,6 +2083,9 @@ function carryRecordedBlockers(
 ): { carried: Diagnostic[]; matched: ReadonlySet<Diagnostic> } {
 	if (prior.length === 0) return { carried: [], matched: new Set() };
 	const runnerIds = new Set(dispatchResult.inconclusiveSources?.runnerIds);
+	const inFlight = new Set(
+		dispatchResult.inconclusiveSources?.collectLaterRunnerIds,
+	);
 	const serverIds = new Set(dispatchResult.inconclusiveSources?.serverIds);
 	const answered = dispatchResult.inconclusiveSources?.answeredServerIds;
 	// #5727: a runner with no verdict keeps its recorded blockers, except one
@@ -2115,14 +2126,22 @@ function carryRecordedBlockers(
 		// #5784: a recorded blocker still here was kept by `keepUnobserved`, so
 		// its source gave no verdict for it on this write. Its own server names
 		// that source when it has one, else its runner.
-		const unconfirmedBy = d.serverId ?? d.runnerId ?? "unknown";
+		// #5788 review F2: a collect-later re-check still in flight answers for
+		// it on its own, so it is marked as running, not as needing a probe.
+		// A marker from an earlier carry is this write's to restate, not keep.
+		const { recheckInFlight: _earlier, ...row } = d;
+		const marker = {
+			unconfirmedBy: d.serverId ?? d.runnerId ?? "unknown",
+			...(d.runnerId !== undefined &&
+				inFlight.has(d.runnerId) && { recheckInFlight: true as const }),
+		};
 		const at = positionOf(d);
 		// #4509 (N3): kept without a place in these bytes, its line number is
 		// from older bytes; say so instead of leaving a later write to infer it
 		// from one line's hash.
 		if (typeof at !== "number")
-			return [{ ...d, positionStale: true as const, unconfirmedBy }];
-		return [{ ...d, line: at, unconfirmedBy }];
+			return [{ ...row, positionStale: true as const, ...marker }];
+		return [{ ...row, line: at, ...marker }];
 	});
 	if (carried.some((d) => !dispatchResult.stillObserved?.includes(d))) {
 		incrementDegradationCount({
@@ -2861,11 +2880,18 @@ async function analysePipeline(
 		filePath,
 		blockers: liveBlockers,
 	});
-	const replaySuppressed =
-		replay === "suppress" &&
-		(allowAutonomousWriters
-			? stillUnfixed.length > 0
-			: liveBlockers.length > 0);
+	const replayLine = allowAutonomousWriters
+		? stillUnfixed.length > 0
+		: liveBlockers.length > 0;
+	const replaySuppressed = replay.shown === "suppress" && replayLine;
+	// #5788 review F4: the latch is written only once the tool result reached
+	// the agent (`clients/runtime-tool-result.ts`), and only for a line this
+	// write rendered, or to forget the file after a verdict.
+	const blockerReplayCommit =
+		replay.commit !== undefined &&
+		(replay.commit.key === undefined || replayLine)
+			? replay.commit
+			: undefined;
 	if (stillUnfixed.length > 0 && !replaySuppressed) {
 		output += `\n\n${formatStillUnfixedLine(stillUnfixed, filePath, toRunnerDisplayPath(cwd, filePath))}`;
 	}
@@ -3114,6 +3140,7 @@ async function analysePipeline(
 		// #4484: what a clear must find empty, whatever the authorship.
 		currentBlockerCount: liveBlockers.length,
 		...(withheldBlockerLine !== undefined && { withheldBlockerLine }),
+		...(blockerReplayCommit !== undefined && { blockerReplayCommit }),
 		...(preExisting.length > 0 && {
 			preExistingBlockerCount: preExisting.length,
 		}),
