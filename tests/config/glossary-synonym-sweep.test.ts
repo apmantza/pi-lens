@@ -690,6 +690,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/file-kinds.ts": 1,
 		"clients/file-role.ts": 3,
 		"clients/file-utils.ts": 3,
+		// 0 -> 1 (#5784): `unconfirmedBlockerNote` keeps the blockers a carry marked
+		// `unconfirmedBy`, an `Array.prototype.filter` call, not a delivery filter.
+		// 1 -> 3 (#5788 review F2): it counts the rows whose re-check is in
+		// flight and the language server's rows, two more such calls.
+		"clients/finding-delivery-gate.ts": 3,
 		"clients/fix-worklog.ts": 1,
 		"clients/format-service.ts": 2,
 		"clients/formatters.ts": 6,
@@ -935,7 +940,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 47 -> 49 (#5258): the clean claim's scope keeps the checked summaries,
 		// and its proof keeps the swept files the sweep proved; two
 		// `Array.prototype.filter` calls, not delivery filters.
-		"tools/lens-diagnostics.ts": 49,
+		// 49 -> 50 (#5788 review F1): `uncheckedFilesLine` hands the gate a
+		// file's blocking rows, one `Array.prototype.filter` call.
+		"tools/lens-diagnostics.ts": 50,
 		// 12 -> 13 (#4346): the batch selects its finding-bearing files to resolve.
 		// 13 -> 14 (#4322): the batch counts its files with auxiliary findings
 		// only, one `Array.prototype.filter` use, not a delivery filter.
