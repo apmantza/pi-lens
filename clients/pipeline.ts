@@ -1809,10 +1809,16 @@ export function formatWithheldBlockerLine(
 	// cannot retire those: only a run that re-checks the file judges them, so the
 	// line names that action (#5108 shape 10 — a withheld verdict must not send
 	// an agent to re-read a file the passive path will never answer for).
+	const carriedPronoun = carried === 1 ? "it" : "them";
+	const carriedVerb = carried === 1 ? "was" : "were";
+	const carriedSettle =
+		diagnosticsTool === undefined
+			? ""
+			: `; ${diagnosticsTool} mode=full settles ${carriedPronoun}`;
 	const carriedClause =
 		carried <= 0
 			? ""
-			: ` ${carried} recorded earlier ${carried === 1 ? "was" : "were"} not re-checked on this write, so fixing the code cannot retire ${carried === 1 ? "it" : "them"}${diagnosticsTool ? `; ${diagnosticsTool} mode=full settles ${carried === 1 ? "it" : "them"}` : ""}.`;
+			: ` ${carried} recorded earlier ${carriedVerb} not re-checked on this write, so fixing the code cannot retire ${carriedPronoun}${carriedSettle}.`;
 	return `\u26a0 ${count} blocking finding${count === 1 ? "" : "s"} in ${display}${formatBlockerPlaces(blockers, filePath)} withheld: ${known}.${carriedClause} If this call wrote it, fix ${them}.${pointer}`;
 }
 
