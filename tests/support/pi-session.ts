@@ -733,6 +733,14 @@ export interface PiSessionOptions {
 	 */
 	modelCompat?: Readonly<Record<string, unknown>>;
 	/**
+	 * The session model's `api` (the provider wire format pi reports on
+	 * `ctx.model`, e.g. `anthropic-messages`), replacing the faux provider's
+	 * own. Only the label on the model object pi hands the session changes: the
+	 * scripted provider still answers it. Carried by every session this handle
+	 * builds.
+	 */
+	modelApi?: string;
+	/**
 	 * Bind a RECORDING UI context instead of pi's no-op one. A case that asserts
 	 * what pi-lens asked the UI to show (a notification, the LSP status line)
 	 * reads it back from {@link PiSession.notifications} / `.statuses`; the
@@ -809,7 +817,10 @@ export interface PiSession {
 	 * alternate) carrying `compat`, through pi's own `AgentSession.setModel`,
 	 * which emits `model_select` to the loaded copy.
 	 */
-	switchModel(compat: Readonly<Record<string, unknown>>): Promise<void>;
+	switchModel(
+		compat: Readonly<Record<string, unknown>>,
+		api?: string,
+	): Promise<void>;
 	/**
 	 * Reopen this session's persisted file in a NEW session with a new provider
 	 * script — the resume path a restarted process takes.
@@ -895,10 +906,15 @@ async function buildModelRuntime(
 	agentDir: string,
 	requests: PiProviderRequest[],
 	compat: Readonly<Record<string, unknown>>,
+	api: string | undefined,
 ): Promise<{
 	modelRuntime: ModelRuntime;
 	model: unknown;
-	modelFor(id: string, compat: Readonly<Record<string, unknown>>): unknown;
+	modelFor(
+		id: string,
+		compat: Readonly<Record<string, unknown>>,
+		api?: string,
+	): unknown;
 	script(responses: readonly PiFauxReply[]): void;
 }> {
 	const faux = piAiModule().fauxProvider({
@@ -930,10 +946,15 @@ async function buildModelRuntime(
 	const modelFor = (
 		id: string,
 		modelCompat: Readonly<Record<string, unknown>>,
+		modelApi: string | undefined = api,
 	): unknown => {
 		const registered = modelRuntime.getModel("faux", id);
 		if (!registered) throw new Error(`the faux provider registered no ${id}`);
-		return { ...registered, compat: { ...modelCompat } };
+		return {
+			...registered,
+			...(modelApi ? { api: modelApi } : {}),
+			compat: { ...modelCompat },
+		};
 	};
 	const model = modelFor(FAUX_MODEL.id as string, compat);
 	return { modelRuntime, model, modelFor, script };
@@ -945,6 +966,8 @@ interface SessionArgs {
 	readonly flags: ReadonlyMap<string, boolean | string>;
 	/** The `compat` every session of this handle's model carries. */
 	readonly modelCompat: Readonly<Record<string, unknown>>;
+	/** {@link PiSessionOptions.modelApi}. */
+	readonly modelApi?: string;
 	/** Present only when the case asked for a recording UI context. */
 	readonly ui?: UiRecorder;
 	/** {@link PiSessionOptions.customTools}. */
@@ -963,7 +986,11 @@ interface CreatedSession {
 	readonly result: CreateAgentSessionResult;
 	readonly requests: PiProviderRequest[];
 	script(responses: readonly PiFauxReply[]): void;
-	modelFor(id: string, compat: Readonly<Record<string, unknown>>): unknown;
+	modelFor(
+		id: string,
+		compat: Readonly<Record<string, unknown>>,
+		api?: string,
+	): unknown;
 }
 
 /**
@@ -985,6 +1012,7 @@ async function createSession(
 		options.agentDir,
 		requests,
 		args.modelCompat,
+		args.modelApi,
 	);
 	script(responses);
 	const services = await withFixtureTmpdir(args.root, () =>
@@ -1175,11 +1203,11 @@ function handleFor(
 		async compact(instructions) {
 			return session.compact(instructions);
 		},
-		async switchModel(compat) {
+		async switchModel(compat, api) {
 			const next =
 				session.model?.id === FAUX_MODEL.id ? FAUX_MODEL_ALT : FAUX_MODEL;
 			await session.setModel(
-				created.modelFor(next.id as string, compat) as never,
+				created.modelFor(next.id as string, compat, api) as never,
 			);
 		},
 		async restart(replacement, responses) {
@@ -1322,6 +1350,7 @@ export async function startPiSession(
 		root: options.root,
 		flags: flagMap(DEFAULT_FLAGS, options.flags),
 		modelCompat: options.modelCompat ?? DEFAULT_MODEL_COMPAT,
+		...(options.modelApi ? { modelApi: options.modelApi } : {}),
 		...(options.captureUi ? { ui: createUiRecorder() } : {}),
 		...(options.customTools ? { customTools: options.customTools } : {}),
 		...(options.extraExtensions

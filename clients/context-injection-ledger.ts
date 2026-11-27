@@ -1,5 +1,6 @@
 /**
- * Retained context injections (#4743, opt-in `--lens-retain-injections`).
+ * Retained context injections (#4743, `--lens-retain-injections`; on by
+ * default for the `anthropic-messages` API only, #5770).
  *
  * pi rebuilds every provider request from its own transcript, and pi-lens's
  * findings ride ONE request: `context_with_system` returns an amended copy and
@@ -37,7 +38,37 @@ import {
 	rollingMessageDigests,
 } from "./cache-observability.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
+import type { ResolvedPiLensFlag } from "./lens-config.js";
 import { resolveLensToolName } from "./tool-config.js";
+
+/**
+ * The APIs whose requests retain by default (#5770). Every other API keeps the
+ * flag's own default, off. Exact strings: a label that merely resembles one of
+ * these (`anthropic-messages-v2`) is not the API.
+ */
+const RETAIN_DEFAULT_APIS: ReadonlySet<string> = new Set([
+	"anthropic-messages",
+]);
+
+/**
+ * Whether THIS request retains, from the resolved `lens-retain-injections`
+ * setting and the model's API as `ctx.model.api` reports it now (#5770).
+ *
+ * An explicit setting (the flag, or `contextInjection.retain` in either
+ * direction) decides alone: only a setting that resolved to the registry
+ * default, which nobody chose, falls back to the API. An API that is absent or
+ * not a string is unknown and keeps today's default, off. `apiDefault` says
+ * the API, not a setting, turned retention on, so the caller can record that.
+ */
+export function resolveRetainInjections(
+	setting: Pick<ResolvedPiLensFlag, "value" | "source">,
+	api: unknown,
+): { retain: boolean; apiDefault: boolean } {
+	if (setting.source !== "default")
+		return { retain: Boolean(setting.value), apiDefault: false };
+	const apiDefault = typeof api === "string" && RETAIN_DEFAULT_APIS.has(api);
+	return { retain: apiDefault, apiDefault };
+}
 
 export const MAX_RETAINED_ENTRIES = 64;
 export const MAX_RETAINED_BYTES = 256 * 1024;
