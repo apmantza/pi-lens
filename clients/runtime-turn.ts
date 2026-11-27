@@ -171,7 +171,6 @@ import {
 	composeCascadeSection,
 	forgetCascadePendingNeighbor,
 	settleCascadePendingAfterWrite,
-	clearCascadeWriteVerdicts,
 	formatCascadeNeighborDiagnostics,
 	listCascadePendingNeighbors,
 	markCascadeUnansweredPrimariesDelivered,
@@ -2385,7 +2384,6 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		if (settleCascadePendingAfterWrite(absolute, settleAt))
 			editedKeys.add(normalizeMapKey(absolute));
 	}
-	clearCascadeWriteVerdicts();
 	// The latest result per primary (last writer wins).
 	const seen = new Map<string, CascadeResult>();
 	for (const result of cascadeResults) {

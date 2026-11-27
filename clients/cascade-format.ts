@@ -766,9 +766,9 @@ export function forgetCascadePendingNeighbor(
 	pendingNeighbors.delete(key);
 }
 
-// #5804: files whose last write this turn a language server answered for.
-// Bounded like the record: an evicted note reads as "no answer", which keeps
-// the file's errors.
+// #5804: files whose last write a language server answered for. A note lives
+// until that file's next write starts. Bounded like the record: an evicted
+// note reads as "no answer", which keeps the file's errors.
 const answeredWrites = new BoundedFifoMap<string, true>(MAX_PENDING_NEIGHBORS);
 
 /**
@@ -804,11 +804,6 @@ export function settleCascadePendingAfterWrite(
 	const entry = pendingNeighbors.get(key);
 	if (entry) entry.checkedAt = Math.max(entry.checkedAt, at);
 	return false;
-}
-
-/** Turn end: the notes above are about this turn's writes only. */
-export function clearCascadeWriteVerdicts(): void {
-	answeredWrites.clear();
 }
 
 /** The record, oldest-written first. */
