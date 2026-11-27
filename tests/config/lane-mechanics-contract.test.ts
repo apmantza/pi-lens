@@ -259,23 +259,36 @@ describe("flaky-test rules (#5806)", () => {
 	// Recurrence: shape 85 requires a scaled or shared budget on every new
 	// tree-walking test, and a new test has no failing host. Without this scope
 	// a shape-85-compliant test reads as a budget raised without a measurement
-	// (review of #5809, F2).
-	it("scopes the measurement rule to a test that failed and sends a new test's budget to shape 85", () => {
+	// (review of #5809, F2). The trigger names its evidence and covers the two
+	// budgets the first scope left open: a new non-walking test, and a raise on
+	// an existing test that never failed (verify r2, V4).
+	it("scopes the measurement rule to a test with failure evidence and routes the other budgets", () => {
 		const fixer = fixerSection();
-		expect(fixer).toMatch(/binds a fix to a test that failed or flaked/);
 		expect(fixer).toMatch(
-			/A budget set on a new test follows its own shape \(shape 85/,
+			/binds a fix to a test that failed or flaked, which a failing CI run id or a linked flake issue shows/,
+		);
+		expect(fixer).toMatch(
+			/shape 85 governs it for a tree-walking test .{0,90}and any other new test gets ordinary review/,
+		);
+		expect(fixer).toMatch(
+			/A budget raised on an existing test with no failing run or flake issue to name is not a flake fix; the PR body states the measurement that motivated it/,
 		);
 		const reviewer = rule("pi-lens-reviewer.md");
 		expect(reviewer).toMatch(
-			/A budget set on a new test follows its own shape \(shape 85\) and is not this finding/,
+			/a test that failed \(a failing CI run id or a linked flake issue names it\)/,
+		);
+		expect(reviewer).toMatch(
+			/A budget set on a new test is not this finding: shape 85 governs a tree-walking test and any other gets ordinary review/,
+		);
+		expect(reviewer).toMatch(
+			/A budget raised on an existing test with no failure to name is not a flake fix; ask for the measurement that motivated it/,
 		);
 	});
 
 	// Recurrence: closing windows were picked case by case (#2042 closed on 11
 	// kill-free runs; other flakes closed on one green rerun), and a p read off
-	// a small window made "95%" a claim about the point estimate (review of
-	// #5809, F3 and F6).
+	// a small window makes "95%" approximate (review of #5809, F3 and F6). The
+	// rule counts against the point estimate of p, as #5806 states.
 	it("states the 3/p stopping rule with its derivation, recurrence and how p is estimated", () => {
 		const text = fixerSection();
 		expect(text).toMatch(
@@ -287,8 +300,9 @@ describe("flaky-test rules (#5806)", () => {
 			/Recurrence: #2042 closed on an 11-run kill-free window, and other flakes closed on one green rerun/,
 		);
 		expect(text).toMatch(
-			/count the clean runs against the lower bound of its 95% interval/,
+			/A p taken from a window is an estimate, so the 95% figure is approximate; a longer window narrows it/,
 		);
+		expect(text).not.toMatch(/lower bound/);
 		expect(text).toMatch(
 			/Estimate p\*\* as failures over runs of the same job in a stated window/,
 		);
@@ -302,7 +316,7 @@ describe("flaky-test rules (#5806)", () => {
 		expect(text).toMatch(/do not close the issue as fixed/);
 		expect(text).toMatch(/accepted gap/);
 		expect(text).toMatch(
-			/each state p, the failures, runs and window behind it, and the clean-run count reached against 3\/p/,
+			/each state p, the failures, runs and window behind it, and the clean-run count reached against 3\/p\. A close that omits them is a finding/,
 		);
 	});
 
@@ -312,7 +326,9 @@ describe("flaky-test rules (#5806)", () => {
 	it("gives a deleted flake a close that is not a fix and records p and the root-cause attempt", () => {
 		const text = fixerSection();
 		expect(text).toMatch(/A deletion is not a fix\./);
-		expect(text).toMatch(/closes the issue as removed, never as fixed/);
+		expect(text).toMatch(
+			/closes the issue as not planned, never as completed or fixed/,
+		);
 		expect(text).toMatch(
 			/records p with the failures, runs and window behind it, and the root-cause attempt/,
 		);
@@ -320,7 +336,7 @@ describe("flaky-test rules (#5806)", () => {
 			/what a deletion records are in `docs\/pi-lens-fixer\.md`/,
 		);
 		expect(rule("pi-lens-reviewer.md")).toMatch(
-			/A deletion closes as removed and records p and the root-cause attempt, never a "fixed" claim/,
+			/A deletion is the exception: it closes as not planned, records p and the root-cause attempt, and quotes no clean-run count, and a deletion that claims "fixed" is a finding/,
 		);
 	});
 
@@ -331,6 +347,10 @@ describe("flaky-test rules (#5806)", () => {
 		expect(text).toContain("**Flake fixes and flake closes.**");
 		expect(text).toContain('`docs/pi-lens-fixer.md` "Flaky tests"');
 		expect(text).toMatch(/a close on one green rerun[^.]*is a finding/);
+		// V6: the count sentence binds a fix close; a deletion is its exception.
+		expect(text).toMatch(
+			/A fix close or an accepted-gap record quotes p, the failures, runs and window behind it, and the clean-run count against 3\/p/,
+		);
 	});
 
 	// Recurrence: the close and the known-gap record are where the numbers are

@@ -192,9 +192,13 @@ This section is the only home of both rules; `AGENTS.md`, the reviewer
 checklist and the merge policy point here.
 
 - **No reproduction, no fix.** This binds a fix to a test that failed or
-  flaked. A budget set on a new test follows its own shape (shape 85 requires
-  `TREE_WALK_TIMEOUT_MS` or `scaledTestTimeout(...)` on a tree-walking test) and
-  needs no failing-host measurement. A retry, a longer or scaled timeout
+  flaked, which a failing CI run id or a linked flake issue shows; the PR body
+  quotes it. A budget set on a new test has no failing host and needs no
+  measurement: shape 85 governs it for a tree-walking test (it requires
+  `TREE_WALK_TIMEOUT_MS` or `scaledTestTimeout(...)`), and any other new test
+  gets ordinary review. A budget raised on an existing test with no failing run
+  or flake issue to name is not a flake fix; the PR body states the measurement
+  that motivated it. A retry, a longer or scaled timeout
   (`scaledTestTimeout`, a raised `testTimeout`), a skip or a quarantine is not a
   fix: it hides the failure and leaves its cause. Reproduce the failure on the
   failing host or lane, name the slow or racing step, and fix that step. Raise the
@@ -218,26 +222,21 @@ checklist and the merge policy point here.
   since the flake first appeared. Name the window and count a failure only when
   its message matches the flake's own. A flake with one recorded failure uses
   p = 1/runs in the window, never 0. A p taken from a window is an estimate, so
-  count the clean runs against the lower bound of its 95% interval: 4 failures in
-  40 runs (p = 0.10) has a lower bound near 0.04 and needs about 75 clean runs,
-  not 30.
+  the 95% figure is approximate; a longer window narrows it.
 - **When 3/p is impractical** (a 1-in-50 flake needs 150 clean runs, more than
   the lane can run), do not close the issue as fixed. Record it as an accepted
-  gap (`docs/pi-lens-merge-policy.md` "Known gaps") with the numbers the next bullet
-  lists, and let the count carry forward to the next fix
-  attempt.
+  gap (`docs/pi-lens-merge-policy.md` "Known gaps") with the numbers the closing
+  bullet lists, and let the count carry forward to the next fix attempt.
 - **A deletion is not a fix.** `AGENTS.md` lets a repeat flake whose cause
   stays unknown after a root-cause attempt be deleted. That closes the issue as
-  removed, never as fixed, and the PR body records p with the failures, runs and
+  not planned, never as completed or fixed, and the PR body records p with the failures, runs and
   window behind it, and the root-cause attempt (what you reproduced or tried,
   and what stayed unknown). It needs no clean-run count, because no test remains
   to run.
 - **The closing step quotes the numbers.** A PR that fixes a flake, the issue
   close that credits it, and an accepted-gap record (with the count reached so
-  far) each state p, the
-  failures, runs and window behind it, and the clean-run count reached against
-  3/p. Review treats a close that omits them as a
-  finding.
+  far) each state p, the failures, runs and window behind it, and the clean-run
+  count reached against 3/p. A close that omits them is a finding.
 
 ## Required checks
 
