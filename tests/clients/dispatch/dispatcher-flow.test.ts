@@ -872,9 +872,8 @@ describe("Dispatch Flow", () => {
 
 		it("calls a finding new when one tool names it under another id at the same place and rule (#4629)", async () => {
 			// Two copies are one finding across LANES (a language server and a CLI),
-			// not across ids of one tool: helm-lint's id carries an ordinal and
-			// actionlint's carries the message, so a new message at the same line and
-			// rule is a new finding. The id alone decides, as it did before #4629.
+			// not across ids of one tool: actionlint's id carries the message, so a
+			// new message at the same line and rule is a new finding.
 			const file = "/project/test.ts";
 			const facts = new FactStore();
 			setBaselineFacts(facts, file, [
@@ -926,6 +925,97 @@ describe("Dispatch Flow", () => {
 
 			expect(result.diagnostics.map((d) => d.id)).toEqual(["reporter-2-error"]);
 			expect(result.resolvedCount).toBe(1);
+		});
+
+		// #5816: a line-keyed id (`eslint:<rule>:<line>`) names two findings of
+		// one rule on one line. The dedupe keeps both, so the delta must too.
+		const lineKeyed = (message: string, tool = "reporter"): Diagnostic => ({
+			id: `${tool}:no-eval:3`,
+			message,
+			filePath: "test.ts",
+			line: 3,
+			column: 1,
+			rule: "no-eval",
+			severity: "error",
+			semantic: "blocking",
+			tool,
+		});
+		const writes = () => {
+			const facts = new FactStore();
+			return async (...diagnostics: Diagnostic[]) => {
+				registry = new RunnerRegistry();
+				const tools = [...new Set(diagnostics.map((d) => d.tool))];
+				for (const tool of tools)
+					registerRunner(
+						createMockRunner({
+							id: tool,
+							appliesTo: ["jsts"],
+							runResult: {
+								status: "succeeded",
+								diagnostics: diagnostics.filter((d) => d.tool === tool),
+								semantic: "blocking",
+							},
+						}),
+					);
+				const result = await dispatchForFile(
+					createDispatchContext(
+						"test.ts",
+						"/project",
+						{ getFlag: () => false },
+						facts,
+					),
+					[{ mode: "all", runnerIds: tools }],
+				);
+				return result.blockers.map((d) => `${d.tool}: ${d.message}`);
+			};
+		};
+
+		it("blocks a new message under an id the tool already used (#5816)", async () => {
+			const write = writes();
+			await write(lineKeyed("'a' is not defined"));
+
+			expect(
+				await write(
+					lineKeyed("'a' is not defined"),
+					lineKeyed("'b' is not defined"),
+				),
+			).toEqual(["reporter: 'b' is not defined"]);
+		});
+
+		it("holds back a finding whose message only moved its numbers (#5816)", async () => {
+			const write = writes();
+			await write(lineKeyed("12 lines is too long"));
+
+			expect(await write(lineKeyed("13 lines is too long"))).toEqual([]);
+		});
+
+		// #5816: one tool's two findings are both kept when another tool reports
+		// one at the same place and rule, whichever tool the dedupe prefers.
+		it.each([
+			["eslint", "reporter"],
+			["reporter", "eslint"],
+		])(
+			"never drops one of two %s findings for a single %s copy (#5816)",
+			async (two, one) => {
+				const listed = await writes()(
+					lineKeyed("first", two),
+					lineKeyed("second", two),
+					lineKeyed("copy", one),
+				);
+
+				expect(listed).toEqual(
+					expect.arrayContaining([`${two}: first`, `${two}: second`]),
+				);
+			},
+		);
+
+		it("still lists one copy where two tools word one finding differently (#5816)", async () => {
+			expect(
+				await writes()(
+					lineKeyed("'a' is not defined", "eslint"),
+					lineKeyed("a is undefined", "reporter"),
+				),
+			).toHaveLength(1);
 		});
 
 		it("reports baseline issues when delta mode is disabled", async () => {

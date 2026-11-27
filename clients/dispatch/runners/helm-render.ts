@@ -72,6 +72,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { withMessageIds } from "../../finding-identity.js";
 import { logLatency } from "../../latency-logger.js";
 import { PathKeyedMap } from "../../path-keyed-map.js";
 import {
@@ -338,11 +339,12 @@ export function parseHelmTemplateFailure(
 			? resolveTemplateSource(location.ref, chartRoot, realRoot)
 			: null;
 		const chartName = path.basename(chartRoot);
+		const message = resolved
+			? trimmed
+			: `${trimmed} (helm template failed for chart ${chartName})`;
 		diagnostics.push({
-			id: `helm-render-error-${diagnostics.length + 1}`,
-			message: resolved
-				? trimmed
-				: `${trimmed} (helm template failed for chart ${chartName})`,
+			id: "helm-render-error",
+			message,
 			filePath: resolved ?? chartYaml(chartRoot),
 			line: resolved ? (location?.line ?? 1) : 1,
 			column: 1,
@@ -367,7 +369,7 @@ export function parseHelmTemplateFailure(
 			fixable: false,
 		});
 	}
-	return diagnostics;
+	return withMessageIds(diagnostics);
 }
 
 /**
@@ -495,9 +497,11 @@ export function parseRenderedTrivyOutput(
 			const at = renderedLine
 				? `${located.detail}:${renderedLine}`
 				: located.detail;
+			const message =
+				`[${id}] ${title} (${severity}) in ${at}.${resolution}`.trim();
 			diagnostics.push({
-				id: `helm-render-${id}-${diagnostics.length + 1}`,
-				message: `[${id}] ${title} (${severity}) in ${at}.${resolution}`.trim(),
+				id: `helm-render-${id}`,
+				message,
 				filePath: located.filePath,
 				line: 1,
 				column: 1,
@@ -510,7 +514,7 @@ export function parseRenderedTrivyOutput(
 			});
 		}
 	}
-	return { understood: true, diagnostics };
+	return { understood: true, diagnostics: withMessageIds(diagnostics) };
 }
 
 /**
