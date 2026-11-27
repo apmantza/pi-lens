@@ -513,16 +513,16 @@ export async function hasProjectBoundaryMarker(
 	// A nested Git checkout is an independently hosted project even when it has
 	// no language manifest. Keep this directory boundary aligned with the shared
 	// FALLBACK_PROJECT_MARKERS policy used by nearestNonExcludedFallbackRoot.
-	if (await markerExists(dir, ".git")) return true;
-	for (const marker of PROJECT_BOUNDARY_MARKERS) {
-		if (
-			PYTHON_BOUNDARY_MARKERS.has(marker) &&
-			!server.extensions.some((extension) => PYTHON_EXTENSIONS.has(extension))
-		)
-			continue;
-		if (await markerExists(dir, marker)) return true;
-	}
-	return false;
+	const python = server.extensions.some((extension) =>
+		PYTHON_EXTENSIONS.has(extension),
+	);
+	return markerExists(
+		dir,
+		".git",
+		...PROJECT_BOUNDARY_MARKERS.filter(
+			(marker) => python || !PYTHON_BOUNDARY_MARKERS.has(marker),
+		),
+	);
 }
 
 function pathSegments(dir: string): string[] {
@@ -607,9 +607,8 @@ async function nearestNonExcludedFallbackRoot(
 	for (const current of walkUpDirs(startDir, { spelling: true })) {
 		if (!(await isExcludedLspRoot(current, gitBoundaries))) {
 			nearestAllowed ??= current;
-			for (const marker of FALLBACK_PROJECT_MARKERS) {
-				if (await markerExists(current, marker)) return current;
-			}
+			if (await markerExists(current, ...FALLBACK_PROJECT_MARKERS))
+				return current;
 		}
 		if (normalizeEphemeralMapKey(current) === stopDir) break;
 	}
@@ -2009,9 +2008,7 @@ export async function declinesProjectlessRoot(
 	for (let visited = 0; visited < PROJECT_FILE_SEARCH_MAX_DIRS; visited++) {
 		const dir = queue.shift();
 		if (dir === undefined) break;
-		for (const marker of markers) {
-			if (await markerExists(dir, marker)) return false;
-		}
+		if (await markerExists(dir, ...markers)) return false;
 		for (const entry of await readDirEntriesSafeAsync(dir)) {
 			if (visited + queue.length + 1 >= PROJECT_FILE_SEARCH_MAX_DIRS) break;
 			if (entry.isDirectory() && !isExcludedDirName(entry.name)) {
@@ -2066,25 +2063,29 @@ function markerProbeDir(dir: string, pattern: string): string {
 		: dir;
 }
 
-async function markerExists(dir: string, pattern: string): Promise<boolean> {
+/** One marker probe's answer; `denied` is the line to log when it is read. */
+type MarkerProbe = { found: boolean; denied?: string };
+
+/** Never rejects, so a probe nobody reads settles on its own. */
+async function probeMarker(dir: string, pattern: string): Promise<MarkerProbe> {
 	if (!pattern.includes("*")) {
 		try {
 			await stat(path.join(dir, pattern));
-			return true;
+			return { found: true };
 		} catch (err) {
-			if (isPermissionFsError(err)) {
-				logSessionStart(
-					`lsp root marker skipped: permission error stat ${path.join(dir, pattern)}`,
-				);
-			}
-			return false;
+			return {
+				found: false,
+				...(isPermissionFsError(err) && {
+					denied: `lsp root marker skipped: permission error stat ${path.join(dir, pattern)}`,
+				}),
+			};
 		}
 	}
 
 	const normalized = toPosix(pattern);
 	const slash = normalized.lastIndexOf("/");
 	const basenamePattern = slash >= 0 ? normalized.slice(slash + 1) : normalized;
-	if (!basenamePattern) return false;
+	if (!basenamePattern) return { found: false };
 	const targetDir = markerProbeDir(dir, normalized);
 	try {
 		const entries = await readdir(targetDir, { withFileTypes: true });
@@ -2092,15 +2093,44 @@ async function markerExists(dir: string, pattern: string): Promise<boolean> {
 		// `Foo.csproj/` dir) is not a project file. Case-insensitive on win32 to
 		// match the filesystem (and the project ignore matcher), via the shared
 		// marker-glob helper.
-		return direntsHaveMarkerGlobMatch(entries, basenamePattern);
+		return { found: direntsHaveMarkerGlobMatch(entries, basenamePattern) };
 	} catch (err) {
-		if (isPermissionFsError(err)) {
-			logSessionStart(
-				`lsp root marker skipped: permission error read ${targetDir}`,
-			);
-		}
-		return false;
+		return {
+			found: false,
+			...(isPermissionFsError(err) && {
+				denied: `lsp root marker skipped: permission error read ${targetDir}`,
+			}),
+		};
 	}
+}
+
+/**
+ * The `patterns` present in `dir`, in list order. All probes start together, so
+ * a directory costs one round trip rather than one per marker (#5814: 2855 ms
+ * for 130 serial stats on a stalled Windows runner). They are read in list
+ * order: a hit never waits on a later marker, and only a marker that was read
+ * logs its permission error.
+ */
+async function* markerHits(
+	dir: string,
+	patterns: readonly string[],
+): AsyncGenerator<string> {
+	const probes = patterns.map((pattern) => ({
+		pattern,
+		probe: probeMarker(dir, pattern),
+	}));
+	for (const { pattern, probe } of probes) {
+		const { found, denied } = await probe;
+		if (denied) logSessionStart(denied);
+		if (found) yield pattern;
+	}
+}
+
+async function markerExists(
+	dir: string,
+	...patterns: string[]
+): Promise<boolean> {
+	return !(await markerHits(dir, patterns).next()).done;
 }
 
 // --- Root Detection Helpers ---
@@ -2264,22 +2294,16 @@ export function NearestRoot(
 				probedDirs.push(...(stepRecords ?? unknownDirMtimeRecords(stepDirs)));
 
 				// Check exclude patterns — skip this dir (but keep walking up)
-				if (excludePatterns) {
-					let excluded = false;
-					for (const pattern of excludePatterns) {
-						if (await markerExists(currentDir, pattern)) {
-							excluded = true;
-							break;
-						}
-					}
-					if (excluded) continue;
-				}
+				if (
+					excludePatterns &&
+					(await markerExists(currentDir, ...excludePatterns))
+				)
+					continue;
 
 				// Check include patterns. Exact marker names stay cheap (`stat`), while
 				// glob markers like `*.csproj` match real project filenames (#201).
-				for (const pattern of includePatterns) {
+				for await (const pattern of markerHits(currentDir, includePatterns)) {
 					if (
-						(await markerExists(currentDir, pattern)) &&
 						(pattern !== ".git" ||
 							currentDir !== realpathOrResolve(os.tmpdir())) &&
 						!(await isExcludedLspRoot(currentDir))
@@ -3207,22 +3231,8 @@ async function findExtensionBoundedRoot(
 	// `start` is already the identity (inside the root) or the spelling the
 	// boundary is written in (a linked extension), so the climb takes it as is.
 	for (const currentDir of walkUpDirs(start, { spelling: true })) {
-		for (const pattern of configMarkers) {
-			try {
-				await stat(path.join(currentDir, pattern));
-				return currentDir;
-			} catch {
-				/* not found, try next marker */
-			}
-		}
-		for (const pattern of TS_TOOLING_MARKERS) {
-			try {
-				await stat(path.join(currentDir, pattern));
-				return currentDir;
-			} catch {
-				/* not found, try next marker */
-			}
-		}
+		if (await markerExists(currentDir, ...configMarkers, ...TS_TOOLING_MARKERS))
+			return currentDir;
 		// Stop at or beyond the extensions root — never walk into the
 		// pi-agent-wide scope.
 		const currentKey = normalizeEphemeralMapKey(path.resolve(currentDir));
@@ -3247,17 +3257,12 @@ async function classifyAgentLevelMarker(
 	const agentDir = path.dirname(extensionRootKey);
 	if (!agentDir || agentDir === extensionRootKey) return undefined;
 	const configMarkers = tsConfigMarkersForFile(file);
-	for (const pattern of [
+	for await (const pattern of markerHits(agentDir, [
 		...configMarkers,
 		...TS_CONFIG_MARKERS,
 		...TS_TOOLING_MARKERS,
-	]) {
-		try {
-			await stat(path.join(agentDir, pattern));
-			return configMarkers.includes(pattern) ? "config" : "other";
-		} catch {
-			/* not found, try next */
-		}
+	])) {
+		return configMarkers.includes(pattern) ? "config" : "other";
 	}
 	return undefined;
 }
