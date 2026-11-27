@@ -2309,19 +2309,28 @@ async function settleProjectSnapshotPersistsForTests(): Promise<
 	string | undefined
 > {
 	await waitForProjectSnapshotPersistsForTests();
-	const pending =
-		_snapshotWorkerRequests.size +
-		_activeSnapshotPersists.size +
-		_queuedSnapshotPersists.size;
-	return pending > 0
+	return projectSnapshotPersistsPending()
 		? "project-snapshot persists still pending after the bounded wait"
 		: undefined;
+}
+
+/** Any worker request, active persist or queued persist in this copy. */
+function projectSnapshotPersistsPending(): boolean {
+	return (
+		_snapshotWorkerRequests.size +
+			_activeSnapshotPersists.size +
+			_queuedSnapshotPersists.size >
+		0
+	);
 }
 
 // #4937: the loaded extension copy's in-flight worker write is invisible to a
 // test's own import of this module; the tier-2 harness joins it through the
 // registry (`clients/background-write-drains.ts`).
-registerBackgroundWriteDrain(settleProjectSnapshotPersistsForTests);
+registerBackgroundWriteDrain(
+	settleProjectSnapshotPersistsForTests,
+	projectSnapshotPersistsPending,
+);
 
 /** Test-only: force any in-flight worker body write to the sync main-thread path. */
 export function flushProjectSnapshotPersistsForTests(): void {

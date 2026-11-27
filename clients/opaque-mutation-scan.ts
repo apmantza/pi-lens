@@ -46,6 +46,11 @@ import {
 } from "./review-graph/git-identity.js";
 import { collectSourceFilesWithBudgetAsync } from "./source-filter.js";
 
+import { warnIgnoredConfigOnce } from "./config-warn.js";
+import { getPiLensGlobalConfigPath } from "./config-locations.js";
+import { loadPiLensGlobalConfig } from "./lens-config.js";
+import { loadPiLensProjectConfig } from "./project-lens-config.js";
+import { getProjectTrustState } from "./project-trust.js";
 import { BoundedFifoMap } from "./bounded-cache.js";
 import { hashContentBytes } from "./content-stamp.js";
 import { scanShellWriteScopes } from "./bash-file-access.js";
@@ -185,7 +190,8 @@ const PI_BUILTIN_TOOL_WRITES = new Map<string, "opaque" | "named" | "none">(
  * ({@link PI_BUILTIN_TOOL_WRITES}) and pi-lens's own pi tools
  * ({@link isPiLensToolName}), which are read-only or record every write through the
  * mutation bridge. Every other name (another extension's tool, an MCP tool
- * routed through pi, the outer codemode call) is opaque. A tool whose EVENT the
+ * routed through pi, the outer codemode call) is opaque, unless the user listed
+ * it in `opaqueScan.nonWriterTools` (#5793; no list ships by default). A tool whose EVENT the
  * structured classifier recognizes is excluded at the record site, which has
  * the event.
  */
@@ -195,8 +201,102 @@ export function shouldRunOpaqueRecovery(
 ): workspaceRoot is string {
 	if (workspaceRoot === undefined) return false;
 	const builtin = PI_BUILTIN_TOOL_WRITES.get(toolName);
-	if (builtin !== undefined) return builtin === "opaque";
-	return !isPiLensToolName(toolName);
+	if (builtin === "named" || builtin === "none") return false;
+	if (isPiLensToolName(toolName)) return false;
+	// A shell reaches the lists too, so an entry naming one is reported; the
+	// lists never hold a name pi decides, so it stays opaque.
+	return !isDeclaredNonWriter(toolName, workspaceRoot);
+}
+
+/**
+ * #5793: the one form an entry of `opaqueScan.nonWriterTools` may take: an
+ * exact tool name, spelled with characters a tool name carries. Everything
+ * else (empty, padded, a pattern, a number) is refused, so the list admits a
+ * short known-good form and a spelling nobody planned for leaves the tool
+ * opaque (principles section 1, fail closed).
+ */
+const NON_WRITER_TOOL_NAME = /^[A-Za-z0-9_.:/-]{1,128}$/;
+
+/** Refused entries one notice names before it counts the rest. */
+const NON_WRITER_NOTICE_ENTRIES = 3;
+
+/**
+ * The names a list admits. A refused entry (not a name, or a name pi or
+ * pi-lens already decides: a shell, a structured writer, a read-only built-in,
+ * a pi-lens tool) is not exempted, and one notice per list names the first few,
+ * so a setting is never silently ignored.
+ */
+function admitNonWriters(
+	entries: readonly unknown[],
+	subsystem: "lens-config" | "project-lens-config",
+	file: string,
+): readonly string[] {
+	const admitted: string[] = [];
+	const refused: string[] = [];
+	for (const entry of entries) {
+		if (typeof entry !== "string" || !NON_WRITER_TOOL_NAME.test(entry)) {
+			refused.push(`${JSON.stringify(entry)?.slice(0, 40)} (not a tool name)`);
+		} else if (PI_BUILTIN_TOOL_WRITES.has(entry) || isPiLensToolName(entry)) {
+			refused.push(`"${entry}" (pi or pi-lens already decides it)`);
+		} else if (!admitted.includes(entry)) admitted.push(entry);
+	}
+	if (refused.length > 0) {
+		const named = refused.slice(0, NON_WRITER_NOTICE_ENTRIES).join(", ");
+		const rest = refused.length - NON_WRITER_NOTICE_ENTRIES;
+		warnIgnoredConfigOnce({
+			subsystem,
+			file,
+			key: "opaqueScan.nonWriterTools",
+			code: "PILENS_CFG_0005",
+			reason: `opaqueScan.nonWriterTools entries refused, so those tools stay opaque: ${named}${rest > 0 ? ` and ${rest} more` : ""}`,
+		});
+	}
+	return admitted;
+}
+
+/**
+ * The global list, read once per session: `resetOpaqueMutationState` clears it
+ * at the session boundary, which is also when the ledger resets, so a refused
+ * entry is recorded again in the next session.
+ */
+let globalNonWriters: readonly string[] | undefined;
+
+/**
+ * The project list, read per call through the loader's own file cache. It is
+ * a repository's statement, so a cloned repo could switch write detection off
+ * for a tool with it: honored only while pi trusts the project. Anything else
+ * (untrusted, or a host that gave no answer) ignores it with one notice.
+ */
+function projectNonWriterTools(workspaceRoot: string): readonly string[] {
+	const project = loadPiLensProjectConfig(workspaceRoot);
+	const entries = project.opaqueScan?.nonWriterTools;
+	if (entries === undefined || entries.length === 0) return [];
+	const file = project.configPath ?? workspaceRoot;
+	const trust = getProjectTrustState();
+	if (trust !== "trusted") {
+		warnIgnoredConfigOnce({
+			subsystem: "project-lens-config",
+			file,
+			key: "opaqueScan.nonWriterTools",
+			code: "PILENS_CFG_0004",
+			reason: `opaqueScan.nonWriterTools is honored in a project .pi-lens.json only when pi trusts the project (trust is ${trust}); ignored, so those tools stay opaque`,
+		});
+		return [];
+	}
+	return admitNonWriters(entries, "project-lens-config", file);
+}
+
+/** Whether the user declared this tool a non-writer, at a scope that counts. */
+function isDeclaredNonWriter(toolName: string, workspaceRoot: string): boolean {
+	globalNonWriters ??= admitNonWriters(
+		loadPiLensGlobalConfig()?.opaqueScan?.nonWriterTools ?? [],
+		"lens-config",
+		getPiLensGlobalConfigPath(),
+	);
+	return (
+		globalNonWriters.includes(toolName) ||
+		projectNonWriterTools(workspaceRoot).includes(toolName)
+	);
 }
 
 /**
@@ -760,6 +860,7 @@ const overCapRootMemo = new BoundedFifoMap<string, true>(16);
  * reset both leak and mis-answer forever.
  */
 export function resetOpaqueMutationState(): void {
+	globalNonWriters = undefined;
 	getOpaqueBaselineStore().takeAllForTest();
 	gitRepoMemo.clear();
 	overCapRootMemo.clear();

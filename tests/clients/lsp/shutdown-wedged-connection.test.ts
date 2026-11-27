@@ -31,7 +31,10 @@ vi.mock("../../../clients/latency-logger.js", async (importActual) => ({
 	>()),
 	logLatency: vi.fn(),
 }));
-vi.mock("../../../clients/instance-registry.js", () => ({
+vi.mock("../../../clients/instance-registry.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../clients/instance-registry.js")
+	>()),
 	recordLspChild: vi.fn().mockResolvedValue(undefined),
 	removeLspChild: vi.fn().mockResolvedValue(undefined),
 }));

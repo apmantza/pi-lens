@@ -5099,7 +5099,13 @@ function activateExtension(hostPi: ExtensionAPI) {
 				consumedTurnEnd.repeatBodies.every((body) => rebuilt.holds(body))
 					? undefined
 					: consumedTurnEnd;
-			const sessionGuidance = consumeSessionStartGuidance(cacheManager, cwd);
+			// #5792: the guidance record is the writing session's, like the turn-end
+			// slot above; `telemetrySessionId` is the coordinator's id, the one its
+			// `session_start` stamped.
+			const sessionGuidance = consumeSessionStartGuidance(cacheManager, cwd, {
+				sessionId: readerSessionId,
+				coordinatorId: runtime.telemetrySessionId,
+			});
 			const testFindings = consumeStagedTestRunnerFindings({
 				cwd,
 				sessionId: readerSessionId,

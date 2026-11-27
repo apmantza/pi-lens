@@ -80,6 +80,11 @@
   root), so the two never share an answer (#5410). A present tool that fails its
   version check and has no later rung is a failed formatter outcome carrying the
   probe's stderr, not "executable not found".
+  `BiomeClient` selects the shared resolver's presence-only ladder: exact-cwd
+  project shim, the client's auto-install result, managed Node shim, then
+  package-manager global bins before its npx fallback. It has no command cache
+  above the trust gate. Stylua retains its trust-gated ancestor Node-bin walk
+  before the shared formatter ladder; a walk hit is not version-probed.
   The clients ask the same ladder (`resolveToolCommandWithInstallFallback`,
   `toolBinaryVerdict`) rather than build a checker: jscpd, madge, knip and the
   security scanners' managed-binary lookup (#5410). Every client-owned lookup

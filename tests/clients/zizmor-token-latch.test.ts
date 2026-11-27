@@ -34,7 +34,8 @@ vi.mock("../../clients/latency-logger.js", async (importOriginal) => {
 	return { ...actual, logLatency };
 });
 
-vi.mock("../../clients/safe-spawn.js", () => ({
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
 	safeSpawnAsync: (...args: unknown[]) => safeSpawnAsync(...args),
 }));
 

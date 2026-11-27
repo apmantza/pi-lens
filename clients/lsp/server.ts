@@ -1791,18 +1791,18 @@ function piAgentExtensionsRootKey(file: string): string | undefined {
 }
 
 function IgnoreHomeRoot(primary: RootFunction): RootFunction {
-	// #1193 P3: the former `normalizeRootKey` folded case on win32 but left the
-	// separator alone; both sides of the comparison below go through the same
-	// derivation, so adding the seam's slash fold cannot change the verdict for
-	// any spelling the old copy already agreed on, and it makes a mixed-separator
-	// root agree with the home directory it names. #4689: the primary returns
-	// the root's path identity, so the home is taken as its identity too; a
-	// home spelled through a link (`/home -> var/home`) is still refused.
-	const homeKey = normalizeEphemeralMapKey(realpathOrResolve(os.homedir()));
+	// #4689/#5728: fold onto the shared `isAtOrAboveHomeDir` ceiling over path
+	// identities on both sides so HOME (including a link-spelled home such as
+	// `/home -> var/home`) and every ancestor of HOME are refused; read
+	// `os.homedir()` per call so an environment change takes effect without a
+	// module reload.
 	return withRootMarkers(async (file: string): Promise<string | undefined> => {
 		const root = await primary(file);
 		if (!root) return undefined;
-		return normalizeEphemeralMapKey(path.resolve(root)) === homeKey
+		return isAtOrAboveHomeDir(
+			realpathOrResolve(root),
+			realpathOrResolve(os.homedir()),
+		)
 			? undefined
 			: root;
 	}, primary.rootMarkers ?? []);

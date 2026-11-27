@@ -13,6 +13,12 @@ import {
 	resolveRebuildScript,
 	summarizeScan,
 } from "../../../clients/mcp/review.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../../clients/degradation-ledger.js";
+import { DEFAULT_MAX_OUTPUT_BYTES } from "../../../clients/spawn-output-cap.js";
+import { spawnAbortScope } from "../../../clients/safe-spawn.js";
 import { removeTempDirSync } from "../test-utils.js";
 
 describe("resolveRebuildScript", () => {
@@ -138,5 +144,150 @@ describe("analyzeFileFresh", () => {
 		expect((outcome.result as unknown as { flags: unknown }).flags).toEqual({
 			"no-lsp": true,
 		});
+	});
+
+	// Recurrence: #3383's hand-rolled fork bounded its own pipes but ended a
+	// timed-out worker with one SIGTERM, so a worker that ignored it, or a
+	// process it had started, outlived the call. The fork now rides the spawn
+	// seam, whose teardown signals the whole group and escalates to SIGKILL.
+	// lane: Unit tests (ubuntu, macOS); win32 teardown is taskkill, covered by
+	// the safe-spawn tests.
+	describe.skipIf(process.platform === "win32")("timed-out worker", () => {
+		function isLive(pid: number): boolean {
+			try {
+				process.kill(pid, 0);
+			} catch {
+				return false;
+			}
+			try {
+				// A container's init may never reap: a zombie is a dead process.
+				return !/^State:\s*Z/m.test(
+					fs.readFileSync(`/proc/${pid}/status`, "utf8"),
+				);
+			} catch {
+				return true;
+			}
+		}
+
+		async function runTimedOut(
+			name: string,
+			body: string,
+		): Promise<{ error: string | undefined; live: boolean }> {
+			const pidFile = path.join(tmpDir, `${name}.pid`);
+			const worker = writeWorker(
+				`${name}.mjs`,
+				`import { writeFileSync } from "node:fs";\n${body.replaceAll("PIDFILE", JSON.stringify(pidFile))}`,
+			);
+			const outcome = await analyzeFileFresh(
+				worker,
+				"/x/app.ts",
+				"/x",
+				{},
+				2_000,
+			);
+			const pid = Number(fs.readFileSync(pidFile, "utf8"));
+			// No cleanup kill here: a worker left alive expires on its own.
+			return { error: outcome.error, live: isLive(pid) };
+		}
+
+		// The process holds the worker's stdout open, so the call settles only
+		// once it is gone or the seam's pipe-idle cap passes: no wait on a timer.
+		it("ends a process the worker started", async () => {
+			const { error, live } = await runTimedOut(
+				"grandchild",
+				[
+					'import { spawn } from "node:child_process";',
+					'const child = spawn("sleep", ["20"], { stdio: ["ignore", "inherit", "inherit"] });',
+					"writeFileSync(PIDFILE, String(child.pid));",
+					"setInterval(() => {}, 1000);",
+				].join("\n"),
+			);
+			expect(error).toBe("fresh analyze timed out after 2000ms");
+			expect(live).toBe(false);
+		}, 20_000);
+
+		it("ends a worker that ignores SIGTERM", async () => {
+			const { error, live } = await runTimedOut(
+				"deaf",
+				[
+					'process.on("SIGTERM", () => {});',
+					"writeFileSync(PIDFILE, String(process.pid));",
+					"setTimeout(() => process.exit(0), 20_000);",
+				].join("\n"),
+			);
+			expect(error).toBe("fresh analyze timed out after 2000ms");
+			expect(live).toBe(false);
+		}, 20_000);
+	});
+
+	// Recurrence: #3383 (a worker that writes without end must not reach the
+	// host's string limit). The seam now owns the cap; this keeps the verdict
+	// and the ledger row the old off-seam test pinned, over a real writer.
+	it("bounds a worker that writes without end and records the trip", async () => {
+		resetDegradationLedger();
+		const worker = writeWorker(
+			"endless.mjs",
+			[
+				'const chunk = "x".repeat(1024 * 1024);',
+				"let written = 0;",
+				"const pump = () => {",
+				"\twhile (written < 80) {",
+				"\t\twritten += 1;",
+				"\t\tif (!process.stdout.write(chunk)) {",
+				'\t\t\tprocess.stdout.once("drain", pump);',
+				"\t\t\treturn;",
+				"\t\t}",
+				"\t}",
+				"};",
+				"pump();",
+				"setInterval(() => {}, 1000);",
+			].join("\n"),
+		);
+		const outcome = await analyzeFileFresh(worker, "/x/app.ts", "/x");
+		expect(outcome.result).toBeUndefined();
+		expect(outcome.error).toBe(
+			`worker output exceeded ${DEFAULT_MAX_OUTPUT_BYTES} bytes`,
+		);
+		const row = getDegradationSummary().find(
+			(entry) => entry.kind === "spawn-output-cap-truncated",
+		);
+		expect(row?.latestReasons[0]?.subject).toBe("mcp-fresh-analyze");
+		expect(row?.latestReasons[0]?.reason).toContain("terminated");
+	});
+
+	// Recurrence: the seam's default is to cancel a spawn with the agent turn's
+	// Esc; this call never was cancellable, and `ignoreAmbientSignal` keeps it so.
+	it("finishes a worker while the agent turn's signal is aborted", async () => {
+		const worker = writeWorker("slow-ok.mjs", `process.stdout.write("{}");`);
+		const turn = new AbortController();
+		turn.abort();
+		const outcome = await spawnAbortScope.run(turn.signal, () =>
+			analyzeFileFresh(worker, "/x/app.ts", "/x"),
+		);
+		expect(outcome.error).toBeUndefined();
+		expect(outcome.result).toEqual({});
+	});
+
+	it("reports a worker that dies on a signal", async () => {
+		const worker = writeWorker(
+			"killed.mjs",
+			'process.kill(process.pid, "SIGKILL");',
+		);
+		const outcome = await analyzeFileFresh(worker, "/x/app.ts", "/x");
+		expect(outcome.result).toBeUndefined();
+		expect(outcome.error).toContain("worker exited null");
+	});
+
+	it("reports an interpreter that cannot start", async () => {
+		const execPath = process.execPath;
+		process.execPath = path.join(tmpDir, "no-such-node");
+		try {
+			const outcome = await analyzeFileFresh("/w/worker.js", "/x/app.ts", "/x");
+			expect(outcome.result).toBeUndefined();
+			expect(outcome.error).toContain("failed to fork worker: ");
+			expect(outcome.error).toContain("no-such-node");
+		} finally {
+			process.execPath = execPath;
+		}
 	});
 });

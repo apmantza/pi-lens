@@ -690,6 +690,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/file-kinds.ts": 1,
 		"clients/file-role.ts": 3,
 		"clients/file-utils.ts": 3,
+		// 0 -> 1 (#5784): `unconfirmedBlockerNote` keeps the blockers a carry marked
+		// `unconfirmedBy`, an `Array.prototype.filter` call, not a delivery filter.
+		// 1 -> 3 (#5788 review F2): it counts the rows whose re-check is in
+		// flight and the language server's rows, two more such calls.
+		"clients/finding-delivery-gate.ts": 3,
 		"clients/fix-worklog.ts": 1,
 		"clients/format-service.ts": 2,
 		"clients/formatters.ts": 6,
@@ -935,7 +940,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 47 -> 49 (#5258): the clean claim's scope keeps the checked summaries,
 		// and its proof keeps the swept files the sweep proved; two
 		// `Array.prototype.filter` calls, not delivery filters.
-		"tools/lens-diagnostics.ts": 49,
+		// 49 -> 50 (#5788 review F1): `uncheckedFilesLine` hands the gate a
+		// file's blocking rows, one `Array.prototype.filter` call.
+		"tools/lens-diagnostics.ts": 50,
 		// 12 -> 13 (#4346): the batch selects its finding-bearing files to resolve.
 		// 13 -> 14 (#4322): the batch counts its files with auxiliary findings
 		// only, one `Array.prototype.filter` use, not a delivery filter.
@@ -1068,7 +1075,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/bash-file-access.ts": 13,
 		// 10 -> 7 (#4268): the hand-built `path.join` candidate list folds onto the
 		// shared `findLocalBinAt` trust seam, one construction site for the shim.
-		"clients/biome-client.ts": 7,
+		// 7 -> 3 (#5410 r2): the managed `.bin` join (`path.join` x4) moved to the
+		// shared resolver, leaving only the import, `path.resolve` and `path.basename`.
+		"clients/biome-client.ts": 3,
 		"clients/blocker-freshness.ts": 4,
 		// 5 -> 6 (#3594): the remembered-holder skip's degradation `subject`,
 		// `path.resolve(dir)`, mirroring `withGenerationLockSync`'s own (#3578).
@@ -1193,7 +1202,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// (the existing VenvResolution shape).
 		// 19 -> 20 (#5492 r2): the path-first project rung's `{ path, rung }`
 		// value, the same VenvResolution shape.
-		"clients/dispatch/runners/utils/runner-helpers.ts": 20,
+		// 20 -> 24 (#5410 r2): the biome presence rung joins the managed `.bin`
+		// directory and its `biome.cmd`/`biome` candidates (`path.join` x4), the
+		// same path-operation sense as the joins BiomeClient dropped.
+		"clients/dispatch/runners/utils/runner-helpers.ts": 24,
 		// 7 -> 3 (#4689 item 6): `findValeConfig` delegates to
 		// `findLocalToolConfig`, dropping its hand-rolled `path` loop.
 		"clients/dispatch/runners/vale.ts": 3,
@@ -1234,7 +1246,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// (`path.join(dir, entry.name)` for the stat) and joins candidates
 		// with `path.posix.join`.
 		"clients/file-utils.ts": 69,
-		"clients/finding-identity.ts": 2,
 		"clients/fix-worklog.ts": 3,
 		// 3 -> 2, 16 -> 15 (#4689): the formatter is handed `realpathOrResolve`,
 		// not a `path.resolve` of the spelling it was given. 2 -> 3 (#4675 F2):
@@ -1383,7 +1394,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 111 -> 114 (#5504): `findTypeScriptNativeAlias` joins the alias
 		// directory and its manifest and resolves its `bin.tsc` against it:
 		// three filesystem path uses on the same probe.
-		"clients/lsp/server.ts": 114,
+		// 114 -> 113 (#5728): folding IgnoreHomeRoot onto isAtOrAboveHomeDir
+		// replaces `path.resolve(root)` with `realpathOrResolve(root)`.
+		"clients/lsp/server.ts": 113,
 		"clients/lsp/session-roots.ts": 7,
 		// 13 -> 15 (#4346): a creation's path joins the entry's dependency
 		// scope test (Go package directory, created-file stem/directory names).
@@ -1443,7 +1456,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// (`path.isAbsolute`) does not count as reaching the project.
 		// 17 -> 16 (#5674 r4): the per-entry reach check moved to
 		// session-repository.ts as `projectSearchJudge`.
-		"clients/package-manager.ts": 16,
+		// 16 -> 17 (#5782 r5): findGlobalBinary judges a candidate's real
+		// directory (`path.dirname`) against the refused root.
+		"clients/package-manager.ts": 17,
 		"clients/package-root.ts": 4,
 		// #5371: the `paths` glob matcher and its bounded walk arrive from
 		// `clients/lens-engine.ts` with their `node:path` uses — the namespace
@@ -2005,8 +2020,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/installer/index.ts": 44,
 		// 9 -> 14 (#4765): refreshOpengrepRulePack reads the fetch `res.status`, the
 		// validate spawn's `status` (twice) and the refresh-state read's `status`
-		// discriminant: host fields, not a pi-lens status vocabulary.
-		"clients/installer/managed-tool-refresh.ts": 14,
+		// discriminant: host fields, not a pi-lens status vocabulary. 14 -> 13
+		// (#5701): replacing the buffered fetch removes that fetch `res.status`.
+		"clients/installer/managed-tool-refresh.ts": 13,
 		"clients/instance-reaper.ts": 15,
 		"clients/knip-client.ts": 4,
 		"clients/latency-logger.ts": 1,
@@ -2026,7 +2042,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lsp/launch.ts": 1,
 		"clients/lsp/server.ts": 4,
 		"clients/mcp/analyze.ts": 9,
-		"clients/mcp/review.ts": 1,
+		// 1 -> 3 (fresh-analyze fork on the spawn seam): the worker's exit
+		// check and its error text read `SpawnResult.status`.
+		"clients/mcp/review.ts": 3,
 		// #5087: `SpawnResult.status`, the git exit code of the default-branch
 		// read (for-each-ref, show); the spawn seam names the field.
 		"clients/metrics/complexity-baseline.ts": 2,

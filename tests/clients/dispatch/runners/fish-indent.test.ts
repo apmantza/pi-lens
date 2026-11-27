@@ -8,7 +8,12 @@ const safeSpawnAsync = vi.fn((..._args: unknown[]): Promise<Spawned> =>
 	Promise.resolve({ error: null, status: 0, stdout: "", stderr: "" }),
 );
 
-vi.mock("../../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
+vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/safe-spawn.js")
+	>()),
+	safeSpawnAsync,
+}));
 
 // Whether the mocked availability checker reports fish_indent present. A case
 // flips it instead of re-mocking the module with vi.doMock, which would outlive

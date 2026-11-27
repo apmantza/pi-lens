@@ -132,14 +132,10 @@ function clientLadderUses(): { keys: string[]; scanned: number } {
  * use disappeared, so a fold deletes its row in the same change.
  */
 const CLIENT_LADDER_ADMISSIONS: Record<string, string> = {
-	"clients/biome-client.ts::findGlobalBinary":
-		"BiomeClient resolves the binary it spawns for formatting and linting: project shim at the file's cwd, managed, pm-global bins, then npx. The registry ladder answers availability for the runner; folding the spawn ladder waits on #5410 D10.",
-	"clients/biome-client.ts::findLocalBinAt":
-		"BiomeClient's project rung at the exact cwd, the same lookup the registry ladder makes; its spawn ladder stays with its other rungs (see findGlobalBinary).",
 	"clients/biome-client.ts::getInstallAttempt":
 		"Reads the install attempt to explain a missing biome in the availability record; the write side is resolveManagedToolClient's (see its row).",
 	"clients/biome-client.ts::probeToolAsync":
-		"BiomeClient's own version probe of the candidates in its spawn ladder (see findGlobalBinary); folding waits on #5410 D10.",
+		"BiomeClient's cwd-less availability probe classifies install eligibility and records probe evidence; command selection is now resolveInstalledToolCommand's shared presence ladder.",
 	"clients/biome-client.ts::resolveManagedToolClient":
 		"Typed install seam with a caller-supplied probe and an acceptInstalled validation; biome is one of its two callers. Staying: the install-attempt state it writes is runner-helpers' own, shared with resolveAvailableOrInstall, so there is one memory.",
 	"clients/dead-code-client.ts::findLocalBinsAt":

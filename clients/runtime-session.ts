@@ -17,6 +17,7 @@ import {
 	resetDegradationLedger,
 } from "./degradation-ledger.js";
 import { resetDeferredDispositions } from "./diagnostic-dispositions.js";
+import { resetBlockerReplayState } from "./finding-delivery-gate.js";
 import { getDiagnosticTracker } from "./diagnostic-tracker.js";
 import { resetPsScriptAnalyzerAvailability } from "./dispatch/runners/psscriptanalyzer.js";
 import { resetInstallRetryLatches } from "./dispatch/runners/utils/availability-policy.js";
@@ -88,6 +89,7 @@ import {
 	saveRuntimeProjectSnapshot,
 } from "./project-snapshot.js";
 import { scanProjectRules } from "./rules-scanner.js";
+import type { SessionStartGuidanceRecord } from "./runtime-context.js";
 import type {
 	RuntimeCoordinator,
 	StartupTaskName,
@@ -2268,6 +2270,8 @@ export function resetSessionScopedState(
 	// project stayed "marked" to the read-only turn's cost guard — for the life
 	// of the PROCESS.
 	resetDeferredDispositions();
+	// #5784: which unconfirmed blocker lines this session already delivered.
+	resetBlockerReplayState();
 	// #817/#1199: Windows command resolution is cached per (command, canonical
 	// effective child PATH/PATHEXT/cwd/per-drive provenance); drop it each
 	// session so environment changes (e.g.
@@ -3364,11 +3368,20 @@ export async function handleSessionStart(
 		dbg("session_start: no project rules found");
 	}
 
-	cacheManager.writeCache(
-		"session-start-guidance",
-		{ content: agentStartupGuidance.join("\n") },
-		analysisRoot,
-	);
+	// #5792: stamped with this session's id (`consumeSessionStartGuidance`
+	// compares it), the same id its `context` requests read as. A post-await
+	// publish like its siblings, so a start a later one superseded stamps
+	// nothing: the id read here would be the successor's (catalog shape 22).
+	if (runtime.isCurrentSession(sessionGeneration)) {
+		cacheManager.writeCache<SessionStartGuidanceRecord>(
+			"session-start-guidance",
+			{
+				content: agentStartupGuidance.join("\n"),
+				sessionId: runtime.telemetrySessionId,
+			},
+			analysisRoot,
+		);
+	}
 
 	// `sessionGeneration` was captured earlier (#1162's bounded sequence read
 	// needs it before this point) and is stable across this whole call.

@@ -2908,6 +2908,21 @@
 					"value": "TRUE",
 					"test": "tests/clients/lsp/adopted-root-trust-5469.test.ts",
 					"title": "detached diagnostics rereads saved trust after the host turn changes"
+				},
+				"ScopeGuard": {
+					"value": "TRUE",
+					"test": "tests/clients/package-manager.test.ts",
+					"title": "re-queries when the PATH view changes under a warm slot"
+				},
+				"FinderGuard": {
+					"value": "TRUE",
+					"test": "tests/clients/package-manager.test.ts",
+					"title": "sends explicit PATH deletion to both finder and query"
+				},
+				"IdentityGuard": {
+					"value": "TRUE",
+					"test": "tests/clients/package-manager.test.ts",
+					"title": "refuses a global link whose target sits in the scan root"
 				}
 			}
 		}

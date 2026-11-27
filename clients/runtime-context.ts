@@ -460,24 +460,66 @@ export function acknowledgeTestFindings(
 	retireTestFindings(cacheManager, cwd);
 }
 
+/**
+ * #5792: the per-project `session-start-guidance` record. `sessionId` is the
+ * session whose full `session_start` wrote it (the coordinator's telemetry
+ * id, the same id its requests read as). Absent on every record written
+ * before #5792: such a record is the coordinator's (see
+ * `consumeSessionStartGuidance`).
+ */
+export interface SessionStartGuidanceRecord {
+	content: string;
+	sessionId?: string | undefined;
+}
+
+/**
+ * Take the guidance the reading session's own `session_start` wrote. `reader`
+ * names the request's session (`sessionId`) and the process coordinator's id
+ * (`coordinatorId`, the writer's identity): only a declined concurrent
+ * secondary reads as a different id, and it never writes guidance. A record
+ * stamped for another session is left untouched for that session and
+ * recorded once per owner. A record with no stamp (written before #5792) is
+ * the coordinator's, since the only writer was its full start; a secondary
+ * cannot prove it wrote one. The 30-minute `readCache` age bound refuses a
+ * record no session has taken, and a session end or next full start replaces
+ * the one record per project, so nothing accumulates (#4943's slot rule).
+ */
 export function consumeSessionStartGuidance(
 	cacheManager: CacheManager,
 	cwd: string,
+	reader: { sessionId: string; coordinatorId: string },
 	host: LensToolHost = "pi",
 ): ContextResult | undefined {
-	const guidance = cacheManager.readCache<{ content: string }>(
+	const guidance = cacheManager.readCache<SessionStartGuidanceRecord>(
 		"session-start-guidance",
 		cwd,
 	);
 	if (!guidance?.data?.content) return;
+	const owner = guidance.data.sessionId;
+	if (
+		owner === undefined
+			? reader.sessionId !== reader.coordinatorId
+			: owner !== reader.sessionId
+	) {
+		// Once per owner, not per request: every request of the other session
+		// skips the same record until its owner reads it.
+		recordDegradationOnce({
+			kind: "session-start-guidance-addressed-elsewhere",
+			subject: owner ?? "unstamped",
+			reason:
+				"the staged session-start guidance belongs to another session; it waits for that session's next request",
+		});
+		return;
+	}
 
 	// Consume by writing empty guidance, not by casting `null` into the entry's
 	// own type. `writeCache` infers its type parameter from `data`, so the cast
 	// bought nothing and claimed the file held a `{ content: string }` when it
 	// held JSON `null`. The producer (`runtime-session.ts`) always writes
-	// `{ content }`, and this reader gates on `data?.content` being non-empty,
-	// so an empty string is the same "already consumed" signal with the type
-	// the entry actually has. Same idiom as `acknowledgeTestFindings` above.
+	// `{ content, sessionId }`, and this reader gates on `data?.content` being
+	// non-empty, so an empty string is the same "already consumed" signal with
+	// the type the entry actually has. Same idiom as `acknowledgeTestFindings`
+	// above.
 	cacheManager.writeCache("session-start-guidance", { content: "" }, cwd);
 
 	return {

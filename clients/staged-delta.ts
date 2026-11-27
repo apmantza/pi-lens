@@ -26,7 +26,6 @@
  * bound each refuse as degraded, never allow.
  */
 import * as nodeFs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { bounded } from "./deadline-utils.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
@@ -50,6 +49,7 @@ import {
 	toProjectRelativePath,
 } from "./path-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
+import { scannerReportParentDir } from "./scanner-temp-root.js";
 import { truncatedByOutputCap } from "./spawn-output-cap.js";
 
 const GIT_TIMEOUT_MS = 5000;
@@ -234,7 +234,9 @@ async function judgeStagedDelta(
 	const plan = planStagedCommit(toolName, input, deps.cwd);
 	if ("unresolved" in plan)
 		return degraded("unresolved_command", plan.unresolved);
-	const scratch = nodeFs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-staged-"));
+	const scratch = nodeFs.mkdtempSync(
+		path.join(scannerReportParentDir(), "pi-lens-staged-"),
+	);
 	try {
 		// A dry run that an argument turns into a real commit
 		// (`--no-porcelain --no-null --no-dry-run`) stops at this hook, which

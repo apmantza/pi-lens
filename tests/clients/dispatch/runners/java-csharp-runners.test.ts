@@ -9,7 +9,10 @@ const safeSpawnAsync = vi.fn((...args: Parameters<typeof safeSpawn>) =>
 	Promise.resolve(safeSpawn(...args)),
 );
 
-vi.mock("../../../../clients/safe-spawn.js", () => ({
+vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/safe-spawn.js")
+	>()),
 	safeSpawn,
 	safeSpawnAsync,
 }));

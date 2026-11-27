@@ -17,8 +17,10 @@ import {
 } from "./code-quality-warnings.js";
 import type { CacheEntry, CacheManager } from "./cache-manager.js";
 import type {
+	CascadeNeighborResult,
 	CascadeResult,
 	CascadeRun,
+	CascadeSectionLayout,
 	CascadeSkipReason,
 	CascadeUnconfirmedReason,
 } from "./cascade-types.js";
@@ -56,8 +58,11 @@ import {
 } from "./dispatch/runner-context.js";
 import { getKnipIgnorePatterns } from "./file-utils.js";
 import {
+	admitBlockerReplay,
 	admitsProjectWideFindings,
+	DEPENDENCY_DRIFT_MAX_DELIVERIES,
 	formatCacheAgeLabel,
+	unconfirmedBlockerNote,
 } from "./finding-delivery-gate.js";
 import {
 	getFullScanWallClockMs,
@@ -138,11 +143,7 @@ import {
 	advisoryPathKey,
 	snapshotAdvisoryProvenance,
 } from "./advisory-provenance.js";
-import {
-	DEPENDENCY_DRIFT_MAX_DELIVERIES,
-	SELF_DRIFT_MAX_DELIVERIES,
-	sweepInlineBlockerFreshness,
-} from "./blocker-freshness.js";
+import { sweepInlineBlockerFreshness } from "./blocker-freshness.js";
 import { sweepInlineBlockerPastEof } from "./blocker-past-eof.js";
 // #2001/#2002: collect-later delivery for slow auxiliary LSP servers.
 import { getLSPService } from "./lsp/capabilities.js";
@@ -938,6 +939,84 @@ export function cancelLSPIdleReset(): void {
 	}
 }
 
+/**
+ * #5790: what each field of a cascade section's source holds when the section
+ * shows no finding. The tables name every field the render reads; their type
+ * makes a new field fail the build until it is classified, and
+ * `fieldsHoldCleanValues` refuses a key a table does not hold at run time.
+ */
+type CleanValues<T> = { readonly [K in keyof T]-?: (value: T[K]) => boolean };
+const anyValue = (): boolean => true;
+
+const CLEAN_LAYOUT: CleanValues<CascadeSectionLayout> = {
+	cwd: anyValue,
+	noun: anyValue,
+	includeReason: anyValue,
+	// The impact header: importers, files to check next, risk flags.
+	header: anyValue,
+	// Dependents the neighbour budget never walked.
+	truncationLine: (value) => value === "",
+	// Findings the policy input bound never evaluated (#3157).
+	coverageLine: (value) => value === "",
+	policySuppressed: (value) => value === 0,
+};
+
+const CLEAN_NEIGHBOR: CleanValues<CascadeNeighborResult> = {
+	filePath: anyValue,
+	reason: anyValue,
+	lspTouched: anyValue,
+	durationMs: anyValue,
+	diagnostics: (value) => value.length === 0,
+	// The "inconclusive" note is the form this exists for.
+	inconclusive: anyValue,
+	unconfirmedServerIds: (value) => value === undefined || value.length === 0,
+	primaryUnavailable: (value) => value === undefined,
+};
+
+/** `neighbors` is judged apart: only the owned ones are rendered. */
+const CLEAN_RESULT: CleanValues<Omit<CascadeResult, "neighbors">> = {
+	filePath: anyValue,
+	impact: anyValue,
+	// Composed from the fields judged here.
+	formatted: anyValue,
+	unansweredPrimaries: (value) => value === undefined,
+	layout: (value) =>
+		value !== undefined && fieldsHoldCleanValues(value, CLEAN_LAYOUT),
+};
+
+/** Every key of `value` is in `table`, and every table key holds a clean value. */
+function fieldsHoldCleanValues<T extends object>(
+	value: T,
+	table: CleanValues<T>,
+): boolean {
+	const checks = table as Record<string, (field: unknown) => boolean>;
+	const fields = value as Record<string, unknown>;
+	return (
+		Object.keys(fields).every((key) => Object.hasOwn(checks, key)) &&
+		Object.entries(checks).every(([key, check]) => check(fields[key]))
+	);
+}
+
+/**
+ * #5790: true only when the section `result` renders over `ownedNeighbors`
+ * shows no finding: every field the render reads holds its clean value
+ * (`CLEAN_RESULT`, `CLEAN_LAYOUT`, `CLEAN_NEIGHBOR`). Its text is then the
+ * impact header and the inconclusive note. Any other form keeps the section
+ * in the commit gate's record.
+ */
+function cascadeSectionShowsNoFinding(
+	result: CascadeResult,
+	ownedNeighbors: readonly CascadeNeighborResult[],
+): boolean {
+	const { neighbors: _rendered, ...rest } = result;
+	return (
+		fieldsHoldCleanValues(rest, CLEAN_RESULT) &&
+		ownedNeighbors.every((neighbor) =>
+			fieldsHoldCleanValues(neighbor, CLEAN_NEIGHBOR),
+		)
+	);
+}
+
 function capTurnEndMessage(content: string, held = 0): string {
 	const maxLines = RUNTIME_CONFIG.turnEnd.maxLines;
 	const maxChars = RUNTIME_CONFIG.turnEnd.maxChars;
@@ -1150,22 +1229,40 @@ function resyncCommitGateForReadOnlyTurn(args: {
 }
 
 /**
- * #1950/#4990: the delivery cap for a demoted record's OWN drift axis, or
- * `undefined` for a `past-eof` demotion (#1944 retires that after one delivery
- * and keeps no count) and for a record a sibling gate demoted.
+ * #1950/#4990: a demotion's own drift axis, if it has one. `past-eof` retires
+ * after its own single delivery (#1944) and has no count, and a record a
+ * sibling gate demoted has no axis here.
  */
-function driftDeliveryCap(
-	staleReason: "dependency-drift" | "past-eof" | "self-drift" | undefined,
-): { axis: "dependency-drift" | "self-drift"; cap: number } | undefined {
-	if (staleReason !== "dependency-drift" && staleReason !== "self-drift")
-		return undefined;
-	return {
-		axis: staleReason,
-		cap:
-			staleReason === "self-drift"
-				? SELF_DRIFT_MAX_DELIVERIES
-				: DEPENDENCY_DRIFT_MAX_DELIVERIES,
-	};
+function driftAxisOf(
+	staleReason: string | undefined,
+): "dependency-drift" | "self-drift" | undefined {
+	return staleReason === "dependency-drift" || staleReason === "self-drift"
+		? staleReason
+		: undefined;
+}
+
+/**
+ * #1950/#4990: a drift demotion is recoverable (its coordinates are still in
+ * bounds), so it does not retire after one delivery like the past-EOF case;
+ * the delivery gate's cap stops the repeat re-serve of a record that never
+ * heals, and this is the note on the delivery that reaches it. The count is a
+ * PEEK (fix-round F1): the hold's `onDelivered` commits it only once the
+ * content reaches the agent, so a suppressed turn or a part the cap cut never
+ * advances it.
+ */
+function driftCapNote(
+	runtime: Pick<RuntimeCoordinator, "peekInlineBlockerStaleDeliveryCount">,
+	bPath: string,
+	axis: "dependency-drift" | "self-drift",
+): string | undefined {
+	const staleDeliveries = runtime.peekInlineBlockerStaleDeliveryCount(bPath);
+	return admitBlockerReplay({
+		surface: "turn-end-demoted",
+		axis,
+		staleDeliveries,
+	}).shown === "retire-note"
+		? formatDeliveryCapNote(staleDeliveries + 1)
+		: undefined;
 }
 
 /**
@@ -1460,6 +1557,15 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 
 	const turnEndStart = Date.now();
 	const blockerParts: string[] = [];
+	/**
+	 * #5790: blocker parts the commit gate's record leaves out, because they
+	 * report no finding: a cascade section holding only its impact header and
+	 * coverage notes. The agent is still told. The gate holds findings, and a
+	 * silent server does not hold it for an edited file either. No file owns
+	 * this text, so in the record it made `blockingProvenance` refuse every
+	 * later trim, and the commit stayed refused until the next turn end.
+	 */
+	const noFindingParts = new Set<string>();
 	/**
 	 * #5532: the inline-blocker replay parts of this turn by part, and the
 	 * pointer line each capped one reads as in the message (`blockerParts` keeps
@@ -1892,11 +1998,18 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			bPath: string,
 			displayPath: string,
 			reason: "dependency-drift" | "self-drift",
-			cap: number,
 		) =>
 		(): void => {
 			const deliveryCount = runtime.incrementInlineBlockerStaleDelivery(bPath);
-			if (deliveryCount < cap) return;
+			// The gate's rule, asked about the delivery just counted.
+			if (
+				admitBlockerReplay({
+					surface: "turn-end-demoted",
+					axis: reason,
+					staleDeliveries: deliveryCount - 1,
+				}).shown !== "retire-note"
+			)
+				return;
 			if (!runtime.retireDemotedDriftBlocker(bPath, reason)) return;
 			runtime.updateGitGuardStatus(false, "");
 			demotedFindingsRetired += 1;
@@ -1995,25 +2108,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				bPath,
 				deadLines,
 			);
-			// #1950/#4990: which axis's delivery cap applies, if this demotion has
-			// one. `past-eof` retires after its own single delivery (#1944) and has
-			// no count.
-			const drift = driftDeliveryCap(staleReason);
+			const driftAxis = driftAxisOf(staleReason);
 			let retirementNote: string | undefined;
 			if (retires) {
 				retirementNote = formatRetirementNote(deadLines);
-			} else if (drift !== undefined) {
-				// #1950/#4990: a drift demotion is recoverable (its coordinates are
-				// still in bounds), so it does not retire after one delivery like the
-				// past-EOF case; the cap stops the repeat re-serve of a record that
-				// never heals. The count is a PEEK (fix-round F1): the hold's
-				// `onDelivered` commits it only once the content reaches the agent,
-				// so a suppressed turn or a part the cap cut never advances it.
-				const tentativeCount =
-					runtime.peekInlineBlockerStaleDeliveryCount(bPath) + 1;
-				if (tentativeCount >= drift.cap) {
-					retirementNote = formatDeliveryCapNote(tentativeCount);
-				}
+			} else if (driftAxis !== undefined) {
+				retirementNote = driftCapNote(runtime, bPath, driftAxis);
 			}
 			const advisoryPart =
 				`${STALE_LINE_MARKER} ${displayPath}${suppressedByDispositionNote(policy.suppressed)}:\n${degraded.body}` +
@@ -2028,14 +2128,13 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					part: advisoryPart,
 					onDelivered: retirePastEofOnDelivery(bPath, deadLines, displayPath),
 				});
-			} else if (drift !== undefined) {
+			} else if (driftAxis !== undefined) {
 				deliveryHolds.push({
 					part: advisoryPart,
 					onDelivered: countDriftDeliveryOnDelivery(
 						bPath,
 						displayPath,
-						drift.axis,
-						drift.cap,
+						driftAxis,
 					),
 					skipOnSuppressed: true,
 				});
@@ -2057,7 +2156,15 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				policySuppressedPaths.push(bPath);
 				continue;
 			}
-			const replayPart = `Unresolved from this turn — ${displayPath}${suppressedByDispositionNote(policy.suppressed)}:\n${policy.body}`;
+			// #5784: the gate's sentence for blockers carried without a verdict,
+			// indented so `clients/git-guard.ts` parses it as section body. Built
+			// from the rows the policy kept (#5788 round 3 R3-3): a row the agent
+			// marked is out of the block, so it is out of the note too.
+			const note = unconfirmedBlockerNote(policy.keptDiagnostics, displayPath, {
+				on: "its latest write",
+				host,
+			});
+			const replayPart = `Unresolved from this turn — ${displayPath}${suppressedByDispositionNote(policy.suppressed)}:\n${policy.body}${note === undefined ? "" : `\n  ${note}`}`;
 			// @delivery-surface: runtime-turn:unresolved-inline-blocker
 			blockerParts.push(replayPart);
 			// #4617: the replay is about this file, which a no-write turn did not
@@ -2068,7 +2175,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			// commit gate's blocker text and the key of the stamp's citations. Only
 			// a pi delivery counts (`blockerDeliveries`), so an MCP count stays 0.
 			replayedBlockers.set(replayPart, { filePath: bPath, displayPath });
-			if (runtime.blockerFullDeliveryCapped(bPath))
+			if (
+				admitBlockerReplay({
+					surface: "turn-end-replay",
+					fullDeliveries: runtime.peekBlockerFullDeliveryCount(bPath),
+				}).shown === "collapse"
+			)
 				cappedBlockerText.set(replayPart, cappedBlockerLine(displayPath));
 		}
 	}
@@ -2343,6 +2455,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		const sectionPrimaries: string[] = [];
 		// Round 6 (W2): the kept lines head the section (`renderCascadeResult`).
 		const unansweredLines: string[] = [];
+		// #5790: whether the section shows a finding (see `noFindingParts`).
+		let sectionShowsFinding = false;
 		for (const result of seen.values()) {
 			const ownedNeighbors = result.neighbors.filter(
 				(n) =>
@@ -2384,6 +2498,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			}
 			if (rendered && (rendered.text || rendered.lines.length > 0)) {
 				unansweredLines.push(...rendered.lines);
+				if (!cascadeSectionShowsNoFinding(result, ownedNeighbors))
+					sectionShowsFinding = true;
 				if (rendered.text) {
 					// Fix B (#3167/#3168): a carried run's re-rendered blocker is
 					// labeled so the agent can tell it from a fresh observation —
@@ -2470,6 +2586,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					testSection += `\n  ... and ${testSuggestions.length - 5} more`;
 				}
 				parts.push(testSection);
+				sectionShowsFinding = true;
 				// #4617: the lines name test files, so the joined section speaks for
 				// them too (the "and N more" line stands for the whole list).
 				sectionPrimaries.push(...testSuggestions.map((s) => s.testFile));
@@ -2480,6 +2597,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			const section = parts.join("\n\n");
 			// @delivery-surface: runtime-turn:cascade-blocker
 			blockerParts.push(section);
+			if (!sectionShowsFinding) noFindingParts.add(section);
 			citePart(section, sectionPrimaries);
 			const shownServerIds = [...shownUnansweredServerIds];
 			deliveryHolds.push({
@@ -6651,6 +6769,11 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		// record then reaches the next request; under it that branch marks the
 		// record consumed, so nothing does (unchanged by #5240). Only two turn
 		// ends with no request between reach this: pi sends one after each.
+		// #5790: the commit gate's record holds only the parts that report a
+		// finding; both writes below take their blocker text from this list.
+		const gateBlockerParts = blockerParts.flatMap((part) =>
+			noFindingParts.has(part) ? [] : [part],
+		);
 		const waiting = duplicate
 			? readTurnEndGuardRecord(cacheManager, runtime, cwd, sessionId).stored
 			: undefined;
@@ -6696,12 +6819,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					// #4733 r5 F21: this session's blocker sections lead the record, so
 					// it is this session's; another session's are carried (#4738).
 					const own: BlockerPartition[] =
-						blockerParts.length > 0
+						gateBlockerParts.length > 0
 							? [
 									{
 										sessionId: deliverySessionId,
 										blockerContent: capTurnEndMessage(
-											blockerParts.join("\n\n"),
+											gateBlockerParts.join("\n\n"),
 										),
 										blockingFiles: existingGuard.affectedFiles ?? [],
 										blockerWrittenAt: Date.now(),
@@ -6868,8 +6991,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			// With `--lens-guard` off this session claims nothing, so a record that
 			// holds another session's blocker keeps theirs alone.
 			const blockingContent =
-				getFlag("lens-guard") && blockerParts.length > 0
-					? capTurnEndMessage(blockerParts.join("\n\n"))
+				getFlag("lens-guard") && gateBlockerParts.length > 0
+					? capTurnEndMessage(gateBlockerParts.join("\n\n"))
 					: undefined;
 			const affectedFiles = [
 				...(existingGuard?.affectedFiles ?? []),

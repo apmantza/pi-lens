@@ -159,6 +159,7 @@ export const CI_ONLY_PRE_PUSH_TESTS = {
 	"tests/real-harness/negative.test.ts": REAL_HARNESS_CI_ONLY,
 	"tests/real-harness/provider-compatibility.test.ts": REAL_HARNESS_CI_ONLY,
 	"tests/real-harness/read-guard-moves.test.ts": REAL_HARNESS_CI_ONLY,
+	"tests/real-harness/runner-host-exit-5703.test.ts": REAL_HARNESS_CI_ONLY,
 	"tests/real-harness/scenario-1.test.ts": REAL_HARNESS_CI_ONLY,
 	"tests/real-harness/scenario-2.test.ts": REAL_HARNESS_CI_ONLY,
 	"tests/real-harness/scenario-3.test.ts": REAL_HARNESS_CI_ONLY,
@@ -259,6 +260,10 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	// clients/, scripts/ AND tests/, and their owner tests and cells, so it is
 	// a both-tree scanner registered in both lists.
 	"tests/config/baseline-owner-governance.test.ts",
+	// #5753 (review 5754 F3): takes every tracked path (`git ls-files`) to
+	// validate each catalog trigger glob, so a production change and a tests/
+	// change can both move it: a both-tree scanner registered in both lists.
+	"tests/config/agents-governance.test.ts",
 	// #4946: walks clients/, tools/, mcp/ and index.ts for flag names the code
 	// reads, against the flag registry; a production change arms it.
 	"tests/config/flag-read-registry-sweep.test.ts",
@@ -295,6 +300,7 @@ export const TEST_TREE_GOVERNANCE_TESTS = [
 	"tests/real-harness/negative.test.ts",
 	"tests/real-harness/provider-compatibility.test.ts",
 	"tests/real-harness/read-guard-moves.test.ts",
+	"tests/real-harness/runner-host-exit-5703.test.ts",
 	"tests/real-harness/scenario-1.test.ts",
 	"tests/real-harness/scenario-2.test.ts",
 	"tests/real-harness/scenario-3.test.ts",
@@ -320,6 +326,9 @@ export const TEST_TREE_GOVERNANCE_TESTS = [
 	// #5072: the tests/ half of the baseline census; its production half is the
 	// same file, registered in TREE_SCANNING_GOVERNANCE_TESTS above.
 	"tests/config/baseline-owner-governance.test.ts",
+	// #5753: the tests/ half of the trigger-glob gate; its production half is
+	// the same file, registered in TREE_SCANNING_GOVERNANCE_TESTS above.
+	"tests/config/agents-governance.test.ts",
 	// #4789: walks tests/ for files that read the real home outside the named
 	// opt-out registry.
 	"tests/config/real-home-reader-registry.test.ts",

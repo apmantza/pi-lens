@@ -206,6 +206,12 @@ export interface PiLensProjectConfig {
 		autoFix?: PiLensProjectMutationConfig;
 	};
 	/**
+	 * #5793: tool names this repository declares never write. A cloned repo's
+	 * say-so, so a consumer honors it only under host project trust
+	 * (`clients/opaque-mutation-scan.ts`); this loader only carries it.
+	 */
+	opaqueScan?: { nonWriterTools?: string[] };
+	/**
 	 * Base project-size scale knob (#776) — see `clients/project-scale.ts`.
 	 * `undefined` means "use the env override / default chain".
 	 */
@@ -1088,6 +1094,15 @@ function parseProjectConfigFields(
 		assignFlagConfigSection(obj, mutations, spec.configKey, note);
 	}
 	const toolConfig = readToolConfig(obj, note);
+	// #5793: the schema (`config-schema.ts`) already dropped a non-array and a
+	// non-string member with a record, so only a typed list reaches here.
+	const opaqueScanSection = obj.opaqueScan;
+	const nonWriterTools =
+		opaqueScanSection &&
+		typeof opaqueScanSection === "object" &&
+		!Array.isArray(opaqueScanSection)
+			? (opaqueScanSection as Record<string, unknown>).nonWriterTools
+			: undefined;
 
 	const rules: Record<string, PiLensProjectRuleConfig> = {};
 	if (obj.rules && typeof obj.rules === "object" && !Array.isArray(obj.rules)) {
@@ -1380,6 +1395,9 @@ function parseProjectConfigFields(
 	return {
 		...(toolConfig === undefined ? {} : { tools: toolConfig }),
 		...(startup === undefined ? {} : { startup }),
+		...(Array.isArray(nonWriterTools)
+			? { opaqueScan: { nonWriterTools: nonWriterTools as string[] } }
+			: {}),
 		ignore,
 		rules,
 		...(mutations as Pick<

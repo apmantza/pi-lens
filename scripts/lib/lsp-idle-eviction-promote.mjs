@@ -64,16 +64,30 @@ function previousDay(day) {
 		.slice(0, 10);
 }
 
+/** True when a night-state entry already holds `PROMOTE_NIGHTS` qualifying nights (#5747). */
+export function isSettledPair(entry) {
+	return Array.isArray(entry?.nights) && entry.nights.length >= PROMOTE_NIGHTS;
+}
+
 /**
- * Advance the per-server night memory by one run. A server keeps (or gains) a
- * night only when this run's row qualifies; every other outcome (vetoed,
- * inconclusive, unavailable, budget-exhausted, no row, over the cold-start cap,
- * under the RSS floor, no longer `unmeasured`) drops its entry, so the nights held are consecutive.
- * A held night counts only when it is the previous UTC day; any other (a skipped
- * night, or today's own earlier run) restarts the count at one, so two runs on
- * one UTC day count once and a manual dispatch cannot satisfy the rule. An entry that already holds `PROMOTE_NIGHTS` nights is left
- * untouched, so a settled server writes a byte-identical block and the refresh
- * PR does not open on timing noise.
+ * Advance the per-server night memory by one run. A server without a settled
+ * entry keeps (or gains) a night only when this run's row qualifies; every
+ * other outcome (vetoed, inconclusive, unavailable, budget-exhausted, no row,
+ * over the cold-start cap, under the RSS floor, no longer `unmeasured`) drops
+ * its partial entry, so the nights held are consecutive. A held night counts
+ * only when it is the previous UTC day; any other (a skipped night, or today's
+ * own earlier run) restarts the count at one, so two runs on one UTC day count
+ * once and a manual dispatch cannot satisfy the rule.
+ *
+ * An entry that already holds `PROMOTE_NIGHTS` nights is SETTLED and is kept
+ * byte-identical through a night that does not qualify, as the sibling
+ * `publishIdleEvictionDoc` seam keeps a published row (`holdSettledCell`): a
+ * night over the cold-start cap, under the RSS floor, inconclusive or
+ * unavailable could not tell, and it does not erase evidence the policy already
+ * earned (#5747 F1). Only a hard veto (the respawn failed or the coverage
+ * narrowed) or a policy that no longer reads `unmeasured` empties it, so a
+ * settled server cannot be promoted on the strength of nights it has since
+ * failed, and a promoted or `resident` server stops being re-proposed.
  *
  * @param {NightState | undefined} prior
  * @param {readonly object[]} rows  this run's summary rows
@@ -84,12 +98,14 @@ export function advanceNights(prior, rows, today) {
 	/** @type {NightState} */
 	const next = {};
 	for (const row of rows) {
-		if (!qualifies(row)) continue;
-		const held = prior?.[row.serverId]?.nights ?? [];
-		if (held.length >= PROMOTE_NIGHTS) {
+		const entry = prior?.[row.serverId];
+		const held = entry?.nights ?? [];
+		if (isSettledPair(entry)) {
+			if (row.result === "vetoed" || row.declared !== "unmeasured") continue;
 			next[row.serverId] = { nights: held.slice(-PROMOTE_NIGHTS) };
 			continue;
 		}
+		if (!qualifies(row)) continue;
 		/** @type {Night} */
 		const night = {
 			day: today,
@@ -104,18 +120,23 @@ export function advanceNights(prior, rows, today) {
 }
 
 /**
- * Decide which servers to promote from the night memory.
+ * Decide which servers to promote from the night memory and this run's rows.
+ * A retained settled pair stays in `state` across a non-qualifying night, so
+ * promotion also requires `qualifies(row)` on the current run (#5747 F2).
  *
  * @param {NightState} state  after `advanceNights`
  * @param {ReadonlyMap<string, string>} hold  server id -> why it is held
+ * @param {readonly object[]} rows  this run's summary rows
  * @returns {{ promote: { serverId: string, nights: Night[], minRssMb: number, worstColdMs: number }[], skipped: { serverId: string, reason: string }[] }}
  */
-export function selectPromotions(state, hold) {
+export function selectPromotions(state, hold, rows) {
+	const qualified = new Set(rows.filter(qualifies).map((row) => row.serverId));
 	const promote = [];
 	const skipped = [];
 	for (const serverId of Object.keys(state).sort()) {
-		const nights = state[serverId].nights;
-		if (nights.length < PROMOTE_NIGHTS) {
+		const entry = state[serverId];
+		const nights = entry.nights;
+		if (!isSettledPair(entry)) {
 			skipped.push({
 				serverId,
 				reason: `pending: ${nights.length}/${PROMOTE_NIGHTS} consecutive eligible nights`,
@@ -144,6 +165,13 @@ export function selectPromotions(state, hold) {
 			skipped.push({
 				serverId,
 				reason: `cold start ${worstColdMs} ms exceeds the ${COLD_START_MAX_MS} ms cap`,
+			});
+			continue;
+		}
+		if (!qualified.has(serverId)) {
+			skipped.push({
+				serverId,
+				reason: "settled pair retained; this run did not qualify",
 			});
 			continue;
 		}
@@ -370,7 +398,7 @@ export function planPromotions({
 				})),
 		);
 	}
-	const { promote, skipped } = selectPromotions(state, hold);
+	const { promote, skipped } = selectPromotions(state, hold, rows);
 	if (rejected === null && promote.length > 0) {
 		// The closed-PR list could not be read: reopening a closed PR is the failure
 		// to avoid, so promote nothing tonight.

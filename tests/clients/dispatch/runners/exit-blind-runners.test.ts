@@ -10,7 +10,12 @@ const { safeSpawnAsync, getLinterPolicyForCwd } = vi.hoisted(() => ({
 	getLinterPolicyForCwd: vi.fn(),
 }));
 
-vi.mock("../../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
+vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/safe-spawn.js")
+	>()),
+	safeSpawnAsync,
+}));
 
 vi.mock("../../../../clients/tool-policy.js", async (importOriginal) => ({
 	...(await importOriginal<

@@ -14,6 +14,7 @@ import {
 } from "./project-changes.js";
 import type { CodeQualityWarningRecord } from "./code-quality-warnings.js";
 import type { Diagnostic } from "./dispatch/types.js";
+import { BLOCKER_FULL_DELIVERY_CAP } from "./finding-delivery-gate.js";
 import {
 	ANY_POSITION,
 	foldedFindingIdentity,
@@ -572,12 +573,6 @@ const TOOL_CALL_ATTRIBUTION_CAPACITY = 256;
  * round-trip; only guards against genuine identity reuse, not slow tools.
  */
 const TOOL_CALL_ATTRIBUTION_TTL_MS = 5 * 60_000;
-
-/**
- * #5532: a live blocker's full section is delivered at most this many times
- * (the first delivery included); later deliveries render a one-line pointer.
- */
-export const BLOCKER_FULL_DELIVERY_CAP = 3;
 
 /**
  * A record narrowed to the rows that survive a retirement. The derived fields
@@ -2545,18 +2540,16 @@ export class RuntimeCoordinator {
 	}
 
 	/**
-	 * #5532: whether this live blocker has had its full section delivered
-	 * `BLOCKER_FULL_DELIVERY_CAP` times, so the next delivery renders the one-line
-	 * pointer instead. A peek: the delivery that renders it commits through
-	 * {@link recordBlockerDelivery} once the message is known to reach the model.
-	 * The count is this record's own, so another blocker joining, leaving or
-	 * being fixed never moves it.
+	 * #5532: how many times this live blocker's full section has reached the
+	 * model. A peek: the delivery gate (`admitBlockerReplay`, surface
+	 * `turn-end-replay`) decides from it whether the next delivery collapses to
+	 * the one-line pointer, and the delivery that renders it commits through
+	 * {@link recordBlockerDelivery} once the message is known to reach the
+	 * model. The count is this record's own, so another blocker joining,
+	 * leaving or being fixed never moves it.
 	 */
-	blockerFullDeliveryCapped(filePath: string): boolean {
-		return (
-			(this._pendingInlineBlockers.get(filePath)?.fullDeliveryCount ?? 0) >=
-			BLOCKER_FULL_DELIVERY_CAP
-		);
+	peekBlockerFullDeliveryCount(filePath: string): number {
+		return this._pendingInlineBlockers.get(filePath)?.fullDeliveryCount ?? 0;
 	}
 
 	/**

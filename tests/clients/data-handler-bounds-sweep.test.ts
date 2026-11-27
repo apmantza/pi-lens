@@ -94,16 +94,6 @@ const REGISTRY: Readonly<Record<string, BoundedHandlers>> = {
 			"#3383: createBoundedOutputSink() at the shared default; a truncated process table is the partial-output ending this collector already documents.",
 		evidence: ["createBoundedOutputSink()", "out.append(chunk)"],
 	},
-	"clients/mcp/review.ts": {
-		handlers: 2,
-		bound:
-			"#3383: createBoundedOutputSink() per pipe; a truncated stdout kills the worker and resolves the cap as the outcome.",
-		evidence: [
-			"createBoundedOutputSink()",
-			"stdout.append(chunk)",
-			"stderr.append(chunk)",
-		],
-	},
 	"clients/mcp/ipc.ts": {
 		handlers: 2,
 		bound:
@@ -119,8 +109,11 @@ const REGISTRY: Readonly<Record<string, BoundedHandlers>> = {
 	"clients/installer/index.ts": {
 		handlers: 1,
 		bound:
-			"The two interpreter user-base probes (#3383's createBoundedOutputSink pair) moved onto the spawn seam's own output cap in #4530 and attach no handler here. The two Buffer[] sinks — the HTTPS asset body and the gunzip of it — are deliberately UNBOUNDED: `Buffer.concat` has no reachable length ceiling (buffer.constants.MAX_LENGTH is 9007199254740991 on Node 22), so there is no throw to convert into a bounded result, the failure mode is host OOM, and any byte cap would refuse an asset the user explicitly asked to install (#3383 non-goal).",
-		evidence: ["Buffer.concat(chunks)"],
+			"The GitHub API metadata response is capped at MAX_GITHUB_METADATA_BYTES before Buffer.concat; asset and rule-pack payloads use the streaming temp-file seam.",
+		evidence: [
+			"totalBytes > MAX_GITHUB_METADATA_BYTES",
+			"Buffer.concat(chunks)",
+		],
 	},
 	"clients/installer/download.ts": {
 		handlers: 2,

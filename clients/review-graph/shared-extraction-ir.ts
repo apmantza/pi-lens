@@ -1,10 +1,10 @@
-import { createHash } from "node:crypto";
 import type { FunctionSummary } from "../dispatch/facts/function-facts.js";
 import type {
 	ImportEntry,
 	ReExportEntry,
 } from "../dispatch/facts/import-facts.js";
 import { BoundedFifoMap } from "../bounded-cache.js";
+import { hashContentBytes } from "../content-stamp.js";
 import { normalizeMapKey } from "../path-utils.js";
 import type { ExtractedSymbols } from "../tree-sitter-symbol-extractor.js";
 
@@ -54,7 +54,7 @@ export interface ReviewGraphFileIr {
  * string they parsed.
  */
 export function reviewGraphIrContentHash(content: string): string {
-	return createHash("sha256").update(content).digest("hex");
+	return hashContentBytes(Buffer.from(content, "utf8"));
 }
 
 // Process-local handoff only. Values are compact extracted data: never source

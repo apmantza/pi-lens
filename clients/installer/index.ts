@@ -79,6 +79,7 @@ import {
 	projectTrustDenialReason,
 } from "../project-trust.js";
 import {
+	inUnadmittedSpawnRoot,
 	isUntrustedProjectPath,
 	recordProjectCommandRefusal,
 } from "../session-repository.js";
@@ -2552,9 +2553,9 @@ export async function flushProbeCache(): Promise<ProbeCacheFlushResult> {
 		clearTimeout(_probeCacheFlushTimer);
 		_probeCacheFlushTimer = null;
 	}
-	// #946 review F4: if the 300ms timer's write already started, the dirty
-	// flag is false but the write may still be in flight — an immediate
-	// process.exit would truncate it. Always await the in-flight write.
+	// #946 review F4: the 300ms timer may have started a write that is
+	// still in flight. An immediate process.exit would truncate it, so
+	// always await that write before checking whether another is needed.
 	if (_probeCacheWriteInFlight) {
 		await _probeCacheWriteInFlight;
 		if (!_probeCacheDirty) return "written";
@@ -2595,7 +2596,16 @@ async function settleProbeCacheForTests(): Promise<string | undefined> {
 // the tier-2 harness's loaded extension copy owns one the test's own import
 // cannot reach, so its write lands after the fixture root is removed. The
 // harness joins it through the registry (`clients/background-write-drains.ts`).
-registerBackgroundWriteDrain(settleProbeCacheForTests);
+// Pending: an update that has not marked its change yet, or a change the flush
+// above would write. An armed timer and a write in flight both keep the change
+// dirty until a write publishes it, so they need no term of their own; a dirty
+// change with no loaded cache is not pending, the flush answers it `idle`.
+registerBackgroundWriteDrain(
+	settleProbeCacheForTests,
+	() =>
+		_probeCacheUpdatesPending.size > 0 ||
+		(_probeCacheDirty && _probeCache !== null),
+);
 
 function isAstGrepVersionOutput(output: string): boolean {
 	return /\bast[- ]grep\b/i.test(output);
@@ -3812,7 +3822,12 @@ async function firstVerifiedBinary(
 	for (const candidate of candidates) {
 		try {
 			await fs.access(candidate);
-			if (isUntrustedProjectPath(candidate)) {
+			// #5782 R5: an absolute path skips the spawn seam's lookup judgment,
+			// so a link into launch's unadmitted root is judged here too.
+			if (
+				isUntrustedProjectPath(candidate) ||
+				inUnadmittedSpawnRoot(candidate)
+			) {
 				recordProjectCommandRefusal(candidate);
 				continue;
 			}
@@ -4102,6 +4117,8 @@ interface HttpGetResponse {
 	etag?: string;
 }
 
+const MAX_GITHUB_METADATA_BYTES = 2 * 1024 * 1024;
+
 /**
  * Fetch a URL, following up to `maxRedirects` redirects, and surface the status
  * line and `ETag` alongside the body.
@@ -4161,7 +4178,19 @@ function httpsGetWithMeta(
 						);
 					}
 					const chunks: Buffer[] = [];
-					res.on("data", (chunk: Buffer) => chunks.push(chunk));
+					let totalBytes = 0;
+					res.on("data", (chunk: Buffer) => {
+						chunks.push(chunk);
+						totalBytes += chunk.length;
+						if (totalBytes > MAX_GITHUB_METADATA_BYTES) {
+							res.destroy();
+							reject(
+								new Error(
+									`GitHub metadata exceeds ${MAX_GITHUB_METADATA_BYTES} bytes`,
+								),
+							);
+						}
+					});
 					res.on("end", () =>
 						resolve({ statusCode: 200, body: Buffer.concat(chunks), etag }),
 					);
