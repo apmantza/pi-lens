@@ -138,6 +138,7 @@ describe("#5770 contextInjection.retain defaults by the request's API", () => {
 			// One row for the session, though three requests resolved the default.
 			const rows = await defaultRows(handle);
 			expect(rows).toHaveLength(1);
+			expect(rows[0]?.phase).toBe("context_injection_retain_default");
 			expect(rows[0]?.metadata).toMatchObject({ api: ANTHROPIC });
 		} finally {
 			await handle.dispose();

@@ -42,8 +42,6 @@ import { claimPhaseOncePerSession, logLatency } from "./latency-logger.js";
 import type { ResolvedPiLensFlag } from "./lens-config.js";
 import { resolveLensToolName } from "./tool-config.js";
 
-const RETAIN_DEFAULT_PHASE = "context_injection_retain_default";
-
 /**
  * The APIs whose requests retain by default (#5770). Every other API keeps the
  * flag's own default, off. Exact strings: a label that merely resembles one of
@@ -72,10 +70,15 @@ export function resolveRetainInjections(
 ): boolean {
 	if (setting.source !== "default") return Boolean(setting.value);
 	if (typeof api !== "string" || !RETAIN_DEFAULT_APIS.has(api)) return false;
-	if (claimPhaseOncePerSession(RETAIN_DEFAULT_PHASE, sessionId ?? "<none>"))
+	if (
+		claimPhaseOncePerSession(
+			"context_injection_retain_default",
+			sessionId ?? "<none>",
+		)
+	)
 		logLatency({
 			type: "phase",
-			phase: RETAIN_DEFAULT_PHASE,
+			phase: "context_injection_retain_default",
 			filePath: "",
 			durationMs: 0,
 			metadata: { sessionId, api },
