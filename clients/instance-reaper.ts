@@ -1179,7 +1179,7 @@ function matchesWindowsLaunch(command: string, marker: ManagedMarker): boolean {
 	// A node package launched through its entry file: `node_modules\<marker>\lib\cli.mjs`.
 	const parts = file.toLowerCase().split(/[\\/]+/);
 	const at = parts.indexOf("node_modules");
-	return at >= 0 && parts[at + 1] === name && at + 2 < parts.length;
+	return at >= 0 && parts[at + 1] === name;
 }
 
 /**

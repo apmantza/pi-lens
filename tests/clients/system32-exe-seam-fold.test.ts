@@ -483,6 +483,17 @@ const SPARED: ReadonlyArray<readonly [string, string]> = [
 		"package name outside node_modules",
 		"node.exe C:\\x\\yaml-language-server\\notes.js",
 	],
+	// Recurrence (#5699 F5): no spared row covered the node_modules adjacency,
+	// so `parts.includes(name)` survived. A marker above a project's node_modules,
+	// or inside another package, stays spared.
+	[
+		"project directory above its own node_modules",
+		"node.exe C:\\dev\\ty\\node_modules\\vite\\bin\\vite.js",
+	],
+	[
+		"marker directory below a package under node_modules",
+		"node.exe C:\\p\\node_modules\\foo\\ty\\x.js",
+	],
 	["undeclared image", "C:\\Users\\me\\ty\\other.exe"],
 	["image that only ends in the marker", "C:\\tools\\notgopls.exe"],
 	["unbalanced quote", 'node.exe "C:\\unbalanced\\ty.js'],
