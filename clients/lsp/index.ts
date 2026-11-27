@@ -6624,7 +6624,6 @@ export class LSPService {
 								classifiedServerId !== undefined &&
 								outstanding.every(
 									(entry) =>
-										entry.client.serverId === classifiedServerId &&
 										clientsInheritedByTouch.has(entry.client) &&
 										entry.client.hasUnwithdrawnPushFindings?.(filePath) ===
 											false,
