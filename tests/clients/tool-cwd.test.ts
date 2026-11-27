@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
+import { Worker } from "node:worker_threads";
 import * as path from "node:path";
 import {
 	afterAll,
@@ -166,6 +167,33 @@ const pl5802Probe = (() => {
 	};
 })();
 
+// TEMP #5802 timing instrumentation; removed before ready.
+// Red-first on Windows: 8 spinning workers oversubscribe the 4-vCPU runner for
+// the two cells the sweep found near the 5 s ceiling, the state in which the
+// failing runs showed 19-22 ms per async stat.
+let pl5802Burners: Worker[] = [];
+async function pl5802BurnStart(count: number): Promise<void> {
+	pl5802Burners = Array.from(
+		{ length: count },
+		() =>
+			new Worker("const end = Date.now() + 60000; while (Date.now() < end);", {
+				eval: true,
+			}),
+	);
+	await Promise.all(
+		pl5802Burners.map(
+			(worker) =>
+				new Promise<void>((resolve) => worker.once("online", resolve)),
+		),
+	);
+}
+async function pl5802BurnStop(): Promise<void> {
+	await Promise.all(pl5802Burners.map((worker) => worker.terminate()));
+	pl5802Burners = [];
+}
+const pl5802Burned = (name: string): boolean =>
+	/built-in server with no marker|flags exactly the servers/.test(name);
+
 async function pl5802Sequence(tag: string, base: string): Promise<string> {
 	const laps: string[] = [];
 	let t0 = performance.now();
@@ -289,15 +317,17 @@ beforeEach(async (ctx) => {
 	// TEMP #5802 timing instrumentation; removed before ready.
 	cellStartedAt = performance.now();
 	pl5802Probe.carryIn(ctx.task.name);
+	if (pl5802Burned(ctx.task.name)) await pl5802BurnStart(8);
 });
 
 // Log writes under this home are queued; the drain lets them land before the
 // home is removed.
 useTrackedTempDirs("pi-lens-tool-cwd-");
 
-afterEach((ctx) => {
+afterEach(async (ctx) => {
 	// TEMP #5802 timing instrumentation; removed before ready.
 	pl5802Probe.endCell(ctx.task.name);
+	await pl5802BurnStop();
 	console.log(
 		"PL5802-CELL " +
 			Math.round(performance.now() - cellStartedAt) +
@@ -870,11 +900,19 @@ describe("resolveToolCwd (#2777)", () => {
 	});
 
 	it("uses the file directory for a built-in server with no marker", async () => {
-		// TEMP #5802 timing instrumentation; removed before ready.
-		const rr2 = await pl5802Sequence("python-cell", home);
 		const project = path.join(home, "repo");
 		const file = path.join(project, "nested", "src", "main.py");
-		expect(rr2).toBe(path.dirname(file));
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		const server = LSP_SERVERS.find((entry) => entry.id === "python");
+		if (!server) throw new Error("python server missing from registry");
+		const service = new LSPService(undefined, project);
+		const { clientRegistry } = service as unknown as {
+			clientRegistry: {
+				resolveServerRoot(server: LSPServerInfo, file: string): Promise<string>;
+			};
+		};
+		const resolveRoot = clientRegistry.resolveServerRoot.bind(clientRegistry);
+		expect(await resolveRoot(server, file)).toBe(path.dirname(file));
 	});
 
 	// TEMP #5802 timing instrumentation; removed before ready.
