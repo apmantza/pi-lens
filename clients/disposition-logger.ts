@@ -13,6 +13,7 @@
  */
 import * as path from "node:path";
 import { isTestMode } from "./env-utils.js";
+import { getLogLimit } from "./log-rotation-limits.js";
 import { getGlobalPiLensLogDir } from "./probe-home-state.js";
 import { createNdjsonLogger } from "./ndjson-logger.js";
 
@@ -22,13 +23,7 @@ const DISPOSITION_LOG_BACKUP_FILE = path.join(
 	DISPOSITION_LOG_DIR,
 	"dispositions.log.1",
 );
-const MAX_LOG_BYTES = Math.max(
-	128 * 1024,
-	Number.parseInt(
-		process.env.PI_LENS_DISPOSITION_LOG_MAX_BYTES ?? "1048576",
-		10,
-	) || 1048576,
-);
+const MAX_LOG_BYTES = Math.max(128 * 1024, getLogLimit("dispositionMaxBytes"));
 const writer = createNdjsonLogger({
 	filePath: DISPOSITION_LOG_FILE,
 	maxBytes: MAX_LOG_BYTES,

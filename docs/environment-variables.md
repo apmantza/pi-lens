@@ -441,9 +441,9 @@ entry for what's still holding the loop open.
 How many days the session-start cleanup keeps these files before it removes them:
 the daily `logs/*.jsonl` files, rotated log backups, oversized tool-result spill
 logs (`tool-result-<id>.log`), and per-session state snapshots. The current
-session's snapshot stays whatever its age. **Default:** `7`. Cleanup reads the value as a
-leading integer, so `1garbage` reads as `1`; a value that yields `0` or no leading
-integer reads as `7`, and a negative one as `1`.
+session's snapshot stays whatever its age. **Default:** `7`. A positive integer, or
+`0` / `off` / `unlimited` to keep them forever. An unusable value falls back to the
+default and the session start report names it.
 
 The same cleanup also removes two things this variable does not tune. An MCP
 endpoint socket in the temp directory goes after one day, and only when its
@@ -455,7 +455,20 @@ a `🧹` notice when it removed something.
 
 ### `PI_LENS_MAX_LOG_SIZE_MB`
 
-Maximum log size (MB) before rotation. **Default:** `10`.
+Maximum log size (MB) before rotation. **Default:** `10`. A positive integer,
+or `0` / `off` / `unlimited` to never rotate. An unusable value falls back to
+the default and the session start report names it.
+
+### Log byte caps
+
+`PI_LENS_READ_GUARD_MAX_BYTES`, `PI_LENS_AW_LOG_MAX_BYTES`,
+`PI_LENS_AST_GREP_LOG_MAX_BYTES`, `PI_LENS_DISPOSITION_LOG_MAX_BYTES` and
+`PI_LENS_DEAD_CODE_LOG_MAX_BYTES`: maximum size (bytes) of `read-guard.log`,
+`actionable-warnings.log`, `ast-grep-tools.log`, `dispositions.log` and
+`dead-code.log` before the one backup is replaced. **Default:** `1048576`; a
+positive value below `131072` is raised to it. `0` / `off` / `unlimited` never
+rotates. An unusable value falls back to the default and the session start
+report names it.
 
 ## Diagnostic-only knobs
 
