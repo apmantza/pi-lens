@@ -16,6 +16,105 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Security
 
+## [4.5.3] - 2026-11-27
+
+### Added
+
+#### Configuration and flags
+
+- **The caps on retained injections are now config keys, and `0` removes a cap.** `contextInjection.retainMaxEntries`, `retainMaxBytes` and `retainMaxSessions` replace the fixed 64 entries, 256 KiB and 32 sessions, so a long session no longer loses cache stability once it passes them. (refs #5770)
+
+- **A tool you know never writes can now skip the per-call tree comparison.** List its name under `opaqueScan.nonWriterTools` in `~/.pi-lens/config.json`, or in a project `.pi-lens.json` that pi trusts, and pi-lens stops running two `git status` checks around each call. No tool is listed by default, shells and pi-lens tools are never exempted, and a refused entry is reported once per session. (refs #5793)
+
+### Changed
+
+#### Configuration and flags
+
+- **Retained context injections are now on by default for `anthropic-messages` models.** Findings that pi-lens injects are repeated unchanged in later requests so the provider's prompt cache keeps hitting; every other API keeps the old default of off. Set `contextInjection.retain` to `false` in `~/.pi-lens/config.json` to opt out, or to `true` to turn it on for every API. (refs #5770)
+
+### Fixed
+
+#### Language servers
+
+- **Language servers now refuse project markers found in ancestors of the home directory.** TypeScript, HTML, Vue, Svelte, and CSS servers previously adopted config or lockfile roots located above the home directory instead of falling back to safer scopes. (refs #5728)
+
+- **A clean markdown or Lua edit beside an auxiliary is now confirmed clean.** Before, the per-edit check waited its full budget and then reported the file as not fully checked, because marksman and lua-language-server publish nothing for a clean file. The edit is now confirmed when the server was already running, answers a liveness probe, and never pushed a finding it has not withdrawn. TypeScript keeps its own check. (refs #5774)
+
+#### Blockers and sessions
+
+- **A commit held by a neighbour file's cascade error now says what clears it.** `--lens-guard` used to tell the agent to "write the affected files again", and no write cleared the hold. The refusal now says to fix the named files, re-check them, and end the turn. A neighbour fixed outside pi and confirmed clean with `lens_diagnostics source=lsp` no longer keeps its old cascade error on every later turn. (refs #5790)
+
+- **A cascade note that reports no error no longer holds a commit refused.** When a language server stayed silent through the turn end, the impact cascade note it left made `--lens-guard` refuse `git commit` after every file was fixed and settled, until the next turn end. The note still reaches the agent. (refs #5790)
+
+- **A second session in one workspace no longer takes the first session's startup guidance.** The guidance record now names the session that wrote it, so a concurrent subagent's first request leaves it in place and the writing session still receives it. (refs #5792)
+
+- **A single-range adapter edit now clears a stale read record.** The edit check judges the range the adapter reported, so a formatter or external rewrite no longer blocks every later edit and a re-read repairs the state. (refs #5762)
+
+- **A blocker carried without a verdict now says so, and is not repeated every write.** When a language server or runner gives no verdict on a write, the withheld and `Still unfixed` lines, the turn-end replay and the session read say the finding was not re-checked and how it settles: a language server's blocker names the `lens_diagnostics source=lsp` probe, a runner's waits for a later write its check answers, and one whose re-check is still running says so. An identical line is shown once per session, counted only once it reaches the agent, until the blocker set changes or a source answers. The session read no longer prints an all-clear while the commit gate still holds a blocker. (refs #5784)
+
+#### Runners and scanners
+
+- **A hung runner process left by a killed host is now reaped.** Linter, formatter, installer, and test-runner processes spawned through `safeSpawnAsync` are now tagged and recorded so the next pi or MCP session can reap them after a host crash or SIGKILL. (refs #5703)
+
+- **Tool availability now follows one trust-aware binary ladder.** Biome re-checks project trust without a client command cache and retains its managed and package-manager global lookup order. Stylua retains ancestor lookup and accepts project shims without a version probe. (refs #5410)
+
+#### Tools and reports
+
+- **A finding in a directory named `..foo` now gets the same id in every checkout.** The id hashed the checkout's absolute path for such files, so a dismissal or a stored warning did not follow the project to another clone; the id of a file in a `..`-prefixed directory changes once. (refs #2556)
+
+#### Configuration and flags
+
+- **Log retention and size limits can now be turned off.** `0`, `off` or `unlimited` in `PI_LENS_LOG_RETENTION_DAYS`, `PI_LENS_MAX_LOG_SIZE_MB`, `PI_LENS_READ_GUARD_MAX_BYTES`, `PI_LENS_AW_LOG_MAX_BYTES`, `PI_LENS_AST_GREP_LOG_MAX_BYTES`, `PI_LENS_DISPOSITION_LOG_MAX_BYTES` and `PI_LENS_DEAD_CODE_LOG_MAX_BYTES` no longer fall back to the default, and an unusable value is named in the session-start report. (refs #5771)
+
+#### Install and updates
+
+- **The Opengrep rule pack now streams to disk, and release metadata is size-capped.** The pack download no longer holds its whole body in memory, a pack download that outlasts 60 seconds is cut off with its partial file removed, and a GitHub release answer past 2 MiB is refused. (refs #5701)
+
+#### Hosts and integrations
+
+- **A timed-out `pilens_analyze mode=fresh` worker is now ended with everything it started.** The worker is forked through `safeSpawnAsync`, so a timeout signals its whole process group and escalates to SIGKILL, and a worker that ignores SIGTERM no longer outlives the call. (refs #4907)
+
+### Security
+
+#### Language servers
+
+- **Global package-manager discovery gates probes by root admission.** Discovery scopes both the manager finder and the manager query, judges the root the caller scanned, refuses a manager or a global tool linked into that root, and keeps cached answers separate across execution contexts. A session started in your home directory without pi trust no longer runs global tools installed under it; trust the project in pi to use them. (refs #5689)
+
+### Internal
+
+<details>
+<summary>14 internal changes: tests, CI, tooling, and refactors</summary>
+
+- The fence-rollup cap case in `tests/index-3873-session-decision-records.test.ts` no longer reads a stray `package-manager-global-bin` write from the previous case's session_start global-bin-dir lookup: the file's `afterEach` now joins every registered background drain, so a loaded CI shard stops reading `guardedTotal: 21` for 20 writes. (refs #4909)
+
+- The Lombok case in `tests/clients/lsp/runtime-install-discovery.test.ts` no longer pays the `java` PATH probe's one-time cold start (a lazy import and a real JVM start) inside its 5 s cap, so it stops timing out on a loaded CI shard. (refs #4909)
+
+- Preserve the no-start reload witness across pi 1.5.2 and 1.6.0 host gates. (refs #5763)
+
+- `tests/index-wiring.test.ts` no longer reads an earlier case's global-bin-dir prime in the #2515 S3 `/lens-perf` case's exact degradation list: its root `afterEach` takes one macrotask turn so the `setImmediate`-scheduled prime starts, then joins the registered background drains, so shuffle seeds 202 and 8888 stay green. (refs #5794)
+
+- `tests/clients/runtime-tool-result.test.ts` warms the first-touch pre-edit capture in a `beforeAll`, so the decorated-bash `structuredContent` case no longer pays its one-time tree-sitter and dispatch load inside its own 5 s budget. The case timed out at 5 s on Windows; on the Windows CI job (run 45935233393) its two variants now take 2.3 s and 1.9 s. (refs #5798)
+
+- A formatter's unavailable PATH-probe row now carries the finder's evidence, as the package-manager row already did. (refs #5410)
+
+- **The nightly idle-eviction writer keeps a settled two-night pair without promoting on a failing night.** A night that could not qualify retains the settled pair in refresh state while requiring a qualifying current night before promotion; only a hard veto, server removal or policy change clears the pair.
+
+- Fold the ast-grep search and replace tools' shared parameters (language, strictness, five relational filters) onto one `astGrepSharedParams` factory; the registered schemas are byte-identical. (refs #4907)
+
+- Fold the stored-path and fence-drop producers of the `lsp_empty_first_publish_held` hold onto one `spendEmptyFirstPublishHold` helper in `clients/lsp/client.ts`; the spend rule and the record are unchanged (384-case old-versus-new probe identical). (refs #4907)
+
+- Route the yamllint, ruff, biome-check and spellcheck runners' spawn cwd through `resolveRunnerCwd` in `clients/tool-cwd.ts`, delete the second copy in `runner-helpers.ts`, and stop `spawn-cwd-scan` admitting a resolver imported from any module but `tool-cwd.js` (refs #4907).
+
+- The commit gate's staged-delta read now makes its scratch directory under `scannerReportParentDir()`, the shared scanner temp root, instead of its own `os.tmpdir()` join, so a harness that owns `PI_LENS_TEST_SCANNER_TMPDIR` sees and sweeps it. (refs #4907)
+
+- The retention sweep's pid-scoped socket gate reads its owner through `realIsPidAlive` instead of its own `process.kill(pid, 0)` copy, so one liveness reading serves every consumer. (refs #4907)
+
+- Six sites that hashed a decoded file text with their own `createHash("sha256")` now call `hashContentBytes` in `clients/content-stamp.ts`, the owner the bytes fold of #4541 left this half out of; every digest is unchanged. (refs #4907)
+
+- Make the symbol-count pin audit red on a pinned file the scan no longer measures, and drop the three stale pins it found in the hook-await helper table (refs #4907).
+
+</details>
+
 ## [4.5.2] - 2026-11-22
 
 ### Added
