@@ -6703,8 +6703,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		// ends with no request between reach this: pi sends one after each.
 		// #5790: the commit gate's record holds only the parts that report a
 		// finding; both writes below take their blocker text from this list.
-		const gateBlockerParts = blockerParts.filter(
-			(part) => !noFindingParts.has(part),
+		const gateBlockerParts = blockerParts.flatMap((part) =>
+			noFindingParts.has(part) ? [] : [part],
 		);
 		const waiting = duplicate
 			? readTurnEndGuardRecord(cacheManager, runtime, cwd, sessionId).stored
