@@ -46,6 +46,7 @@ import {
 } from "./config-locations.js";
 import {
 	type ConfigDocumentSummary,
+	type ConfigSourceDigest,
 	lspSectionOf,
 	type PiLensConfigResolution,
 	resolveOnePiLensConfigDocument,
@@ -204,6 +205,8 @@ export interface EffectiveConfigView {
 	/** Home-relative when the workspace is under `$HOME`. */
 	readonly cwd: string;
 	readonly documents: readonly EffectiveConfigDocument[];
+	/** Read-time candidate source digests (home-relative when under `$HOME`). */
+	readonly inspectedConfigSources: readonly ConfigSourceDigest[];
 	/** Every resolved leaf's source. Sources only, never values. */
 	readonly provenance: readonly ProvenanceViewEntry[];
 	/** How many leaves each tier decided. The shape `pilens_health` embeds. */
@@ -553,6 +556,10 @@ export async function effectiveConfig(
 	const view: EffectiveConfigView = {
 		cwd: homeRelativeCwd,
 		documents: summary.documents,
+		inspectedConfigSources: resolution.inspectedConfigSources.map((entry) => ({
+			...entry,
+			file: homeRelativePath(entry.file, homeDir),
+		})),
 		provenance: provenanceView(resolved, homeDir).entries,
 		provenanceCounts: summary.countsByTier,
 		// The unknown `dispatch.disabledRunners` ids are records too: the pure
