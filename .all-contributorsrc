@@ -2272,6 +2272,27 @@
       "contributions": [
         "ideas"
       ]
+    },
+    {
+      "login": "Lyapsus",
+      "name": "Yakov Till",
+      "avatar_url": "https://avatars.githubusercontent.com/u/37628546?v=4",
+      "profile": "https://github.com/Lyapsus",
+      "contributions": [
+        "code",
+        "bug",
+        "ideas"
+      ]
+    },
+    {
+      "login": "CloudedQuartz",
+      "name": "Ayan Pande",
+      "avatar_url": "https://avatars.githubusercontent.com/u/73547066?v=4",
+      "profile": "https://github.com/CloudedQuartz",
+      "contributions": [
+        "bug",
+        "ideas"
+      ]
     }
   ]
 }
