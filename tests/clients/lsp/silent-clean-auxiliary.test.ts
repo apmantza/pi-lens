@@ -85,7 +85,11 @@ function makeSilentPushOnlyClient(serverId: string, root: string) {
 				mode: "push-only" as const,
 				diagnosticProviderKind: "none",
 			}),
-			getOperationSupport: () => ({}),
+			// A server the gate may confirm advertises a method the liveness probe can
+			// use (`workspace/symbol` here); the unprobeable case overrides it.
+			getOperationSupport: (): Record<string, boolean> => ({
+				workspaceSymbol: true,
+			}),
 			getAdvertisedCommands: () => [],
 			getRawCapabilityKeys: () => [],
 			getLaunchVariant: () => undefined,
@@ -94,9 +98,16 @@ function makeSilentPushOnlyClient(serverId: string, root: string) {
 			getSentContent: (filePath: string) => sent.get(filePath),
 			hasNotifyInFlight: () => false,
 			notify: {
-				open: vi.fn(async (filePath: string, content: string) => {
-					sent.set(filePath, { hash: hashDiagnosticContent(content) });
-				}),
+				open: vi.fn(
+					async (
+						filePath: string,
+						content: string,
+					): Promise<boolean | void> => {
+						sent.set(filePath, { hash: hashDiagnosticContent(content) });
+					},
+				),
+				// Changed bytes are announced to sibling clients on every touch.
+				announceCreated: vi.fn(),
 			},
 			waitForDiagnostics: vi.fn(async (_filePath: string, ms: number) => {
 				await new Promise<void>((resolve) => {
@@ -143,6 +154,7 @@ function makeAnsweringClient(serverId: string, root: string, filePath: string) {
 				open: vi.fn(async (fp: string, content: string) => {
 					sent.set(fp, { hash: hashDiagnosticContent(content) });
 				}),
+				announceCreated: vi.fn(),
 			},
 			waitForDiagnostics: vi.fn(async () => "answered" as const),
 			getDiagnostics: vi.fn(() => []),
@@ -565,4 +577,147 @@ describe("with-auxiliary silent-clean confirm (per-edit dispatch path)", () => {
 		expect((result as { inconclusive?: boolean }).inconclusive).toBe(true);
 		expect(unprobed.hasUnwithdrawnPushFindings).toHaveBeenCalled();
 	});
+
+	it("a primary whose notify write was superseded is never confirmed clean", async () => {
+		// Recurrence (#5775 review F7, CodeRabbit rzkg): a write that resolved
+		// `false` (#3481: a later read, a closing path, a dead client) leaves the
+		// server without this content, so its silence answers a question it was
+		// never asked. The gate filtered only timed-out writes, so the touch was
+		// reported clean for bytes the server never received.
+		const filePath = path.join(tmp, "j.md");
+		fs.writeFileSync(filePath, "# hi\n");
+		const marksman = makeServer("marksman", ".md", tmp);
+		const typos = makeServer("typos", ".md", tmp, "auxiliary");
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".md") ? [marksman, typos] : [],
+		);
+		const primary = makeSilentPushOnlyClient("marksman", tmp);
+		createLSPClient.mockImplementation(async (opts: { serverId: string }) =>
+			opts.serverId === "typos"
+				? makeAnsweringClient("typos", tmp, filePath).client
+				: primary.client,
+		);
+
+		const service = await loadService();
+		await service.touchFile(filePath, "# hi\n", perEditOptions);
+		// Control: the warm silent primary IS confirmed on unchanged content.
+		const control = await service.touchFile(filePath, "# hi\n", perEditOptions);
+		expect(
+			(control as { inconclusive?: boolean }).inconclusive,
+		).toBeUndefined();
+
+		primary.client.notify.open.mockImplementation(async () => false);
+		primary.client.pingLiveness.mockClear();
+		const result = await service.touchFile(
+			filePath,
+			"# hi, edited\n",
+			perEditOptions,
+		);
+
+		expect(primary.client.notify.open).toHaveBeenCalled();
+		expect((result as { inconclusive?: boolean }).inconclusive).toBe(true);
+		expect(primary.client.pingLiveness).not.toHaveBeenCalled();
+	});
+
+	it("a finding pushed while the liveness probe is in flight is not confirmed over", async () => {
+		// Recurrence (#5775 review F9, CodeRabbit rzks; the #1586 stale-read shape):
+		// the push record was read once before the probe's await, so a finding the
+		// server published during it was certified clean. The decision re-reads the
+		// record with no await between it and the commit.
+		const filePath = path.join(tmp, "l.md");
+		fs.writeFileSync(filePath, "# hi\n");
+		const marksman = makeServer("marksman", ".md", tmp);
+		const typos = makeServer("typos", ".md", tmp, "auxiliary");
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".md") ? [marksman, typos] : [],
+		);
+		const primary = makeSilentPushOnlyClient("marksman", tmp);
+		let pushed = false;
+		let armed = false;
+		primary.client.hasUnwithdrawnPushFindings.mockImplementation(() => pushed);
+		primary.client.pingLiveness.mockImplementation(async () => {
+			if (armed) pushed = true;
+			return true;
+		});
+		createLSPClient.mockImplementation(async (opts: { serverId: string }) =>
+			opts.serverId === "typos"
+				? makeAnsweringClient("typos", tmp, filePath).client
+				: primary.client,
+		);
+
+		const service = await loadService();
+		await service.touchFile(filePath, "# hi\n", perEditOptions);
+		armed = true;
+		const result = await service.touchFile(filePath, "# hi\n", perEditOptions);
+
+		expect(primary.client.pingLiveness).toHaveBeenCalled();
+		expect(pushed).toBe(true);
+		expect((result as { inconclusive?: boolean }).inconclusive).toBe(true);
+	});
+
+	it("a warm primary that advertises no probeable method stays inconclusive", async () => {
+		// Recurrence (#5775 review F8, CodeRabbit rzko): with no method to probe,
+		// `clientPingLiveness` answers from process state alone (client.ts, #1969),
+		// the check the probe exists to strengthen. The gate reads that boolean as
+		// proof, so a server that cannot be asked was certified clean on silence.
+		// The probe still runs, so the `lsp-liveness-probe-unsupported` ledger row
+		// stays the observable record of the downgrade.
+		const filePath = path.join(tmp, "m.md");
+		fs.writeFileSync(filePath, "# hi\n");
+		const marksman = makeServer("marksman", ".md", tmp);
+		const typos = makeServer("typos", ".md", tmp, "auxiliary");
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".md") ? [marksman, typos] : [],
+		);
+		const primary = makeSilentPushOnlyClient("marksman", tmp);
+		primary.client.getOperationSupport = () => ({});
+		createLSPClient.mockImplementation(async (opts: { serverId: string }) =>
+			opts.serverId === "typos"
+				? makeAnsweringClient("typos", tmp, filePath).client
+				: primary.client,
+		);
+
+		const service = await loadService();
+		await service.touchFile(filePath, "# hi\n", perEditOptions);
+		primary.client.pingLiveness.mockClear();
+		const result = await service.touchFile(filePath, "# hi\n", perEditOptions);
+
+		expect(primary.client.pingLiveness).toHaveBeenCalledTimes(1);
+		expect((result as { inconclusive?: boolean }).inconclusive).toBe(true);
+	});
+
+	it.each(["workspaceSymbol", "documentSymbol", "hover"])(
+		"a warm primary whose only probeable method is %s is still confirmed",
+		async (method) => {
+			// Control for the unprobeable refusal (#5775 review F8): each method
+			// `chooseLivenessProbe` can send satisfies it, so the refusal is the
+			// absence of all three and not a preference for one.
+			const filePath = path.join(tmp, `n-.md`);
+			fs.writeFileSync(filePath, "# hi\n");
+			const marksman = makeServer("marksman", ".md", tmp);
+			const typos = makeServer("typos", ".md", tmp, "auxiliary");
+			getServersForFileWithConfig.mockImplementation((fp: string) =>
+				fp.endsWith(".md") ? [marksman, typos] : [],
+			);
+			const primary = makeSilentPushOnlyClient("marksman", tmp);
+			primary.client.getOperationSupport = () => ({ [method]: true });
+			createLSPClient.mockImplementation(async (opts: { serverId: string }) =>
+				opts.serverId === "typos"
+					? makeAnsweringClient("typos", tmp, filePath).client
+					: primary.client,
+			);
+
+			const service = await loadService();
+			await service.touchFile(filePath, "# hi\n", perEditOptions);
+			const result = await service.touchFile(
+				filePath,
+				"# hi\n",
+				perEditOptions,
+			);
+
+			expect(
+				(result as { inconclusive?: boolean }).inconclusive,
+			).toBeUndefined();
+		},
+	);
 });

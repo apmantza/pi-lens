@@ -6577,6 +6577,11 @@ export class LSPService {
 						const outstanding = primaryEntries.filter(
 							(entry) =>
 								!notifyWriteTimedOutServerIds.includes(entry.info.id) &&
+								// #5775 review F7: a write that resolved `false` was SUPERSEDED (#3481),
+								// so the server does not hold this content and its silence answers a
+								// question it was never asked. An unchanged-content skip is not in this
+								// list: the server already holds those bytes.
+								!supersededServerIds.includes(entry.info.id) &&
 								!entry.client.getAllDiagnostics().has(normalizedPath),
 						);
 						if (outstanding.length > 0) {
@@ -6619,15 +6624,37 @@ export class LSPService {
 							// touch, so a finding seen beside an unanswered auxiliary was
 							// forgotten by the next edit. A client that cannot answer the question
 							// is unknown and refuses (`=== false`, never `!== true`).
+							// Read again at the decision, below: the probe's await is a window in
+							// which the server can publish the finding this record names.
+							const noUnwithdrawnFindings = () =>
+								outstanding.every(
+									(entry) =>
+										entry.client.hasUnwithdrawnPushFindings?.(filePath) ===
+										false,
+								);
+							// #5775 review F8: `clientPingLiveness` has nothing to send to a
+							// server that advertises none of the probe's methods and answers
+							// from process state alone (#1969), which is the check the probe
+							// exists to strengthen. That answer is not proof, so a primary
+							// whose snapshot offers no probeable method is refused. The probe
+							// still runs, so `lsp-liveness-probe-unsupported` stays the record.
+							const probeable = outstanding.every((entry) => {
+								const support = snapshots.find(
+									(s) => s.serverId === entry.client.serverId,
+								)?.operationSupport;
+								return (
+									support?.workspaceSymbol === true ||
+									support?.documentSymbol === true ||
+									support?.hover === true
+								);
+							});
 							const judged =
 								primaryClass === "tier3-silent" &&
 								classifiedServerId !== undefined &&
-								outstanding.every(
-									(entry) =>
-										clientsInheritedByTouch.has(entry.client) &&
-										entry.client.hasUnwithdrawnPushFindings?.(filePath) ===
-											false,
-								);
+								outstanding.every((entry) =>
+									clientsInheritedByTouch.has(entry.client),
+								) &&
+								noUnwithdrawnFindings();
 							if (judged) {
 								// #1277: the class is static capability data and cannot tell "silent
 								// because clean" from "silent because wedged", so every
@@ -6657,7 +6684,13 @@ export class LSPService {
 										}
 									}),
 								);
-								if (liveness.every(Boolean)) {
+								// #1586: the record is read again here, with no await between it and
+								// the commit, because the probe's await just ran.
+								if (
+									liveness.every(Boolean) &&
+									probeable &&
+									noUnwithdrawnFindings()
+								) {
 									diagnosticsTimedOut = false;
 									retractPrimaryTimeoutAttribution(); // #1549
 									logLatency({
