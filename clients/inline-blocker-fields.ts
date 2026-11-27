@@ -21,7 +21,9 @@ import { normalizeEphemeralMapKey } from "./path-utils.js";
  * (`retireInlineBlockerOnConfirmedClean`, #4990) both read, so a verdict's
  * coverage and a row's provenance cannot drift apart.
  */
-export function inlineBlockerSourceOf(diagnostic: Diagnostic): string {
+export function inlineBlockerSourceOf(
+	diagnostic: Pick<Diagnostic, "tool">,
+): string {
 	return diagnostic.tool?.trim() || "unknown";
 }
 

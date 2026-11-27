@@ -371,8 +371,13 @@ export function createLensDiagnosticsTool(
 			// #5790 r3: a confirmed clean read of a cascade neighbour is the fresh
 			// observation that retires its pending cascade errors, when it is
 			// newer than the one that recorded them. Without it the next turn end
-			// re-served them on every later turn.
-			forgetCascadePendingNeighbor(info.filePath, info.observedAt);
+			// re-served them on every later turn. Review F2: only the errors the
+			// sources it covered raised.
+			forgetCascadePendingNeighbor(
+				info.filePath,
+				info.observedAt,
+				info.coveredSources,
+			);
 			const runtime = getRuntime?.();
 			if (!runtime) return;
 			const retired = retireInlineBlockerAndResyncGuard({

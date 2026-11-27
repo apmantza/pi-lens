@@ -1708,6 +1708,67 @@ describe("#4725: the record's writers read it whatever its age", () => {
 		}
 	});
 
+	// Recurrence (#5790 review F1): the record checks after the latch named
+	// "Write the affected files again" over text no file owns, a step that
+	// cannot clear it (the reviewer's file_content_changed witness). Each
+	// reason now names the clearing steps; a record whose every section a file
+	// owns keeps the write sentence, which is true there.
+	it.each([
+		["project_sequence_mismatch", "unowned"],
+		["file_sequence_mismatch", "unowned"],
+		["file_content_changed", "unowned"],
+		["project_sequence_mismatch", "owned"],
+		["file_sequence_mismatch", "owned"],
+		["file_content_changed", "owned"],
+	] as const)(
+		"names the steps that clear a record check's refusal over text no file owns (%s, %s)",
+		(reasonCategory, text) => {
+			const env = setupTestEnvironment("pi-lens-git-guard-5790-record-checks-");
+			try {
+				const file = path.join(env.tmpDir, "a.ts");
+				fs.writeFileSync(file, "const x = 1;\n");
+				const runtime = sessionA(env.tmpDir);
+				const cache = new CacheManager(false);
+				const content =
+					text === "owned"
+						? composerSections([file])
+						: "📐 Cascade errors in 1 neighbor file(s) — fix before finishing:\n  b.ts: L3 Cannot find name 'BAD_CALL'.";
+				const fileSeqMoves = reasonCategory === "file_sequence_mismatch";
+				writeGitGuardRecord(
+					cache,
+					runtime,
+					env.tmpDir,
+					record({
+						content,
+						blockerContent: content,
+						hasBlockers: true,
+						affectedFiles: [file],
+						blockingFiles: [file],
+						projectSeqEnd: fileSeqMoves ? 1 : 0,
+					}),
+				);
+				if (reasonCategory === "project_sequence_mismatch") {
+					runtime.bumpFileSeq(path.join(env.tmpDir, "other.ts"));
+				} else if (fileSeqMoves) {
+					runtime.bumpFileSeq(file);
+				} else {
+					fs.writeFileSync(file, "const x = 2;\n");
+				}
+				const reason =
+					evaluateGitGuard(runtime, cache, env.tmpDir).reason ?? "";
+				expect(reason).toContain(`(${reasonCategory})`);
+				if (text === "owned") {
+					expect(reason).toContain("Write the affected files again");
+				} else {
+					expect(reason).not.toContain("Write the affected files again");
+					expect(reason).toContain("no write of one file clears them now.");
+				}
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
+
 	it("caps the files a refusal names and says how many it left out, and names failing tests", () => {
 		// An agent-facing list is bounded and discloses its cut (AGENTS.md
 		// shape 10); a record that also holds test failures says what clears

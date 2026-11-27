@@ -17,6 +17,7 @@ import { BoundedFifoMap } from "./bounded-cache.js";
 import { logLatency } from "./latency-logger.js";
 import { formatCacheAgeLabel } from "./finding-delivery-gate.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
+import { inlineBlockerSourceOf } from "./inline-blocker-fields.js";
 import { normalizeMapKey } from "./path-utils.js";
 import type { LSPDiagnostic } from "./lsp/client.js";
 import { demoteEnvironmentGapDiagnostics } from "./lsp/environment-gap.js";
@@ -739,15 +740,29 @@ export function recordDeliveredCascadeNeighbor(
  * A fresh observation says `filePath` holds no cascade error: a confirmed
  * clean, a late clean publish, or the file's own dispatch after an edit.
  * `observedAt`, when given, must be newer than the record's own observation.
+ * `coveredSources`, when given, are the only sources the observation spoke
+ * for (#5790 review F2): only the errors they raised retire, by the same
+ * per-row rule the inline blocker store uses (#4990), and an empty list
+ * retires nothing. Omitted, the observation covered the whole pipeline.
  */
 export function forgetCascadePendingNeighbor(
 	filePath: string,
 	observedAt?: number,
+	coveredSources?: readonly string[],
 ): void {
 	const key = normalizeMapKey(filePath);
 	const entry = pendingNeighbors.get(key);
 	if (!entry) return;
 	if (observedAt !== undefined && observedAt <= entry.checkedAt) return;
+	if (coveredSources !== undefined) {
+		const covered = new Set(coveredSources);
+		for (const [errorKey, stored] of entry.errors) {
+			if (covered.has(inlineBlockerSourceOf(stored.identity))) {
+				entry.errors.delete(errorKey);
+			}
+		}
+		if (entry.errors.size > 0) return;
+	}
 	pendingNeighbors.delete(key);
 }
 

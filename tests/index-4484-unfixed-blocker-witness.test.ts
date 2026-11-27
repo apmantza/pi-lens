@@ -3755,4 +3755,76 @@ describe("#5790 witness: a cascade note with no finding does not hold the commit
 		}
 		await fixAndDrain(s);
 	}, 120_000);
+
+	// Recurrence (#5790 review F1, the reviewer's witness): a file of the
+	// record edited outside pi after the turn end reaches the
+	// file_content_changed refusal, which named "Write the affected files
+	// again" while the record held a neighbour's error no write clears.
+	it("names the clearing steps when a file of a held record changes outside pi", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("cc", TARGET, TARGET_FIXED);
+		removeNeighbourOnCleanup();
+		fs.writeFileSync(path.join(tmpDir, NEIGHBOUR), NEIGHBOUR_BAD);
+		// A clean edit of the target: the only blocker is the neighbour's.
+		expect(await s.write(TARGET_FIXED + "export const d = 4;\n")).not.toContain(
+			"🔴 STOP",
+		);
+		expect(await s.endTurn()).toContain(CASCADE_ERRORS);
+		fs.writeFileSync(s.target, TARGET_FIXED);
+		const refusal = await s.commitReason();
+		expect(refusal).toContain("(file_content_changed)");
+		expect(refusal).not.toContain("Write the affected files again");
+		expect(refusal).toContain(HOLD_REMEDY);
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence (#5790 review F2): a source=lsp probe covers the sources its
+	// servers answered for, so it retires only the pending rows those sources
+	// raised. A knip row it never observed stayed forgotten with the lsp ones.
+	it.each([
+		[["knip"], ["knip"]],
+		[["lsp", "knip"], ["knip"]],
+		[["lsp"], []],
+		[[""], [""]],
+	] as const)(
+		"retires only the pending neighbour rows a source=lsp probe covered (%j keeps %j)",
+		async (tools, kept) => {
+			boundary.lsp.enabled = true;
+			const s = await openSession(
+				"cv" + tools.join("").length,
+				TARGET,
+				TARGET_FIXED,
+			);
+			removeNeighbourOnCleanup();
+			const neighbour = path.join(tmpDir, NEIGHBOUR);
+			fs.writeFileSync(neighbour, NEIGHBOUR_FIXED);
+			const pendingTools = () =>
+				listCascadePendingNeighbors()
+					.filter((e) => e.filePath === neighbour)
+					.flatMap((e) => e.errors.map((error) => error.tool));
+			try {
+				recordDeliveredCascadeNeighbor(
+					neighbour,
+					tools.map((tool, index) => ({
+						id: tool + ":" + index,
+						message: "finding " + index,
+						filePath: neighbour,
+						line: index + 1,
+						column: 1,
+						severity: "error" as const,
+						semantic: "blocking" as const,
+						tool,
+					})),
+					0,
+					Date.now() - 60_000,
+				);
+				expect(await s.settleOther(NEIGHBOUR)).toMatch(/confirmed clean/);
+				expect(pendingTools()).toEqual(kept);
+			} finally {
+				forgetCascadePendingNeighbor(neighbour);
+			}
+			await fixAndDrain(s);
+		},
+		120_000,
+	);
 });
