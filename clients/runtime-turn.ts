@@ -1548,8 +1548,30 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		`turn_end: ${files.length} file(s) modified, cycles: ${turnState.turnCycles}/${turnState.maxCycles}, access: ${access}, owner: ${gateOwnerLabel}`,
 	);
 
+	/**
+	 * #5804: settle each write on the worklist against the cascade record, on
+	 * every turn_end that holds one. A write a language server answered for
+	 * drops the file's record (its own dispatch reports what is left); an
+	 * unanswered one keeps it, stamped `at`. The record this turn_end builds
+	 * for a `carried` file takes that stamp too, so pi's own write never reads
+	 * as an edit outside pi once the worklist is cleared (#5812 verify F4).
+	 */
+	const settleWorklistWrites = (at: number) => {
+		const answered = new Set<string>();
+		const carried = new Set<string>();
+		for (const file of files) {
+			const absolute = path.resolve(cwd, file);
+			const key = normalizeMapKey(absolute);
+			if (settleCascadePendingAfterWrite(absolute, at)) answered.add(key);
+			else carried.add(key);
+		}
+		return { answered, carried };
+	};
+
 	if (cacheManager.isMaxCyclesExceeded(cwd, turnStateSessionId)) {
 		dbg("turn_end: max cycles exceeded, clearing state and forcing through");
+		// The forced turn_end drops the worklist too, so it settles it first.
+		settleWorklistWrites(Date.now());
 		clearOwnedTurnState();
 		runtime.fixedThisTurn.clear();
 		resetFormatService();
@@ -2376,14 +2398,10 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// keeps none for it. #5804: only when a language server answered for that
 	// write. A write with no answer (inconclusive, crashed, timed out,
 	// superseded, never dispatched) says nothing about the errors the record
-	// holds, so they stay, carried to the write's read time.
-	const editedKeys = new Set<string>();
+	// holds, so they stay, carried to this turn_end (`settleWorklistWrites`).
 	const settleAt = Date.now();
-	for (const file of files) {
-		const absolute = path.resolve(cwd, file);
-		if (settleCascadePendingAfterWrite(absolute, settleAt))
-			editedKeys.add(normalizeMapKey(absolute));
-	}
+	const { answered: editedKeys, carried: carriedKeys } =
+		settleWorklistWrites(settleAt);
 	// The latest result per primary (last writer wins).
 	const seen = new Map<string, CascadeResult>();
 	for (const result of cascadeResults) {
@@ -2615,13 +2633,18 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					// with the run's read bound, never the delivery time, which
 					// would postdate a write landing between the read and now. A
 					// run with no read bound records 0, so it never passes the
-					// freshness gate as unchanged.
+					// freshness gate as unchanged. #5804: a file pi wrote with no
+					// server answer is stamped no earlier than the settle, like the
+					// record the settle kept for it (#5812 verify F4).
 					for (const o of sectionObservations) {
+						const readBound = o.checkedAt ?? 0;
 						recordDeliveredCascadeNeighbor(
 							o.filePath,
 							o.diagnostics,
 							cascadeTurn,
-							o.checkedAt ?? 0,
+							carriedKeys.has(normalizeMapKey(o.filePath))
+								? Math.max(readBound, settleAt)
+								: readBound,
 						);
 					}
 				},

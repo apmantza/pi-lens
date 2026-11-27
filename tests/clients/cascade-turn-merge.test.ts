@@ -1483,15 +1483,20 @@ describe("cascade_indeterminate attribution (#1550)", () => {
  * that persist across turns.
  */
 describe("cascade delivery at turn_end (#4485, #4487)", () => {
+	/**
+	 * `consume: false` leaves the message waiting in the slot, as when no
+	 * request took it before the next turn_end; `dbg` receives the debug lines.
+	 */
 	async function turnEndOf(
 		runtime: RuntimeCoordinator,
 		cacheManager: CacheManager,
 		cwd: string,
+		opts: { consume?: boolean; dbg?: (line: string) => void } = {},
 	): Promise<string> {
 		await handleTurnEnd({
 			ctxCwd: cwd,
 			getFlag: () => false,
-			dbg: () => {},
+			dbg: opts.dbg ?? (() => {}),
 			runtime,
 			cacheManager,
 			knipClient: {
@@ -1504,6 +1509,7 @@ describe("cascade delivery at turn_end (#4485, #4487)", () => {
 			resetLSPService: () => {},
 			resetFormatService: () => {},
 		} as any);
+		if (opts.consume === false) return "";
 		return (
 			consumeTurnEndFindings(cacheManager, cwd)?.messages[0]?.content ?? ""
 		);
@@ -2865,6 +2871,165 @@ describe("cascade delivery at turn_end (#4485, #4487)", () => {
 			} as any);
 			edit(cacheManager, n1, env.tmpDir, false);
 			await turnEndOf(runtime, cacheManager, env.tmpDir);
+			const { listCascadePendingNeighbors } =
+				await import("../../clients/cascade-format.js");
+			expect(
+				listCascadePendingNeighbors().map((entry) => entry.errorCount),
+			).toEqual([1]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	/**
+	 * #5812 verify F4 rig: n1 exists from long ago; a turn edits a.ts, whose
+	 * run read n1's `message` a second ago, and pi may then write n1 with no
+	 * server answer (after the read, so past the gate's mtime tolerance).
+	 */
+	async function observeN1Turn(
+		runtime: RuntimeCoordinator,
+		cacheManager: CacheManager,
+		cwd: string,
+		message: string,
+		opts: {
+			piWritesN1?: boolean;
+			consume?: boolean;
+			dbg?: (line: string) => void;
+		} = {},
+	): Promise<string> {
+		const a = path.join(cwd, "a.ts");
+		const n1 = path.join(cwd, "n1.ts");
+		if (!fs.existsSync(n1)) {
+			fs.writeFileSync(n1, "export const n = 1;\n");
+			const longAgo = new Date(Date.now() - 60_000);
+			fs.utimesSync(n1, longAgo, longAgo);
+		}
+		runtime.beginTurn();
+		edit(cacheManager, a, cwd);
+		runtime.appendCascadeRun({
+			filePath: a,
+			result: await computedResult(cwd, a, [[n1, [message]]]),
+			neighborCount: 1,
+			diagnosticCount: 1,
+			observedNeighborPaths: [n1],
+			checkedAt: Date.now() - 1_000,
+		} as any);
+		if (opts.piWritesN1) edit(cacheManager, n1, cwd, false);
+		return turnEndOf(runtime, cacheManager, cwd, opts);
+	}
+
+	/** A later turn that edits c.ts, whose run does not cover n1. */
+	async function unrelatedTurn(
+		runtime: RuntimeCoordinator,
+		cacheManager: CacheManager,
+		cwd: string,
+	): Promise<string> {
+		const c = path.join(cwd, "c.ts");
+		runtime.beginTurn();
+		edit(cacheManager, c, cwd);
+		runtime.appendCascadeRun({
+			filePath: c,
+			result: undefined,
+			neighborCount: 0,
+			diagnosticCount: 0,
+			observedNeighborPaths: [],
+			checkedAt: Date.now(),
+		} as any);
+		return turnEndOf(runtime, cacheManager, cwd);
+	}
+
+	// Recurrence (#5812 verify F4, repeat path): a repeat delivery clears the
+	// worklist, so no later settle restamped the record this turn_end built
+	// from the run's read before pi's unanswered write. The next turn read
+	// pi's own write as an edit outside pi, named it once and forgot the error.
+	it("a neighbour pi writes unanswered on a repeat turn keeps its error after the worklist clears", async () => {
+		const env = setupTestEnvironment("cascade-5804-repeat-clear-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			const cacheManager = new CacheManager(false);
+			const cwd = env.tmpDir;
+			await observeN1Turn(runtime, cacheManager, cwd, "n1 error");
+			await observeN1Turn(runtime, cacheManager, cwd, "n1 error");
+			expect(
+				await observeN1Turn(runtime, cacheManager, cwd, "n1 error", {
+					piWritesN1: true,
+				}),
+			).toContain("Still unresolved (already reported on an earlier turn");
+			const text = await unrelatedTurn(runtime, cacheManager, cwd);
+			expect(text).toContain("n1.ts: 1 error(s) unresolved");
+			expect(text).not.toContain("changed since checked");
+			const { listCascadePendingNeighbors } =
+				await import("../../clients/cascade-format.js");
+			expect(
+				listCascadePendingNeighbors().map((entry) => entry.errorCount),
+			).toEqual([1]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// Recurrence (#5812 verify F4, duplicate path): the same turn content while
+	// the first delivery still waits in the slot takes the plain suppression,
+	// which clears the worklist after the record was built from the pre-write
+	// read; the error was named once and forgotten.
+	it("a neighbour pi writes unanswered on a suppressed duplicate turn keeps its error after the worklist clears", async () => {
+		const env = setupTestEnvironment("cascade-5804-duplicate-clear-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			const cacheManager = new CacheManager(false);
+			const cwd = env.tmpDir;
+			const lines: string[] = [];
+			await observeN1Turn(runtime, cacheManager, cwd, "n1 error");
+			await observeN1Turn(runtime, cacheManager, cwd, "n1 error", {
+				consume: false,
+			});
+			await observeN1Turn(runtime, cacheManager, cwd, "n1 error", {
+				piWritesN1: true,
+				consume: false,
+				dbg: (line) => lines.push(line),
+			});
+			expect(lines).toContain(
+				"turn_end: duplicate findings detected (same session), suppressing re-prompt",
+			);
+			consumeTurnEndFindings(cacheManager, cwd);
+			const text = await unrelatedTurn(runtime, cacheManager, cwd);
+			expect(text).toContain("n1.ts: 1 error(s) unresolved");
+			expect(text).not.toContain("changed since checked");
+			const { listCascadePendingNeighbors } =
+				await import("../../clients/cascade-format.js");
+			expect(
+				listCascadePendingNeighbors().map((entry) => entry.errorCount),
+			).toEqual([1]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// Recurrence (#5812 verify F4, max-cycles path): the forced-through turn_end
+	// returns before the settle, so pi's unanswered write of a neighbour in
+	// that turn was never settled; the next turn read it as an edit outside
+	// pi, named it once and forgot the error.
+	it("a neighbour pi writes unanswered on a max-cycles turn keeps its error after the worklist clears", async () => {
+		const env = setupTestEnvironment("cascade-5804-max-cycles-clear-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			const cacheManager = new CacheManager(false);
+			const cwd = env.tmpDir;
+			const lines: string[] = [];
+			// Three fresh blocker turns keep the worklist and use up the cycles.
+			for (const turn of [1, 2, 3])
+				await observeN1Turn(runtime, cacheManager, cwd, `n1 error ${turn}`);
+			runtime.beginTurn();
+			edit(cacheManager, path.join(cwd, "n1.ts"), cwd, false);
+			await turnEndOf(runtime, cacheManager, cwd, {
+				dbg: (line) => lines.push(line),
+			});
+			expect(lines).toContain(
+				"turn_end: max cycles exceeded, clearing state and forcing through",
+			);
+			const text = await unrelatedTurn(runtime, cacheManager, cwd);
+			expect(text).toContain("n1.ts: 1 error(s) unresolved");
+			expect(text).not.toContain("changed since checked");
 			const { listCascadePendingNeighbors } =
 				await import("../../clients/cascade-format.js");
 			expect(
