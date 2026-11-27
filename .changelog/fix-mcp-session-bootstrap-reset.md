@@ -1,6 +1,7 @@
 ---
 section: Fixed
-audience: internal
+audience: user
+area: config
 ---
 
-- Guard MCP session bootstrap with a `createGenerationSource("mcp-session-bootstrap")` fence and `session_scope_transition` retirement so `_resetMcpSessionContext()` during an in-flight `loadBootstrapClients()` rejects the stale bootstrap instead of republishing `resolvedRuntime` or clearing a successor `contextPromise`, and expose `MAX_CONFIG_BYTES`-bounded `contributingConfigSources` digests (distinguishing absent from present-but-unreadable candidates) on `resolvePiLensConfig`.
+- **MCP sessions now reset when config files change.** `resolvePiLensConfig` records 3-state `inspectedConfigSources` digests (`absent`, `unreadable`, and `readable` with `parsed`, `sha256`, and `byteLength`), `pilens_effective_config` surfaces them home-relativized, and MCP session entry points reset any cached or in-flight bootstrap context with `mcp-session-reset` whenever inspected sources change. (refs #1570, #2426)

@@ -156,7 +156,10 @@ the requested window.
    `storeNames`, and `chosen`), `session_store_action` (one per declared store
    per primary start: `action` `adopt`/`reset`/`skip`, `payloadPresent`,
    `itemsIn`/`itemsKept`/`itemsDropped`), `session_scope_transition` with the
-   `end` (a scope superseded without a shutdown) and `demote` (a start in a
+   `end` (`superseded` when a pi scope is superseded without a shutdown, or
+   `mcp-session-reset` / `mcp-session-bootstrap-failed` when an MCP session
+   scope retires on reset, config change, or bootstrap failure) and `demote`
+   (a start in a
    replacement gap that is not the successor the shutdown named: a subagent
    that binds in the gap is one, a real successor an interrupting reload
    displaced is another; a subagent beside a live primary writes none)
