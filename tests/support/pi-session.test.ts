@@ -1,3 +1,4 @@
+import { LSP_SERVERS } from "../../clients/lsp/server.js";
 /**
  * The contract of the tier-2 helper itself (#4632): a real `AgentSession` over
  * the BUILT extension, a scripted provider at the boundary, in process.
@@ -710,7 +711,9 @@ describe("pi-session: the built extension in a real AgentSession (#4632)", () =>
 		const pinnedHome = process.env.PI_LENS_HOME;
 		process.env.PI_LENS_HOME = path.join(fixture.root, "home");
 		try {
-			expect(await sweepUntrackedOrphans()).toBe("cooldown");
+			expect(
+				await sweepUntrackedOrphans({ getServers: async () => LSP_SERVERS }),
+			).toBe("cooldown");
 		} finally {
 			if (pinnedHome === undefined) delete process.env.PI_LENS_HOME;
 			else process.env.PI_LENS_HOME = pinnedHome;

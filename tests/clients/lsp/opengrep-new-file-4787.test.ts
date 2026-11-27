@@ -37,9 +37,12 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../../clients/degradation-ledger.js";
-import { createLSPClient } from "../../../clients/lsp/client.js";
+import {
+	killProcessTree,
+	createLSPClient,
+} from "../../../clients/lsp/client.js";
 import { LSPService } from "../../../clients/lsp/index.js";
-import { stopLSP } from "../../../clients/lsp/launch.js";
+
 import { _setServersForFileForTests } from "../../../clients/lsp/config.js";
 import { spawnFakeLspServer } from "../../support/fake-lsp-server.js";
 import { waitFor } from "../interleaving-kit.js";
@@ -73,7 +76,7 @@ describe("opengrep hears a file created after spawn (#4787)", () => {
 	afterEach(async () => {
 		await client?.shutdown().catch(() => {});
 		await service?.shutdown({ fast: true }).catch(() => {});
-		if (proc) await stopLSP(proc).catch(() => {});
+		if (proc) await killProcessTree(proc.process, proc.pid).catch(() => {});
 		client = undefined;
 		service = undefined;
 		proc = undefined;

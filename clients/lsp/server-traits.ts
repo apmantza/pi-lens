@@ -310,3 +310,9 @@ export function serverTraits(
 		resendRecheck: declaration.resendRecheck ?? DEFAULT_RESEND_RECHECK,
 	};
 }
+
+/** Registry-owned command markers and OS images for the orphan backstop. */
+export interface LspOrphanProcess {
+	names: readonly string[];
+	images: readonly string[];
+}

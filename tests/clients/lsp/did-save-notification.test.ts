@@ -36,6 +36,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+	killProcessTree,
 	createLSPClient,
 	handleNotifyChange,
 	handleNotifyOpen,
@@ -43,7 +44,7 @@ import {
 	sentContentFor,
 	type LSPClientState,
 } from "../../../clients/lsp/client.js";
-import { stopLSP } from "../../../clients/lsp/launch.js";
+
 import { normalizeMapKey } from "../../../clients/path-utils.js";
 import {
 	negotiateSaveOptions,
@@ -589,7 +590,7 @@ describe("didSave through the real createLSPClient init path (#3405)", () => {
 			);
 		} finally {
 			await client.shutdown().catch(() => {});
-			await stopLSP(proc).catch(() => {});
+			await killProcessTree(proc.process, proc.pid).catch(() => {});
 		}
 	}, 15_000);
 
@@ -632,7 +633,7 @@ describe("didSave through the real createLSPClient init path (#3405)", () => {
 			expect(recorder.saves).toEqual([]);
 		} finally {
 			await client.shutdown().catch(() => {});
-			await stopLSP(proc).catch(() => {});
+			await killProcessTree(proc.process, proc.pid).catch(() => {});
 		}
 	}, 15_000);
 
@@ -678,7 +679,7 @@ describe("didSave through the real createLSPClient init path (#3405)", () => {
 			]);
 		} finally {
 			await client.shutdown().catch(() => {});
-			await stopLSP(proc).catch(() => {});
+			await killProcessTree(proc.process, proc.pid).catch(() => {});
 		}
 	}, 15_000);
 
@@ -721,7 +722,7 @@ describe("didSave through the real createLSPClient init path (#3405)", () => {
 			expect(client.getDiagnostics(filePath)).toEqual([]);
 		} finally {
 			await client.shutdown().catch(() => {});
-			await stopLSP(proc).catch(() => {});
+			await killProcessTree(proc.process, proc.pid).catch(() => {});
 		}
 	}, 15_000);
 });

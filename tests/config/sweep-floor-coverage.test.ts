@@ -192,6 +192,22 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 		"reaper behavior cases; one case lists its own fixture home's backstop " +
 		"lock directory and asserts a settled sweep left no canonical or " +
 		"quarantine name (#4581), not a production source-population sweep",
+	// #5699: these four pass the built-in catalog (`LSP_SERVERS`) to the reaper
+	// as its required `getServers` argument. The symbol alone made the census
+	// read them as registry sweeps; none enumerates the registry.
+	"tests/clients/instance-reaper-pid-reuse.test.ts":
+		"real-process reaper behavior cases; LSP_SERVERS is only the catalog " +
+		"handed to the sweep (#5699), not a production source-population sweep",
+	"tests/clients/system32-exe-seam-fold.test.ts":
+		"Windows launch-form cells over the real reaper; LSP_SERVERS is only the " +
+		"catalog handed to the sweep and the spared forms expect no taskkill " +
+		"(#5699), not a production source-population sweep",
+	"tests/clients/instance-reaper-unref.test.ts":
+		"reaper spawn-unref behavior cases; LSP_SERVERS is only the catalog " +
+		"handed to the sweep (#5699), not a production source-population sweep",
+	"tests/support/pi-session.test.ts":
+		"tier-2 session helper contract cases; LSP_SERVERS is only the catalog " +
+		"handed to one sweep call (#5699), not a production source-population sweep",
 	"tests/clients/instance-registry-lock.test.ts":
 		"lock behavior cases; it lists one lock directory and asserts an empty " +
 		"degradation ledger, not a production population sweep",

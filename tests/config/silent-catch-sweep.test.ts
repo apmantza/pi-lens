@@ -819,10 +819,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	// #5689 changes the global lookup arguments in the existing fallback;
 	// the same eight handlers remain, with no new silent handler admitted.
 	"clients/lsp/launch.ts": {
-		silent: 8,
-		identities: "4fee9037ac58efe8",
+		silent: 5,
+		identities: "cd4b860e88e687cc",
 		reason: PRE_RULE,
-	}, // :244, :564, :942, :948, :1199, :1424, :1435, :1446
+	}, // #5699 removes stopLSP and its three silent handlers.
 	"clients/lsp/lombok.ts": {
 		silent: 6,
 		identities: "a076d98b1826881f",

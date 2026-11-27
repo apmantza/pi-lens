@@ -8,10 +8,13 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../../clients/degradation-ledger.js";
-import { createLSPClient } from "../../../clients/lsp/client.js";
+import {
+	killProcessTree,
+	createLSPClient,
+} from "../../../clients/lsp/client.js";
 import { LSPService } from "../../../clients/lsp/index.js";
 import { LspRequestTimeoutError } from "../../../clients/lsp/request-timeout-error.js";
-import { stopLSP } from "../../../clients/lsp/launch.js";
+
 import { spawnFakeLspServer } from "../../support/fake-lsp-server.js";
 import type { RenameClientDouble } from "../../support/lsp-rename-client-double.js";
 import {
@@ -254,7 +257,7 @@ describe("LSPService.renameFile", () => {
 				expect(reasons, testCase.name).toEqual([...testCase.expected]);
 			} finally {
 				await client.shutdown().catch(() => {});
-				await stopLSP(proc).catch(() => {});
+				await killProcessTree(proc.process, proc.pid).catch(() => {});
 				removeTempDirSync(tmpDir);
 			}
 		}

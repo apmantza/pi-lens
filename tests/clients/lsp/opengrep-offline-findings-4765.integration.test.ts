@@ -66,8 +66,11 @@ import {
 } from "../../../clients/degradation-ledger.js";
 import { refreshOpengrepRulePack } from "../../../clients/installer/managed-tool-refresh.js";
 import { resetManagedToolRefreshSession } from "../../../clients/installer/managed-tool-refresh-session.js";
-import { createLSPClient } from "../../../clients/lsp/client.js";
-import { stopLSP } from "../../../clients/lsp/launch.js";
+import {
+	killProcessTree,
+	createLSPClient,
+} from "../../../clients/lsp/client.js";
+
 import { OpengrepServer } from "../../../clients/lsp/server.js";
 import {
 	resetProjectTrust,
@@ -271,7 +274,9 @@ async function spawnClient(project: string, file: string) {
 	});
 	cleanups.push(async () => {
 		await client.shutdown().catch(() => undefined);
-		await stopLSP(launched.process).catch(() => undefined);
+		await killProcessTree(launched.process.process, launched.process.pid).catch(
+			() => undefined,
+		);
 	});
 	await client.notify.open(file, PLANTED, "python");
 	const configuration = (

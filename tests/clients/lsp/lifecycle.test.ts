@@ -5,11 +5,12 @@
  * These are smoke tests — full protocol testing requires a real language server.
  */
 
+import { killProcessTree } from "../../../clients/lsp/client.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { launchLSP, stopLSP } from "../../../clients/lsp/launch.js";
+import { launchLSP } from "../../../clients/lsp/launch.js";
 
 // Every test here spawns a real OS process (launchLSP uses `shell: true` on
 // Windows → cmd.exe). In isolation the whole file runs in <4s, but under the
@@ -52,7 +53,7 @@ describe("LSP Launch", () => {
 			expect(proc.stderr).toBeDefined();
 
 			// Clean up
-			await stopLSP(proc);
+			await killProcessTree(proc.process, proc.pid);
 			fs.unlinkSync(scriptPath);
 		},
 	);
@@ -78,7 +79,7 @@ describe("LSP Launch", () => {
 	);
 
 	it(
-		"stopLSP kills the process",
+		"production teardown kills the process",
 		{ timeout: SPAWN_TEST_TIMEOUT_MS },
 		async () => {
 			const scriptPath = path.join(
@@ -90,7 +91,7 @@ describe("LSP Launch", () => {
 			const proc = await launchLSP(process.execPath, [scriptPath]);
 
 			expect(proc.process.killed).toBe(false);
-			await stopLSP(proc);
+			await killProcessTree(proc.process, proc.pid);
 			expect(
 				proc.process.killed ||
 					proc.process.exitCode !== null ||
@@ -102,7 +103,7 @@ describe("LSP Launch", () => {
 	);
 
 	it(
-		"stopLSP returns when the process already exited",
+		"production teardown returns when the process already exited",
 		{ timeout: SPAWN_TEST_TIMEOUT_MS },
 		async () => {
 			const scriptPath = path.join(
@@ -118,7 +119,9 @@ describe("LSP Launch", () => {
 				proc.process.once("exit", () => resolve()),
 			);
 
-			await expect(stopLSP(proc)).resolves.toBeUndefined();
+			await expect(
+				killProcessTree(proc.process, proc.pid),
+			).resolves.toBeUndefined();
 
 			fs.unlinkSync(scriptPath);
 		},

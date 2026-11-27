@@ -2961,7 +2961,12 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// measured at 9344ms on the session_start critical path, exactly
 					// overlapping and starving `warmup_language_profile`. It now fires on
 					// an unref'd timer well after warmup, under a machine-wide cooldown.
-					scheduleUntrackedOrphanSweep();
+					scheduleUntrackedOrphanSweep(undefined, {
+						getServers: () =>
+							import("./clients/lsp/server.js").then(
+								({ LSP_SERVERS }) => LSP_SERVERS,
+							),
+					});
 					// #449 slice 2 (prototype): machine-wide LSP budget check. Reads the
 					// same registry, decides locally whether THIS session should skip
 					// spawning auxiliary LSP servers, and caches the decision for

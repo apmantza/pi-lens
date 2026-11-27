@@ -18,8 +18,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createLSPClient } from "../../../clients/lsp/client.js";
-import { stopLSP } from "../../../clients/lsp/launch.js";
+import {
+	killProcessTree,
+	createLSPClient,
+} from "../../../clients/lsp/client.js";
+
 import { spawnFakeLspServer } from "../../support/fake-lsp-server.js";
 
 const BOM = "\uFEFF";
@@ -80,7 +83,7 @@ describe("#5151 the bytes that leave the process", () => {
 			return { echoed, lines };
 		} finally {
 			await client.shutdown().catch(() => {});
-			await stopLSP(proc).catch(() => {});
+			await killProcessTree(proc.process, proc.pid).catch(() => {});
 		}
 	}
 

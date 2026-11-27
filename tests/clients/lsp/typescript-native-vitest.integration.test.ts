@@ -18,8 +18,11 @@ vi.mock("../../../clients/latency-logger.js", async (importActual) => ({
 	}),
 }));
 
-import { createLSPClient } from "../../../clients/lsp/client.js";
-import { stopLSP } from "../../../clients/lsp/launch.js";
+import {
+	killProcessTree,
+	createLSPClient,
+} from "../../../clients/lsp/client.js";
+
 import { normalizeMapKey } from "../../../clients/lsp/path-utils.js";
 import { TypeScriptServer } from "../../../clients/lsp/server.js";
 
@@ -52,7 +55,11 @@ describe.skipIf(!RUN_LIVE_NATIVE_TS7)(
 
 		afterAll(async () => {
 			if (client) await client.shutdown().catch(() => {});
-			if (spawned) await stopLSP(spawned.process).catch(() => {});
+			if (spawned)
+				await killProcessTree(
+					spawned.process.process,
+					spawned.process.pid,
+				).catch(() => {});
 			fs.rmSync(projectRoot, { recursive: true, force: true });
 		});
 

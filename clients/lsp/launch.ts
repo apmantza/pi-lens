@@ -35,16 +35,11 @@ import {
 } from "../degradation-ledger.js";
 import { getProjectTrustState } from "../project-trust.js";
 import { logExtension } from "../extension-log.js";
-import {
-	OWNER_TAG_ENV,
-	ownerTagForChildren,
-	windowsExe,
-} from "../process-snapshot.js";
+import { OWNER_TAG_ENV, ownerTagForChildren } from "../process-snapshot.js";
 import { redactSecrets } from "../redact/secrets.js";
 import {
 	classifySpawnFailure,
 	holdOwnChildPid,
-	isOwnLiveChild,
 	mergeWindowsEnvironment,
 	resolveSearchPathCommand,
 	resolveWindowsCommandForEnvironment,
@@ -939,7 +934,7 @@ function trySpawn(
 	// #3091 F1-r2: take ownership HERE, while the child is provably alive. LSP
 	// servers are the one long-lived child pi-lens spawns outside
 	// `safeSpawnAsync`, so without this their first offer of verification is
-	// `stopLSP`'s group kill — by which time, on the `processExiting` path, the
+	// `killProcessTree`'s group kill — by which time, on the `processExiting` path, the
 	// leader can already be dead, `/proc` is gone, and the group signal that
 	// reaps surviving grandchildren (#2026) is refused. The verdict is released
 	// by `killProcessTree` when the shutdown ladder is done with the pid.
@@ -1400,94 +1395,4 @@ export async function launchViaPython(
 	// On Windows, prefer 'py' launcher, fall back to 'python'
 	const pythonCmd = process.platform === "win32" ? "py" : "python3";
 	return launchLSP(pythonCmd, ["-m", moduleName, ...args], options);
-}
-
-/**
- * Stop an LSP process gracefully
- */
-export async function stopLSP(handle: LSPProcess): Promise<void> {
-	if (handle.process.exitCode !== null || handle.process.signalCode !== null) {
-		return;
-	}
-
-	return new Promise((resolve) => {
-		let settled = false;
-		let forceTimeout: ReturnType<typeof setTimeout> | undefined;
-		let giveUpTimeout: ReturnType<typeof setTimeout> | undefined;
-
-		const done = () => {
-			if (settled) return;
-			settled = true;
-			if (forceTimeout) clearTimeout(forceTimeout);
-			if (giveUpTimeout) clearTimeout(giveUpTimeout);
-			handle.process.off("exit", done);
-			handle.process.off("error", done);
-			resolve();
-		};
-
-		handle.process.once("exit", done);
-		handle.process.once("error", done);
-
-		const killWindowsTree = (): boolean => {
-			if (!isWindows) return false;
-			// If our child has already exited, its PID is dead and the OS may have
-			// RECYCLED it to an unrelated process. `taskkill /F /T` on a recycled PID
-			// force-kills that process AND its whole tree — in the test suite this
-			// occasionally nuked a vitest worker fork ("Worker exited unexpectedly",
-			// no fatal dump, e.g. via the "stopLSP after the process already exited"
-			// path); in production it could kill an unrelated user process. Never
-			// tree-kill a PID we no longer own — fall back to handle.process.kill(),
-			// which on Windows signals via the retained process HANDLE (not the raw
-			// PID), so it's a safe no-op on an already-exited child.
-			//
-			// #2042 folded the sign check and this exited check into the one
-			// ownership predicate every kill-by-raw-pid now shares; the handle
-			// arm below IS this paragraph, and on Windows it is the only
-			// ownership evidence available (there is no /proc to read).
-			if (!isOwnLiveChild(handle.pid, "lsp-stop-windows-tree", handle.process))
-				return false;
-			try {
-				// Absolute path avoids PATH-resolution substitution on Windows.
-				const taskkill = windowsExe("taskkill.exe");
-				const killer = nodeSpawn(
-					taskkill,
-					["/F", "/T", "/PID", String(handle.pid)],
-					{
-						shell: false,
-						windowsHide: true,
-					},
-				);
-				killer.once("error", done);
-				return true;
-			} catch {
-				return false;
-			}
-		};
-
-		try {
-			// On Windows, kill the tree first; killing the direct child can orphan
-			// grandchildren (e.g. tsserver.js behind a cmd/npm shim).
-			if (!killWindowsTree()) {
-				handle.process.kill("SIGTERM");
-			}
-		} catch {
-			done();
-			return;
-		}
-
-		forceTimeout = setTimeout(() => {
-			if (settled) return;
-			try {
-				if (!killWindowsTree()) {
-					handle.process.kill("SIGKILL");
-				}
-			} catch {
-				done();
-				return;
-			}
-			// If the process had already exited before listeners were attached, no
-			// exit event will arrive. Resolve rather than hanging test cleanup forever.
-			giveUpTimeout = setTimeout(done, 500);
-		}, 5000);
-	});
 }
