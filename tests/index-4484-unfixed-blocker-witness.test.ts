@@ -503,6 +503,7 @@ import {
 	flushLatencyLog,
 	getLatencyLogPath,
 } from "../clients/latency-logger.js";
+import { CacheManager } from "../clients/cache-manager.js";
 import { getDegradationSummary } from "../clients/degradation-ledger.js";
 import { exportWidgetState } from "../clients/widget-state.js";
 import { removeTempDirSync } from "./clients/test-utils.js";
@@ -3254,6 +3255,9 @@ describe("#5784 witness: an unconfirmed carried blocker is not replayed verbatim
 			/confirmed clean/,
 		);
 		expect(await s.sessionDiagnostics()).not.toContain(RECORD_HELD);
+		// #5790: the settle that retires the record opens the commit gate in the
+		// same step, not at the next turn end.
+		expect(await s.commitBlocked()).toBe(false);
 		await s.write(V_FIXED);
 		await fixAndDrain(s);
 	}, 120_000);
@@ -3544,6 +3548,94 @@ describe("#5784 witness: an unconfirmed carried blocker is not replayed verbatim
 		expect(await s.write(withTail(51))).toMatch(STILL_UNFIXED);
 		boundary.lsp.mode = "answer";
 		await s.write(V_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
+});
+
+describe("#5790 witness: a cascade note with no finding does not hold the commit gate", () => {
+	const TARGET = "src/cascade-target.ts";
+	const NEIGHBOUR = "src/cascade-user.ts";
+	const TARGET_FIXED = "export const a = 1;\nexport const b = 2;\n";
+	const TARGET_BAD = "export const a = 1;\nBAD_CALL();\nexport const b = 2;\n";
+	const TARGET_BAD_OTHER =
+		"export const a = 1;\nBAD_CALL();\nexport const b = 3;\n";
+	const NEIGHBOUR_FIXED =
+		'import { a } from "./cascade-target.js";\nexport const c = a + 1;\n';
+	const NEIGHBOUR_BAD = NEIGHBOUR_FIXED + "BAD_CALL();\n";
+	const INCONCLUSIVE = "Cascade diagnostics inconclusive for 1 neighbor";
+	const CASCADE_ERRORS = "Cascade errors in 1 neighbor file(s)";
+
+	const blockerContent = (): string =>
+		new CacheManager(false).readCache<{ blockerContent?: string }>(
+			"turn-end-findings",
+			tmpDir,
+			Number.POSITIVE_INFINITY,
+		)?.data?.blockerContent ?? "";
+
+	/**
+	 * The neighbour shares the cells' project directory, so the cell's cleanup
+	 * deletes it before its fixing turn end, and no later cell sees it.
+	 */
+	const removeNeighbourOnCleanup = () => {
+		const fixTarget = pendingCleanup;
+		pendingCleanup = async () => {
+			fs.rmSync(path.join(tmpDir, NEIGHBOUR), { force: true });
+			await fixTarget?.();
+		};
+	};
+
+	// Recurrence (#5790): a server silent through the turn end made the
+	// cascade persist its "inconclusive" note into the commit gate's record.
+	// No file owns that text, so every later write latched
+	// blocking_provenance_untrusted, and the commit stayed refused after the
+	// agent fixed and settled both files, until the next turn end.
+	it("admits the commit once both files settle, with the cascade's inconclusive note delivered", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("cn", TARGET, TARGET_FIXED);
+		removeNeighbourOnCleanup();
+		await s.writeOther(NEIGHBOUR, NEIGHBOUR_BAD);
+		expect(await s.write(TARGET_BAD)).toContain("🔴 STOP");
+		boundary.lsp.mode = "inconclusive";
+		await s.write(TARGET_BAD_OTHER);
+		const turnEnd = await s.endTurn();
+		// The agent is still told; only the gate's record leaves the note out.
+		expect(turnEnd).toContain(INCONCLUSIVE);
+		const recorded = blockerContent();
+		fs.writeFileSync(s.target, TARGET_FIXED);
+		boundary.lsp.mode = "answer";
+		expect(await s.settleCall({ source: "lsp", waitMs: 30000 })).toMatch(
+			/confirmed clean/,
+		);
+		await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+		expect(await s.commitBlocked()).toBe(false);
+		// The gate's record held the edited file's section and not the note.
+		expect(recorded).toContain("Unresolved from this turn — " + TARGET + ":");
+		expect(recorded).not.toContain(INCONCLUSIVE);
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// The fail-closed direction: a cascade section that shows a neighbour's
+	// finding is a blocker claim no file re-check retires, so the gate keeps
+	// it after the edited file settles clean.
+	it("keeps a cascade section that shows a neighbour's error in the gate after the edited file settles", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("ce", TARGET, TARGET_FIXED);
+		removeNeighbourOnCleanup();
+		// On disk before the session's writes: no write of this session
+		// records it, so the cascade section is the gate's only hold on it.
+		fs.writeFileSync(path.join(tmpDir, NEIGHBOUR), NEIGHBOUR_BAD);
+		expect(await s.write(TARGET_BAD)).toContain("🔴 STOP");
+		boundary.lsp.mode = "inconclusive";
+		await s.write(TARGET_BAD_OTHER);
+		boundary.lsp.mode = "answer";
+		const turnEnd = await s.endTurn();
+		expect(turnEnd).toContain(CASCADE_ERRORS);
+		expect(blockerContent()).toContain(CASCADE_ERRORS);
+		fs.writeFileSync(s.target, TARGET_FIXED);
+		expect(await s.settleCall({ source: "lsp", waitMs: 30000 })).toMatch(
+			/confirmed clean/,
+		);
+		expect(await s.commitBlocked()).toBe(true);
 		await fixAndDrain(s);
 	}, 120_000);
 });

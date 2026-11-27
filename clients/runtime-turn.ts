@@ -17,8 +17,10 @@ import {
 } from "./code-quality-warnings.js";
 import type { CacheEntry, CacheManager } from "./cache-manager.js";
 import type {
+	CascadeNeighborResult,
 	CascadeResult,
 	CascadeRun,
+	CascadeSectionLayout,
 	CascadeSkipReason,
 	CascadeUnconfirmedReason,
 } from "./cascade-types.js";
@@ -937,6 +939,84 @@ export function cancelLSPIdleReset(): void {
 	}
 }
 
+/**
+ * #5790: what each field of a cascade section's source holds when the section
+ * shows no finding. The tables name every field the render reads; their type
+ * makes a new field fail the build until it is classified, and
+ * `fieldsHoldCleanValues` refuses a key a table does not hold at run time.
+ */
+type CleanValues<T> = { readonly [K in keyof T]-?: (value: T[K]) => boolean };
+const anyValue = (): boolean => true;
+
+const CLEAN_LAYOUT: CleanValues<CascadeSectionLayout> = {
+	cwd: anyValue,
+	noun: anyValue,
+	includeReason: anyValue,
+	// The impact header: importers, files to check next, risk flags.
+	header: anyValue,
+	// Dependents the neighbour budget never walked.
+	truncationLine: (value) => value === "",
+	// Findings the policy input bound never evaluated (#3157).
+	coverageLine: (value) => value === "",
+	policySuppressed: (value) => value === 0,
+};
+
+const CLEAN_NEIGHBOR: CleanValues<CascadeNeighborResult> = {
+	filePath: anyValue,
+	reason: anyValue,
+	lspTouched: anyValue,
+	durationMs: anyValue,
+	diagnostics: (value) => value.length === 0,
+	// The "inconclusive" note is the form this exists for.
+	inconclusive: anyValue,
+	unconfirmedServerIds: (value) => value === undefined || value.length === 0,
+	primaryUnavailable: (value) => value === undefined,
+};
+
+/** `neighbors` is judged apart: only the owned ones are rendered. */
+const CLEAN_RESULT: CleanValues<Omit<CascadeResult, "neighbors">> = {
+	filePath: anyValue,
+	impact: anyValue,
+	// Composed from the fields judged here.
+	formatted: anyValue,
+	unansweredPrimaries: (value) => value === undefined,
+	layout: (value) =>
+		value !== undefined && fieldsHoldCleanValues(value, CLEAN_LAYOUT),
+};
+
+/** Every key of `value` is in `table`, and every table key holds a clean value. */
+function fieldsHoldCleanValues<T extends object>(
+	value: T,
+	table: CleanValues<T>,
+): boolean {
+	const checks = table as Record<string, (field: unknown) => boolean>;
+	const fields = value as Record<string, unknown>;
+	return (
+		Object.keys(fields).every((key) => Object.hasOwn(checks, key)) &&
+		Object.entries(checks).every(([key, check]) => check(fields[key]))
+	);
+}
+
+/**
+ * #5790: true only when the section `result` renders over `ownedNeighbors`
+ * shows no finding: every field the render reads holds its clean value
+ * (`CLEAN_RESULT`, `CLEAN_LAYOUT`, `CLEAN_NEIGHBOR`). Its text is then the
+ * impact header and the inconclusive note. Any other form keeps the section
+ * in the commit gate's record.
+ */
+function cascadeSectionShowsNoFinding(
+	result: CascadeResult,
+	ownedNeighbors: readonly CascadeNeighborResult[],
+): boolean {
+	const { neighbors: _rendered, ...rest } = result;
+	return (
+		fieldsHoldCleanValues(rest, CLEAN_RESULT) &&
+		ownedNeighbors.every((neighbor) =>
+			fieldsHoldCleanValues(neighbor, CLEAN_NEIGHBOR),
+		)
+	);
+}
+
 function capTurnEndMessage(content: string, held = 0): string {
 	const maxLines = RUNTIME_CONFIG.turnEnd.maxLines;
 	const maxChars = RUNTIME_CONFIG.turnEnd.maxChars;
@@ -1477,6 +1557,15 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 
 	const turnEndStart = Date.now();
 	const blockerParts: string[] = [];
+	/**
+	 * #5790: blocker parts the commit gate's record leaves out, because they
+	 * report no finding: a cascade section holding only its impact header and
+	 * coverage notes. The agent is still told. The gate holds findings, and a
+	 * silent server does not hold it for an edited file either. No file owns
+	 * this text, so in the record it made `blockingProvenance` refuse every
+	 * later trim, and the commit stayed refused until the next turn end.
+	 */
+	const noFindingParts = new Set<string>();
 	/**
 	 * #5532: the inline-blocker replay parts of this turn by part, and the
 	 * pointer line each capped one reads as in the message (`blockerParts` keeps
@@ -2366,6 +2455,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		const sectionPrimaries: string[] = [];
 		// Round 6 (W2): the kept lines head the section (`renderCascadeResult`).
 		const unansweredLines: string[] = [];
+		// #5790: whether the section shows a finding (see `noFindingParts`).
+		let sectionShowsFinding = false;
 		for (const result of seen.values()) {
 			const ownedNeighbors = result.neighbors.filter(
 				(n) =>
@@ -2407,6 +2498,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			}
 			if (rendered && (rendered.text || rendered.lines.length > 0)) {
 				unansweredLines.push(...rendered.lines);
+				if (!cascadeSectionShowsNoFinding(result, ownedNeighbors))
+					sectionShowsFinding = true;
 				if (rendered.text) {
 					// Fix B (#3167/#3168): a carried run's re-rendered blocker is
 					// labeled so the agent can tell it from a fresh observation —
@@ -2493,6 +2586,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					testSection += `\n  ... and ${testSuggestions.length - 5} more`;
 				}
 				parts.push(testSection);
+				sectionShowsFinding = true;
 				// #4617: the lines name test files, so the joined section speaks for
 				// them too (the "and N more" line stands for the whole list).
 				sectionPrimaries.push(...testSuggestions.map((s) => s.testFile));
@@ -2503,6 +2597,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			const section = parts.join("\n\n");
 			// @delivery-surface: runtime-turn:cascade-blocker
 			blockerParts.push(section);
+			if (!sectionShowsFinding) noFindingParts.add(section);
 			citePart(section, sectionPrimaries);
 			const shownServerIds = [...shownUnansweredServerIds];
 			deliveryHolds.push({
@@ -6674,6 +6769,11 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		// record then reaches the next request; under it that branch marks the
 		// record consumed, so nothing does (unchanged by #5240). Only two turn
 		// ends with no request between reach this: pi sends one after each.
+		// #5790: the commit gate's record holds only the parts that report a
+		// finding; both writes below take their blocker text from this list.
+		const gateBlockerParts = blockerParts.flatMap((part) =>
+			noFindingParts.has(part) ? [] : [part],
+		);
 		const waiting = duplicate
 			? readTurnEndGuardRecord(cacheManager, runtime, cwd, sessionId).stored
 			: undefined;
@@ -6719,12 +6819,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					// #4733 r5 F21: this session's blocker sections lead the record, so
 					// it is this session's; another session's are carried (#4738).
 					const own: BlockerPartition[] =
-						blockerParts.length > 0
+						gateBlockerParts.length > 0
 							? [
 									{
 										sessionId: deliverySessionId,
 										blockerContent: capTurnEndMessage(
-											blockerParts.join("\n\n"),
+											gateBlockerParts.join("\n\n"),
 										),
 										blockingFiles: existingGuard.affectedFiles ?? [],
 										blockerWrittenAt: Date.now(),
@@ -6891,8 +6991,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			// With `--lens-guard` off this session claims nothing, so a record that
 			// holds another session's blocker keeps theirs alone.
 			const blockingContent =
-				getFlag("lens-guard") && blockerParts.length > 0
-					? capTurnEndMessage(blockerParts.join("\n\n"))
+				getFlag("lens-guard") && gateBlockerParts.length > 0
+					? capTurnEndMessage(gateBlockerParts.join("\n\n"))
 					: undefined;
 			const affectedFiles = [
 				...(existingGuard?.affectedFiles ?? []),
