@@ -1,6 +1,5 @@
 import * as fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { Worker } from "node:worker_threads";
 import * as path from "node:path";
 import {
 	afterAll,
@@ -68,6 +67,7 @@ const pl5802Probe = (() => {
 	];
 	const original = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 	let inFlight = 0;
+	let injectMs = 0;
 	const inFlightByOp = new Map<string, number>();
 	let windowRows = new Map<string, Pl5802Row>();
 	let slowLogged = 0;
@@ -104,6 +104,23 @@ const pl5802Probe = (() => {
 					inFlight++;
 					inFlightByOp.set(op, (inFlightByOp.get(op) ?? 0) + 1);
 					try {
+						if (injectMs > 0 && op === "stat") {
+							await (
+								Atomics as unknown as {
+									waitAsync: (
+										view: Int32Array,
+										index: number,
+										value: number,
+										timeout: number,
+									) => { value: Promise<string> | string };
+								}
+							).waitAsync(
+								new Int32Array(new SharedArrayBuffer(4)),
+								0,
+								0,
+								injectMs,
+							).value;
+						}
 						return await real(...args);
 					} finally {
 						inFlight--;
@@ -137,6 +154,9 @@ const pl5802Probe = (() => {
 			}
 			syncBuiltinESMExports();
 		},
+		inject(ms: number) {
+			injectMs = ms;
+		},
 		uninstall() {
 			for (const [op, real] of original) table[op] = real;
 			original.clear();
@@ -168,30 +188,11 @@ const pl5802Probe = (() => {
 })();
 
 // TEMP #5802 timing instrumentation; removed before ready.
-// Red-first on Windows: 8 spinning workers oversubscribe the 4-vCPU runner for
-// the two cells the sweep found near the 5 s ceiling, the state in which the
-// failing runs showed 19-22 ms per async stat.
-let pl5802Burners: Worker[] = [];
-async function pl5802BurnStart(count: number): Promise<void> {
-	pl5802Burners = Array.from(
-		{ length: count },
-		() =>
-			new Worker("const end = Date.now() + 60000; while (Date.now() < end);", {
-				eval: true,
-			}),
-	);
-	await Promise.all(
-		pl5802Burners.map(
-			(worker) =>
-				new Promise<void>((resolve) => worker.once("online", resolve)),
-		),
-	);
-}
-async function pl5802BurnStop(): Promise<void> {
-	await Promise.all(pl5802Burners.map((worker) => worker.terminate()));
-	pl5802Burners = [];
-}
-const pl5802Burned = (name: string): boolean =>
+// Red-first: the failing Windows jobs showed 19-22 ms per awaited fs.promises
+// stat (jobs 140372464201, 140383089933), 0.1 ms on a healthy runner. Inject 24
+// ms per awaited stat into the two cells the sweep found near the 5 s ceiling.
+// `Atomics.waitAsync` is a real asynchronous wait without a timer token.
+const pl5802Injected = (name: string): boolean =>
 	/built-in server with no marker|flags exactly the servers/.test(name);
 
 async function pl5802Sequence(tag: string, base: string): Promise<string> {
@@ -317,7 +318,9 @@ beforeEach(async (ctx) => {
 	// TEMP #5802 timing instrumentation; removed before ready.
 	cellStartedAt = performance.now();
 	pl5802Probe.carryIn(ctx.task.name);
-	if (pl5802Burned(ctx.task.name)) await pl5802BurnStart(8);
+	pl5802Probe.inject(
+		pl5802Injected(ctx.task.name) && process.platform === "win32" ? 24 : 0,
+	);
 });
 
 // Log writes under this home are queued; the drain lets them land before the
@@ -327,7 +330,7 @@ useTrackedTempDirs("pi-lens-tool-cwd-");
 afterEach(async (ctx) => {
 	// TEMP #5802 timing instrumentation; removed before ready.
 	pl5802Probe.endCell(ctx.task.name);
-	await pl5802BurnStop();
+	pl5802Probe.inject(0);
 	console.log(
 		"PL5802-CELL " +
 			Math.round(performance.now() - cellStartedAt) +
@@ -899,7 +902,42 @@ describe("resolveToolCwd (#2777)", () => {
 		}
 	});
 
-	it("uses the file directory for a built-in server with no marker", async () => {
+	// #5802: this cell awaits about 230 `fs.promises.stat` calls (the python root
+	// walk from the fixture to the filesystem root, then the file-directory
+	// fallback walk; 210-250 counted on Windows and Linux). On the Windows leg
+	// the first 130 awaited stats of this cell took 2855 ms and 2473 ms (22 and
+	// 19 ms each, job 140372464201 and job 140383089933) while 130 `statSync`
+	// calls took 5 and 2 ms: the wait is the pool hop, not the filesystem.
+	// 230 hops at 22 ms is 5.1 s, over Vitest's 5 s default (the failing run
+	// timed out at 5289 ms). The 15 s Windows ceiling (scale 3) is 3x that.
+	it(
+		"uses the file directory for a built-in server with no marker",
+		async () => {
+			const project = path.join(home, "repo");
+			const file = path.join(project, "nested", "src", "main.py");
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			const server = LSP_SERVERS.find((entry) => entry.id === "python");
+			if (!server) throw new Error("python server missing from registry");
+			const service = new LSPService(undefined, project);
+			const { clientRegistry } = service as unknown as {
+				clientRegistry: {
+					resolveServerRoot(
+						server: LSPServerInfo,
+						file: string,
+					): Promise<string>;
+				};
+			};
+			const resolveRoot = clientRegistry.resolveServerRoot.bind(clientRegistry);
+			expect(await resolveRoot(server, file)).toBe(path.dirname(file));
+		},
+		scaledTestTimeout(5_000),
+	);
+
+	// TEMP #5802 timing instrumentation; removed before ready.
+	it.fails("PL5802 before the fix: built-in server with no marker at the default budget", async () => {
+		// Expected-fail demo: only the Windows leg injects latency, elsewhere
+		// throw so `it.fails` stays green.
+		if (process.platform !== "win32") throw new Error("Windows-only demo");
 		const project = path.join(home, "repo");
 		const file = path.join(project, "nested", "src", "main.py");
 		fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -1086,48 +1124,56 @@ describe("resolveToolCwd (#2777)", () => {
 	// decision (rust measured, .NET documented, everything else unflagged until
 	// measured) is pinned on the REAL registry entries, bare directory, real root
 	// functions.
-	it("flags exactly the servers that need a project, on the real registry (#3750)", async () => {
-		const bare = path.join(home, "bare");
-		fs.mkdirSync(bare, { recursive: true });
-		const byId = new Map(LSP_SERVERS.map((server) => [server.id, server]));
-		const verdicts: Record<string, boolean | undefined> = {};
+	// #5802: eight real `resolveLspServerCwd` walks, about 136 awaited stats and
+	// 64 readdirs. It took 4055 ms on the Windows run whose sibling cell timed out
+	// (job 140340087346), 81% of Vitest's 5 s default, for the same pool-hop
+	// reason as the "built-in server with no marker" cell above; same budget.
+	it(
+		"flags exactly the servers that need a project, on the real registry (#3750)",
+		async () => {
+			const bare = path.join(home, "bare");
+			fs.mkdirSync(bare, { recursive: true });
+			const byId = new Map(LSP_SERVERS.map((server) => [server.id, server]));
+			const verdicts: Record<string, boolean | undefined> = {};
 
-		for (const id of [
-			"rust",
-			"csharp",
-			"omnisharp",
-			"fsharp",
-			"lua",
-			"nix",
-			"deno",
-			"ocaml",
-		]) {
-			const server = byId.get(id);
-			const extension = server?.extensions[0] ?? ".x";
-			let seen: boolean | undefined;
-			await resolveLspServerCwd(
-				server as LSPServerInfo,
-				path.join(bare, `f${extension}`),
-				bare,
-				undefined,
-				(fallback) => {
-					seen = fallback.requiresProjectRoot;
-				},
-			);
-			verdicts[id] = seen;
-		}
+			for (const id of [
+				"rust",
+				"csharp",
+				"omnisharp",
+				"fsharp",
+				"lua",
+				"nix",
+				"deno",
+				"ocaml",
+			]) {
+				const server = byId.get(id);
+				const extension = server?.extensions[0] ?? ".x";
+				let seen: boolean | undefined;
+				await resolveLspServerCwd(
+					server as LSPServerInfo,
+					path.join(bare, `f${extension}`),
+					bare,
+					undefined,
+					(fallback) => {
+						seen = fallback.requiresProjectRoot;
+					},
+				);
+				verdicts[id] = seen;
+			}
 
-		expect(verdicts).toEqual({
-			rust: true,
-			csharp: true,
-			omnisharp: true,
-			fsharp: true,
-			lua: false,
-			nix: false,
-			deno: false,
-			ocaml: false,
-		});
-	});
+			expect(verdicts).toEqual({
+				rust: true,
+				csharp: true,
+				omnisharp: true,
+				fsharp: true,
+				lua: false,
+				nix: false,
+				deno: false,
+				ocaml: false,
+			});
+		},
+		scaledTestTimeout(5_000),
+	);
 
 	it("words each cause of a root fallback without claiming a marker is missing when one exists (#3750)", async () => {
 		const { describeRootFallback } =
