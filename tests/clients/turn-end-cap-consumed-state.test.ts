@@ -2786,91 +2786,235 @@ describe("#5240: a duplicate turn end stages a repeat of its live blockers", () 
 
 describe("#5790: the commit gate's record keeps only cascade sections that show a finding", () => {
 	const NOTE = "CASCADE-5790-NOTE";
-	const coverageLine = "⚠️ Cascade did not evaluate 3 finding(s)";
-	/** One cascade run whose result has the form the cell names. */
-	function run(
-		rig: Rig,
-		form: { layout: boolean; coverageLine: string; diagnostic: boolean },
-	) {
+	const cleanLayout = (cwd: string) => ({
+		cwd,
+		noun: "neighbor",
+		includeReason: true,
+		header: "",
+		truncationLine: "",
+		coverageLine: "",
+		policySuppressed: 0,
+	});
+	/**
+	 * One cascade run in the clean form: a layout whose every field holds its
+	 * clean value, and one inconclusive neighbour with no diagnostic. `patch`
+	 * turns one field away from its clean value.
+	 */
+	function run(rig: Rig, patch: (result: CascadeResult) => CascadeResult) {
 		const primary = touch(rig, "casc-5790.ts");
 		const neighbor = touch(rig, "casc-5790-dep.ts");
 		const base = cascadeResult(primary, neighbor, NOTE);
-		const result: CascadeResult = {
+		const result = patch({
 			...base,
 			neighbors: base.neighbors.map((n) => ({
 				...n,
-				diagnostics: form.diagnostic ? n.diagnostics : [],
+				diagnostics: [],
+				inconclusive: true,
 			})),
-			...(form.layout
-				? {
-						layout: {
-							cwd: rig.cwd,
-							noun: "neighbor",
-							includeReason: true,
-							header: "",
-							truncationLine: "",
-							coverageLine: form.coverageLine,
-							policySuppressed: 0,
-						},
-					}
-				: {}),
+			layout: cleanLayout(rig.cwd),
+		});
+		rig.runtime.appendCascadeRun({
+			filePath: primary,
+			result,
+			neighborCount: result.neighbors.length,
+			diagnosticCount: 0,
+		});
+	}
+	/**
+	 * F4: neighbour B's error belongs to run 1, but a later run observes B, so
+	 * run 1's section renders only neighbour A, inconclusive.
+	 */
+	function supersededRun(rig: Rig) {
+		const primary = touch(rig, "casc-5790.ts");
+		const a = touch(rig, "casc-5790-a.ts");
+		const b = touch(rig, "casc-5790-b.ts");
+		const withError = cascadeResult(primary, b, NOTE);
+		const result: CascadeResult = {
+			...withError,
+			neighbors: [
+				{
+					filePath: a,
+					reason: "imports",
+					diagnostics: [],
+					lspTouched: true,
+					inconclusive: true,
+				},
+				...withError.neighbors,
+			],
+			layout: cleanLayout(rig.cwd),
 		};
 		rig.runtime.appendCascadeRun({
 			filePath: primary,
 			result,
-			neighborCount: 1,
-			diagnosticCount: form.diagnostic ? 1 : 0,
+			neighborCount: 2,
+			diagnosticCount: 1,
 		});
+		rig.runtime.appendCascadeRun({
+			filePath: touch(rig, "casc-5790-later.ts"),
+			result: undefined,
+			neighborCount: 1,
+			diagnosticCount: 0,
+			observedNeighborPaths: [b],
+		});
+		return b;
 	}
+	const withLayout = (r: CascadeResult, extra: Record<string, unknown>) =>
+		({
+			...r,
+			layout: { ...cleanLayout(r.layout?.cwd ?? ""), ...extra },
+		}) as CascadeResult;
+	const withNeighbor = (r: CascadeResult, extra: Record<string, unknown>) =>
+		({
+			...r,
+			neighbors: r.neighbors.map((n) => ({ ...n, ...extra })),
+		}) as CascadeResult;
 
 	// Recurrence (#5790): a finding-free cascade note in the record held the
-	// commit gate until the next turn end. Every other form keeps failing
-	// closed: a coverage line names findings nobody evaluated, and a result
-	// with no layout is a form the rule does not recognise.
+	// commit gate until the next turn end. Review r1 found the first recognizer
+	// admitted a truncated section, a suppressed count and an unanswered
+	// primary, and judged the neighbours the section does not render: each
+	// field the render reads now has one cell, and only the clean form leaves
+	// the record.
+	it.each([
+		{ cell: "the clean form", kept: false, patch: (r: CascadeResult) => r },
+		{
+			cell: "truncated dependents (F1)",
+			kept: true,
+			patch: (r: CascadeResult) =>
+				withLayout(r, { truncationLine: "... and 5 more dependent file(s)" }),
+		},
+		{
+			cell: "findings suppressed by disposition (F2)",
+			kept: true,
+			patch: (r: CascadeResult) => withLayout(r, { policySuppressed: 3 }),
+		},
+		{
+			cell: "a coverage line",
+			kept: true,
+			patch: (r: CascadeResult) =>
+				withLayout(r, {
+					coverageLine: "⚠️ Cascade did not evaluate 3 finding(s)",
+				}),
+		},
+		{
+			cell: "an unknown layout key",
+			kept: true,
+			patch: (r: CascadeResult) => withLayout(r, { futureField: "x" }),
+		},
+		{
+			cell: "no layout",
+			kept: true,
+			patch: (r: CascadeResult) => ({ ...r, layout: undefined }),
+		},
+		{
+			cell: "an unanswered primary (F3)",
+			kept: true,
+			patch: (r: CascadeResult) => ({
+				...r,
+				unansweredPrimaries: {
+					notes: [{ serverIds: ["typescript"], line: "no primary answered" }],
+					formattedWithoutNotes: r.formatted,
+				},
+			}),
+		},
+		{
+			cell: "a neighbour diagnostic",
+			kept: true,
+			patch: (r: CascadeResult) =>
+				withNeighbor(r, {
+					diagnostics: cascadeResult("p.ts", "n.ts", "").neighbors[0]
+						?.diagnostics,
+				}),
+		},
+		{
+			cell: "a neighbour no scanner covered",
+			kept: true,
+			patch: (r: CascadeResult) =>
+				withNeighbor(r, { unconfirmedServerIds: ["ast-grep"] }),
+		},
+		{
+			cell: "a neighbour with no primary",
+			kept: true,
+			patch: (r: CascadeResult) =>
+				withNeighbor(r, {
+					primaryUnavailable: { serverIds: ["typescript"], cause: "unstarted" },
+				}),
+		},
+		{
+			cell: "an unknown neighbour key",
+			kept: true,
+			patch: (r: CascadeResult) => withNeighbor(r, { futureField: 1 }),
+		},
+	])("$cell: the record keeps the section = $kept", async ({ kept, patch }) => {
+		const rig = makeRig("pi-lens-5790-");
+		try {
+			rig.lensGuard = true;
+			run(rig, patch);
+			// The agent is told in every cell.
+			expect(await endTurn(rig)).toContain(NOTE);
+			const record = rig.cacheManager.readCache<{ blockerContent?: string }>(
+				"turn-end-findings",
+				rig.cwd,
+				Number.POSITIVE_INFINITY,
+			)?.data;
+			expect((record?.blockerContent ?? "").includes(NOTE)).toBe(kept);
+			expect(
+				evaluateGitGuard(rig.runtime, rig.cacheManager, rig.cwd).block,
+			).toBe(kept);
+		} finally {
+			rig.cleanup();
+		}
+	});
+
+	// F4 (CodeRabbit): the section renders the owned neighbours, so they are
+	// what it is judged by; a test suggestion for the superseded error is a
+	// part the clean form does not include, so it keeps the section.
 	it.each([
 		{
-			cell: "layout, no coverage line, no diagnostic",
-			layout: true,
-			coverageLine: "",
-			diagnostic: false,
+			cell: "a superseded neighbour's error (F4)",
+			suggest: false,
 			kept: false,
 		},
-		{
-			cell: "layout with a coverage line, no diagnostic",
-			layout: true,
-			coverageLine,
-			diagnostic: false,
-			kept: true,
-		},
-		{
-			cell: "no layout, no diagnostic",
-			layout: false,
-			coverageLine: "",
-			diagnostic: false,
-			kept: true,
-		},
-		{
-			cell: "layout, no coverage line, a neighbour diagnostic",
-			layout: true,
-			coverageLine: "",
-			diagnostic: true,
-			kept: true,
-		},
+		{ cell: "a test suggestion beside it", suggest: true, kept: true },
 	])(
 		"$cell: the record keeps the section = $kept",
-		async ({ layout, coverageLine, diagnostic, kept }) => {
-			const rig = makeRig("pi-lens-5790-");
+		async ({ suggest, kept }) => {
+			const rig = makeRig("pi-lens-5790-owned-");
 			try {
 				rig.lensGuard = true;
-				run(rig, { layout, coverageLine, diagnostic });
-				// The agent is told in every cell.
-				expect(await endTurn(rig)).toContain(NOTE);
+				const b = supersededRun(rig);
+				const deps = makeDeps(
+					rig.runtime,
+					rig.cacheManager,
+					rig.cwd,
+					undefined,
+					true,
+				);
+				if (suggest)
+					deps.testRunnerClient = {
+						getTestRunTarget: () => null,
+						suggestTestFiles: () => [
+							{
+								testFile: path.join(rig.cwd, "b.test.ts"),
+								sourceFile: b,
+								runner: "vitest",
+							},
+						],
+					};
+				await handleTurnEnd(deps);
+				const told =
+					consumeTurnEndFindings(rig.cacheManager, rig.cwd, rig.runtime)
+						?.messages?.[0]?.content ?? "";
+				expect(told).toContain("casc-5790-a.ts");
+				expect(told).not.toContain("cascade message");
 				const record = rig.cacheManager.readCache<{ blockerContent?: string }>(
 					"turn-end-findings",
 					rig.cwd,
 					Number.POSITIVE_INFINITY,
 				)?.data;
-				expect((record?.blockerContent ?? "").includes(NOTE)).toBe(kept);
+				expect((record?.blockerContent ?? "").includes("casc-5790-a.ts")).toBe(
+					kept,
+				);
 				expect(
 					evaluateGitGuard(rig.runtime, rig.cacheManager, rig.cwd).block,
 				).toBe(kept);
@@ -2894,7 +3038,7 @@ describe("#5790: the commit gate's record keeps only cascade sections that show 
 				["ast-grep"],
 				[1],
 			);
-			const form = { layout: true, coverageLine: "", diagnostic: false };
+			const form = (r: CascadeResult) => r;
 			const deps = () =>
 				makeDeps(rig.runtime, rig.cacheManager, rig.cwd, undefined, true);
 			run(rig, form);

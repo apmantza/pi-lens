@@ -17,8 +17,10 @@ import {
 } from "./code-quality-warnings.js";
 import type { CacheEntry, CacheManager } from "./cache-manager.js";
 import type {
+	CascadeNeighborResult,
 	CascadeResult,
 	CascadeRun,
+	CascadeSectionLayout,
 	CascadeSkipReason,
 	CascadeUnconfirmedReason,
 } from "./cascade-types.js";
@@ -938,16 +940,80 @@ export function cancelLSPIdleReset(): void {
 }
 
 /**
- * #5790: true only for the one form known to show no finding: a result
- * composed through its layout whose frame names no unevaluated finding and
- * whose neighbours hold no diagnostic. Its text is then the impact header and
- * coverage notes. Any other form (no layout, a coverage line, a neighbour
- * diagnostic) counts as a finding, so the commit gate keeps it.
+ * #5790: what each field of a cascade section's source holds when the section
+ * shows no finding. The tables name every field the render reads; their type
+ * makes a new field fail the build until it is classified, and
+ * `fieldsHoldCleanValues` refuses a key a table does not hold at run time.
  */
-function cascadeResultShowsNoFinding(result: CascadeResult): boolean {
+type CleanValues<T> = { readonly [K in keyof T]-?: (value: T[K]) => boolean };
+const anyValue = (): boolean => true;
+
+const CLEAN_LAYOUT: CleanValues<CascadeSectionLayout> = {
+	cwd: anyValue,
+	noun: anyValue,
+	includeReason: anyValue,
+	// The impact header: importers, files to check next, risk flags.
+	header: anyValue,
+	// Dependents the neighbour budget never walked.
+	truncationLine: (value) => value === "",
+	// Findings the policy input bound never evaluated (#3157).
+	coverageLine: (value) => value === "",
+	policySuppressed: (value) => value === 0,
+};
+
+const CLEAN_NEIGHBOR: CleanValues<CascadeNeighborResult> = {
+	filePath: anyValue,
+	reason: anyValue,
+	lspTouched: anyValue,
+	durationMs: anyValue,
+	diagnostics: (value) => value.length === 0,
+	// The "inconclusive" note is the form this exists for.
+	inconclusive: anyValue,
+	unconfirmedServerIds: (value) => value === undefined || value.length === 0,
+	primaryUnavailable: (value) => value === undefined,
+};
+
+/** `neighbors` is judged apart: only the owned ones are rendered. */
+const CLEAN_RESULT: CleanValues<Omit<CascadeResult, "neighbors">> = {
+	filePath: anyValue,
+	impact: anyValue,
+	// Composed from the fields judged here.
+	formatted: anyValue,
+	unansweredPrimaries: (value) => value === undefined,
+	layout: (value) =>
+		value !== undefined && fieldsHoldCleanValues(value, CLEAN_LAYOUT),
+};
+
+/** Every key of `value` is in `table`, and every table key holds a clean value. */
+function fieldsHoldCleanValues<T extends object>(
+	value: T,
+	table: CleanValues<T>,
+): boolean {
+	const checks = table as Record<string, (field: unknown) => boolean>;
+	const fields = value as Record<string, unknown>;
 	return (
-		result.layout?.coverageLine === "" &&
-		result.neighbors.every((neighbor) => neighbor.diagnostics.length === 0)
+		Object.keys(fields).every((key) => Object.hasOwn(checks, key)) &&
+		Object.entries(checks).every(([key, check]) => check(fields[key]))
+	);
+}
+
+/**
+ * #5790: true only when the section `result` renders over `ownedNeighbors`
+ * shows no finding: every field the render reads holds its clean value
+ * (`CLEAN_RESULT`, `CLEAN_LAYOUT`, `CLEAN_NEIGHBOR`). Its text is then the
+ * impact header and the inconclusive note. Any other form keeps the section
+ * in the commit gate's record.
+ */
+function cascadeSectionShowsNoFinding(
+	result: CascadeResult,
+	ownedNeighbors: readonly CascadeNeighborResult[],
+): boolean {
+	const { neighbors: _rendered, ...rest } = result;
+	return (
+		fieldsHoldCleanValues(rest, CLEAN_RESULT) &&
+		ownedNeighbors.every((neighbor) =>
+			fieldsHoldCleanValues(neighbor, CLEAN_NEIGHBOR),
+		)
 	);
 }
 
@@ -2432,6 +2498,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			}
 			if (rendered && (rendered.text || rendered.lines.length > 0)) {
 				unansweredLines.push(...rendered.lines);
+				if (!cascadeSectionShowsNoFinding(result, ownedNeighbors))
+					sectionShowsFinding = true;
 				if (rendered.text) {
 					// Fix B (#3167/#3168): a carried run's re-rendered blocker is
 					// labeled so the agent can tell it from a fresh observation —
@@ -2445,7 +2513,6 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 						carrySuffix ? `${rendered.text}\n${carrySuffix}` : rendered.text,
 					);
 					if (carrySuffix) carriedRunsRendered += 1;
-					if (!cascadeResultShowsNoFinding(result)) sectionShowsFinding = true;
 				}
 				const sectionRun = runByResult.get(result);
 				if (sectionRun) sectionRuns.push(sectionRun);
@@ -2519,6 +2586,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					testSection += `\n  ... and ${testSuggestions.length - 5} more`;
 				}
 				parts.push(testSection);
+				sectionShowsFinding = true;
 				// #4617: the lines name test files, so the joined section speaks for
 				// them too (the "and N more" line stands for the whole list).
 				sectionPrimaries.push(...testSuggestions.map((s) => s.testFile));
