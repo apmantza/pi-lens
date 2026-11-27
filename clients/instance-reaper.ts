@@ -1159,8 +1159,9 @@ function launchedFile(argv: string[], image: string): string | undefined {
 
 function matchesWindowsLaunch(command: string, marker: ManagedMarker): boolean {
 	const argv = splitWindowsCommandLine(command);
-	if (argv === undefined || argv.length === 0) return false;
-	let image = pathBase(argv[0]).toLowerCase();
+	const argv0 = argv?.[0];
+	if (argv === undefined || argv0 === undefined) return false;
+	let image = pathBase(argv0).toLowerCase();
 	if (!image.includes(".")) image += ".exe"; // npm shims run a bare `node`
 	if (!marker.images.some((own) => own.toLowerCase() === image)) return false;
 	const name = marker.name.toLowerCase();

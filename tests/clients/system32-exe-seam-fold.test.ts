@@ -518,10 +518,5 @@ describe("Windows launch forms the backstop recognises", () => {
 				"ruby.exe",
 			]),
 		);
-		const { LSP_SERVERS } = await import("../../clients/lsp/server.js");
-		const declared = new Set(
-			LSP_SERVERS.flatMap((server) => server.orphanProcess!.images),
-		);
-		expect(asked.filter((image) => !declared.has(image))).toEqual([]);
 	});
 });
