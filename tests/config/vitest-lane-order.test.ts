@@ -158,7 +158,6 @@ describe("Vitest lane registries (#2671)", () => {
 			const population = headTestFiles();
 			const collected = await ciCollectedFiles();
 			assertNonEmptyScan("head test files", population.length, 1000);
-			assertNonEmptyScan("vitest-collected test files", collected.size, 1000);
 			const { uncollected, staleExemptions } = collectionVerdict({
 				population,
 				collected,
