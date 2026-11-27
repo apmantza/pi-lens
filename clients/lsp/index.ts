@@ -6608,21 +6608,26 @@ export class LSPService {
 							// load. A silent-on-clean server does not stay silent when its answer
 							// CHANGES: marksman publishes an empty set to withdraw findings it
 							// reported before (measured — fix a broken link and `[]` arrives in
-							// ~200 ms). So a path whose last authoritative answer was non-empty, and
-							// which now says nothing, has not been re-examined at all — silence is
-							// a missed publish, never "clean". Without this, a finding delayed past
-							// the budget by machine load (measured at 10.5 s under 14 competing CPU
-							// hogs) would be reported as clean.
-							const knownFindings =
-								this.lastKnownDiagnostics.get(normalizedPath)?.length ?? 0;
+							// ~200 ms). So a path the server pushed findings for and never
+							// withdrew, which now says nothing, has not been re-examined at all —
+							// silence is a missed publish, never "clean". Without this, a finding
+							// delayed past the budget by machine load (measured at 10.5 s under 14
+							// competing CPU hogs) would be reported as clean.
+							//
+							// #5775 review F1: the fact is the primary CLIENT's, read from its own
+							// wire record. The service's last-known cache skips every partial
+							// touch, so a finding seen beside an unanswered auxiliary was
+							// forgotten by the next edit. A client that cannot answer the question
+							// is unknown and refuses (`=== false`, never `!== true`).
 							const judged =
 								primaryClass === "tier3-silent" &&
 								classifiedServerId !== undefined &&
-								knownFindings === 0 &&
 								outstanding.every(
 									(entry) =>
 										entry.client.serverId === classifiedServerId &&
-										clientsInheritedByTouch.has(entry.client),
+										clientsInheritedByTouch.has(entry.client) &&
+										entry.client.hasUnwithdrawnPushFindings?.(filePath) ===
+											false,
 								);
 							if (judged) {
 								// #1277: the class is static capability data and cannot tell "silent

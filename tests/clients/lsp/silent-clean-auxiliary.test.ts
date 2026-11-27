@@ -102,6 +102,8 @@ function makeSilentPushOnlyClient(serverId: string, root: string) {
 			}),
 			getDiagnostics: vi.fn(() => []),
 			getAllDiagnostics: vi.fn(() => new Map()),
+			// Never published, so nothing to withdraw (`client.ts`, #5775).
+			hasUnwithdrawnPushFindings: vi.fn(() => false),
 			pingLiveness: vi.fn().mockResolvedValue(true),
 		},
 	};
@@ -171,9 +173,8 @@ function makeTsLikeSilentClient(serverId: string, root: string) {
 /**
  * A silent-on-clean client that reports ONE finding on its first touch and
  * nothing afterwards — the shape of a broken link the server has not
- * re-examined yet. It never publishes, so `lastKnownDiagnostics` is written by
- * the first touch's merged answer and the second touch's silence must not be
- * read as clean.
+ * re-examined yet. Its push record keeps the finding unwithdrawn, so the second
+ * touch's silence must not be read as clean.
  */
 function makePreviouslyDirtyClient(
 	serverId: string,
@@ -204,6 +205,7 @@ function makePreviouslyDirtyClient(
 			return undefined;
 		}),
 		getDiagnostics: vi.fn(() => (touch === 1 ? [finding] : [])),
+		hasUnwithdrawnPushFindings: vi.fn(() => touch >= 1),
 		getAllDiagnostics: vi.fn(
 			() =>
 				(touch === 1
@@ -212,6 +214,15 @@ function makePreviouslyDirtyClient(
 		),
 	};
 }
+
+/** The options `clients/dispatch/runners/lsp.ts` passes on a markdown edit. */
+const perEditOptions = {
+	diagnostics: "document" as const,
+	collectDiagnostics: true as const,
+	clientScope: "with-auxiliary" as const,
+	auxiliaryServerIds: ["typos"],
+	source: "dispatch-lsp-runner",
+};
 
 describe("with-auxiliary silent-clean confirm (per-edit dispatch path)", () => {
 	let tmp: string;
@@ -286,16 +297,15 @@ describe("with-auxiliary silent-clean confirm (per-edit dispatch path)", () => {
 
 		const { LSPService } = await import("../../../clients/lsp/index.js");
 		const service = new LSPService();
+		// Warm first (#5775 review F3): a cold touch is refused on the inherited
+		// client check and would never reach the liveness probe this case is about.
+		await service.touchFile(filePath, "# hi\n", perEditOptions);
+		wedged.client.pingLiveness.mockClear();
 
-		const result = await service.touchFile(filePath, "# hi\n", {
-			diagnostics: "document",
-			collectDiagnostics: true,
-			clientScope: "with-auxiliary",
-			auxiliaryServerIds: ["typos"],
-			source: "dispatch-lsp-runner",
-		});
+		const result = await service.touchFile(filePath, "# hi\n", perEditOptions);
 
 		expect((result as { inconclusive?: boolean }).inconclusive).toBe(true);
+		expect(wedged.client.pingLiveness).toHaveBeenCalledTimes(1);
 	});
 
 	it("a liveness probe that THROWS stays inconclusive AND records the probe failure (#1277)", async () => {
@@ -364,24 +374,24 @@ describe("with-auxiliary silent-clean confirm (per-edit dispatch path)", () => {
 		getServersForFileWithConfig.mockImplementation((fp: string) =>
 			fp.endsWith(".ts") ? [typescript, astGrep] : [],
 		);
+		const tsClient = makeTsLikeSilentClient("typescript", tmp);
 		createLSPClient.mockImplementation(async (opts: { serverId: string }) =>
 			opts.serverId === "typescript"
-				? makeTsLikeSilentClient("typescript", tmp)
+				? tsClient
 				: makeAnsweringClient("ast-grep", tmp, filePath).client,
 		);
 
 		const { LSPService } = await import("../../../clients/lsp/index.js");
 		const service = new LSPService();
+		const options = { ...perEditOptions, auxiliaryServerIds: ["ast-grep"] };
+		// Warm first (#5775 review F3): only an inherited client reaches the class
+		// check, so a cold touch would pass this case whatever the class said.
+		await service.touchFile(filePath, "const a = 1;\n", options);
 
-		const result = await service.touchFile(filePath, "const a = 1;\n", {
-			diagnostics: "document",
-			collectDiagnostics: true,
-			clientScope: "with-auxiliary",
-			auxiliaryServerIds: ["ast-grep"],
-			source: "dispatch-lsp-runner",
-		});
+		const result = await service.touchFile(filePath, "const a = 1;\n", options);
 
 		expect((result as { inconclusive?: boolean }).inconclusive).toBe(true);
+		expect(tsClient.pingLiveness).not.toHaveBeenCalled();
 	});
 
 	it("the other marked server (lua) is confirmed the same way — the fix is not markdown-specific", async () => {
@@ -434,35 +444,31 @@ describe("with-auxiliary silent-clean confirm (per-edit dispatch path)", () => {
 		getServersForFileWithConfig.mockImplementation((fp: string) =>
 			fp.endsWith(".md") ? [raw, typos] : [],
 		);
+		const straggler = makeSilentPushOnlyClient("rust-analyzer", tmp).client;
 		createLSPClient.mockImplementation(async (opts: { serverId: string }) =>
 			opts.serverId === "typos"
 				? makeAnsweringClient("typos", tmp, filePath).client
-				: makeSilentPushOnlyClient("rust-analyzer", tmp).client,
+				: straggler,
 		);
 
 		const { LSPService } = await import("../../../clients/lsp/index.js");
 		const service = new LSPService();
+		// Warm first (#5775 review F3), as in the TypeScript case above.
+		await service.touchFile(filePath, "# hi\n", perEditOptions);
 
-		const result = await service.touchFile(filePath, "# hi\n", {
-			diagnostics: "document",
-			collectDiagnostics: true,
-			clientScope: "with-auxiliary",
-			auxiliaryServerIds: ["typos"],
-			source: "dispatch-lsp-runner",
-		});
+		const result = await service.touchFile(filePath, "# hi\n", perEditOptions);
 
 		expect((result as { inconclusive?: boolean }).inconclusive).toBe(true);
+		expect(straggler.pingLiveness).not.toHaveBeenCalled();
 	});
 
 	it("a path whose last answer had findings never confirms on silence", async () => {
 		// marksman withdraws findings by publishing an empty set, so silence on a
 		// path that previously had one means it has not been re-examined — not that
 		// it is clean. This is the case machine load produces: a finding delayed past
-		// the budget (measured at 10.5 s under 14 competing CPU hogs).
-		//
-		// The last-known answer is primed by an AUTHORITATIVE touch (an inconclusive
-		// or partial one deliberately does not prime), so this primes it with a
-		// primary-scope touch and then asks the per-edit gate.
+		// the budget (measured at 10.5 s under 14 competing CPU hogs). The gate reads
+		// the client's own push record, so the scope of the first touch does not
+		// matter; the real-wire partial-touch case is in `request-sender-5097.test.ts`.
 		const filePath = path.join(tmp, "g.md");
 		fs.writeFileSync(filePath, "# hi\n\n[broken](./gone.md)\n");
 		const marksman = makeServer("marksman", ".md", tmp);
@@ -487,7 +493,6 @@ describe("with-auxiliary silent-clean confirm (per-edit dispatch path)", () => {
 			},
 		);
 		expect(priming?.diags).toHaveLength(1);
-		expect(service.getLastKnownDiagnostics(filePath)).toHaveLength(1);
 
 		// The per-edit gate now sees silence on a path known to have had findings.
 		const second = await service.touchFile(
@@ -502,5 +507,33 @@ describe("with-auxiliary silent-clean confirm (per-edit dispatch path)", () => {
 			},
 		);
 		expect((second as { inconclusive?: boolean }).inconclusive).toBe(true);
+	});
+
+	it("a warm primary client that cannot report its push record stays inconclusive", async () => {
+		// Recurrence (#5775 review F1): unknown is not clean. A transport without
+		// `hasUnwithdrawnPushFindings` cannot say whether it withdrew a finding, so
+		// the gate must refuse it rather than read the missing answer as "none".
+		const filePath = path.join(tmp, "h.md");
+		fs.writeFileSync(filePath, "# hi\n");
+		const marksman = makeServer("marksman", ".md", tmp);
+		const typos = makeServer("typos", ".md", tmp, "auxiliary");
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".md") ? [marksman, typos] : [],
+		);
+		const { hasUnwithdrawnPushFindings: _absent, ...unknown } =
+			makeSilentPushOnlyClient("marksman", tmp).client;
+		createLSPClient.mockImplementation(async (opts: { serverId: string }) =>
+			opts.serverId === "typos"
+				? makeAnsweringClient("typos", tmp, filePath).client
+				: unknown,
+		);
+
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		await service.touchFile(filePath, "# hi\n", perEditOptions);
+		const result = await service.touchFile(filePath, "# hi\n", perEditOptions);
+
+		expect((result as { inconclusive?: boolean }).inconclusive).toBe(true);
+		expect(unknown.pingLiveness).not.toHaveBeenCalled();
 	});
 });

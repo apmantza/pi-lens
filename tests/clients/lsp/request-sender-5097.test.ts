@@ -636,6 +636,20 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 		"the %s-scope clean-confirm ping is cancelled when the bound aborts, and the touch stays unconfirmed",
 		async (clientScope) => {
 			const filePath = register("workspace/symbol", "lua");
+			if (clientScope === "with-auxiliary") {
+				// The with-auxiliary gate refuses a client the touch itself started, so
+				// a cold touch never reaches the ping this row is about (#5775 review
+				// F2). Warm the client first with a touch that waits for nothing, and
+				// show it sent no ping of its own.
+				await service.touchFile(filePath, "fn main() {}\n", {
+					diagnostics: "none",
+					clientScope,
+					source: "dispatch",
+				});
+				expect(
+					lines().some((line) => line.startsWith("recv workspace/symbol")),
+				).toBe(false);
+			}
 			const turn = new AbortController();
 			const touch = bounded(
 				() =>
@@ -660,6 +674,87 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 		},
 		20_000,
 	);
+
+	/**
+	 * The with-auxiliary per-edit gate on a real wire: a silent-on-clean primary
+	 * (`lua`) and an auxiliary (`typos`) that never answers, so every touch is
+	 * `partial` and none primes the service's last-known cache. `finding` makes
+	 * the primary publish one finding on `didOpen` and nothing on `didChange`.
+	 */
+	function registerWithSilentAuxiliary(finding: boolean): string {
+		const filePath = path.join(tmp, "main.fkr");
+		fs.writeFileSync(filePath, "fn main() {}\n");
+		const fake = (id: string, env: Record<string, string>) => ({
+			id,
+			name: id,
+			extensions: [".fkr"],
+			idleEviction: "resident",
+			...(id === "typos" && { role: "auxiliary" }),
+			root: async () => tmp,
+			spawn: async () => {
+				const proc = await spawnFakeLspServer({
+					cwd: tmp,
+					env: {
+						...process.env,
+						FAKE_LSP_NO_DIAGNOSTIC_PROVIDER: "1",
+						...env,
+					},
+				});
+				procs.push(proc);
+				return { process: proc, source: "test" };
+			},
+		});
+		const servers = [
+			fake("lua", {
+				FAKE_LSP_TRACE_FILE: trace,
+				...(finding && { FAKE_LSP_PUSH_DIAGNOSTIC: "1" }),
+			}),
+			fake("typos", {}),
+		];
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".fkr") ? servers : [],
+		);
+		return filePath;
+	}
+	const perEdit = {
+		diagnostics: "document",
+		collectDiagnostics: true,
+		clientScope: "with-auxiliary",
+		auxiliaryServerIds: ["typos"],
+		source: "dispatch-lsp-runner",
+	} as const;
+
+	// Recurrence (#5775 review F1): the gate read "no known finding" from the
+	// service's last-known cache, which a partial touch never primes. The primary's
+	// finding from touch one was therefore forgotten, and its silence on the next
+	// edit was certified clean while the auxiliary gap stayed named.
+	it("a primary finding seen on a partial touch keeps the next silent edits unconfirmed", async () => {
+		const filePath = registerWithSilentAuxiliary(true);
+		const first = await service.touchFile(filePath, "fn main() {}\n", perEdit);
+		expect(first?.diags.map((d) => d.code)).toEqual(["P2780"]);
+		expect(first?.confirmation).toBe("partial");
+		// Two later edits the primary never answers: the second one proves the
+		// refusal is not spent by the first.
+		for (const content of ["fn main() { }\n", "fn main() {  }\n"]) {
+			const next = await service.touchFile(filePath, content, perEdit);
+			expect(next?.inconclusive).toBe(true);
+			expect(next?.inconclusiveServerIds).toEqual(["lua"]);
+			expect(next?.confirmation).toBeUndefined();
+		}
+	}, 20_000);
+
+	// The control for the case above: the same wire with no finding confirms the
+	// warm edit, so the refusal above is the finding's and not the harness's.
+	it("a silent-on-clean primary that never published is confirmed on the warm edit", async () => {
+		const filePath = registerWithSilentAuxiliary(false);
+		const cold = await service.touchFile(filePath, "fn main() {}\n", perEdit);
+		expect(cold?.inconclusive).toBe(true);
+		const warm = await service.touchFile(filePath, "fn main() { }\n", perEdit);
+		expect(warm?.inconclusive).toBeUndefined();
+		expect(warm?.diags).toEqual([]);
+		expect(warm?.confirmation).toBe("partial");
+		expect(warm?.unconfirmedServerIds).toEqual(["typos"]);
+	}, 20_000);
 
 	// Recurrence: reading the ambient abort in the pull makes every caller of the
 	// pull a reader of whatever scope it inherited. A server-initiated re-pull
