@@ -10,9 +10,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
 	createInjectionLedger,
 	type LedgerMessage,
+	DEFAULT_RETAIN_LIMITS,
 	MAX_RETAINED_BYTES,
 	MAX_RETAINED_ENTRIES,
 	MAX_RETAINED_SESSIONS,
+	retainLimitsFromConfig,
 } from "../../clients/context-injection-ledger.js";
 import {
 	getDegradationSummary,
@@ -174,6 +176,97 @@ describe("context-injection ledger (#4743)", () => {
 		).toBe("byte-cap");
 		expect(ledger.size("s1")).toBe(0);
 		expect(declines()[0]?.subject).toBe("byte-cap:s1");
+	});
+
+	it("retainLimitsFromConfig keeps a default for an unset key and reads 0 as no cap (#5770)", () => {
+		expect(retainLimitsFromConfig(undefined)).toEqual(DEFAULT_RETAIN_LIMITS);
+		expect(retainLimitsFromConfig({})).toEqual(DEFAULT_RETAIN_LIMITS);
+		expect(
+			retainLimitsFromConfig({
+				retainMaxEntries: 0,
+				retainMaxBytes: 1000,
+			}),
+		).toEqual({
+			maxEntries: Number.POSITIVE_INFINITY,
+			maxBytes: 1000,
+			maxSessions: MAX_RETAINED_SESSIONS,
+		});
+		expect(retainLimitsFromConfig({ retainMaxSessions: 0 }).maxSessions).toBe(
+			Number.POSITIVE_INFINITY,
+		);
+	});
+
+	it("declines at a configured entry cap and keeps going without one (#5770)", () => {
+		const small = createInjectionLedger({
+			...DEFAULT_RETAIN_LIMITS,
+			maxEntries: 2,
+		});
+		const uncapped = createInjectionLedger(
+			retainLimitsFromConfig({ retainMaxEntries: 0 }),
+		);
+		let raw: LedgerMessage[] = [system];
+		const outcomes: Array<[string | undefined, string | undefined]> = [];
+		for (let index = 0; index < MAX_RETAINED_ENTRIES + 2; index++) {
+			raw = [...raw, user(`q${index}`)];
+			const injection = {
+				kind: "after" as const,
+				messages: [user(`f${index}`)],
+			};
+			outcomes.push([
+				small.rebuild("s1", raw, append).retain(injection),
+				uncapped.rebuild("s1", raw, append).retain(injection),
+			]);
+		}
+		expect(outcomes.slice(0, 2).map(([capped]) => capped)).toEqual([
+			undefined,
+			undefined,
+		]);
+		expect(outcomes[2]?.[0]).toBe("entry-cap");
+		expect(small.size("s1")).toBe(2);
+		expect(outcomes.every(([, free]) => free === undefined)).toBe(true);
+		expect(uncapped.size("s1")).toBe(MAX_RETAINED_ENTRIES + 2);
+	});
+
+	it("declines at a configured byte cap and accepts any size without one (#5770)", () => {
+		const raw = [system, user("question")];
+		const tight = createInjectionLedger({
+			...DEFAULT_RETAIN_LIMITS,
+			maxBytes: 10,
+		});
+		expect(
+			tight
+				.rebuild("s1", raw, append)
+				.retain({ kind: "user-text", text: "x".repeat(11) }),
+		).toBe("byte-cap");
+		const uncapped = createInjectionLedger(
+			retainLimitsFromConfig({ retainMaxBytes: 0 }),
+		);
+		expect(
+			uncapped.rebuild("s1", raw, append).retain({
+				kind: "user-text",
+				text: "x".repeat(MAX_RETAINED_BYTES + 1),
+			}),
+		).toBeUndefined();
+	});
+
+	it("holds a configured number of sessions, and all of them without a cap (#5770)", () => {
+		const raw = [system, user("question")];
+		const one = createInjectionLedger({
+			...DEFAULT_RETAIN_LIMITS,
+			maxSessions: 1,
+		});
+		const many = createInjectionLedger(
+			retainLimitsFromConfig({ retainMaxSessions: 0 }),
+		);
+		for (let index = 0; index <= MAX_RETAINED_SESSIONS; index++) {
+			for (const ledger of [one, many])
+				ledger
+					.rebuild(`s${index}`, raw, append)
+					.retain({ kind: "user-text", text: `T${index}` });
+		}
+		expect(one.size("s0")).toBe(0);
+		expect(one.size(`s${MAX_RETAINED_SESSIONS}`)).toBe(1);
+		expect(many.size("s0")).toBe(1);
 	});
 
 	it("retains nothing without a session id", () => {

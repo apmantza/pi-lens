@@ -369,6 +369,7 @@ import {
 import {
 	createInjectionLedger,
 	retainedSnapshotLabel,
+	retainLimitsFromConfig,
 } from "./clients/context-injection-ledger.js";
 import {
 	buildStartupTimingRecords,
@@ -923,6 +924,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 	const endDisposedMember = (
 		member: (typeof liveSessionMembers)[number],
 	): void => {
+		// #5770: the member's retained injections end with it, as a shutdown's do
+		// (the ledger's key is the same `getSessionId()` the member was recorded
+		// under). Every later read calls this again for a member still listed;
+		// a repeat finds nothing left to clear.
+		injectionLedger.clearSession(member.sessionId);
 		if (!member.scope) return;
 		if (liveSessionMembers.some(isLiveSessionMember)) unbindScope(member.scope);
 		else retireScope(member.scope, "disposed");
@@ -1449,7 +1455,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// The flag is read per request because pi applies extension flag values
 	// after the factory runs; its CLI value and the global config are fixed per
 	// load.
-	const injectionLedger = createInjectionLedger();
+	const injectionLedger = createInjectionLedger(
+		retainLimitsFromConfig(globalConfig?.contextInjection),
+	);
 	let lensWidgetVisible = globalConfig?.widget?.visible !== false;
 	let mountedLensWidgetUi: LensWidgetUi | undefined;
 	let widgetMountFailureLogged = false;
@@ -4672,6 +4680,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 			clearCachePrefixSession(stableSessionId, localRole);
 			// #3613: its per-turn records end with it.
 			runtime.forgetTurnSession(stableSessionId);
+			// #5770: so do its retained injections; with `retainMaxSessions: 0` no
+			// LRU eviction would ever drop them while the activation lives on.
+			injectionLedger.clearSession(stableSessionId);
 			// The counter counts LIVE secondaries; a primary leaving first is not a
 			// secondary departure.
 			if (shutdownClassification === "secondary")

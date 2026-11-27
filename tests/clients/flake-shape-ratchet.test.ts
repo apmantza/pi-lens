@@ -569,6 +569,15 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"a pass-through wrapper holds the real handler open past the host bound and records its return value; dispatch, pipeline, advisory queue and the pi session stay real (precedent: index-2939-tool-result-budget-witness.test.ts)",
 		},
+	// 2026-11-27 (#5770 F5): the retained-injection ledger is private to its
+	// activation, so the wrapper hands the test the REAL ledger each activation
+	// creates and reads its `size()`; no behaviour is replaced.
+	"in-process-mock:index-5770-disposed-member-ledger.test.ts::clients/context-injection-ledger":
+		{
+			detector: "in-process-mock",
+			reason:
+				"a pass-through of createInjectionLedger that records the real ledger each activation builds, so the test reads how many entries a disposed session still holds; the ledger, the dispose route and the session lifecycle are real",
+		},
 	// 2026-10-21 (#4675 r2): the format smoke runs the REAL FormatService and
 	// formatter selection; installation is the network boundary, so the stub
 	// answers `ensureTool`/`getToolPath` and the child process is doubled below

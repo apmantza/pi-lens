@@ -1180,6 +1180,7 @@
 		"index-4554-last-member-teardown.test.ts::clients/lsp/capabilities": 1,
 		"index-5108-opaque-blocker-disclosure-witness.test.ts::clients/pipeline": 1,
 		"index-5108-opaque-blocker-disclosure-witness.test.ts::clients/runtime-tool-result": 1,
+		"index-5770-disposed-member-ledger.test.ts::clients/context-injection-ledger": 1,
 		"index-drain-refresh-straddle.test.ts::clients/bootstrap": 1,
 		"index-drain-refresh-straddle.test.ts::clients/observed-mutation": 1,
 		"index-drain-refresh-straddle.test.ts::clients/runtime-agent-end": 1,

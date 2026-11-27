@@ -18,6 +18,7 @@ import {
 	LENS_FLAGS,
 	type LensFlagSpec,
 } from "../../clients/lens-flag-registry.js";
+import { retainLimitsFromConfig } from "../../clients/context-injection-ledger.js";
 import { EMPTY_PROJECT_CONFIG } from "../../clients/project-lens-config.js";
 import { removeTempDirSync } from "./test-utils.js";
 import { useConfigPath } from "../support/global-config.js";
@@ -494,6 +495,44 @@ describe("global pi-lens config", () => {
 		).toBeUndefined();
 	});
 
+	it("parses the contextInjection.retainMax* caps, with 0 as no cap (#5770)", () => {
+		const home = makeTempHome();
+		const configPath = writeConfig(
+			home,
+			JSON.stringify({
+				contextInjection: {
+					retain: true,
+					retainMaxEntries: 0,
+					retainMaxBytes: 1048576,
+					retainMaxSessions: 4,
+				},
+			}),
+		);
+		expect(loadPiLensGlobalConfig(configPath)?.contextInjection).toMatchObject({
+			retainMaxEntries: 0,
+			retainMaxBytes: 1048576,
+			retainMaxSessions: 4,
+		});
+	});
+
+	// #5770 (the #5772 sibling): a bare `000` is not JSON, so the zero a user can
+	// write is `0` in any spelling JSON allows, and each is the same no-cap `0`.
+	it.each([["0"], ["0.0"], ["-0"], ["0e5"]])(
+		"reads the JSON zero %s as no cap (#5770)",
+		(literal) => {
+			const home = makeTempHome();
+			const configPath = writeConfig(
+				home,
+				'{"contextInjection":{"retainMaxBytes":' + literal + "}}",
+			);
+			const parsed = loadPiLensGlobalConfig(configPath)?.contextInjection;
+			expect(parsed?.retainMaxBytes === 0).toBe(true);
+			expect(retainLimitsFromConfig(parsed).maxBytes).toBe(
+				Number.POSITIVE_INFINITY,
+			);
+		},
+	);
+
 	it("defaults context injection to enabled when unset", () => {
 		const home = makeTempHome();
 		const configPath = writeConfig(home, JSON.stringify({ widget: {} }));
@@ -932,6 +971,81 @@ describe("global pi-lens config", () => {
 			);
 			loadPiLensGlobalConfig(silentPath);
 			expect(warnedFor("requirePreExistingFixes")).toBe(false);
+		});
+
+		it.each([[-1], [1.5], ["unlimited"], [null]])(
+			"ignores a contextInjection.retainMaxBytes of %j with a warning; absent stays silent (#5770)",
+			(bad) => {
+				const home = makeTempHome();
+				const badPath = writeConfig(
+					home,
+					JSON.stringify({ contextInjection: { retainMaxBytes: bad } }),
+				);
+				expect(
+					loadPiLensGlobalConfig(badPath)?.contextInjection?.retainMaxBytes,
+				).toBeUndefined();
+				expect(console.error).toHaveBeenCalledWith(
+					expect.stringContaining(
+						"contextInjection.retainMaxBytes must be a whole number of 0 or more",
+					),
+				);
+
+				(console.error as ReturnType<typeof vi.fn>).mockClear();
+				const silentHome = makeTempHome();
+				const silentPath = writeConfig(
+					silentHome,
+					JSON.stringify({ contextInjection: { retain: true } }),
+				);
+				loadPiLensGlobalConfig(silentPath);
+				expect(warnedFor("retainMax")).toBe(false);
+			},
+		);
+
+		// #5770 (the #5772 sibling): no second normaliser is added for the retain
+		// caps. A number past double range parses to Infinity, and the loader's
+		// own JSON-data check refuses it before the retain code runs, with its
+		// own warning; the rest of the section survives. This case passes on
+		// master (the check is not this PR's), so it pins that the keys sit
+		// behind that check rather than proving the new parser.
+		it.each([
+			["a 400-digit integer", "1" + "0".repeat(400)],
+			["1e999", "1e999"],
+		])(
+			"refuses a contextInjection.retainMaxEntries of %s through the loader's JSON-data check (#5770)",
+			(_label, literal) => {
+				const home = makeTempHome();
+				const badPath = writeConfig(
+					home,
+					'{"contextInjection":{"enabled":false,"retainMaxEntries":' +
+						literal +
+						"}}",
+				);
+				const loaded = loadPiLensGlobalConfig(badPath);
+				expect(loaded?.contextInjection?.enabled).toBe(false);
+				expect(loaded?.contextInjection?.retainMaxEntries).toBeUndefined();
+				expect(console.error).toHaveBeenCalledWith(
+					expect.stringContaining("not valid JSON data (number); ignored"),
+				);
+			},
+		);
+
+		// Recurrence: a "000" string is what an env-style reader (#5772's
+		// `readLimitFromEnv`) reads as 0, no cap. A JSON config holds numbers
+		// only, so the string is refused like "unlimited", never coerced.
+		it('refuses a contextInjection.retainMaxEntries of the string "000" with a warning (#5770)', () => {
+			const home = makeTempHome();
+			const badPath = writeConfig(
+				home,
+				'{"contextInjection":{"enabled":false,"retainMaxEntries":"000"}}',
+			);
+			const loaded = loadPiLensGlobalConfig(badPath);
+			expect(loaded?.contextInjection?.enabled).toBe(false);
+			expect(loaded?.contextInjection?.retainMaxEntries).toBeUndefined();
+			expect(console.error).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"contextInjection.retainMaxEntries must be a whole number of 0 or more",
+				),
+			);
 		});
 
 		it("warns once on a present-but-invalid dispatch.runnerTimeoutFloorMs; absent stays silent", () => {

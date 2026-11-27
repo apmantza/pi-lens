@@ -21,7 +21,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { snapshotAdvisoryProvenance } from "../../clients/advisory-provenance.js";
 import { CacheManager } from "../../clients/cache-manager.js";
 import { MAX_RETAINED_ENTRIES } from "../../clients/context-injection-ledger.js";
@@ -29,6 +29,7 @@ import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
+	hostModule,
 	type PiProviderRequest,
 	type PiSession,
 	piAiModule,
@@ -57,10 +58,13 @@ interface TranscriptReplay {
 /** pi-ai's transcript replay, from the certified host's own install. */
 const piAi = piAiModule() as unknown as TranscriptReplay;
 
-function stage(cwd: string, text: string): void {
+// #5792: the record is the writing session's. No `sessionId` is the
+// coordinator's record (the primary); a second session on the activation reads
+// as its own id, so a record staged for it carries that id.
+function stage(cwd: string, text: string, sessionId?: string): void {
 	new CacheManager(false).writeCache(
 		"session-start-guidance",
-		{ content: text },
+		{ content: text, ...(sessionId ? { sessionId } : {}) },
 		cwd,
 	);
 }
@@ -344,6 +348,163 @@ describe("request N+1 keeps the exact prefix request N sent", () => {
 		expect((await contextRows(handle)).at(-1)).toMatchObject({
 			placement: "append-to-last-user",
 			retention: { retainedNew: false, declined: "entry-cap" },
+		});
+	});
+
+	// #5770: the caps come from `contextInjection.retainMax*` in the global config,
+	// read when the loaded copy starts, through the whole extension.
+	async function withRetainConfig<T>(
+		section: Record<string, number>,
+		run: () => Promise<T>,
+	): Promise<T> {
+		const configPath = path.join(fixture.root, "retain-caps-config.json");
+		fs.writeFileSync(configPath, JSON.stringify({ contextInjection: section }));
+		vi.stubEnv("PI_LENS_CONFIG_PATH", configPath);
+		try {
+			return await run();
+		} finally {
+			vi.unstubAllEnvs();
+			fs.rmSync(configPath, { force: true });
+		}
+	}
+
+	it("retainMaxEntries: 0 keeps every injection past the default cap", async () => {
+		const cwd = `${fixture.root}/tail-uncapped/proj`;
+		const findings = Array.from(
+			{ length: MAX_RETAINED_ENTRIES + 1 },
+			(_, index) => `TAIL_UNCAPPED_FINDING_${index}_END`,
+		);
+		await withRetainConfig({ retainMaxEntries: 0 }, async () => {
+			const handle = await session("tail-uncapped", [
+				...findings.map((finding) => stagingReply(cwd, finding)),
+				readCall(cwd),
+				fauxAssistantMessage("done"),
+			]);
+			await handle.prompt("look at the notes");
+			const last = findings.at(-1) ?? "";
+			const atLast = handle.requests.findIndex(
+				(request) => count(request, last) > 0,
+			);
+			const n = handle.requests[atLast];
+			expect(n).toBeTruthy();
+			if (!n) return;
+			expect(count(n, LABEL)).toBe(MAX_RETAINED_ENTRIES + 1);
+			const rows = await contextRows(handle);
+			expect(rows[atLast]).toMatchObject({
+				injectionOccurred: true,
+				retention: { retainedNew: true },
+			});
+			expect(rows[atLast]?.retention).not.toHaveProperty("declined");
+		});
+	});
+
+	it("retainMaxEntries: 2 declines the third injection with the entry cap", async () => {
+		const cwd = `${fixture.root}/tail-small-cap/proj`;
+		const findings = ["A", "B", "C"].map(
+			(letter) => `TAIL_SMALL_CAP_FINDING_${letter}_END`,
+		);
+		await withRetainConfig({ retainMaxEntries: 2 }, async () => {
+			const handle = await session("tail-small-cap", [
+				...findings.map((finding) => stagingReply(cwd, finding)),
+				readCall(cwd),
+				fauxAssistantMessage("done"),
+			]);
+			await handle.prompt("look at the notes");
+			const third = findings.at(-1) ?? "";
+			const atThird = handle.requests.findIndex(
+				(request) => count(request, third) > 0,
+			);
+			const n = handle.requests[atThird];
+			expect(n).toBeTruthy();
+			if (!n) return;
+			expect(count(n, LABEL)).toBe(2);
+			expect((await contextRows(handle))[atThird]).toMatchObject({
+				retention: { retainedNew: false, declined: "entry-cap" },
+			});
+		});
+	});
+
+	// #5770 F5. Recurrence prevented: `session_shutdown` cleared the cache
+	// prefix and the turn records of the ending session but never its ledger
+	// entries, so with `retainMaxSessions: 0` (no LRU eviction) a long-lived
+	// activation kept every ended session's retained injections forever.
+	// pi's own entry points never put two live sessions on one activation, so
+	// the second one is an embedder's, built from the first one's
+	// `ResourceLoader` (the shape of tests/index-4723).
+	it("a session's shutdown forgets its retained injections and keeps a live sibling's", async () => {
+		const SIBLING = "TAIL_SHUTDOWN_SIBLING_FINDING";
+		const ENDED = "TAIL_SHUTDOWN_ENDED_FINDING";
+		await withRetainConfig({ retainMaxSessions: 0 }, async () => {
+			const live = await session("tail-shutdown-live", [
+				fauxAssistantMessage("unused"),
+			]);
+			interface EmbeddedRunner {
+				emit(event: Record<string, unknown>): Promise<unknown>;
+				emitContext(
+					messages: Array<{ role: string; content: unknown }>,
+				): Promise<Array<{ role: string; content: unknown }>>;
+			}
+			interface EmbeddedSession {
+				readonly model: unknown;
+				readonly modelRuntime: unknown;
+				readonly settingsManager: unknown;
+				readonly resourceLoader: unknown;
+				readonly sessionManager: { getSessionId(): string };
+				readonly extensionRunner: EmbeddedRunner;
+				bindExtensions(bindings: {
+					onError: (error: unknown) => void;
+				}): Promise<void>;
+				dispose(): void;
+			}
+			const liveSession = live.session as unknown as EmbeddedSession;
+			const endedCwd = path.join(fixture.root, "tail-shutdown-ended", "proj");
+			fs.mkdirSync(path.join(endedCwd, ".git"), { recursive: true });
+			const host = hostModule();
+			const created = await host.createAgentSessionFromServices({
+				services: {
+					cwd: endedCwd,
+					agentDir: path.join(fixture.root, "agent"),
+					modelRuntime: liveSession.modelRuntime,
+					settingsManager: liveSession.settingsManager,
+					resourceLoader: liveSession.resourceLoader,
+				},
+				sessionManager: host.SessionManager.inMemory(endedCwd),
+				model: liveSession.model,
+			} as unknown as Parameters<
+				typeof host.createAgentSessionFromServices
+			>[0]);
+			const ended = created.session as unknown as EmbeddedSession;
+			try {
+				await ended.bindExtensions({ onError: () => undefined });
+				expect(ended.sessionManager.getSessionId()).not.toBe(
+					liveSession.sessionManager.getSessionId(),
+				);
+				// The same transcript on both: the ledger keys by session id.
+				const transcript = () => [{ role: "user", content: "question" }];
+				const sent = async (runner: EmbeddedRunner, text: string) =>
+					count(
+						(await runner.emitContext(transcript())) as PiProviderRequest,
+						text,
+					);
+				stage(live.cwd, SIBLING);
+				expect(await sent(liveSession.extensionRunner, SIBLING)).toBe(1);
+				stage(endedCwd, ENDED, ended.sessionManager.getSessionId());
+				expect(await sent(ended.extensionRunner, ENDED)).toBe(1);
+				// Control: with nothing newly staged, a retained entry is re-sent.
+				expect(await sent(liveSession.extensionRunner, SIBLING)).toBe(1);
+				expect(await sent(ended.extensionRunner, ENDED)).toBe(1);
+
+				await ended.extensionRunner.emit({
+					type: "session_shutdown",
+					reason: "quit",
+				});
+
+				expect(await sent(ended.extensionRunner, ENDED)).toBe(0);
+				expect(await sent(liveSession.extensionRunner, SIBLING)).toBe(1);
+				expect(live.errors).toEqual([]);
+			} finally {
+				ended.dispose();
+			}
 		});
 	});
 
