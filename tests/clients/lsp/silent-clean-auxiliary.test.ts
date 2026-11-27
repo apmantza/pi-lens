@@ -536,4 +536,34 @@ describe("with-auxiliary silent-clean confirm (per-edit dispatch path)", () => {
 		expect((result as { inconclusive?: boolean }).inconclusive).toBe(true);
 		expect(unknown.pingLiveness).not.toHaveBeenCalled();
 	});
+
+	it("a warm primary client with no liveness probe stays inconclusive", async () => {
+		// Recurrence (#5775 review F1, its fail-closed half): the gate read a
+		// missing probe as "alive", so a transport that cannot be asked was
+		// certified clean on silence alone.
+		const filePath = path.join(tmp, "i.md");
+		fs.writeFileSync(filePath, "# hi\n");
+		const marksman = makeServer("marksman", ".md", tmp);
+		const typos = makeServer("typos", ".md", tmp, "auxiliary");
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".md") ? [marksman, typos] : [],
+		);
+		const { pingLiveness: _absent, ...unprobed } = makeSilentPushOnlyClient(
+			"marksman",
+			tmp,
+		).client;
+		createLSPClient.mockImplementation(async (opts: { serverId: string }) =>
+			opts.serverId === "typos"
+				? makeAnsweringClient("typos", tmp, filePath).client
+				: unprobed,
+		);
+
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		await service.touchFile(filePath, "# hi\n", perEditOptions);
+		const result = await service.touchFile(filePath, "# hi\n", perEditOptions);
+
+		expect((result as { inconclusive?: boolean }).inconclusive).toBe(true);
+		expect(unprobed.hasUnwithdrawnPushFindings).toHaveBeenCalled();
+	});
 });

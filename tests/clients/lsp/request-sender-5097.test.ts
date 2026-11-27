@@ -427,6 +427,39 @@ describe("a pushed finding stays unwithdrawn until the server withdraws it (#577
 			},
 		);
 	}, 15_000);
+
+	// The same withdrawal through the seed-first-push store, the one a server
+	// whose first push is its complete answer (`python`) takes after a clear.
+	it("an empty first push after a didChange withdraws it on a seed-first-push server", async () => {
+		await withHangingServer(
+			"",
+			async (ctx) => {
+				await vi.waitFor(
+					() =>
+						expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(
+							true,
+						),
+					{ timeout: 5000, interval: 10 },
+				);
+				// didChange answers with the sequence alone: one empty push.
+				await ctx.client.notify.change(ctx.file, "function greet() { }\n");
+				await vi.waitFor(
+					() =>
+						expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(
+							false,
+						),
+					{ timeout: 5000, interval: 10 },
+				);
+			},
+			{
+				serverId: "python",
+				env: {
+					FAKE_LSP_PUSH_DIAGNOSTIC: "1",
+					FAKE_LSP_PUBLISH_SEQUENCE: "empty",
+				},
+			},
+		);
+	}, 15_000);
 });
 
 describe("a firing bound cancels the request its LSP work started (#5097)", () => {

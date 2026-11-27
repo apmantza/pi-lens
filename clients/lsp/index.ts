@@ -6636,11 +6636,12 @@ export class LSPService {
 								const liveness = await Promise.all(
 									outstanding.map(async (entry) => {
 										try {
+											// A client with no probe is unknown, and unknown is never clean.
 											return (
 												(await entry.client.pingLiveness?.(
 													undefined,
 													getAmbientAbortSignal(),
-												)) ?? true
+												)) ?? false
 											);
 										} catch (livenessError) {
 											// A probe that THREW is a wedged server, so the verdict is the same
