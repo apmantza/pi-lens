@@ -3673,7 +3673,7 @@ describe("#5790 witness: a cascade note with no finding does not hold the commit
 	// clean by source=lsp kept its pending cascade error on every later turn.
 	// The refusal now names the steps that clear the hold, and following them
 	// does, for both ways of re-checking the neighbour.
-	it.each(["write", "source=lsp"] as const)(
+	it.each(["write", "source=lsp", "source=lsp on its directory"] as const)(
 		"names the steps that clear a held neighbour error, and following them clears it (%s)",
 		async (recheck) => {
 			boundary.lsp.enabled = true;
@@ -3703,7 +3703,13 @@ describe("#5790 witness: a cascade note with no finding does not hold the commit
 			if (recheck === "write") await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
 			else {
 				fs.writeFileSync(path.join(tmpDir, NEIGHBOUR), NEIGHBOUR_FIXED);
-				expect(await s.settleOther(NEIGHBOUR)).toMatch(/confirmed clean/);
+				// The directory form goes through the batch collector, a second
+				// caller of the confirmed-clean hook.
+				const probed =
+					recheck === "source=lsp" ? NEIGHBOUR : path.dirname(NEIGHBOUR);
+				expect(await s.settleOther(probed)).toMatch(
+					recheck === "source=lsp" ? /confirmed clean/ : /No diagnostics found/,
+				);
 			}
 			await s.endTurn();
 			expect(await s.commitReason()).toBe("");

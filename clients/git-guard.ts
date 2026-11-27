@@ -3251,15 +3251,10 @@ export function evaluateGitGuard(
 		return unknown(cwd, "session_mismatch", {}, recordRemedy());
 	}
 	if (record.projectSeqEnd !== runtime.projectSeq) {
-		return unknown(
-			cwd,
-			"project_sequence_mismatch",
-			{
-				recordedProjectSeq: record.projectSeqEnd,
-				currentProjectSeq: runtime.projectSeq,
-			},
-			recordRemedy(),
-		);
+		return unknown(cwd, "project_sequence_mismatch", {
+			recordedProjectSeq: record.projectSeqEnd,
+			currentProjectSeq: runtime.projectSeq,
+		});
 	}
 	const liveFiles: string[] = [];
 	for (const file of record.affectedFiles) {
@@ -3270,12 +3265,7 @@ export function evaluateGitGuard(
 			recordedSeq === undefined ||
 			recordedSeq !== (runtime.getFileSeq?.(resolved) ?? 0)
 		) {
-			return unknown(
-				cwd,
-				"file_sequence_mismatch",
-				{ file: resolved },
-				recordRemedy(),
-			);
+			return unknown(cwd, "file_sequence_mismatch", { file: resolved });
 		}
 		try {
 			if (
@@ -3291,12 +3281,7 @@ export function evaluateGitGuard(
 						currentHash.startsWith("unreadable:") ||
 						expectedHash !== currentHash
 					) {
-						return unknown(
-							cwd,
-							"file_content_changed",
-							{ file: resolved },
-							recordRemedy(),
-						);
+						return unknown(cwd, "file_content_changed", { file: resolved });
 					}
 				}
 			}
