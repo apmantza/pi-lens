@@ -508,7 +508,7 @@ dispatched nightly replaces it on the first night that reaches the server.
 | csharp | `save+text` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 1 diagnostic. Gated. | `node scripts/probe-save-verdict.mjs` (fixture csharp) |
 | deno | `save` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 1 diagnostic. Gated. | `node scripts/probe-save-verdict.mjs` (fixture deno) |
 | svelte | `save` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 2 diagnostics. Gated. | `node scripts/probe-save-verdict.mjs` (fixture svelte) |
-| powershell | `save+text` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 1 publish event. Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture powershell) |
+| powershell | `save+text` | yes | Measured: only the save published — silent on didOpen (6000 ms), then 1 publish event after the save alone. Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture powershell) |
 | cmake | `save` | inconclusive | Measured: inconclusive — no arm published, so this fixture does not distinguish a save-triggered server from one that never diagnoses it (arms: no-save silent (6000 ms), save alone silent (6000 ms), saved write silent (6000 ms)). Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture cmake) |
 
 Notes.
@@ -586,5 +586,5 @@ the pending `idle-eviction-doc` flips (#5667).
 Regenerated every run; never a measurement.
 
 ```json
-{"clean-behavior":{"fallow":{"pendingBehavior":"silent","pendingTier":"3","runs":1}},"first-publish":{"fallow":{"pendingFirstPublish":"direct","runs":1}},"idle-eviction":{"csharp":{"nights":[{"day":"2026-11-19","rssMb":236,"coldMs":2942},{"day":"2026-11-20","rssMb":237,"coldMs":2951}]},"dart":{"nights":[{"day":"2026-11-06","rssMb":75,"coldMs":511},{"day":"2026-11-07","rssMb":75,"coldMs":538}]},"go":{"nights":[{"day":"2026-11-06","rssMb":89,"coldMs":567},{"day":"2026-11-07","rssMb":90,"coldMs":595}]}},"save-verdict":{"powershell":{"pendingSaveVerdict":"yes","runs":1}}}
+{"clean-behavior":{"fallow":{"pendingBehavior":"silent","pendingTier":"3","runs":1}},"first-publish":{"fallow":{"pendingFirstPublish":"direct","runs":1}},"idle-eviction":{"csharp":{"nights":[{"day":"2026-11-19","rssMb":236,"coldMs":2942},{"day":"2026-11-20","rssMb":237,"coldMs":2951}]},"dart":{"nights":[{"day":"2026-11-06","rssMb":75,"coldMs":511},{"day":"2026-11-07","rssMb":75,"coldMs":538}]},"go":{"nights":[{"day":"2026-11-06","rssMb":89,"coldMs":567},{"day":"2026-11-07","rssMb":90,"coldMs":595}]}}}
 ```
