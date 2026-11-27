@@ -2416,7 +2416,9 @@ function unconfirmedRecordRemedy(
 		// #5790 r3: text no file owns is not cleared by a write.
 		const unattributed = unattributedRecordRemedy(record, cwd, diagnosticsTool);
 		if (unattributed) {
-			return `${unattributed}${testRemedy ? ` ${testRemedy}` : ""} Then retry.`;
+			return [unattributed, testRemedy, "Then retry."]
+				.flatMap((part) => (part ? [part] : []))
+				.join(" ");
 		}
 		// #4733 r1 F5: a write re-checks this session's own files, and clears no
 		// test failure, so a record that holds one names the passing run too.

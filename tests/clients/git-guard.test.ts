@@ -1670,6 +1670,44 @@ describe("#4725: the record's writers read it whatever its age", () => {
 		}
 	});
 
+	it("keeps the failing-test step beside the steps for blockers no file owns", () => {
+		// Recurrence (#5790 r3): the remedy for this session's record holding
+		// a cascade section replaced the write sentence, and must not drop the
+		// test-failure sentence that sat beside it.
+		const env = setupTestEnvironment("pi-lens-git-guard-5790-hold-tests-");
+		try {
+			const file = path.join(env.tmpDir, "a.ts");
+			fs.writeFileSync(file, "const x = 1;\n");
+			const runtime = sessionA(env.tmpDir);
+			const cache = new CacheManager(false);
+			const text =
+				"📐 Cascade errors in 1 neighbor file(s) — fix before finishing:\n  b.ts: L3 Cannot find name 'BAD_CALL'.";
+			writeGitGuardRecord(
+				cache,
+				runtime,
+				env.tmpDir,
+				record({
+					content: text,
+					blockerContent: text,
+					hasBlockers: true,
+					affectedFiles: [file],
+					blockingFiles: [file],
+					testFailures: true,
+					testFailureContent: "FAIL 0p/1f",
+					testFailureFiles: [file],
+				}),
+			);
+			runtime.markGitGuardCacheUnknown("cache_write_failed", env.tmpDir);
+			const reason = evaluateGitGuard(runtime, cache, env.tmpDir).reason ?? "";
+			expect(reason).toContain("no write of one file clears them now.");
+			expect(reason).toContain(
+				"Run the failing tests again: a passing run clears them. Then retry.",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("caps the files a refusal names and says how many it left out, and names failing tests", () => {
 		// An agent-facing list is bounded and discloses its cut (AGENTS.md
 		// shape 10); a record that also holds test failures says what clears
