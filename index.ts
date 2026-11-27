@@ -4255,7 +4255,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 		// errors, when it is newer than the observation that recorded them.
 		onResolvedClean: ({ filePath, publishedAt }) => {
 			reconcileCascadeNeighborLspErrors(filePath, [], undefined, publishedAt);
-			forgetCascadePendingNeighbor(filePath, publishedAt);
+			// The touch was primary-scope: only the rows the primary server
+			// raised, which the dispatch runner tags `lsp` (#5804 sweep).
+			forgetCascadePendingNeighbor(filePath, publishedAt, ["lsp"]);
 		},
 	});
 	// #484: emit the opt-in run summary entry HERE, not at turn_end. The SDK's
