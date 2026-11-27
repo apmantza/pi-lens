@@ -3826,6 +3826,39 @@ describe("#5790 witness: a cascade note with no finding does not hold the commit
 		await fixAndDrain(s);
 	}, 120_000);
 
+	// Recurrence (#5804, a write is a transition): the last write of the turn
+	// decides. A write a server answered for, then one it did not, leaves the
+	// file unconfirmed; the first write's answer must not speak for the second.
+	it("keeps a neighbour's pending error when an unanswered write follows an answered one", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("cw", TARGET, TARGET_FIXED);
+		removeNeighbourOnCleanup();
+		const neighbour = path.join(tmpDir, NEIGHBOUR);
+		fs.writeFileSync(neighbour, NEIGHBOUR_BAD);
+		expect(await s.write(TARGET_BAD)).toContain("🔴 STOP");
+		boundary.lsp.mode = "inconclusive";
+		await s.write(TARGET_BAD_OTHER);
+		boundary.lsp.mode = "answer";
+		expect(await s.endTurn()).toContain(CASCADE_ERRORS);
+		fs.writeFileSync(s.target, TARGET_FIXED);
+		expect(await s.settleCall({ source: "lsp", waitMs: 30000 })).toMatch(
+			/confirmed clean/,
+		);
+		try {
+			await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+			boundary.lsp.mode = "inconclusive";
+			await s.writeOther(NEIGHBOUR, NEIGHBOUR_BAD + "export const d = 4;\n");
+			boundary.lsp.mode = "answer";
+			await s.endTurn();
+			expect(fs.readFileSync(neighbour, "utf8")).toContain("BAD_CALL();");
+			expect(await s.commitReason()).toContain(HOLD_REMEDY);
+		} finally {
+			forgetCascadePendingNeighbor(neighbour);
+		}
+		await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
+
 	// Recurrence (#5790 review F2): a source=lsp probe covers the sources its
 	// servers answered for, so it retires only the pending rows those sources
 	// raised. A knip row it never observed stayed forgotten with the lsp ones.

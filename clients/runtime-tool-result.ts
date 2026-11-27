@@ -1605,16 +1605,11 @@ function publishInlineVerdict(args: {
 
 	// A superseded verdict must not latch the commit gate either (#3507).
 	if (resultLive) {
-		// #5804: an applied, authored run a language server answered for reports
-		// whatever error the file still holds, so it speaks for the file's
-		// pending cascade errors. An unanswered or unauthored run (an
-		// inconclusive server, a withheld blocker channel) speaks for none.
-		if (
-			inlineVerdictApplied &&
-			authored &&
-			!result.isError &&
-			(result.verdictRunnerIds ?? []).includes("lsp")
-		)
+		// #5804: an applied run a language server answered for reports whatever
+		// error the file still holds, so it speaks for the file's pending
+		// cascade errors. An unanswered run (an inconclusive server) speaks for
+		// none.
+		if (inlineVerdictApplied && (result.verdictRunnerIds ?? []).includes("lsp"))
 			noteCascadeWrite(filePath, true);
 		// #5020: this write's clean verdict on `filePath` also speaks for the rows
 		// OTHER files' records hold against it. A chart-wide runner reports
