@@ -147,22 +147,24 @@ beforeAll(async () => {
 		);
 		const runtime = new RuntimeCoordinator();
 		runtime.projectRoot = env.tmpDir;
-		await handleToolCall({
-			event: {
-				toolName: "bash",
-				toolCallId: "5798-warm",
-				input: { command: `sed -i 's/warm/cold/' ${filePath}` },
-			},
-			ctx: { cwd: env.tmpDir },
-			lensEnabled: true,
-			getFlag: () => false,
-			dbg: () => {},
-			runtime,
-			cacheManager: new CacheManager(false),
-			ensureLSPConfigInitialized: async () => {},
-			updateLspStatus: () => {},
-			resetLSPService: () => {},
-		} as any);
+		await runHandlerExpectingNoThrow(() =>
+			handleToolCall({
+				event: {
+					toolName: "bash",
+					toolCallId: "5798-warm",
+					input: { command: `sed -i 's/warm/cold/' ${filePath}` },
+				},
+				ctx: { cwd: env.tmpDir },
+				lensEnabled: true,
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				ensureLSPConfigInitialized: async () => {},
+				updateLspStatus: () => {},
+				resetLSPService: () => {},
+			} as any),
+		);
 	} finally {
 		env.cleanup();
 	}
