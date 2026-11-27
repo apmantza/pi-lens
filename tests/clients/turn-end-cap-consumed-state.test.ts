@@ -2879,4 +2879,38 @@ describe("#5790: the commit gate's record keeps only cascade sections that show 
 			}
 		},
 	);
+
+	// The second writer: a turn end that repeats a message no request took yet
+	// rewrites the record on its duplicate path (#5240), from the same parts.
+	it("leaves the note out of the record a duplicate turn end rewrites", async () => {
+		const rig = makeRig("pi-lens-5790-dup-");
+		try {
+			rig.lensGuard = true;
+			const file = touch(rig, "a.ts", "eval(x);\n");
+			rig.runtime.recordInlineBlockers(
+				file,
+				"🔴 STOP — 1 issue(s) must be fixed:\n  L1: eval() is banned",
+				rig.runtime.nextWriteIndex(),
+				["ast-grep"],
+				[1],
+			);
+			const form = { layout: true, coverageLine: "", diagnostic: false };
+			const deps = () =>
+				makeDeps(rig.runtime, rig.cacheManager, rig.cwd, undefined, true);
+			run(rig, form);
+			await handleTurnEnd(deps());
+			run(rig, form);
+			await handleTurnEnd(deps());
+			const record = rig.cacheManager.readCache<{
+				blockerContent?: string;
+				consumed?: boolean;
+			}>("turn-end-findings", rig.cwd, Number.POSITIVE_INFINITY)?.data;
+			// The duplicate path marks the record consumed; the first write does not.
+			expect(record?.consumed).toBe(true);
+			expect(record?.blockerContent).toContain("eval() is banned");
+			expect(record?.blockerContent).not.toContain(NOTE);
+		} finally {
+			rig.cleanup();
+		}
+	});
 });

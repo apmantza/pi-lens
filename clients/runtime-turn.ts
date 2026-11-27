@@ -2519,7 +2519,6 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					testSection += `\n  ... and ${testSuggestions.length - 5} more`;
 				}
 				parts.push(testSection);
-				sectionShowsFinding = true;
 				// #4617: the lines name test files, so the joined section speaks for
 				// them too (the "and N more" line stands for the whole list).
 				sectionPrimaries.push(...testSuggestions.map((s) => s.testFile));
