@@ -27,21 +27,21 @@ let previousHome: string | undefined;
 async function pl5802Sequence(tag: string, base: string): Promise<string> {
 	const laps: string[] = [];
 	let t0 = performance.now();
-	let cpu0 = process.cpuUsage();
+	let elu0 = performance.eventLoopUtilization();
 	let step = "start";
 	const lap = (label: string) => {
 		const now = performance.now();
-		const cpu = process.cpuUsage(cpu0);
+		const elu = performance.eventLoopUtilization(elu0);
 		laps.push(
 			label +
 				"=" +
 				Math.round(now - t0) +
-				"ms(cpu " +
-				Math.round((cpu.user + cpu.system) / 1000) +
-				"ms)",
+				"ms(elu " +
+				elu.utilization.toFixed(2) +
+				")",
 		);
 		t0 = now;
-		cpu0 = process.cpuUsage();
+		elu0 = performance.eventLoopUtilization();
 		step = "after " + label;
 		// Logged live: a cell that times out still shows the last finished lap.
 		console.log("PL5802-LAP " + tag + " " + laps.at(-1));
