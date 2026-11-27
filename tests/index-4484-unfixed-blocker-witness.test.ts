@@ -3869,6 +3869,53 @@ describe("#5790 witness: a cascade note with no finding does not hold the commit
 		await fixAndDrain(s);
 	}, 120_000);
 
+	// Recurrence (#5804, a timeout is a transition): the file's earlier write
+	// was answered, and a later write is still in flight when the turn ends,
+	// so it has published no verdict. The earlier answer must not speak for
+	// the bytes now on disk.
+	it("keeps a neighbour's pending error while a later write of it is still in flight at the turn end", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("cx", TARGET, TARGET_FIXED);
+		removeNeighbourOnCleanup();
+		const neighbour = path.join(tmpDir, NEIGHBOUR);
+		fs.writeFileSync(neighbour, NEIGHBOUR_BAD);
+		expect(await s.write(TARGET_BAD)).toContain("🔴 STOP");
+		boundary.lsp.mode = "inconclusive";
+		await s.write(TARGET_BAD_OTHER);
+		boundary.lsp.mode = "answer";
+		expect(await s.endTurn()).toContain(CASCADE_ERRORS);
+		fs.writeFileSync(s.target, TARGET_FIXED);
+		expect(await s.settleCall({ source: "lsp", waitMs: 30000 })).toMatch(
+			/confirmed clean/,
+		);
+		let inFlight: Promise<void> | undefined;
+		try {
+			await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+			boundary.lsp.mode = "hold";
+			let held!: () => void;
+			const holding = new Promise<void>((resolve) => {
+				held = resolve;
+			});
+			boundary.lsp.onHold = () => held();
+			inFlight = s.writeOther(
+				NEIGHBOUR,
+				NEIGHBOUR_BAD + "export const d = 4;\n",
+			);
+			await holding;
+			boundary.lsp.onHold = undefined;
+			await s.endTurn();
+			expect(fs.readFileSync(neighbour, "utf8")).toContain("BAD_CALL();");
+			expect(await s.commitReason()).toContain(HOLD_REMEDY);
+		} finally {
+			boundary.lsp.mode = "answer";
+			for (const release of boundary.lsp.held.splice(0)) release(true);
+			await inFlight;
+			forgetCascadePendingNeighbor(neighbour);
+		}
+		await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
+
 	// Recurrence (#5790 review F2): a source=lsp probe covers the sources its
 	// servers answered for, so it retires only the pending rows those sources
 	// raised. A knip row it never observed stayed forgotten with the lsp ones.
