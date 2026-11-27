@@ -235,26 +235,25 @@ export type ConfigSourceDigest =
 	| {
 			readonly file: string;
 			readonly tier: SourceTier;
-			readonly exists: false;
+			readonly state: "absent";
 	  }
 	| {
 			readonly file: string;
 			readonly tier: SourceTier;
-			readonly exists: true;
-			readonly readable: false;
+			readonly state: "unreadable";
 	  }
 	| {
 			readonly file: string;
 			readonly tier: SourceTier;
-			readonly exists: true;
-			readonly readable: true;
+			readonly state: "readable";
+			readonly parsed: boolean;
 			readonly sha256: string;
 			readonly byteLength: number;
 	  };
 
 export interface PiLensConfigResolution {
-	/** Read-time candidate source digests (existing and absent candidate paths). */
-	readonly contributingConfigSources: readonly ConfigSourceDigest[];
+	/** Read-time digests for every inspected candidate path (present, unreadable, and absent). */
+	readonly inspectedConfigSources: readonly ConfigSourceDigest[];
 	/** The merged configuration. */
 	readonly value: Record<string, unknown>;
 	readonly provenance: ReadonlyMap<string, Provenance>;
@@ -298,20 +297,21 @@ function readConfigDocumentAndDigest(
 			outcome: raw,
 			digest:
 				"error" in raw
-					? { file, tier, exists: true, readable: false }
-					: { file, tier, exists: false },
+					? { file, tier, state: "unreadable" }
+					: { file, tier, state: "absent" },
 		};
 	}
+	const outcome = parseConfigJson(raw.toString("utf-8"));
 	const digest: ConfigSourceDigest = {
 		file,
 		tier,
-		exists: true,
-		readable: true,
+		state: "readable",
+		parsed: "value" in outcome,
 		sha256: createHash("sha256").update(raw).digest("hex"),
 		byteLength: raw.byteLength,
 	};
 	return {
-		outcome: parseConfigJson(raw.toString("utf-8")),
+		outcome,
 		digest,
 	};
 }
@@ -350,7 +350,7 @@ function collectDocuments(
 }
 
 /**
- * The non-legacy project locations -- the merge input set for a caller that
+ * The non-legacy project locations — the merge input set for a caller that
  * passed `excludeLegacyProjectDocuments`. Derived from the same registry,
  * never a second literal list (#2426 single-source rule).
  */
@@ -507,14 +507,31 @@ export function summarizeConfigResolution(
 	};
 }
 
+/** Deterministic fingerprint of an inspected config-source digest sequence. */
+export function configSourcesFingerprint(
+	sources: readonly ConfigSourceDigest[],
+): string {
+	const hash = createHash("sha256");
+	for (const entry of sources) {
+		if (entry.state === "readable") {
+			hash.update(
+				`${entry.tier}\0${entry.file}\0${entry.state}\0${entry.parsed ? "1" : "0"}\0${entry.byteLength}\0${entry.sha256}\n`,
+			);
+		} else {
+			hash.update(`${entry.tier}\0${entry.file}\0${entry.state}\n`);
+		}
+	}
+	return hash.digest("hex");
+}
+
 /** Resolve every discovered document into one configuration. */
 export function resolvePiLensConfig(
 	options: ResolvePiLensConfigOptions,
 ): PiLensConfigResolution {
-	const contributingConfigSources: ConfigSourceDigest[] = [];
+	const inspectedConfigSources: ConfigSourceDigest[] = [];
 	const documents = collectPiLensConfigDocuments(
 		options,
-		contributingConfigSources,
+		inspectedConfigSources,
 	);
 	const sources = configSources(documents);
 	const resolution = resolveConfig<Record<string, unknown>>({
@@ -523,7 +540,7 @@ export function resolvePiLensConfig(
 	});
 	return {
 		value: resolution.resolved.value ?? {},
-		contributingConfigSources,
+		inspectedConfigSources,
 		provenance: resolution.resolved.provenance,
 		records: finalizeRecords(
 			[

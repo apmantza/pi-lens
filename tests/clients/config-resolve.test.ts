@@ -24,6 +24,7 @@ import {
 import {
 	type ConfigReadFailure,
 	MAX_CONFIG_BYTES,
+	configSourcesFingerprint,
 	deprecationRecords,
 	lspSectionOf,
 	readConfigDocument,
@@ -454,8 +455,8 @@ describe("location table agrees with the deprecation registry (#2418/#2426)", ()
 	});
 });
 
-describe("contributingConfigSources read-time digests", () => {
-	it("records sha256 and byteLength for existing files and exists:false for absent candidates", () => {
+describe("inspectedConfigSources read-time digests", () => {
+	it("records sha256, byteLength, and parsed=true for valid JSON and state=absent for absent candidates", () => {
 		const root = tmpRoot();
 		const home = path.join(root, "home");
 		const globalDir = path.join(home, ".pi-lens");
@@ -473,30 +474,145 @@ describe("contributingConfigSources read-time digests", () => {
 			homeDir: home,
 		});
 
-		const present = resolved.contributingConfigSources.find(
+		const present = resolved.inspectedConfigSources.find(
 			(entry) => entry.file === projectFile,
 		);
 		expect(present).toEqual({
 			file: projectFile,
 			tier: "project",
-			exists: true,
-			readable: true,
+			state: "readable",
+			parsed: true,
 			sha256: expectedSha,
 			byteLength: rawBytes.byteLength,
 		});
 
-		const absentGlobal = resolved.contributingConfigSources.find(
+		const absentGlobal = resolved.inspectedConfigSources.find(
 			(entry) =>
 				entry.file === path.join(globalDir, CANONICAL_GLOBAL_CONFIG_FILE),
 		);
 		expect(absentGlobal).toEqual({
 			file: path.join(globalDir, CANONICAL_GLOBAL_CONFIG_FILE),
 			tier: "global",
-			exists: false,
+			state: "absent",
 		});
 	});
 
-	it("marks an existing unreadable candidate as exists:true, readable:false and invokes onReadError", () => {
+	it("marks invalid JSON as state=readable, parsed=false alongside sha256 and byteLength", () => {
+		const root = tmpRoot();
+		const home = path.join(root, "home");
+		const globalDir = path.join(home, ".pi-lens");
+		const projectRoot = path.join(home, "proj");
+		fs.mkdirSync(projectRoot, { recursive: true });
+		const projectFile = path.join(projectRoot, CANONICAL_PROJECT_CONFIG_FILE);
+		const invalidBody = "{ not json";
+		fs.writeFileSync(projectFile, invalidBody, "utf8");
+		const rawBytes = Buffer.from(invalidBody, "utf8");
+		const expectedSha = createHash("sha256").update(rawBytes).digest("hex");
+
+		const failures: ConfigReadFailure[] = [];
+		const broken = resolvePiLensConfig({
+			cwd: projectRoot,
+			globalDir,
+			globalConfigPath: path.join(globalDir, CANONICAL_GLOBAL_CONFIG_FILE),
+			homeDir: home,
+			onReadError: (failure) => failures.push(failure),
+		});
+
+		expect(failures).toHaveLength(1);
+		expect(broken.documents).toEqual([]);
+		expect(
+			broken.inspectedConfigSources.find((entry) => entry.file === projectFile),
+		).toEqual({
+			file: projectFile,
+			tier: "project",
+			state: "readable",
+			parsed: false,
+			sha256: expectedSha,
+			byteLength: rawBytes.byteLength,
+		});
+
+		fs.writeFileSync(projectFile, "{}", "utf8");
+		const fixed = resolvePiLensConfig({
+			cwd: projectRoot,
+			globalDir,
+			globalConfigPath: path.join(globalDir, CANONICAL_GLOBAL_CONFIG_FILE),
+			homeDir: home,
+		});
+		expect(
+			fixed.inspectedConfigSources.find((entry) => entry.file === projectFile),
+		).toMatchObject({
+			state: "readable",
+			parsed: true,
+		});
+		expect(configSourcesFingerprint(broken.inspectedConfigSources)).not.toBe(
+			configSourcesFingerprint(fixed.inspectedConfigSources),
+		);
+	});
+
+	it("records absent digests for empty intermediate directories and relabels nested tiers", () => {
+		const root = tmpRoot();
+		const home = path.join(root, "home");
+		const globalDir = path.join(home, ".pi-lens");
+		const outer = path.join(home, "outer");
+		const middle = path.join(outer, "middle");
+		const inner = path.join(middle, "inner");
+		fs.mkdirSync(inner, { recursive: true });
+
+		const outerFile = path.join(outer, CANONICAL_PROJECT_CONFIG_FILE);
+		const innerFile = path.join(inner, CANONICAL_PROJECT_CONFIG_FILE);
+		write(outerFile, { lsp: { warmFiles: ["outer.ts"] } });
+		write(innerFile, { lsp: { warmFiles: ["inner.ts"] } });
+
+		const resolved = resolvePiLensConfig({
+			cwd: inner,
+			globalDir,
+			globalConfigPath: path.join(globalDir, CANONICAL_GLOBAL_CONFIG_FILE),
+			homeDir: home,
+		});
+
+		// Outermost config-bearing dir gets tier "project" for all its candidates.
+		for (const location of PROJECT_CONFIG_LOCATIONS) {
+			const outerCandidate = path.join(outer, location.relativePath);
+			const digest = resolved.inspectedConfigSources.find(
+				(entry) => entry.file === outerCandidate,
+			);
+			expect(digest).toBeDefined();
+			expect(digest?.tier).toBe("project");
+			expect(digest?.state).toBe(
+				outerCandidate === outerFile ? "readable" : "absent",
+			);
+		}
+
+		// Empty middle dir must still emit every candidate with state "absent"
+		// and be relabeled to "nested-project" because outer already bore config.
+		for (const location of PROJECT_CONFIG_LOCATIONS) {
+			const middleCandidate = path.join(middle, location.relativePath);
+			expect(
+				resolved.inspectedConfigSources.find(
+					(entry) => entry.file === middleCandidate,
+				),
+			).toEqual({
+				file: middleCandidate,
+				tier: "nested-project",
+				state: "absent",
+			});
+		}
+
+		// Inner config-bearing dir gets "nested-project" for both present and absent candidates.
+		for (const location of PROJECT_CONFIG_LOCATIONS) {
+			const innerCandidate = path.join(inner, location.relativePath);
+			const digest = resolved.inspectedConfigSources.find(
+				(entry) => entry.file === innerCandidate,
+			);
+			expect(digest).toBeDefined();
+			expect(digest?.tier).toBe("nested-project");
+			expect(digest?.state).toBe(
+				innerCandidate === innerFile ? "readable" : "absent",
+			);
+		}
+	});
+
+	it("marks an existing unreadable candidate as state=unreadable and invokes onReadError", () => {
 		const root = tmpRoot();
 		const home = path.join(root, "home");
 		const globalDir = path.join(home, ".pi-lens");
@@ -520,14 +636,13 @@ describe("contributingConfigSources read-time digests", () => {
 			tier: "project",
 			sourceText: undefined,
 		});
-		const unreadable = resolved.contributingConfigSources.find(
+		const unreadable = resolved.inspectedConfigSources.find(
 			(entry) => entry.file === projectFile,
 		);
 		expect(unreadable).toEqual({
 			file: projectFile,
 			tier: "project",
-			exists: true,
-			readable: false,
+			state: "unreadable",
 		});
 	});
 
@@ -566,14 +681,14 @@ describe("contributingConfigSources read-time digests", () => {
 			expect(failures).toEqual([]);
 			expect(resolved.documents.map((doc) => doc.file)).toContain(projectFile);
 			expect(
-				resolved.contributingConfigSources.find(
+				resolved.inspectedConfigSources.find(
 					(entry) => entry.file === projectFile,
 				),
 			).toEqual({
 				file: projectFile,
 				tier: "project",
-				exists: true,
-				readable: true,
+				state: "readable",
+				parsed: true,
 				sha256: expectedSha,
 				byteLength: acceptedBytes,
 			});
@@ -603,14 +718,13 @@ describe("contributingConfigSources read-time digests", () => {
 		expect(overResolved.documents).toEqual([]);
 		expect(readConfigDocument(overFile).status).toBe("error");
 		expect(
-			overResolved.contributingConfigSources.find(
+			overResolved.inspectedConfigSources.find(
 				(entry) => entry.file === overFile,
 			),
 		).toEqual({
 			file: overFile,
 			tier: "project",
-			exists: true,
-			readable: false,
+			state: "unreadable",
 		});
 	});
 });
