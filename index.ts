@@ -5031,6 +5031,16 @@ function activateExtension(hostPi: ExtensionAPI) {
 		try {
 			const cwd = ctx.cwd ?? process.cwd();
 
+			if (!effectiveInjectionEnabled) {
+				// #4743: injection switched off mid-session also stops re-sending
+				// what was retained, so no request carries pi-lens bytes while off.
+				// Unconditional (a Map delete): the API default is resolved only past
+				// this return, so a lens-off request never logs its row (#5770).
+				injectionLedger.clearSession(prefixSessionId);
+				logContextObservation(existingMessages, "none", []);
+				return;
+			}
+
 			// #4743: off, the ledger is neither read nor written, and the request is
 			// exactly what it was without the flag. #5770: unset, it is on for the
 			// API THIS request's model reports (`ctx.model` is the host's live
@@ -5047,13 +5057,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 				prefixSessionId,
 			);
 			const ledger = retainInjections ? injectionLedger : undefined;
-			if (!effectiveInjectionEnabled) {
-				// #4743: injection switched off mid-session also stops re-sending
-				// what was retained, so no request carries pi-lens bytes while off.
-				ledger?.clearSession(prefixSessionId);
-				logContextObservation(existingMessages, "none", []);
-				return;
-			}
 
 			// #4743 (`--lens-retain-injections`): put back what earlier requests of
 			// this session injected, byte for byte and where it sat, BEFORE this

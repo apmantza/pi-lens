@@ -145,6 +145,26 @@ describe("#5770 contextInjection.retain defaults by the request's API", () => {
 		}
 	}, 60_000);
 
+	it("a lens-off session on anthropic-messages writes no default row", async () => {
+		// #5770 review F1: the default was resolved before the lens-off early
+		// return, so a session that never injected logged "retention on by
+		// default", and a cache join of the lens-off arm read it as retained.
+		const handle = await start("anthropic-lens-off", {
+			api: ANTHROPIC,
+			flags: new Map([["no-lens-context", true]]),
+			prompts: 3,
+		});
+		try {
+			const { injecting, quiet } = await injectThenQuiet(handle);
+			// Control: lens-off injects and retains nothing.
+			expect(count(injecting)).toBe(0);
+			expect(count(quiet)).toBe(0);
+			expect(await defaultRows(handle)).toHaveLength(0);
+		} finally {
+			await handle.dispose();
+		}
+	}, 60_000);
+
 	it("does not retain on openai-completions when nothing is set", async () => {
 		const handle = await start("openai-default", { api: OPENAI, prompts: 3 });
 		try {
