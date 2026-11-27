@@ -613,8 +613,9 @@ describe("resolveToolCwd (#2777)", () => {
 	// fallback walk; 210-254 counted on Windows and Linux, the Linux count raw).
 	// On the Windows leg the first 130 awaited stats of this cell took 2855 ms
 	// and 2473 ms (job 140372464201 and job 140383089933). The cost sits in the
-	// awaited call (statSync 2-5 ms against awaited stat 19-22 ms per 130 calls
-	// in the same cell); why an awaited stat waits about 20 ms is not isolated.
+	// awaited call: awaited stat 19-22 ms per call (2473-2855 ms per 130 calls)
+	// against statSync 2-5 ms per 130 calls in the same cell. Why an awaited stat
+	// waits about 20 ms is not isolated.
 	// 230 hops at 22 ms is 5.1 s, over Vitest's 5 s default (job 140340087346
 	// timed out at 5289 ms). The 15 s Windows ceiling (scale 3) is 3x that.
 	// The walk cannot shrink in this test-only PR: cutting its hops means probing
@@ -811,8 +812,8 @@ describe("resolveToolCwd (#2777)", () => {
 	// readdirs (raw counts, one Linux run). It took 4055 ms on master run 45948956820
 	// (job 140340087346), where the main cell timed out, 81% of Vitest's 5 s
 	// default. It timed out at 5000 ms on master run 45967122876 (job 140398356519).
-	// Same awaited-stat cost as the "built-in server with no marker" cell above;
-	// same budget.
+	// It assumes the awaited-stat cost of the "built-in server with no marker"
+	// cell above (its 80 readdirs were not timed separately); same budget.
 	it(
 		"flags exactly the servers that need a project, on the real registry (#3750)",
 		async () => {
