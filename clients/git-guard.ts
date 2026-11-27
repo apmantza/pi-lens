@@ -2493,11 +2493,11 @@ function unconfirmedRecordRemedy(
  * it, or a confirmed clean `source=lsp` probe (`forgetCascadePendingNeighbor`).
  */
 function unattributedRecordRemedy(
-	record: TurnEndFindingsCache,
+	findings: TurnEndFindingsCache,
 	cwd: string,
 	diagnosticsTool: string | undefined,
 ): string | undefined {
-	const attributed = recordPartitions(record).every(
+	const attributed = recordPartitions(findings).every(
 		(partition) =>
 			blockingProvenance(
 				partition.blockerContent,

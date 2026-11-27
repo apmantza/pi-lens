@@ -1803,8 +1803,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// glossary keeps `record` for. 53 -> 65 (#4738): the partition reads, the
 		// carried-blocker shape check and the gate's owner check name the same
 		// `turn-end-findings` row. 65 -> 67 (#4750): the top partition's write
-		// stamp and its shape check read the same row.
-		"clients/git-guard.ts": 67,
+		// stamp and its shape check read the same row. 67 -> 69 (#5790 r3): the
+		// own-session remedy and the final refusal pass the same row to
+		// `unattributedRecordRemedy`.
+		"clients/git-guard.ts": 69,
 		"clients/govulncheck-client.ts": 4,
 		"clients/inline-blocker-dispositions.ts": 3,
 		// #3654: the unified bridge's own `record()` API (RFC §3) — a method
