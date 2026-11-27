@@ -31,6 +31,7 @@ import { projectScan } from "../../clients/lens-engine.js";
 import { _resetStateCacheForTests } from "../../clients/diagnostic-dispositions.js";
 import { createLensDiagnosticMarkTool } from "../../tools/lens-diagnostic-mark.js";
 import { stripSource } from "../support/sweep-kit.js";
+import { readNdjsonRows } from "../support/ndjson-rows.js";
 
 // Spawns the MCP server as a real stdio subprocess; like analyze-cli, it can lose
 // a CPU-starvation race in the full parallel suite (passes in isolation). retry: 2
@@ -2253,4 +2254,103 @@ describe("multi-cwd global config invalidation in MCP server (#5394)", () => {
 			env.cleanup();
 		}
 	}, 60_000);
+});
+
+// #5394: a config reset by a pipelined turn_end, between session_start's own
+// config check and its resumption, let session_start run on the retired runtime
+// and `resetForSession` revived it.
+describe("session_start versus a pipelined config reset (#5394)", () => {
+	it.each([
+		{
+			delivery: "in the same stdin chunk",
+			deferSecond: false,
+			refused: true,
+			resets: [],
+		},
+		{
+			delivery: "one macrotask later",
+			deferSecond: true,
+			refused: false,
+			resets: [{ retiredBy: null, liveAfter: true }],
+		},
+	])(
+		"never revives a retired runtime when turn_end arrives $delivery",
+		async ({ deferSecond, refused, resets }) => {
+			const env = setupTestEnvironment("pi-lens-mcp-reset-race-");
+			const project = path.join(env.tmpDir, "project");
+			const home = path.join(env.tmpDir, "home");
+			const dataDir = path.join(env.tmpDir, "data");
+			const globalConfigPath = path.join(home, "config.json");
+			const eventLog = path.join(env.tmpDir, "race.ndjson");
+			fs.mkdirSync(project, { recursive: true });
+			fs.mkdirSync(home, { recursive: true });
+			fs.writeFileSync(globalConfigPath, "{}");
+			fs.writeFileSync(path.join(project, "a.ts"), "// TODO: probe\n");
+			const preload = new URL(
+				"../fixtures/mcp-session-reset-race.mjs",
+				import.meta.url,
+			).href;
+			const child = new McpHarness({
+				cwd: project,
+				env: {
+					PI_LENS_HOME: home,
+					PILENS_DATA_DIR: dataDir,
+					PI_LENS_CONFIG_PATH: globalConfigPath,
+					PI_LENS_TEST_MODE: "0",
+					NODE_OPTIONS:
+						`${process.env.NODE_OPTIONS ?? ""} --import ${preload}`.trim(),
+					PI_LENS_TEST_RACE_LOG: eventLog,
+					PI_LENS_TEST_RACE_DEFER_SECOND: deferSecond ? "1" : "",
+				},
+			});
+			const call = (id: number, name: string) => ({
+				id,
+				method: "tools/call",
+				params: { name, arguments: { cwd: project } },
+			});
+
+			try {
+				// Warm the session context: the race needs a resolved bootstrap.
+				const warm = call(53950, "pilens_turn_end");
+				await child.request(warm.id, warm.method, warm.params);
+
+				const [started] = await child.pipelinedRequests([
+					call(53951, "pilens_session_start"),
+					call(53952, "pilens_turn_end"),
+				]);
+				const events = readNdjsonRows<{ read?: string; reset?: unknown }>(
+					eventLog,
+				);
+
+				if (!deferSecond) {
+					// The config write lands after the third read.
+					expect(events.rows.flatMap((e) => e.read ?? [])).toEqual([
+						"ensureReady",
+						"ensureReady",
+						"runSessionStartImpl",
+						"runTurnEndNowImpl",
+					]);
+				}
+				const result = started.result as {
+					isError?: boolean;
+					content: { text: string }[];
+				};
+				expect({
+					resets: events.rows.flatMap((e) => e.reset ?? []),
+					refused: result.isError ?? false,
+				}).toEqual({ resets, refused });
+				if (refused) {
+					expect(result.content[0].text).toContain(
+						"MCP session context reset before session_start",
+					);
+					// No data file at all: neither turn_end here has a file to record.
+					expect(fs.existsSync(dataDir)).toBe(false);
+				}
+			} finally {
+				child.dispose();
+				env.cleanup();
+			}
+		},
+		60_000,
+	);
 });

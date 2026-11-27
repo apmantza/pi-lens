@@ -305,7 +305,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"deadline and no signal, exactly like index.ts:2151.",
 		owner: "#2523 slice 2",
 	},
-	"clients/mcp/session.ts#runSessionStartImpl:fceb216b~04fda1bd": {
+	"clients/mcp/session.ts#runSessionStartImpl:fceb216b~73c6239d": {
 		family: "hook-await",
 		site: "session_start",
 		reason:

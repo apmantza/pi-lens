@@ -266,7 +266,11 @@ const degradedSessionStart: SessionStartOutcome = {
 async function runSessionStartImpl(cwd: string): Promise<SessionStartOutcome> {
 	startSituationalToolTelemetrySession("mcp");
 	invalidateMcpSessionIfConfigChanged(cwd);
+	const generation = captureMcpSessionGeneration();
 	const ctx = await getMcpSessionContext();
+	if (!generation.isCurrent()) {
+		throw new Error("MCP session context reset before session_start");
+	}
 	const host = createMcpHost(undefined, cwd);
 
 	await bounded(
