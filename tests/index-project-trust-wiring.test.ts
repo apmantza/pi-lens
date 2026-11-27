@@ -6,6 +6,8 @@ import extension from "../index.js";
 import { resolveToolCommand } from "../clients/dispatch/runners/utils/runner-helpers.js";
 import {
 	getProjectTrustState,
+	readAdoptedProjectTrust,
+	setHostProjectTrustLoader,
 	resetProjectTrust,
 	setProjectTrustState,
 } from "../clients/project-trust.js";
@@ -58,6 +60,7 @@ function tmpProject(): string {
 
 beforeEach(() => {
 	resetProjectTrust();
+	setHostProjectTrustLoader(undefined);
 });
 
 afterEach(async () => {
@@ -74,6 +77,26 @@ afterEach(async () => {
  * host's job, and an extension that answers it would defeat the prompt.
  */
 describe("session_start project-trust adoption (#1334 S5)", () => {
+	it("loads the pi host trust store for an adopted cwd", async () => {
+		// Recurrence: #5469 must wire the pi loader rather than inherit A's trust.
+		const agent = tmpProject(),
+			B = tmpProject();
+		vi.stubEnv("PI_CODING_AGENT_DIR", agent);
+		fs.writeFileSync(
+			path.join(agent, "trust.json"),
+			JSON.stringify({ [B]: false }),
+		);
+		setProjectTrustState("trusted");
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+		try {
+			expect(await readAdoptedProjectTrust(B)).toBe("untrusted");
+		} finally {
+			setHostProjectTrustLoader(undefined);
+			vi.unstubAllEnvs();
+		}
+	});
+
 	it("never registers a project_trust handler", () => {
 		const pi = createPiMock();
 		extension(pi.asExtensionAPI());

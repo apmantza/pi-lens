@@ -54,6 +54,7 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import https from "node:https";
@@ -63,7 +64,6 @@ import path from "node:path";
 import { writeFileAtomicAsync } from "../atomic-write.js";
 import { registerBackgroundWriteDrain } from "../background-write-drains.js";
 import { BoundedLruCache } from "../bounded-cache.js";
-import { hashContentBytes } from "../content-stamp.js";
 import { findCommandOnPath } from "../command-path.js";
 import { logExtension } from "../extension-log.js";
 import { isToolInstallDisabled } from "../env-utils.js";
@@ -79,6 +79,7 @@ import {
 	projectTrustDenialReason,
 } from "../project-trust.js";
 import {
+	inUnadmittedSpawnRoot,
 	isUntrustedProjectPath,
 	recordProjectCommandRefusal,
 } from "../session-repository.js";
@@ -86,6 +87,8 @@ import {
 const _installerRequire = createRequire(import.meta.url);
 
 import { createGunzip } from "node:zlib";
+import { pipeline } from "node:stream/promises";
+import { downloadInstallerFile as streamDownloadInstallerFile } from "./download.js";
 import { TRANSIENT_MAX_COOLDOWN_MS } from "../dispatch/runners/utils/availability-policy.js";
 import {
 	getDegradationLedgerGeneration,
@@ -441,7 +444,17 @@ interface GitHubAssetSpec {
 	 * For bare .gz files (e.g. rust-analyzer) leave undefined — the asset IS the binary.
 	 */
 	binaryInArchive?: string;
-	hashiCorpReleaseProduct?: string;
+	/**
+	 * For a project whose GitHub release does not carry the archives (HashiCorp
+	 * publishes on releases.hashicorp.com, helm on get.helm.sh): build the asset
+	 * the tool downloads from the release tag and the `assetMatch` substring.
+	 * Consulted only when no release asset matches; return undefined when the
+	 * tag yields no usable version.
+	 */
+	derivedAsset?: (
+		tagName: string,
+		assetSubstring: string,
+	) => DownloadAsset | undefined;
 	/**
 	 * Additional release assets (EXACT names) to download as bare files alongside
 	 * the primary binary. Needed when the primary is a wrapper that references a
@@ -451,6 +464,13 @@ interface GitHubAssetSpec {
 	extraAssets?: (platform: string, arch: string) => string[];
 	/** Runtime wrapper for a platform asset that is a PHAR or runnable JAR. */
 	launcher?: "php" | "java";
+	/**
+	 * A Windows zip whose executable imports DLLs shipped beside it (opengrep:
+	 * libstdc++-6, libgmp-10, libpcre2-8-0, libzstd-1 and their dependencies).
+	 * Every `.dll` next to the extracted binary moves into the managed bin
+	 * with it; without them the exe fails to load.
+	 */
+	bundleArchiveDlls?: boolean;
 }
 
 /**
@@ -542,6 +562,16 @@ export interface ToolDefinition {
 	/** Verification timeout for this tool's managed-binary probe, in ms. */
 	verificationTimeoutMs?: number;
 	installStrategy: "npm" | "pip" | "gem" | "github" | "maven" | "archive";
+	/**
+	 * The only place pi-lens records that it may install this tool without being
+	 * asked (#5410 D9). Absent means it may not: pi-lens does not install the
+	 * tool, and the user runs the install. The rubocop runner then reports
+	 * `not-installed`, the rust-clippy runner reports `probe-rejected`, and the
+	 * rustfmt and rubocop formatters skip silently.
+	 * `shouldAutoInstallTool` (`clients/tool-policy.ts`) reads this field; no
+	 * policy table, formatter map or lazy-install table holds a second copy.
+	 */
+	autoInstall?: true;
 	packageName?: string;
 	binaryName?: string;
 	github?: GitHubAssetSpec;
@@ -616,7 +646,7 @@ function archAssetMatch(table: {
 
 // Go-style `<os>_<arch>.zip` release assets, shared verbatim by tflint and
 // terraform-ls — both entries carried byte-identical ladders, down to the asset
-// strings themselves.
+// strings themselves. tflint overrides win32/arm64: it has no such build.
 const OS_ARCH_ZIP_ASSETS = {
 	linux: { x64: "linux_amd64.zip", arm64: "linux_arm64.zip" },
 	darwin: { x64: "darwin_amd64.zip", arm64: "darwin_arm64.zip" },
@@ -666,6 +696,7 @@ const MANAGED_PACKAGE_FORMATTERS = [
 type ManagedGitHubFormatterSpec = {
 	id: string;
 	name: string;
+	autoInstall?: true;
 	owner: string;
 	repo: string;
 	assetPattern: GitHubAssetSpec["assetMatch"];
@@ -682,6 +713,7 @@ function managedGitHubFormatterTool(
 		checkCommand: spec.id,
 		checkArgs: ["--version"],
 		installStrategy: "github",
+		...(spec.autoInstall && { autoInstall: true as const }),
 		binaryName: spec.id,
 		github: {
 			repo: `${spec.owner}/${spec.repo}`,
@@ -697,6 +729,7 @@ const MANAGED_GITHUB_FORMATTERS = [
 	{
 		id: "typstyle",
 		name: "typstyle",
+		autoInstall: true,
 		owner: "typstyle-rs",
 		repo: "typstyle",
 		assetPattern: archAssetMatch({
@@ -792,6 +825,8 @@ export const TOOLS: ToolDefinition[] = [
 	// Core LSP servers
 	{
 		id: "typescript-language-server",
+		// Preinstalled at session start for a TypeScript project, as before (#5410 D9).
+		autoInstall: true,
 		name: "TypeScript Language Server",
 		checkCommand: "typescript-language-server",
 		checkArgs: ["--version"],
@@ -819,6 +854,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "pyright",
+		autoInstall: true,
 		name: "Pyright",
 		checkCommand: "pyright",
 		checkArgs: ["--version"],
@@ -829,6 +865,7 @@ export const TOOLS: ToolDefinition[] = [
 	// Linting/formatting tools
 	{
 		id: "prettier",
+		autoInstall: true,
 		name: "Prettier",
 		checkCommand: "prettier",
 		checkArgs: ["--version"],
@@ -839,6 +876,7 @@ export const TOOLS: ToolDefinition[] = [
 	...MANAGED_PACKAGE_FORMATTERS.map(managedPackageFormatterTool),
 	{
 		id: "ruff",
+		autoInstall: true,
 		name: "Ruff",
 		checkCommand: "ruff",
 		checkArgs: ["--version"],
@@ -859,6 +897,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "biome",
+		autoInstall: true,
 		name: "Biome",
 		checkCommand: "biome",
 		checkArgs: ["--version"],
@@ -881,6 +920,7 @@ export const TOOLS: ToolDefinition[] = [
 	// Analysis tools (run at session start / turn end)
 	{
 		id: "madge",
+		autoInstall: true,
 		name: "Madge",
 		checkCommand: "madge",
 		checkArgs: ["--version"],
@@ -890,16 +930,18 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "jscpd",
+		autoInstall: true,
 		name: "jscpd",
 		checkCommand: "jscpd",
 		checkArgs: ["--version"],
 		installStrategy: "npm",
-		packageName: "jscpd@5.4.2", // v5.4.2 is the repository's exact devDependency; the v4 packaging defect that required the older v5.0.12 pin is gone, and parseReport() reads the unchanged clone-report fields.
+		packageName: "jscpd@5.4.3", // v5.4.3 is the repository's exact devDependency; the v4 packaging defect that required the older v5.0.12 pin is gone, and parseReport() reads the unchanged clone-report fields.
 		binaryName: "jscpd",
 	},
 	// Structural search and dead code detection
 	{
 		id: "ast-grep",
+		autoInstall: true,
 		name: "ast-grep CLI",
 		checkCommand: "ast-grep",
 		checkArgs: ["--version"],
@@ -921,6 +963,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "knip",
+		autoInstall: true,
 		name: "Knip",
 		checkCommand: "knip",
 		checkArgs: ["--version"],
@@ -930,6 +973,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "yamllint",
+		autoInstall: true,
 		name: "yamllint",
 		checkCommand: "yamllint",
 		checkArgs: ["--version"],
@@ -939,6 +983,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "sqlfluff",
+		autoInstall: true,
 		name: "sqlfluff",
 		checkCommand: "sqlfluff",
 		checkArgs: ["--version"],
@@ -976,7 +1021,7 @@ export const TOOLS: ToolDefinition[] = [
 		checkCommand: "cmake-language-server",
 		checkArgs: ["--version"],
 		installStrategy: "pip",
-		packageName: "cmake-language-server",
+		packageName: "cmake-language-server>=0.1.11",
 		binaryName: "cmake-language-server",
 		// Upstream 0.1.11 (the latest release) imports `LanguageServer` from
 		// `pygls.server`, a symbol pygls 2 removed, while declaring only
@@ -1022,6 +1067,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "htmlhint",
+		autoInstall: true,
 		name: "HTMLHint",
 		checkCommand: "htmlhint",
 		checkArgs: ["--version"],
@@ -1031,6 +1077,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "hadolint",
+		autoInstall: true,
 		name: "Hadolint",
 		checkCommand: "hadolint",
 		checkArgs: ["--version"],
@@ -1040,7 +1087,7 @@ export const TOOLS: ToolDefinition[] = [
 			repo: "hadolint/hadolint",
 			assetMatch: (platform, arch) => {
 				if (platform === "linux")
-					return arch === "arm64" ? "linux.aarch64" : "linux.x86_64";
+					return arch === "arm64" ? "linux-arm64" : "linux-x86_64";
 				if (platform === "darwin")
 					return arch === "arm64" ? "macos-arm64" : "macos-x86_64";
 				if (platform === "win32") return "windows-x86_64.exe";
@@ -1050,6 +1097,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "helm",
+		autoInstall: true,
 		name: "Helm",
 		checkCommand: "helm",
 		// Probed against helm 4.3.0: `--version` exits 1 ("unknown flag"), `version --short` exits 0.
@@ -1058,6 +1106,15 @@ export const TOOLS: ToolDefinition[] = [
 		binaryName: "helm",
 		github: {
 			repo: "helm/helm",
+			// The GitHub release holds only `.asc` signatures (#5643); the
+			// archives are served from get.helm.sh under the same names.
+			derivedAsset: (tagName, assetSubstring) => {
+				const name = `helm-${tagName}-${assetSubstring}`;
+				return {
+					name,
+					browser_download_url: `https://get.helm.sh/${name}`,
+				};
+			},
 			assetMatch: (platform, arch) => {
 				// helm publishes per-OS archives: tar.gz for POSIX, zip for Windows.
 				const cpu = arch === "arm64" ? "arm64" : "amd64";
@@ -1075,6 +1132,7 @@ export const TOOLS: ToolDefinition[] = [
 		// Opengrep: a single standalone binary per platform on GitHub releases —
 		// no login, no telemetry (the reason for switching off Semgrep, #111).
 		id: "opengrep",
+		autoInstall: true,
 		name: "Opengrep",
 		checkCommand: "opengrep",
 		checkArgs: ["--version"],
@@ -1083,16 +1141,21 @@ export const TOOLS: ToolDefinition[] = [
 		github: {
 			repo: "opengrep/opengrep",
 			assetMatch: (platform, arch) => {
+				// v2.0.0 renamed the assets (#5624); each also ships .cert and .sig
+				// siblings, which `pickReleaseAsset` refuses. `releases/latest` is
+				// the only release the installer reads, so the v1 names are not kept.
 				if (platform === "linux")
 					return arch === "arm64"
-						? "opengrep_manylinux_aarch64"
-						: "opengrep_manylinux_x86";
+						? "opengrep_linux_aarch64"
+						: "opengrep_linux_x86";
 				if (platform === "darwin")
 					return arch === "arm64" ? "opengrep_osx_arm64" : "opengrep_osx_x86";
-				// One x86 Windows build; runs on arm64 Windows via emulation.
-				if (platform === "win32") return "opengrep_windows_x86.exe";
+				// One x86 Windows build; runs on arm64 Windows via emulation. It is
+				// a zip: opengrep.exe plus the mingw DLLs it imports.
+				if (platform === "win32") return "opengrep_windows_x86.zip";
 				return undefined;
 			},
+			bundleArchiveDlls: true,
 		},
 	},
 	{
@@ -1181,6 +1244,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "markdownlint",
+		autoInstall: true,
 		name: "markdownlint-cli2",
 		checkCommand: "markdownlint-cli2",
 		// `--version` is interpreted as a file glob by markdownlint-cli2. Use
@@ -1192,6 +1256,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "mypy",
+		autoInstall: true,
 		name: "mypy",
 		checkCommand: "mypy",
 		checkArgs: ["--version"],
@@ -1210,6 +1275,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "stylelint",
+		autoInstall: true,
 		name: "Stylelint",
 		checkCommand: "stylelint",
 		checkArgs: ["--version"],
@@ -1219,6 +1285,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "oxlint",
+		autoInstall: true,
 		name: "Oxlint",
 		checkCommand: "oxlint",
 		checkArgs: ["--version"],
@@ -1229,6 +1296,7 @@ export const TOOLS: ToolDefinition[] = [
 	// GitHub release binaries
 	{
 		id: "shellcheck",
+		autoInstall: true,
 		name: "ShellCheck",
 		checkCommand: "shellcheck",
 		checkArgs: ["--version"],
@@ -1253,6 +1321,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "shfmt",
+		autoInstall: true,
 		name: "shfmt",
 		checkCommand: "shfmt",
 		checkArgs: ["--version"],
@@ -1265,8 +1334,8 @@ export const TOOLS: ToolDefinition[] = [
 					return arch === "arm64" ? "linux_arm64" : "linux_amd64";
 				if (platform === "darwin")
 					return arch === "arm64" ? "darwin_arm64" : "darwin_amd64";
-				if (platform === "win32")
-					return arch === "arm64" ? "windows_arm64.exe" : "windows_amd64.exe";
+				// No windows_arm64 build upstream (#5624): x64 via emulation.
+				if (platform === "win32") return "windows_amd64.exe";
 				return undefined;
 			},
 			// bare binary, no archive
@@ -1328,6 +1397,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "golangci-lint",
+		autoInstall: true,
 		name: "golangci-lint",
 		checkCommand: "golangci-lint",
 		checkArgs: ["--version"],
@@ -1351,6 +1421,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "ktlint",
+		autoInstall: true,
 		name: "ktlint",
 		checkCommand: "ktlint",
 		checkArgs: ["--version"],
@@ -1376,6 +1447,7 @@ export const TOOLS: ToolDefinition[] = [
 		// fat JAR — no native binary, no npm package — so it uses the maven strategy
 		// (#129). Run via a `java -jar` launcher; requires a JRE.
 		id: "ktfmt",
+		autoInstall: true,
 		name: "ktfmt",
 		checkCommand: "ktfmt",
 		checkArgs: ["--version"],
@@ -1394,6 +1466,7 @@ export const TOOLS: ToolDefinition[] = [
 		// NOT a runnable fat JAR — so it uses the archive strategy, not maven
 		// (refs #133). Requires a JRE (gated by the runner, not the install).
 		id: "spotbugs",
+		autoInstall: true,
 		name: "SpotBugs",
 		checkCommand: "spotbugs",
 		// Probed against spotbugs 4.10.2 (JRE 21): `--version` exits 1 ("Unknown option"), `-version` prints 4.10.2.
@@ -1568,6 +1641,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "actionlint",
+		autoInstall: true,
 		name: "actionlint",
 		checkCommand: "actionlint",
 		checkArgs: ["--version"],
@@ -1716,6 +1790,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "tflint",
+		autoInstall: true,
 		name: "tflint",
 		checkCommand: "tflint",
 		checkArgs: ["--version"],
@@ -1723,7 +1798,11 @@ export const TOOLS: ToolDefinition[] = [
 		binaryName: "tflint",
 		github: {
 			repo: "terraform-linters/tflint",
-			assetMatch: archAssetMatch(OS_ARCH_ZIP_ASSETS),
+			// No windows_arm64 build upstream (#5624): x64 via emulation.
+			assetMatch: archAssetMatch({
+				...OS_ARCH_ZIP_ASSETS,
+				win32: { x64: "windows_amd64.zip", arm64: "windows_amd64.zip" },
+			}),
 			binaryInArchive: "tflint",
 		},
 	},
@@ -1732,6 +1811,7 @@ export const TOOLS: ToolDefinition[] = [
 		// Windows arm64 uses the x64 binary through Windows' built-in emulation —
 		// there is no terragrunt_windows_arm64.exe upstream.
 		id: "terragrunt",
+		autoInstall: true,
 		name: "terragrunt",
 		checkCommand: "terragrunt",
 		checkArgs: ["--version"],
@@ -1779,6 +1859,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "trivy",
+		autoInstall: true,
 		name: "Trivy",
 		checkCommand: "trivy",
 		checkArgs: ["--version"],
@@ -1802,6 +1883,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "swiftlint",
+		autoInstall: true,
 		name: "SwiftLint",
 		checkCommand: "swiftlint",
 		checkArgs: ["--version"],
@@ -1822,6 +1904,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		id: "taplo",
+		autoInstall: true,
 		name: "taplo",
 		checkCommand: "taplo",
 		checkArgs: ["--version"],
@@ -1853,16 +1936,17 @@ export const TOOLS: ToolDefinition[] = [
 		github: {
 			repo: "vale-cli/vale",
 			assetMatch: (platform, arch) => {
-				const version = "3.14.2";
+				// The installer reads `releases/latest`, so the asset name carries no
+				// version (a pinned 3.14.2 matched nothing once latest moved, #5624).
 				if (platform === "linux")
 					return arch === "arm64"
-						? `vale_${version}_Linux_arm64.tar.gz`
-						: `vale_${version}_Linux_64-bit.tar.gz`;
+						? "_Linux_arm64.tar.gz"
+						: "_Linux_64-bit.tar.gz";
 				if (platform === "darwin")
 					return arch === "arm64"
-						? `vale_${version}_macOS_arm64.tar.gz`
-						: `vale_${version}_macOS_64-bit.tar.gz`;
-				if (platform === "win32") return `vale_${version}_Windows_64-bit.zip`;
+						? "_macOS_arm64.tar.gz"
+						: "_macOS_64-bit.tar.gz";
+				if (platform === "win32") return "_Windows_64-bit.zip";
 				return undefined;
 			},
 			binaryInArchive: "vale",
@@ -1878,7 +1962,15 @@ export const TOOLS: ToolDefinition[] = [
 		binaryName: "terraform-ls",
 		github: {
 			repo: "hashicorp/terraform-ls",
-			hashiCorpReleaseProduct: "terraform-ls",
+			derivedAsset: (tagName, assetSubstring) => {
+				const version = tagName.replace(/^v/, "").trim();
+				if (!version) return undefined;
+				const name = `terraform-ls_${version}_${assetSubstring}`;
+				return {
+					name,
+					browser_download_url: `https://releases.hashicorp.com/terraform-ls/${version}/${name}`,
+				};
+			},
 			assetMatch: archAssetMatch(OS_ARCH_ZIP_ASSETS),
 			binaryInArchive: "terraform-ls",
 		},
@@ -2253,6 +2345,14 @@ let _probeCacheChangeGeneration = 0;
 const _probeCacheChanges = new Map<string, ProbeCacheEntry | null>();
 const _probeCacheChangeVersions = new Map<string, number>();
 
+/**
+ * `updateProbeCache` calls that have not settled yet (#5657). Bound: one entry
+ * per call in flight, deleted when that call settles, so the Set is empty when
+ * the installer is idle. A call that never settles keeps its entry until
+ * `resetProbeCacheStateForTesting` clears the Set.
+ */
+const _probeCacheUpdatesPending = new Set<Promise<void>>();
+
 async function readProbeCache(): Promise<ProbeCache> {
 	if (_probeCache !== null) return _probeCache;
 	try {
@@ -2453,9 +2553,9 @@ export async function flushProbeCache(): Promise<ProbeCacheFlushResult> {
 		clearTimeout(_probeCacheFlushTimer);
 		_probeCacheFlushTimer = null;
 	}
-	// #946 review F4: if the 300ms timer's write already started, the dirty
-	// flag is false but the write may still be in flight — an immediate
-	// process.exit would truncate it. Always await the in-flight write.
+	// #946 review F4: the 300ms timer may have started a write that is
+	// still in flight. An immediate process.exit would truncate it, so
+	// always await that write before checking whether another is needed.
 	if (_probeCacheWriteInFlight) {
 		await _probeCacheWriteInFlight;
 		if (!_probeCacheDirty) return "written";
@@ -2474,10 +2574,15 @@ export async function flushProbeCache(): Promise<ProbeCacheFlushResult> {
 /**
  * Test-only strict form of {@link flushProbeCache}: a flush that fails or is
  * deferred behind another process's lock arms a retry timer, and that retry
- * would write after a fixture root was removed. Settled only on a flush that
+ * would write after a fixture root was removed. Also joins the in-flight
+ * `updateProbeCache` calls first (#5657). Settled only on a flush that
  * left nothing pending; otherwise cancel the retry and report it.
  */
 async function settleProbeCacheForTests(): Promise<string | undefined> {
+	// #5657: an update that has not marked its change yet is invisible to the
+	// flush below, which would report idle and let the debounce timer the update
+	// then arms write after the fixture root is gone.
+	await Promise.allSettled(_probeCacheUpdatesPending);
 	const result = await flushProbeCache();
 	if (result === "idle" || result === "written") return undefined;
 	if (_probeCacheFlushTimer !== null) {
@@ -2491,7 +2596,16 @@ async function settleProbeCacheForTests(): Promise<string | undefined> {
 // the tier-2 harness's loaded extension copy owns one the test's own import
 // cannot reach, so its write lands after the fixture root is removed. The
 // harness joins it through the registry (`clients/background-write-drains.ts`).
-registerBackgroundWriteDrain(settleProbeCacheForTests);
+// Pending: an update that has not marked its change yet, or a change the flush
+// above would write. An armed timer and a write in flight both keep the change
+// dirty until a write publishes it, so they need no term of their own; a dirty
+// change with no loaded cache is not pending, the flush answers it `idle`.
+registerBackgroundWriteDrain(
+	settleProbeCacheForTests,
+	() =>
+		_probeCacheUpdatesPending.size > 0 ||
+		(_probeCacheDirty && _probeCache !== null),
+);
 
 function isAstGrepVersionOutput(output: string): boolean {
 	return /\bast[- ]grep\b/i.test(output);
@@ -2574,34 +2688,46 @@ export async function checkProbeCache(
 }
 
 // Exported for testing only.
-export async function updateProbeCache(
+export function updateProbeCache(
 	toolId: string,
 	resolvedPath: string,
 	transient = false,
 ): Promise<void> {
-	try {
-		const stat = await fs.stat(resolvedPath);
-		const cache = await readProbeCache();
-		const entry: ProbeCacheEntry = {
-			path: resolvedPath,
-			mtimeMs: stat.mtimeMs,
-			sizeBytes: stat.size,
-			cachedAt: Date.now(),
-			...(transient && { transient: true }),
-		};
-		cache[toolId] = entry;
-		markProbeCacheChange(toolId, entry);
-	} catch {
-		// best-effort
-	}
+	const pending = (async () => {
+		try {
+			const stat = await fs.stat(resolvedPath);
+			const cache = await readProbeCache();
+			const entry: ProbeCacheEntry = {
+				path: resolvedPath,
+				mtimeMs: stat.mtimeMs,
+				sizeBytes: stat.size,
+				cachedAt: Date.now(),
+				...(transient && { transient: true }),
+			};
+			cache[toolId] = entry;
+			markProbeCacheChange(toolId, entry);
+		} catch {
+			// best-effort
+		}
+	})();
+	// #5657: `ensureTool` calls this with `void`, so an update can still be
+	// between its `stat` and its `markProbeCacheChange` when a teardown asks the
+	// cache to settle. The settle joins this set before it flushes.
+	_probeCacheUpdatesPending.add(pending);
+	void pending.finally(() => _probeCacheUpdatesPending.delete(pending));
+	return pending;
 }
 
-// Exported for testing only.
-export function resetProbeCacheStateForTesting(): void {
+// Exported for testing only. Returns how many `updateProbeCache` calls were still
+// unsettled and drops them (#5657), so a test reads the pending set through this
+// seam rather than a separate export.
+export function resetProbeCacheStateForTesting(): number {
+	const unsettled = _probeCacheUpdatesPending.size;
 	_probeCache = null;
 	_probeCacheDirty = false;
 	_probeCacheChanges.clear();
 	_probeCacheChangeVersions.clear();
+	_probeCacheUpdatesPending.clear();
 	_probeCacheChangeGeneration = 0;
 	_probeCacheRetryAttempt = 0;
 	resetResolvedPathCache();
@@ -2616,6 +2742,7 @@ export function resetProbeCacheStateForTesting(): void {
 		clearTimeout(_probeCacheFlushTimer);
 		_probeCacheFlushTimer = null;
 	}
+	return unsettled;
 }
 
 /**
@@ -3695,7 +3822,12 @@ async function firstVerifiedBinary(
 	for (const candidate of candidates) {
 		try {
 			await fs.access(candidate);
-			if (isUntrustedProjectPath(candidate)) {
+			// #5782 R5: an absolute path skips the spawn seam's lookup judgment,
+			// so a link into launch's unadmitted root is judged here too.
+			if (
+				isUntrustedProjectPath(candidate) ||
+				inUnadmittedSpawnRoot(candidate)
+			) {
 				recordProjectCommandRefusal(candidate);
 				continue;
 			}
@@ -3985,6 +4117,8 @@ interface HttpGetResponse {
 	etag?: string;
 }
 
+const MAX_GITHUB_METADATA_BYTES = 2 * 1024 * 1024;
+
 /**
  * Fetch a URL, following up to `maxRedirects` redirects, and surface the status
  * line and `ETag` alongside the body.
@@ -4044,7 +4178,19 @@ function httpsGetWithMeta(
 						);
 					}
 					const chunks: Buffer[] = [];
-					res.on("data", (chunk: Buffer) => chunks.push(chunk));
+					let totalBytes = 0;
+					res.on("data", (chunk: Buffer) => {
+						chunks.push(chunk);
+						totalBytes += chunk.length;
+						if (totalBytes > MAX_GITHUB_METADATA_BYTES) {
+							res.destroy();
+							reject(
+								new Error(
+									`GitHub metadata exceeds ${MAX_GITHUB_METADATA_BYTES} bytes`,
+								),
+							);
+						}
+					});
 					res.on("end", () =>
 						resolve({ statusCode: 200, body: Buffer.concat(chunks), etag }),
 					);
@@ -4173,7 +4319,7 @@ async function installGitHubTool(
 
 	const asset =
 		pickReleaseAsset(releaseJson.assets, assetSubstring) ??
-		deriveHashiCorpReleaseAsset(tool, releaseJson.tag_name, assetSubstring);
+		deriveReleaseAsset(tool, releaseJson.tag_name, assetSubstring);
 	if (!asset) {
 		logSessionStart(
 			`github-install ${tool.id}: no asset matched "${assetSubstring}"`,
@@ -4186,21 +4332,6 @@ async function installGitHubTool(
 		`[github] downloading ${asset.name} from ${asset.browser_download_url}`,
 	);
 
-	// Download the asset
-	const downloadStart = Date.now();
-	let assetBuffer: Buffer;
-	try {
-		assetBuffer = await httpsGet(asset.browser_download_url);
-		logSessionStart(
-			`github-install ${tool.id}: downloaded ${asset.name} (${assetBuffer.length} bytes, ${Date.now() - downloadStart}ms)`,
-		);
-	} catch (err) {
-		logSessionStart(
-			`github-install ${tool.id}: download failed: ${(err as Error).message}`,
-		);
-		return undefined;
-	}
-
 	await fs.mkdir(GITHUB_BIN_DIR, { recursive: true });
 
 	const binaryName = tool.binaryName ?? tool.id;
@@ -4211,6 +4342,32 @@ async function installGitHubTool(
 		asset.name,
 	);
 	let destPath = path.join(GITHUB_BIN_DIR, finalBinaryName);
+	const downloadPath = path.join(
+		GITHUB_BIN_DIR,
+		`.${tool.id}.download-${randomUUID()}`,
+	);
+	const downloadStart = Date.now();
+	let downloadedBytes = 0;
+	try {
+		({ bytes: downloadedBytes } = await streamDownloadInstallerFile(
+			asset.browser_download_url,
+			downloadPath,
+		));
+		logSessionStart(
+			`github-install ${tool.id}: downloaded ${asset.name} (${downloadedBytes} bytes, ${Date.now() - downloadStart}ms)`,
+		);
+	} catch (err) {
+		await fs.rm(downloadPath, { force: true });
+		recordDegradationOnce({
+			kind: "managed-tool-download",
+			subject: tool.id,
+			reason: (err as Error).message,
+		});
+		logSessionStart(
+			`github-install ${tool.id}: streamed download failed: ${(err as Error).message}`,
+		);
+		return undefined;
+	}
 
 	const assetName = asset.name;
 	const launcherRuntime = launcherForGitHubAsset(spec, assetName);
@@ -4231,10 +4388,8 @@ async function installGitHubTool(
 				GITHUB_BIN_DIR,
 				`${tool.id}${assetName.endsWith(".phar") ? ".phar" : ".jar"}`,
 			);
-			await writeFileAtomicAsync(assetPath, assetBuffer, {
-				bestEffort: false,
-				mode: 0o750,
-			});
+			await fs.rename(downloadPath, assetPath);
+			if (!isWindows) await fs.chmod(assetPath, 0o750);
 			const launcherName = isWindows ? `${binaryName}.bat` : binaryName;
 			destPath = path.join(GITHUB_BIN_DIR, launcherName);
 			const runtimeTarget = assetName.endsWith(".phar")
@@ -4249,22 +4404,18 @@ async function installGitHubTool(
 			});
 		} else if (assetName.endsWith(".gz") && !assetName.endsWith(".tar.gz")) {
 			// Bare gzip (e.g. rust-analyzer-x86_64-unknown-linux-gnu.gz) — decompress directly
-			const decompressed = await new Promise<Buffer>((resolve, reject) => {
-				const gunzip = createGunzip();
-				const chunks: Buffer[] = [];
-				gunzip.on("data", (chunk: Buffer) => chunks.push(chunk));
-				gunzip.on("end", () => resolve(Buffer.concat(chunks)));
-				gunzip.on("error", reject);
-				gunzip.end(assetBuffer);
-			});
-			await writeFileAtomicAsync(destPath, decompressed, {
-				bestEffort: false,
-				mode: 0o750,
-			});
+			const decompressedPath = `${downloadPath}.decompressed`;
+			await pipeline(
+				createReadStream(downloadPath),
+				createGunzip(),
+				createWriteStream(decompressedPath),
+			);
+			await fs.rename(decompressedPath, destPath);
+			if (!isWindows) await fs.chmod(destPath, 0o750);
 		} else if (assetName.endsWith(".tar.gz") || assetName.endsWith(".tar.xz")) {
 			// Write archive to temp file, extract with system tar
 			const tmpArchive = path.join(GITHUB_BIN_DIR, `_tmp_${assetName}`);
-			await fs.writeFile(tmpArchive, assetBuffer);
+			await fs.rename(downloadPath, tmpArchive);
 			const tmpDir = path.join(GITHUB_BIN_DIR, `_tmp_extract_${tool.id}`);
 			await fs.mkdir(tmpDir, { recursive: true });
 
@@ -4309,7 +4460,7 @@ async function installGitHubTool(
 		} else if (assetName.endsWith(".zip")) {
 			// Write zip to temp, extract with unzip (Linux/macOS) or Expand-Archive (Windows)
 			const tmpArchive = path.join(GITHUB_BIN_DIR, `_tmp_${assetName}`);
-			await fs.writeFile(tmpArchive, assetBuffer);
+			await fs.rename(downloadPath, tmpArchive);
 			const tmpDir = path.join(GITHUB_BIN_DIR, `_tmp_extract_${tool.id}`);
 			await fs.mkdir(tmpDir, { recursive: true });
 
@@ -4354,21 +4505,34 @@ async function installGitHubTool(
 				);
 				return undefined;
 			}
+			if (spec.bundleArchiveDlls) {
+				const siblingDir = path.dirname(srcBinary);
+				for (const entry of await fs.readdir(siblingDir)) {
+					if (entry.toLowerCase().endsWith(".dll")) {
+						await fs.rename(
+							path.join(siblingDir, entry),
+							path.join(GITHUB_BIN_DIR, entry),
+						);
+					}
+				}
+			}
 			await fs.rename(srcBinary, destPath);
 			await fs.rm(tmpDir, { recursive: true, force: true });
 			if (!isWindows) await fs.chmod(destPath, 0o750);
 		} else {
 			// Bare binary (e.g. shfmt_*_linux_amd64)
-			await writeFileAtomicAsync(destPath, assetBuffer, {
-				bestEffort: false,
-				mode: 0o750,
-			});
+			await fs.rename(downloadPath, destPath);
+			if (!isWindows) await fs.chmod(destPath, 0o750);
 		}
 	} catch (err) {
+		await fs.rm(downloadPath, { force: true });
 		logSessionStart(
 			`github-install ${tool.id}: install failed: ${(err as Error).message}`,
 		);
 		return undefined;
+	} finally {
+		await fs.rm(downloadPath, { force: true });
+		await fs.rm(`${downloadPath}.decompressed`, { force: true });
 	}
 
 	// Download any sibling assets the primary wrapper depends on (e.g. ktlint's
@@ -4382,17 +4546,26 @@ async function installGitHubTool(
 			);
 			return undefined;
 		}
+		const extraPath = path.join(
+			GITHUB_BIN_DIR,
+			`.${tool.id}.${extraName}.download-${randomUUID()}`,
+		);
 		try {
-			const extraBuffer = await httpsGet(extraAsset.browser_download_url);
-			await writeFileAtomicAsync(
-				path.join(GITHUB_BIN_DIR, extraName),
-				extraBuffer,
-				{ bestEffort: false, mode: 0o750 },
+			const { bytes } = await streamDownloadInstallerFile(
+				extraAsset.browser_download_url,
+				extraPath,
 			);
+			await fs.rename(extraPath, path.join(GITHUB_BIN_DIR, extraName));
 			logSessionStart(
-				`github-install ${tool.id}: installed extra asset ${extraName} (${extraBuffer.length} bytes)`,
+				`github-install ${tool.id}: installed extra asset ${extraName} (${bytes} bytes)`,
 			);
 		} catch (err) {
+			await fs.rm(extraPath, { force: true });
+			recordDegradationOnce({
+				kind: "managed-tool-download",
+				subject: `${tool.id}:${extraName}`,
+				reason: (err as Error).message,
+			});
 			logSessionStart(
 				`github-install ${tool.id}: extra asset ${extraName} download failed: ${(err as Error).message}`,
 			);
@@ -5222,10 +5395,20 @@ async function installMavenTool(
 	lastInstallResolutionId.set(tool.id, mavenCoordinate(spec));
 
 	logSessionStart(`maven-install ${tool.id}: downloading ${url}`);
-	let jarBuffer: Buffer;
+	await fs.mkdir(GITHUB_BIN_DIR, { recursive: true });
+	const jarDownloadPath = path.join(
+		GITHUB_BIN_DIR,
+		`.${tool.id}.jar-${randomUUID()}`,
+	);
 	try {
-		jarBuffer = await httpsGet(url);
+		await streamDownloadInstallerFile(url, jarDownloadPath);
 	} catch (err) {
+		await fs.rm(jarDownloadPath, { force: true });
+		recordDegradationOnce({
+			kind: "managed-tool-download",
+			subject: tool.id,
+			reason: (err as Error).message,
+		});
 		logSessionStart(
 			`maven-install ${tool.id}: download failed: ${(err as Error).message}`,
 		);
@@ -5233,10 +5416,9 @@ async function installMavenTool(
 	}
 
 	try {
-		await fs.mkdir(GITHUB_BIN_DIR, { recursive: true });
 		assertManagedBinDirInsidePinnedHome(tool.id);
 		const jarPath = path.join(GITHUB_BIN_DIR, `${tool.id}.jar`);
-		await writeFileAtomicAsync(jarPath, jarBuffer, { bestEffort: false });
+		await fs.rename(jarDownloadPath, jarPath);
 
 		// Launcher so the tool resolves as a normal command in the managed bin.
 		const launcherName = isWindows ? `${binaryName}.bat` : binaryName;
@@ -5254,12 +5436,11 @@ async function installMavenTool(
 				{ bestEffort: false, mode: 0o750 },
 			);
 		}
-		logSessionStart(
-			`maven-install ${tool.id}: installed → ${launcherPath} (${jarBuffer.length} bytes)`,
-		);
+		logSessionStart(`maven-install ${tool.id}: installed → ${launcherPath}`);
 		debugLog(`[maven] installed ${tool.name} → ${launcherPath}`);
 		return launcherPath;
 	} catch (err) {
+		await fs.rm(jarDownloadPath, { force: true });
 		logSessionStart(
 			`maven-install ${tool.id}: install failed: ${(err as Error).message}`,
 		);
@@ -5471,10 +5652,23 @@ async function installArchiveTool(
 	lastInstallResolutionId.set(tool.id, url);
 
 	logSessionStart(`archive-install ${tool.id}: downloading ${url}`);
-	let archiveBuffer: Buffer;
+	await fs.mkdir(TOOLS_DIR, { recursive: true });
+	const archiveDownloadPath = path.join(
+		TOOLS_DIR,
+		`.${tool.id}.archive-${randomUUID()}`,
+	);
+	let archiveBytes = 0;
+	let archiveDigest = "";
 	try {
-		archiveBuffer = await httpsGet(url);
+		({ bytes: archiveBytes, sha256: archiveDigest } =
+			await streamDownloadInstallerFile(url, archiveDownloadPath));
 	} catch (err) {
+		await fs.rm(archiveDownloadPath, { force: true });
+		recordDegradationOnce({
+			kind: "managed-tool-download",
+			subject: tool.id,
+			reason: (err as Error).message,
+		});
 		logSessionStart(
 			`archive-install ${tool.id}: download failed: ${(err as Error).message}`,
 		);
@@ -5487,7 +5681,7 @@ async function installArchiveTool(
 	// extraction one): `recordDegradationOnce` keys on kind+subject, so sharing
 	// `${id}:${format}` would let an earlier extraction row swallow this one.
 	const pinned = spec.sha256?.[url];
-	const digest = hashContentBytes(archiveBuffer);
+	const digest = archiveDigest;
 	if (digest !== pinned) {
 		const reason = pinned === undefined ? "sha256-unpinned" : "sha256-mismatch";
 		recordDegradationOnce({
@@ -5497,11 +5691,12 @@ async function installArchiveTool(
 		});
 		installFailureReasons.set(
 			tool.id,
-			`archive integrity ${reason} (${archiveBuffer.length} bytes from ${url})`,
+			`archive integrity ${reason} (${archiveBytes} bytes from ${url})`,
 		);
 		logSessionStart(
 			`archive-install ${tool.id}: refused ${reason} (got ${digest}, pinned ${pinned ?? "none"}) — keeping installed version`,
 		);
+		await fs.rm(archiveDownloadPath, { force: true });
 		return undefined;
 	}
 
@@ -5531,7 +5726,7 @@ async function installArchiveTool(
 		// working copy.
 		await fs.rm(tmpExtractDir, { recursive: true, force: true });
 		await fs.mkdir(tmpExtractDir, { recursive: true });
-		await fs.writeFile(tmpArchive, archiveBuffer);
+		await fs.rename(archiveDownloadPath, tmpArchive);
 
 		// `--strip-components=N` drops N leading path components. Default 1 drops a
 		// versioned top-level dir so a launcher path stays stable (bin/… not
@@ -5645,7 +5840,7 @@ async function installArchiveTool(
 			}
 			await swapExtractedDir(tool.id, tmpExtractDir, extractDir);
 			logSessionStart(
-				`archive-install ${tool.id}: installed tree bundle → ${extractDir} (extracted ${archiveBuffer.length} bytes, sha256 verified ${digest})`,
+				`archive-install ${tool.id}: installed tree bundle → ${extractDir} (extracted ${archiveBytes} bytes, sha256 verified ${digest})`,
 			);
 			debugLog(`[archive] installed ${tool.name} bundle → ${extractDir}`);
 			return extractDir;
@@ -5734,11 +5929,12 @@ async function installArchiveTool(
 			);
 		}
 		logSessionStart(
-			`archive-install ${tool.id}: installed → ${shimPath} (extracted ${archiveBuffer.length} bytes, sha256 verified ${digest})`,
+			`archive-install ${tool.id}: installed → ${shimPath} (extracted ${archiveBytes} bytes, sha256 verified ${digest})`,
 		);
 		debugLog(`[archive] installed ${tool.name} → ${shimPath}`);
 		return shimPath;
 	} catch (err) {
+		await fs.rm(archiveDownloadPath, { force: true }).catch(() => {});
 		await fs.rm(tmpArchive, { force: true }).catch(() => {});
 		await fs
 			.rm(tmpExtractDir, { recursive: true, force: true })
@@ -5751,8 +5947,8 @@ async function installArchiveTool(
 }
 
 /**
- * Record a genuine package-manager install exception against `toolId` and
- * log it — the one place `installNpmTool`/`installPipTool`/`installGemTool`'s
+ * Record a genuine pip package-manager install exception against `toolId` and
+ * log it — the one place `installPipTool`'s
  * catch blocks funnel through (#2661 review F3/Sonar: the three catches were
  * byte-identical but for the strategy label, a duplication SonarCloud's new-
  * code gate correctly flagged). The real error (registry E404, EBADENGINE, a
@@ -5766,8 +5962,15 @@ function recordPackageManagerInstallException(
 	strategyLabel: string,
 	packageName: string,
 	err: unknown,
+	recordManagedToolInstall = true,
 ): undefined {
 	const message = boundInstallError((err as Error).message);
+	if (recordManagedToolInstall && !(err instanceof InstallLockLostError))
+		recordDegradationOnce({
+			kind: "managed-tool-install",
+			subject: toolId,
+			reason: message,
+		});
 	logSessionStart(
 		`auto-install ${strategyLabel} ${packageName}: exception: ${message}`,
 	);
@@ -5775,8 +5978,9 @@ function recordPackageManagerInstallException(
 	return undefined;
 }
 
-const INSTALL_ERROR_LINE_LIMIT = 1000;
+const INSTALL_ERROR_LINE_LIMIT = 5000;
 const INSTALL_CANDIDATE_ERROR_LIMIT = 200;
+const PEP668_LOG_ERROR_LIMIT = 1000;
 
 function boundInstallError(
 	value: string,
@@ -6028,6 +6232,9 @@ async function installNpmTool(
 			"npm",
 			packageName,
 			err,
+			// Pass lock loss through the shared helper so its dedicated exclusion
+			// remains the single guard against a duplicate managed-install row.
+			err instanceof InstallLockLostError,
 		);
 	}
 }
@@ -6174,7 +6381,7 @@ async function installPipTool(
 			if (pipPep668LoggedRefusals.current(logKey) === 0) {
 				pipPep668LoggedRefusals.bump(logKey);
 				logSessionStart(
-					`auto-install pip ${packageName}: ${strategy} refused by PEP 668 (${boundInstallError(reason)})`,
+					`auto-install pip ${packageName}: ${strategy} refused by PEP 668 (${boundInstallError(reason, PEP668_LOG_ERROR_LIMIT)})`,
 				);
 			}
 		};
@@ -6208,6 +6415,44 @@ async function installPipTool(
 				}).cwd,
 				...(spawnEnv ? { env: spawnEnv } : {}),
 			});
+		};
+		const pythonReleaseFor = async (
+			command: string,
+		): Promise<string | undefined> => {
+			const interpreter =
+				command === "pip3" ? "python3" : command === "pip" ? "python" : command;
+			const pipProbe = await run(command, ["--version"]);
+			const pipRelease = `${pipProbe.stdout}\n${pipProbe.stderr}`.match(
+				/(?:python|Python)\s+([0-9]+(?:\.[0-9]+){1,2})/,
+			)?.[1];
+			if (pipRelease) return pipRelease;
+			if (interpreter === command) return undefined;
+			const interpreterProbe = await run(interpreter, ["--version"]);
+			return `${interpreterProbe.stdout}\n${interpreterProbe.stderr}`.match(
+				/^Python\s+([0-9]+(?:\.[0-9]+){1,2})/m,
+			)?.[1];
+		};
+		const candidateFailure = async (
+			command: string,
+			args: string[],
+			failureText: string,
+		): Promise<string> => {
+			const pythonRelease = await pythonReleaseFor(command);
+			const error = failureText;
+			const requiresPython = error.match(
+				/ERROR:\s+Ignored[^\r\n]*Requires-Python[^\r\n]*/i,
+			)?.[0];
+			const tail = requiresPython
+				? error.replace(requiresPython, "").trim()
+				: error;
+			const evidence: string[] = [];
+			if (pythonRelease) evidence.push(`Python ${pythonRelease}`);
+			if (requiresPython)
+				evidence.push(
+					boundInstallError(requiresPython, INSTALL_CANDIDATE_ERROR_LIMIT),
+				);
+			evidence.push(boundInstallError(tail, INSTALL_CANDIDATE_ERROR_LIMIT));
+			return `${command} ${args.join(" ")}: ${evidence.join(" | ")}`;
 		};
 		const addBinToPath = async (
 			binDir: string,
@@ -6344,8 +6589,9 @@ async function installPipTool(
 				// resolution through PATH and its user-base candidates.
 				return succeeded("user", binaryPath ?? packageName);
 			}
-			const candidateError = `${candidate.command} ${args.join(" ")}: ${boundInstallError(error, INSTALL_CANDIDATE_ERROR_LIMIT)}`;
-			candidateErrors.push(candidateError);
+			candidateErrors.push(
+				await candidateFailure(candidate.command, args, error),
+			);
 			if (pep668.test(error)) {
 				userRefused = true;
 				refuse("user", error);
@@ -6373,8 +6619,9 @@ async function installPipTool(
 			const result = await run(candidate.command, args, privateEnv);
 			const error = (result.error?.message ?? result.stderr).trim();
 			if (result.status !== 0) {
-				const candidateError = `${candidate.command} ${args.join(" ")}: ${boundInstallError(error, INSTALL_CANDIDATE_ERROR_LIMIT)}`;
-				candidateErrors.push(candidateError);
+				candidateErrors.push(
+					await candidateFailure(candidate.command, args, error),
+				);
 				continue;
 			}
 			const binaryPath = await addBinToPath(
@@ -6431,6 +6678,7 @@ async function installGemTool(
 			"gem",
 			packageName,
 			err,
+			err instanceof InstallLockLostError,
 		);
 	}
 }
@@ -7185,25 +7433,16 @@ export function pickReleaseAsset<T extends { name: string }>(
 	);
 }
 
-function deriveHashiCorpReleaseAsset(
+function deriveReleaseAsset(
 	tool: ToolDefinition,
 	tagName: string | undefined,
 	assetSubstring: string,
 ): DownloadAsset | undefined {
-	const product = tool.github?.hashiCorpReleaseProduct;
-	if (!product || !tagName) return undefined;
-
-	const version = tagName.replace(/^v/, "").trim();
-	if (!version) return undefined;
-
-	const assetName = `${product}_${version}_${assetSubstring}`;
-	return {
-		name: assetName,
-		browser_download_url: `https://releases.hashicorp.com/${product}/${version}/${assetName}`,
-	};
+	if (!tagName) return undefined;
+	return tool.github?.derivedAsset?.(tagName, assetSubstring);
 }
 
-export function resolveDerivedHashiCorpReleaseAsset(
+export function resolveDerivedReleaseAsset(
 	toolId: string,
 	tagName: string,
 	platform: string,
@@ -7213,5 +7452,5 @@ export function resolveDerivedHashiCorpReleaseAsset(
 	if (!tool) return undefined;
 	const assetSubstring = tool.github?.assetMatch(platform, arch);
 	if (!assetSubstring) return undefined;
-	return deriveHashiCorpReleaseAsset(tool, tagName, assetSubstring);
+	return deriveReleaseAsset(tool, tagName, assetSubstring);
 }

@@ -5,9 +5,20 @@ import { syncBuiltinESMExports } from "node:module";
 import { spawnSync } from "node:child_process";
 import * as os from "node:os";
 import * as path from "node:path";
+import nodeCp from "node:child_process";
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
+import { fileURLToPath } from "node:url";
 import { installGitFixtureEnv } from "./git-fixture-env.js";
 import { installKillGuard, killGuardReport } from "./kill-guard.js";
+import {
+	createRealSpawnLedger,
+	formatRealSpawnEvidence,
+	installRealSpawnObserver,
+	REAL_SPAWN_EVIDENCE_ENV,
+	type RealSpawnLedger,
+} from "./real-spawn-observer.js";
+import { realSpawnGateFailure } from "./real-spawn-admission.js";
+import { recordCensusWorker, runDeadOwnerCensus } from "./dead-owner-census.js";
 import { currentPeakRssMb, reportPeakRss } from "./worker-peak-rss.js";
 import {
 	fixtureHomeRoot,
@@ -31,6 +42,8 @@ import {
 // before every test file's `vi.mock`, so whatever it imports is cached before
 // the mock registers (#3703 round 1: 56 files red).
 import { _settleRegistryMutationsForTests } from "../../clients/instance-registry-tail.js";
+import { AMBIENT_PYTHON_ENVIRONMENT_VARIABLES } from "../../clients/python-ambient-environment.js";
+import { pathWithoutActivePythonEnvironments } from "./ambient-python-scrub.js";
 import {
 	claimScratchDir,
 	SCRATCH_DIR_ROOT,
@@ -96,6 +109,13 @@ process.env.PI_LENS_CONFIG_PATH = "/nonexistent-pi-lens-tests/config.json";
 // drives it (seen 2026-10-16: six golden witnesses gained the startup guidance
 // block). Tests that exercise a mode set it themselves.
 delete process.env.PI_LENS_STARTUP_MODE;
+
+// Same class (#5267): scheduleUntrackedOrphanSweep reads
+// PI_LENS_DISABLE_ORPHAN_BACKSTOP at arm time, so a shell exporting the key
+// turned every in-test arm into a no-op and reddened the backstop's own
+// scheduler tests on an undefined timer. Tests that exercise the opt-out set
+// it themselves (tests/support/pi-session.ts arms it per session start).
+delete process.env.PI_LENS_DISABLE_ORPHAN_BACKSTOP;
 
 // Hermeticity (#525, same class as #515 above): never let a test write into
 // the developer's REAL machine-global ~/.pi-lens (instances.json, logs,
@@ -192,6 +212,8 @@ const tmpHygieneOwnerMarkerBody = JSON.stringify({
 	file: tmpHygieneOwnFile,
 });
 fs.writeFileSync(tmpHygieneOwnerMarker, tmpHygieneOwnerMarkerBody);
+// #5528: name this worker for the dead-owner census (off unless its env is set).
+recordCensusWorker(tmpHygieneOwnFile);
 
 /**
  * #3314: the run-file manifest — every test file a worker of THIS run id
@@ -465,6 +487,100 @@ afterEach(() => touchTmpHygieneOwnerMarker());
  * just removed is seen absent, which is what marks a later reappearance as a
  * straggler.
  */
+// #5100: the ledger the running file's real `child_process` calls land in. One
+// per worker, and `isolate: true` gives every test file its own worker, so the
+// ledger IS that file's record: no cross-file state and no reset owner.
+const realSpawnLedger: RealSpawnLedger = createRealSpawnLedger();
+// #5100: a const copy of the pre-patch `spawnSync`, so this file's own repo-root
+// git census is not attributed to the file that happens to be running.
+const harnessSpawnSync = spawnSync;
+
+// #5100: the run-time real-spawn observer, patched onto the real
+// `node:child_process` exports before the test module graph loads. The
+// `syncBuiltinESMExports()` call under the tmp-root interposer publishes it to
+// every importer shape at once — `import { spawn } from "node:child_process"`,
+// `import * as cp`, `require("node:child_process")`, and `vi.importActual` — so
+// the observation does not depend on which name a file spelled, which is the
+// hole #5100 reports in the name-based census. A file that `vi.mock`s the
+// module is exempt by construction: its calls reach the mock, not these exports.
+//
+// This file's own `spawnSync` (the repo-root git census, reached only from
+// `tests/config/tmp-fixture-hygiene.test.ts`) is called through
+// `harnessSpawnSync`, a const copy of the pre-patch function, so harness work
+// is never attributed to the running file.
+installRealSpawnObserver(
+	nodeCp as unknown as Parameters<typeof installRealSpawnObserver>[0],
+	realSpawnLedger,
+);
+
+// #5100: the run-time real-spawn gate. It is a check of the ONE top-level
+// teardown hook (#3139 pins that this file registers exactly one), and it runs
+// LAST in that hook's check list, so every child an earlier check started — the
+// kill guard's `ps`, the tmp-hygiene sweep — is already in the ledger when this
+// reads it. Running it first would judge the file on a shorter ledger, which is
+// a weaker gate, not a reordered one.
+//
+// A file whose call chain started a real child and that holds no
+// `real-process-spawn` admission fails HERE, in its own run: that is the
+// fail-closed arm #5100 asks for, and it does not care which name the spawn was
+// spelled under. The CHAIN is charged, not the frame nearest the syscall: a file
+// that reaches `child_process` through `clients/` — the #5084 shape, a tool call
+// that ends in the real ast-grep CLI — owns that child's contention just the
+// same. What stays uncharged is a child nobody asked for, with no `tests/` frame
+// anywhere in its chain (a module-level timer, a watcher, vitest's own pool):
+// charging one blames whichever file happened to be scheduled, which is how an
+// instrument becomes the flake it hunts.
+//
+// The measured shape, across the 274 files the static census names or that reach
+// it: 242 started at least one real child and 233 took a harness charge; the
+// name census lists 212 of them. Four took a charge with no row in either
+// admission source, and all four are spawners a name list cannot see — the
+// vulture capability probe in clients/dead-code-client.test.ts, the real bash
+// tool in clients/runtime-tool-result.test.ts, and two language-server children
+// reached through `spawnClient` and `launchLSP` — so each now holds an observed
+// row. Both admission arms are pinned in
+// `tests/support/real-spawn-observer.test.ts`.
+//
+// The static census stays the deterministic floor the baseline is derived from:
+// a run-time count is not derivable (a skipped case, a platform branch, or a
+// targeted run moves it), and `tests/support/real-spawn-observer.test.ts` pins
+// that the observer sees every importer shape the name list had to enumerate.
+function checkRealSpawnGate(): void {
+	const evidence = formatRealSpawnEvidence(tmpHygieneOwnFile, realSpawnLedger);
+	if (evidence === undefined) return;
+	const evidencePath = process.env[REAL_SPAWN_EVIDENCE_ENV];
+	if (evidencePath) {
+		try {
+			fs.appendFileSync(evidencePath, evidence);
+		} catch {
+			// A measurement record that cannot be written costs the census one
+			// line; the gate below still judges this file.
+		}
+	}
+	const failure = realSpawnGateFailure(tmpHygieneOwnFile, realSpawnLedger, {
+		supportDir: path.dirname(fileURLToPath(import.meta.url)),
+		readFile: (target: string): string => fs.readFileSync(target, "utf8"),
+	});
+	if (failure !== undefined) throw new Error(failure);
+}
+
+/** The running file's observed real-spawn ledger, for the observer's own test
+ *  (#5100): it witnesses that the patch reached THIS file's module graph, which
+ *  is the part of the seam a unit test over a hand-built target cannot show. */
+export function realSpawnLedgerView(): {
+	total: number;
+	byClass: Record<string, number>;
+	entryPoints: Record<string, number>;
+	commands: string[];
+} {
+	return {
+		total: realSpawnLedger.total,
+		byClass: Object.fromEntries(realSpawnLedger.byClass),
+		entryPoints: Object.fromEntries(realSpawnLedger.calls),
+		commands: [...realSpawnLedger.commands],
+	};
+}
+
 const tmpRootRegistry = getTmpRootRegistry();
 installTmpRootInterposer(
 	tmpRootRegistry,
@@ -750,6 +866,25 @@ process.env.PI_CODING_AGENT_DIR = path.join(tmpHygieneHome, "agent");
 fs.mkdirSync(path.join(tmpHygieneHome, "agent"), { recursive: true });
 installGitFixtureEnv(tmpHygieneHome);
 
+// Same class (AGENTS.md shape 82): `detectPythonEnvironment` resolves the
+// interpreter and tool directory from an exported VIRTUAL_ENV, CONDA_PREFIX or
+// UV_PROJECT_ENVIRONMENT, so a developer shell with a global venv active handed
+// every test that venv's pyright: a case whose premise is "no language server
+// checks this file" (`adopted-root-runners.test.ts`) read a pyright finding
+// instead. The owner's own list is scrubbed, so a channel it learns is scrubbed
+// too. Its module is a leaf with no imports, so loading it here fixes no
+// logger's sink path ahead of a case's home pin. Tests that exercise a channel
+// set it themselves.
+// Activation also put each environment's directories on PATH, where a lookup
+// by name (`pytest`) finds that environment's tools; drop exactly those
+// directories, read from the channels before they are deleted.
+{
+	const scrubbedPath = pathWithoutActivePythonEnvironments(process.env);
+	if (scrubbedPath !== undefined) process.env.PATH = scrubbedPath;
+}
+for (const ambientPythonChannel of AMBIENT_PYTHON_ENVIRONMENT_VARIABLES)
+	delete process.env[ambientPythonChannel];
+
 // #3083: session_start reaches the backstop transitively through index.js.
 // Pin the filesystem location once for every file, without a caller registry
 // or changing #2912's shared home. Explicit per-case homes remain authoritative.
@@ -1005,7 +1140,7 @@ export function untrackedUnignoredEntries(
 		return stat?.isDirectory() ? `${name}/` : name;
 	});
 	const run = (args: string[], input?: string) =>
-		spawnSync("git", args, {
+		harnessSpawnSync("git", args, {
 			cwd: root,
 			encoding: "utf8",
 			timeout: 15_000,
@@ -2025,11 +2160,18 @@ afterAll(async () => {
 		// window heartbeat's queued updateHeartbeat, so no live worker's lock
 		// generation is left behind for the next file to take over. Bounded,
 		// and it never throws, so the checks below always run.
-		await settleRegistryMutationsBeforeTeardown();
+		// #5528: the dead-owner census scans concurrently (one bounded `ps`), so
+		// it never lengthens the settle bound below.
+		await Promise.all([
+			settleRegistryMutationsBeforeTeardown(),
+			runDeadOwnerCensus(tmpHygieneOwnFile),
+		]);
 		// #2912: before the checks, so the leak notice below names what is left.
 		sweepOwnTmpRoots("afterAll");
+		// #5100: last, so the ledger it judges holds every child the other
+		// checks and the settled registry tail started (see its comment).
 		runTeardownWithMemReport(
-			[checkKillGuard, checkTmpHygiene, checkBackstop],
+			[checkKillGuard, checkTmpHygiene, checkBackstop, checkRealSpawnGate],
 			emitMemReport,
 		);
 	} finally {

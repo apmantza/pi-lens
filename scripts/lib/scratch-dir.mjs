@@ -25,8 +25,12 @@ export function ownerAlive(entryDir) {
 	} catch {
 		return undefined;
 	}
-	const pid = Number.parseInt(pidText.trim(), 10);
-	if (!Number.isInteger(pid) || pid <= 0) return undefined;
+	// The whole marker must be a pid: parseInt read "123junk" as 123 and a
+	// sweep deleted a foreign directory on it (#5468 r3 F5).
+	const text = pidText.trim();
+	if (!/^\d+$/.test(text)) return undefined;
+	const pid = Number(text);
+	if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
 	try {
 		process.kill(pid, 0);
 		return true;
@@ -35,13 +39,22 @@ export function ownerAlive(entryDir) {
 	}
 }
 
-/** Create a named scratch directory and record the process that owns it. */
+/**
+ * Create a named scratch directory and record the process that owns it.
+ *
+ * The directory appears under its prefix only with owner.pid already inside:
+ * it is built under a `.claim-` name no sweep matches and renamed into place.
+ * A concurrent sweep that saw the prefixed name before the marker took a live
+ * allocation for an orphan and deleted it (#5468 r3 F4).
+ */
 export function claimScratchDir(root, prefix) {
 	fs.mkdirSync(root, { recursive: true });
-	const dir = fs.mkdtempSync(
-		path.join(root, `${prefix}-${process.pid}-${Date.now()}-`),
+	const staging = fs.mkdtempSync(
+		path.join(root, `.claim-${prefix}-${process.pid}-${Date.now()}-`),
 	);
-	fs.writeFileSync(path.join(dir, SCRATCH_OWNER_FILE), String(process.pid));
+	fs.writeFileSync(path.join(staging, SCRATCH_OWNER_FILE), String(process.pid));
+	const dir = path.join(root, path.basename(staging).slice(".claim-".length));
+	fs.renameSync(staging, dir);
 	return dir;
 }
 

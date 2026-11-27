@@ -289,7 +289,8 @@ describe("LSPService project-trust gate (#1334 S5)", () => {
 			const binDir = path.join(project, "node_modules", ".bin");
 			fs.mkdirSync(binDir, { recursive: true });
 			const binary = path.join(binDir, "python");
-			fs.writeFileSync(binary, "#!/bin/sh\n");
+			const marker = path.join(project, "ran");
+			fs.writeFileSync(binary, `#!/bin/sh\ntouch "${marker}"\n`);
 			fs.chmodSync(binary, 0o755);
 			const { trust, service, spawn } = await setup();
 			const { launchLSP } = await import("../../../clients/lsp/launch.js");
@@ -300,12 +301,13 @@ describe("LSPService project-trust gate (#1334 S5)", () => {
 					extensions: [".py"],
 					root: async () => project,
 					spawn: async (root: string) => {
+						// #5674: an entry inside a root not admitted for project code
+						// leaves the search path before any lookup, so the project's
+						// bin dir is the whole PATH: nothing else may answer instead.
 						await launchLSP("python", [], {
 							cwd: root,
-							env: {
-								PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-							},
-						});
+							env: { PATH: binDir },
+						}).catch(() => undefined);
 						return undefined;
 					},
 				},
@@ -315,19 +317,17 @@ describe("LSPService project-trust gate (#1334 S5)", () => {
 			);
 			expect(client).toBeUndefined();
 			expect(spawn).not.toHaveBeenCalled();
+			expect(fs.existsSync(marker)).toBe(false);
 			expect(
+				// The host's own PATH can carry the session repository's bin dir
+				// (#4530 drops it too), so only this project's entry is counted.
 				logExtension.mock.calls.filter(
 					([entry]) =>
 						entry.message ===
-						"project-local LSP binary refused: mark the project trusted in pi or upgrade pi",
+							"search-path entry inside the project ignored: mark the project trusted in pi or upgrade pi" &&
+						entry.metadata?.entry === binDir,
 				),
 			).toHaveLength(1);
-			expect(logExtension).toHaveBeenCalledWith(
-				expect.objectContaining({
-					message:
-						"project-local LSP binary refused: mark the project trusted in pi or upgrade pi",
-				}),
-			);
 			trust.resetProjectTrust();
 			fs.rmSync(project, { recursive: true, force: true });
 		},

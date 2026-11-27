@@ -39,11 +39,13 @@ export function convertLspDiagnostics(
 			};
 			const severity: "error" | "warning" | "info" | "hint" =
 				severityMap[d.severity] ?? "info";
-			// LSP information (3) is the warning tier (#5412). A hint (4), an unset
-			// severity and an unknown one keep the raw `none`: the auxiliary profile
-			// raises a hint to `warning` (auxiliary-lsp-opt-in-4929.test.ts).
+			// LSP information (3) and hint (4) share the CLI advisory tier (#5412).
+			// This converter keeps semantic `none` for unset and unknown severities.
 			const semantic =
-				d.severity === 1 || d.severity === 2 || d.severity === 3
+				d.severity === 1 ||
+				d.severity === 2 ||
+				d.severity === 3 ||
+				d.severity === 4
 					? semanticFor(severity)
 					: "none";
 			const code = String(d.code ?? "unknown");

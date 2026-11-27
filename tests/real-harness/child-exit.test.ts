@@ -17,6 +17,9 @@ import {
 	killGuardReport,
 	takeKillGuardViolationsForTest,
 } from "../support/kill-guard.js";
+import { waitFor } from "../clients/interleaving-kit.js";
+import { getProcessSingleton } from "../../clients/process-singletons.js";
+import { safeSpawnAsync } from "../../clients/safe-spawn.js";
 import { isProcessAlive, killProcessTree } from "../support/process-tree.js";
 import { waitForChildExit, withRealPi } from "../support/real-pi-harness.js";
 
@@ -500,6 +503,38 @@ describe("kill-guard ownership (#2042)", () => {
 				strangerAlive: true,
 				recorded: attempts.map(([pid, signal]) => ["kill", pid, signal]),
 			});
+		},
+		15_000,
+	);
+
+	// Recurrence (#5722 review F1): the guard's register arm wrapped a retired
+	// slot while `safeSpawnAsync` added to the process-singleton cell, so the arm
+	// went dead with no test red. A real production registration must land in
+	// the cell the guard wrapped (the same family and version this reads
+	// through the seam) and, being owned, record nothing.
+	it.skipIf(process.platform !== "linux")(
+		"safeSpawnAsync registers its owned child in the cell the guard wrapped",
+		async () => {
+			const pids = getProcessSingleton("safe-spawn-lifetime", 1, () => ({
+				pids: new Set<number>(),
+				installed: false,
+			})).pids;
+			const pending = safeSpawnAsync(
+				process.execPath,
+				["-e", "setTimeout(() => {}, 1500)"],
+				{ lifetimeCoupled: true, timeout: 10_000 },
+			);
+			const registered = await waitFor(
+				() => [...pids],
+				(held) => held.length > 0,
+				{ timeoutMs: 3_000 },
+			);
+			expect((await pending).status).toBe(0);
+			expect({
+				registered: registered.length,
+				recorded: takeKillGuardViolationsForTest(registered),
+				leftover: [...pids],
+			}).toEqual({ registered: 1, recorded: [], leftover: [] });
 		},
 		15_000,
 	);

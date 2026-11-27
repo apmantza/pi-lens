@@ -413,6 +413,16 @@ describe("the CLI's own decisions (no child spawned)", () => {
 		const err: string[] = [];
 		const calls: unknown[] = [];
 		const mainStreams = {
+			// #5670: a dependency patch bump is not a release certification.
+			// These CLI cases need an explicitly certified installed host.
+			readFile: () =>
+				[
+					"### Verified hosts",
+					"",
+					"| host |",
+					"| --- |",
+					...certified.map((version) => `| ${version} |`),
+				].join("\n"),
 			write: (text: string) => out.push(text),
 			warn: (text: string) => err.push(text),
 			runTierSuite: async (input: unknown) => {
@@ -549,9 +559,9 @@ describe("the CLI's own decisions (no child spawned)", () => {
 			]);
 			expect(await cli.promise).toBe(EXIT.ok);
 			expect(cli.err.join("")).toContain(`holds no ${HOST_PACKAGE}`);
-			// One line per certified host (this case reads the real doc), plus the
+			// One line per fixture-certified host, plus the
 			// header and the summary line.
-			const docCertified = certifiedHosts(BASELINE_TEXT).versions;
+			const docCertified = certified;
 			const lines = cli.out.join("").trimEnd().split("\n");
 			expect(lines).toHaveLength(1 + docCertified.length + 1);
 			expect(

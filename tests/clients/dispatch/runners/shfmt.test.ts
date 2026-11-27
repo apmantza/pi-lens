@@ -4,7 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setupTestEnvironment } from "../../test-utils.js";
 
 const { safeSpawnAsync } = vi.hoisted(() => ({ safeSpawnAsync: vi.fn() }));
-vi.mock("../../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
+vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/safe-spawn.js")
+	>()),
+	safeSpawnAsync,
+}));
 vi.mock("../../../../clients/installer/index.js", () => ({
 	ensureTool: vi.fn(async () => "shfmt"),
 }));
@@ -14,10 +19,10 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: () => ({
-			isAvailableAsync: async () => true,
-			getCommand: () => "shfmt",
-		}),
+		// The runner resolves through the registry resolver, which binds the real
+		// checker inside runner-helpers, so a checker double never reaches it
+		// (#5410 S2). Same answer, at the seam the runner now calls.
+		resolveToolCommandWithInstallFallback: async () => "shfmt",
 	}),
 );
 

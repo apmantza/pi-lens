@@ -14,11 +14,13 @@ import {
 } from "./project-changes.js";
 import type { CodeQualityWarningRecord } from "./code-quality-warnings.js";
 import type { Diagnostic } from "./dispatch/types.js";
+import { BLOCKER_FULL_DELIVERY_CAP } from "./finding-delivery-gate.js";
 import {
 	ANY_POSITION,
 	foldedFindingIdentity,
 	retainRecordedFindings,
 } from "./finding-identity.js";
+import { findingClassKey } from "./dispatch/rule-id-normalize.js";
 import { formatDiagnostics } from "./dispatch/utils/format-utils.js";
 import {
 	inlineBlockerLines,
@@ -34,12 +36,17 @@ import {
 } from "./path-utils.js";
 import { PathKeyedMap } from "./path-keyed-map.js";
 import { BoundedFifoMap, BoundedLruCache } from "./bounded-cache.js";
+import {
+	type ComplexityBaseline,
+	MAX_BASELINE_FILES,
+} from "./metrics/complexity-baseline.js";
 import { type AnalysisAnchor, owedByContentOnly } from "./line-alignment.js";
 import {
 	type PartialApplyPending,
 	PartialApplyRecordStore,
 } from "./partial-edit-apply.js";
 import { ReadGuard } from "./read-guard.js";
+import { sanitizeCorrelationId } from "./read-guard-logger.js";
 import type { RuleScanResult } from "./rules-scanner.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
 import { TurnSummaryCollector } from "./turn-summary.js";
@@ -242,6 +249,8 @@ export interface DeferredMutationRecord {
 	 * branch's write to it.
 	 */
 	readGuardBranchEpoch: number;
+	/** #5549: bounded retries after a deferred formatter failure. */
+	formatRequeueAttempts?: number;
 }
 
 /** @deprecated Use DeferredMutationRecord. */
@@ -382,6 +391,18 @@ export interface InlineBlockerRecord {
 	 * self-drift demotion drops it (#4990).
 	 */
 	staleDeliveryCount?: number;
+	/**
+	 * #5532: how many times this LIVE record's full section has reached the model
+	 * (`recordBlockerDelivery`), the first delivery included. Not
+	 * `staleDeliveryCount`: that is one demotion episode's tally (#4990 F3), and a
+	 * demotion spreads the record, so a live count carried into it would retire a
+	 * freshly demoted record on its first stale delivery. A fresh dispatch
+	 * replaces the record wholesale, so a re-raised blocker restarts at zero;
+	 * `recordDeferredInlineBlockers` zeroes it when a late runner adds findings.
+	 */
+	fullDeliveryCount?: number;
+	/** #5532: the `blocker-repeat-capped` row for this record was written. */
+	capRowWritten?: boolean;
 	/**
 	 * #4484 round 4: what the verdict behind this record analysed (line
 	 * hashes, owed lines), set by `setAnalysisAnchor` right after the record
@@ -564,10 +585,15 @@ const TOOL_CALL_ATTRIBUTION_TTL_MS = 5 * 60_000;
 function narrowedRecord(
 	existing: InlineBlockerRecord,
 	kept: Diagnostic[],
+	/** The project root a row's relative path resolves against (#5714 r1). */
+	root: string | undefined,
 ): InlineBlockerRecord {
 	return {
 		...existing,
-		summary: formatDiagnostics(kept, "blocking").trim(),
+		summary: formatDiagnostics(kept, "blocking", undefined, {
+			editedFile: existing.filePath,
+			root,
+		}).trim(),
 		diagnostics: kept,
 		sources: inlineBlockerSources(kept),
 		lines: inlineBlockerLines(kept, existing.filePath),
@@ -629,7 +655,15 @@ export class RuntimeCoordinator {
 		diagnosticsSurfaced: 0,
 		coldSnapshotTouches: 0,
 	};
-	private _complexityBaselines = new Set<string>();
+	/**
+	 * #5087: per-file complexity baselines, keyed by
+	 * `complexityBaselineKey`. Bounded (LRU), and every write goes through a
+	 * session handle captured before the write's first await (#4220).
+	 */
+	private _complexityBaselines = new BoundedLruCache<
+		string,
+		ComplexityBaseline
+	>(MAX_BASELINE_FILES);
 	private readonly _fixedThisTurn = new PathKeyedMap<true>(normalizeMapKey);
 	private readonly _writtenThisTurn = new PathKeyedMap<true>(normalizeMapKey);
 	private readonly _autofixDemotedThisTurn = new PathKeyedMap<true>(
@@ -752,6 +786,17 @@ export class RuntimeCoordinator {
 	 * widening stays separate because it outlives a blocked call's attribution.
 	 */
 	private readonly _readWidenings = new BoundedLruCache<string, ReadWidening>(
+		TOOL_CALL_ATTRIBUTION_CAPACITY,
+	);
+	/**
+	 * #5551: per tool call, the files `recordMutationOutcome` recorded for it
+	 * while its tool ran. Its `tool_result` takes the set and dispatches each
+	 * file, whatever the tool is named, so no producer reports its own writes
+	 * and no table admits it by name. A call with no `tool_result` (a blocked
+	 * call, a tool run outside pi) is evicted by the same bound as an
+	 * attribution; a set holds the files of one call.
+	 */
+	private readonly _callWrites = new BoundedLruCache<string, Set<string>>(
 		TOOL_CALL_ATTRIBUTION_CAPACITY,
 	);
 	/**
@@ -895,6 +940,7 @@ export class RuntimeCoordinator {
 		// not let a NEW session inherit a DEAD session's recorded skip verdict.
 		this._toolCallAttributions.clear();
 		this._readWidenings.clear();
+		this._callWrites.clear();
 		this._lspReadWarmState.clear();
 		this._pendingInlineBlockers.clear();
 		this._owedRunners.clear();
@@ -2001,7 +2047,10 @@ export class RuntimeCoordinator {
 		// #4484 round 5 (K3): not the id. A carry that moves a blocker's line
 		// keeps its line-bound id (`lsp:<code>:<line>`), so the settled copy at
 		// the same line has another one.
+		// #5416: a class member (`findingClassKey`) is the one finding whichever
+		// tool's copy the record holds, as the dispatcher's dedupe reads it.
 		const identity = (d: Diagnostic) =>
+			findingClassKey(d) ??
 			JSON.stringify([foldedFindingIdentity(d), d.line, d.column]);
 		const known = new Set((existing?.diagnostics ?? []).map(identity));
 		const added = blocking.flatMap((d) => (known.has(identity(d)) ? [] : [d]));
@@ -2020,7 +2069,10 @@ export class RuntimeCoordinator {
 					: {}),
 				...this.recordSession(sessionId),
 			}),
-			summary: formatDiagnostics(diagnostics, "blocking").trim(),
+			summary: formatDiagnostics(diagnostics, "blocking", undefined, {
+				editedFile: filePath,
+				root: this.projectRoot || undefined,
+			}).trim(),
 			diagnostics,
 			// The same two derivations the pipeline's writer uses: `lines` keeps only
 			// this file's own rows, `sources` pins an untagged finding as "unknown".
@@ -2037,6 +2089,9 @@ export class RuntimeCoordinator {
 			// The turn-end policy verdict was about the OLD set; the added findings
 			// passed the policy already and the next turn end re-derives the rest.
 			policySuppressed: false,
+			// #5532: new findings are changed content, so the count restarts.
+			fullDeliveryCount: 0,
+			capRowWritten: false,
 		});
 		return added.length;
 	}
@@ -2153,7 +2208,10 @@ export class RuntimeCoordinator {
 			this._pendingInlineBlockers.delete(key);
 			return retired.length;
 		}
-		this._pendingInlineBlockers.set(key, narrowedRecord(existing, kept));
+		this._pendingInlineBlockers.set(
+			key,
+			narrowedRecord(existing, kept, this.projectRoot || undefined),
+		);
 		return retired.length;
 	}
 
@@ -2482,6 +2540,53 @@ export class RuntimeCoordinator {
 	}
 
 	/**
+	 * #5532: how many times this live blocker's full section has reached the
+	 * model. A peek: the delivery gate (`admitBlockerReplay`, surface
+	 * `turn-end-replay`) decides from it whether the next delivery collapses to
+	 * the one-line pointer, and the delivery that renders it commits through
+	 * {@link recordBlockerDelivery} once the message is known to reach the
+	 * model. The count is this record's own, so another blocker joining,
+	 * leaving or being fixed never moves it.
+	 */
+	peekBlockerFullDeliveryCount(filePath: string): number {
+		return this._pendingInlineBlockers.get(filePath)?.fullDeliveryCount ?? 0;
+	}
+
+	/**
+	 * #5532: a delivery that reached the model rendered this blocker `shown`. A
+	 * full one counts toward the cap. The first collapsed one is the moment the
+	 * cap retires a full delivery, so it writes the blocker's one counted
+	 * `blocker-repeat-capped` row; later ones write nothing. The blocker stays in
+	 * the store, `lens_diagnostics` and the commit gate either way. A record that
+	 * is gone (fixed, marked, deleted) is a no-op.
+	 */
+	recordBlockerDelivery(
+		filePath: string,
+		shown: "full" | "collapsed",
+		displayPath: string,
+	): void {
+		const existing = this._pendingInlineBlockers.get(filePath);
+		if (!existing) return;
+		if (shown === "full") {
+			this._pendingInlineBlockers.set(filePath, {
+				...existing,
+				fullDeliveryCount: (existing.fullDeliveryCount ?? 0) + 1,
+			});
+			return;
+		}
+		if (existing.capRowWritten === true) return;
+		this._pendingInlineBlockers.set(filePath, {
+			...existing,
+			capRowWritten: true,
+		});
+		incrementDegradationCount({
+			kind: "blocker-repeat-capped",
+			subject: `inline-blocker-repeat:${displayPath}`,
+			reason: `delivered in full ${BLOCKER_FULL_DELIVERY_CAP} times with no fix; later deliveries get a one-line pointer, the blocker stays in lens_diagnostics and the commit gate`,
+		});
+	}
+
+	/**
 	 * #1950/#4990: retire a drift demotion once it has been delivered its axis's
 	 * cap with no re-run confirming or clearing it.
 	 * `"dependency-drift"` retires at `DEPENDENCY_DRIFT_MAX_DELIVERIES` and
@@ -2605,7 +2710,10 @@ export class RuntimeCoordinator {
 		}
 		// The derived fields come from the surviving rows, never from the old
 		// record (`narrowedRecord`).
-		this._pendingInlineBlockers.set(key, narrowedRecord(existing, kept));
+		this._pendingInlineBlockers.set(
+			key,
+			narrowedRecord(existing, kept, this.projectRoot || undefined),
+		);
 		return true;
 	}
 
@@ -2687,7 +2795,10 @@ export class RuntimeCoordinator {
 					this.noteResolvedBlockerFile(existing, undefined, true);
 				this._pendingInlineBlockers.delete(key);
 			} else {
-				this._pendingInlineBlockers.set(key, narrowedRecord(existing, kept));
+				this._pendingInlineBlockers.set(
+					key,
+					narrowedRecord(existing, kept, this.projectRoot || undefined),
+				);
 			}
 		}
 		return changed;
@@ -2937,7 +3048,7 @@ export class RuntimeCoordinator {
 		return this._turnSummary;
 	}
 
-	get complexityBaselines(): Set<string> {
+	get complexityBaselines(): BoundedLruCache<string, ComplexityBaseline> {
 		return this._complexityBaselines;
 	}
 
@@ -3018,6 +3129,37 @@ export class RuntimeCoordinator {
 		const widening = this._readWidenings.get(toolCallId);
 		this._readWidenings.delete(toolCallId);
 		return widening;
+	}
+
+	/**
+	 * #5551: `recordMutationOutcome` recorded `filePath` for this call. The
+	 * id is the producer's raw one (the tool's `execute` argument); the
+	 * `tool_result` reads it as `resolveToolCallCorrelationId` spells it, so
+	 * both sides key by `sanitizeCorrelationId` (a pi-ai `call_id|item_id`
+	 * host id differs raw versus sanitized; review r1 F1 on #5635). The
+	 * result is a no-op on an id already sanitized.
+	 */
+	noteCallWrite(rawToolCallId: string, filePath: string): void {
+		const toolCallId = sanitizeCorrelationId(rawToolCallId);
+		if (toolCallId === undefined) return;
+		const written = this._callWrites.get(toolCallId);
+		if (written) written.add(filePath);
+		else this._callWrites.set(toolCallId, new Set([filePath]));
+	}
+
+	/** #5551: the files recorded for this call so far, in record order. */
+	peekCallWrites(rawToolCallId: string): string[] {
+		const toolCallId = sanitizeCorrelationId(rawToolCallId);
+		if (toolCallId === undefined) return [];
+		return [...(this._callWrites.get(toolCallId) ?? [])];
+	}
+
+	/** #5551: one-shot claim of a call's files, as with an attribution. */
+	takeCallWrites(rawToolCallId: string): string[] {
+		const written = this.peekCallWrites(rawToolCallId);
+		const toolCallId = sanitizeCorrelationId(rawToolCallId);
+		if (toolCallId !== undefined) this._callWrites.delete(toolCallId);
+		return written;
 	}
 
 	/** #3523: see {@link ToolCallAttribution.editInPlace}. */
@@ -3106,6 +3248,9 @@ export class RuntimeCoordinator {
 			existing.queuedTurnId = `${this._telemetrySessionId}:${this._turnIndex}`;
 			existing.ownerSessionId = ownerSessionId;
 			existing.originCwd = resolvedOriginCwd;
+			// #5549: the spent retry belongs to the earlier edit's failure; a
+			// fresh mutation starts with a new one-retry budget, as a new record does.
+			delete existing.formatRequeueAttempts;
 			return addedKind;
 		}
 		this._pendingDeferredMutations.set(key, {
@@ -3279,8 +3424,20 @@ export class RuntimeCoordinator {
 	}
 
 	/** Return claimed records that were never started by an aborted drain. */
-	requeueDeferredFormatFiles(records: DeferredFormatRecord[]): void {
+	requeueDeferredFormatFiles(
+		records: DeferredFormatRecord[],
+		capFormatFailures = true,
+	): void {
 		for (const record of records) {
+			const formatRequeueAttempts = record.formatRequeueAttempts ?? 0;
+			if (capFormatFailures && formatRequeueAttempts >= 1) {
+				recordDegradationOnce({
+					kind: "formatter-requeue-dropped",
+					subject: record.filePath,
+					reason: "deferred formatter failure retry cap reached",
+				});
+				continue;
+			}
 			const key = record.filePath;
 			const existing = this._pendingDeferredMutations.get(key);
 			if (existing) {
@@ -3291,10 +3448,19 @@ export class RuntimeCoordinator {
 					existing.readGuardBranchEpoch,
 					record.readGuardBranchEpoch,
 				);
+				existing.formatRequeueAttempts = capFormatFailures
+					? Math.max(
+							existing.formatRequeueAttempts ?? 0,
+							formatRequeueAttempts + 1,
+						)
+					: existing.formatRequeueAttempts;
 				continue;
 			}
 			this._pendingDeferredMutations.set(key, {
 				...record,
+				...(capFormatFailures && {
+					formatRequeueAttempts: formatRequeueAttempts + 1,
+				}),
 				kinds: new Set(record.kinds),
 				toolNames: new Set(record.toolNames),
 			});
@@ -3317,8 +3483,11 @@ export class RuntimeCoordinator {
 		);
 	}
 
-	requeueDeferredMutations(records: DeferredMutationRecord[]): void {
-		this.requeueDeferredFormatFiles(records);
+	requeueDeferredMutations(
+		records: DeferredMutationRecord[],
+		capFormatFailures = false,
+	): void {
+		this.requeueDeferredFormatFiles(records, capFormatFailures);
 	}
 
 	shouldWarmLspOnRead(filePath: string, maxAgeMs = 120_000): boolean {

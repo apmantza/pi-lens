@@ -22,6 +22,7 @@ import {
 	waitForProjectSnapshotPersistsForTests,
 } from "../../clients/project-snapshot.js";
 import type { ProjectSnapshot } from "../../clients/project-snapshot.js";
+import { registerBackgroundWriteDrain } from "../../clients/background-write-drains.js";
 import { drainRegisteredBackgroundWritesForTests } from "../support/background-write-drains.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
@@ -119,9 +120,10 @@ describe("background write drains across module copies (#4937)", () => {
 	});
 
 	// Recurrence: review of #5006 (F1), the drain read a deferred write as
-	// settled. The snapshot wait is a bounded poll (200 x 10 ms); a persist that
-	// outlives it resolved the drain, and the write then re-created the fixture
-	// root. The drain must reject while work remains.
+	// settled. The snapshot wait is a bounded poll (SNAPSHOT_PERSIST_WAIT_MS, a
+	// real-clock 2 s ceiling since #4865); a persist that outlives it resolved the
+	// drain, and the write then re-created the fixture root. The drain must reject
+	// while work remains.
 	it("rejects when a snapshot persist outlives the bounded wait", async () => {
 		const env = setupTestEnvironment("bwd-snapshot-slow-");
 		let other: typeof import("../../clients/project-snapshot.js") | undefined;
@@ -176,6 +178,145 @@ describe("background write drains across module copies (#4937)", () => {
 		} finally {
 			other?.resetProbeCacheStateForTesting();
 			env.cleanup();
+		}
+	});
+
+	// Recurrence: #5745 r10. A drain registered after the installer's queued a
+	// probe-cache update once the installer's drain had run. One pass left that
+	// update's flush to write after the fixture root was removed; the
+	// installer's pending signal sends the runner round again. `awaited`: the
+	// update has marked its change (the dirty term) or is still in flight (the
+	// pending-update term) when the pass ends.
+	async function lateProbeCacheUpdate(awaited: boolean): Promise<string[]> {
+		const env = setupTestEnvironment("bwd-probe-cache-late-");
+		let other: typeof import("../../clients/installer/index.js") | undefined;
+		try {
+			const home = path.join(env.tmpDir, "home");
+			fs.mkdirSync(home, { recursive: true });
+			pinEnv(home, path.join(env.tmpDir, "data"));
+			const tool = path.join(env.tmpDir, "tool.sh");
+			fs.writeFileSync(tool, "#!/bin/sh\n");
+			vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+			vi.resetModules();
+			const installer = await import("../../clients/installer/index.js");
+			other = installer;
+			let queued = false;
+			async function lateProbeCacheWriterForTests(): Promise<
+				string | undefined
+			> {
+				if (queued) return undefined;
+				queued = true;
+				const update = installer.updateProbeCache("probe-tool", tool);
+				if (awaited) await update;
+				return undefined;
+			}
+			registerBackgroundWriteDrain(lateProbeCacheWriterForTests, () => false);
+
+			await drainRegisteredBackgroundWritesForTests();
+
+			expect(vi.getTimerCount()).toBe(0);
+			const cacheFile = path.join(home, "probe-cache.json");
+			return Object.keys(JSON.parse(fs.readFileSync(cacheFile, "utf-8")));
+		} finally {
+			other?.resetProbeCacheStateForTesting();
+			env.cleanup();
+		}
+	}
+
+	it("flushes a probe-cache change a later drain marked, in another pass", async () => {
+		expect(await lateProbeCacheUpdate(true)).toEqual(["probe-tool"]);
+	});
+
+	it("joins a probe-cache update a later drain left in flight, in another pass", async () => {
+		expect(await lateProbeCacheUpdate(false)).toEqual(["probe-tool"]);
+	});
+
+	// Recurrence: #5745 r10, the same edge for the snapshot writer: a persist
+	// a later drain started after the snapshot drain had run was in no pass.
+	it("waits for a snapshot persist a later drain started, in another pass", async () => {
+		const env = setupTestEnvironment("bwd-snapshot-late-");
+		let other: typeof import("../../clients/project-snapshot.js") | undefined;
+		try {
+			pinEnv(path.join(env.tmpDir, "home"), path.join(env.tmpDir, "data"));
+			vi.resetModules();
+			const snapshots = await import("../../clients/project-snapshot.js");
+			other = snapshots;
+			const snapshot = JSON.parse(
+				fs.readFileSync(path.join(CORPUS, "snapshot.json"), "utf-8"),
+			) as ProjectSnapshot;
+			const cwd = path.join(env.tmpDir, "project");
+			process.env.PI_LENS_TEST_SNAPSHOT_PERSIST_WORKER_DELAY_MS = "400";
+			let started = false;
+			async function lateSnapshotPersistForTests(): Promise<
+				string | undefined
+			> {
+				if (started) return undefined;
+				started = true;
+				snapshots.saveProjectSnapshot(cwd, snapshot);
+				return undefined;
+			}
+			registerBackgroundWriteDrain(lateSnapshotPersistForTests, () => false);
+
+			await drainRegisteredBackgroundWritesForTests();
+
+			expect(snapshots.getProjectSnapshotPersistStateForTests(cwd).active).toBe(
+				false,
+			);
+			expect(fs.existsSync(snapshots.getProjectSnapshotPath(cwd))).toBe(true);
+		} finally {
+			await other?.waitForProjectSnapshotPersistsForTests();
+			await other?.terminateProjectSnapshotPersistWorkerForTests();
+			env.cleanup();
+		}
+	}, 30_000);
+
+	// Recurrence: #5745 r10. The runner repeats passes until no drain reports
+	// pending work, so a pending signal that never clears would hold a file's
+	// teardown until the hook timeout cut it, with no record of why. The
+	// deadline ends the passes, rejects, and records the event once.
+	it("a fixed point the deadline cuts rejects, stops its passes and records once", async () => {
+		// Read the writer's current module after the earlier resetModules calls.
+		const { getDegradationSummary, resetDegradationLedger } =
+			await import("../../clients/degradation-ledger.js");
+		resetDegradationLedger();
+		let stuck = true;
+		let pendingReads = 0;
+		async function neverIdleWriterForTests(): Promise<string | undefined> {
+			return undefined;
+		}
+		registerBackgroundWriteDrain(neverIdleWriterForTests, () => {
+			pendingReads += 1;
+			return stuck;
+		});
+		try {
+			await expect(
+				drainRegisteredBackgroundWritesForTests({ deadlineMs: 50 }),
+			).rejects.toThrow(
+				/^background-write drains did not reach a fixed point within 50 ms; still pending: .*neverIdleWriterForTests/,
+			);
+			expect(
+				getDegradationSummary().find(
+					(entry) => entry.kind === "background-write-drain-deadline",
+				)?.count,
+			).toBe(1);
+			// The abandoned passes stop: nothing reads the signal any more.
+			const readsAtDeadline = pendingReads;
+			for (let turn = 0; turn < 3; turn += 1)
+				await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(pendingReads).toBe(readsAtDeadline);
+
+			await expect(
+				drainRegisteredBackgroundWritesForTests({ deadlineMs: 50 }),
+			).rejects.toThrow(/did not reach a fixed point/);
+			const group = getDegradationSummary().find(
+				(entry) => entry.kind === "background-write-drain-deadline",
+			);
+			expect(group?.count).toBe(1);
+			expect(group?.latestReasons.map((entry) => entry.subject)).toEqual([
+				"fixed-point",
+			]);
+		} finally {
+			stuck = false;
 		}
 	});
 });

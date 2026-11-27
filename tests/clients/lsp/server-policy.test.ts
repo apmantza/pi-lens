@@ -35,7 +35,10 @@ vi.mock("../../../clients/installer/index.js", () => ({
 
 vi.mock("../../../clients/lsp/launch.js", () => ({
 	launchLSP,
+	launchViaNode: vi.fn(),
 	admitProjectSuppliedTsserver: (tsserverPath: string) => tsserverPath,
+	// The launcher double admits project code, as its tsserver admission does.
+	isLspProjectCodeAdmitted: () => true,
 }));
 
 vi.mock("../../../clients/sessionstart-logger.js", () => ({
@@ -904,7 +907,7 @@ describe("lsp server policy", () => {
 				const second = await server.root(file);
 				if (first !== ws || second !== nested) {
 					stale.push(
-						`${server.id} [${pattern}] first=${first} second=${second} dirMtime=${before}->${fs.statSync(nested).mtimeMs}`,
+						`${server.id} [${pattern}] first=${String(first)} second=${String(second)} dirMtime=${before}->${fs.statSync(nested).mtimeMs}`,
 					);
 				}
 			} finally {
@@ -2090,7 +2093,8 @@ describe("lsp server policy", () => {
 	// --- Deno / TypeScript disambiguation ---
 
 	it("TypeScript server yields to Deno when deno.json is present", async () => {
-		const { TypeScriptServer } = await import("../../../clients/lsp/server.js");
+		const { TypeScriptServer, LSP_ROOT_DECLINED } =
+			await import("../../../clients/lsp/server.js");
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-deno-ts-"));
 		dirs.push(tmp);
 
@@ -2100,11 +2104,12 @@ describe("lsp server policy", () => {
 		fs.writeFileSync(path.join(src, "main.ts"), "const x: number = 1;\n");
 
 		const root = await TypeScriptServer.root(path.join(src, "main.ts"));
-		expect(root).toBeUndefined();
+		expect(root).toBe(LSP_ROOT_DECLINED);
 	});
 
 	it("TypeScript server yields to Deno when deno.jsonc is present", async () => {
-		const { TypeScriptServer } = await import("../../../clients/lsp/server.js");
+		const { TypeScriptServer, LSP_ROOT_DECLINED } =
+			await import("../../../clients/lsp/server.js");
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-deno-jsonc-"));
 		dirs.push(tmp);
 
@@ -2112,7 +2117,7 @@ describe("lsp server policy", () => {
 		fs.writeFileSync(path.join(tmp, "mod.ts"), "export default {};\n");
 
 		const root = await TypeScriptServer.root(path.join(tmp, "mod.ts"));
-		expect(root).toBeUndefined();
+		expect(root).toBe(LSP_ROOT_DECLINED);
 	});
 
 	it("TypeScript server skips loose pi agent extension files without project markers", async () => {
@@ -2819,45 +2824,84 @@ describe("monorepo root hoisting (#1671)", () => {
 		}
 	});
 
-	it("records a capped member glob through the Cargo consumer", async () => {
-		const { RustServer } = await import("../../../clients/lsp/server.js");
-		const { getDegradationSummary } =
-			await import("../../../clients/degradation-ledger.js");
-		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-cargo-cap-"));
+	// #5521: the memo cap is (steps + 1) x (path length + 1) > 2,000,000 cells.
+	// The old fixture reached it with a matching literal glob, i.e. a
+	// 1,415-character member path (708 nested directories) that macOS PATH_MAX
+	// (1024) rejects with ENAMETOOLONG. Steps cost one per pattern character
+	// and Cargo's dialect cannot match a long pattern against a short path
+	// (`**` never matches, `*` cannot repeat), so this fixture keeps the member
+	// path short (60 directories, 119 characters) and gives the glob 20,000
+	// steps instead. The matcher's own over-cap `false` on a matching literal is
+	// pinned path-free by tests/clients/path-utils.test.ts ("declines over-cap
+	// matching literals").
+	const capFixture = () => {
+		const parts = Array.from({ length: 60 }, () => "a");
+		return { parts, relative: parts.join("/") };
+	};
+	const buildCapWorkspace = (
+		prefix: string,
+		parts: string[],
+		pattern: string,
+	) => {
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 		dirs.push(tmp);
-		const parts = Array.from({ length: 708 }, () => "a");
-		const relative = parts.join("/");
 		const crateDir = path.join(tmp, ...parts);
+		const file = path.join(crateDir, "src", "lib.rs");
+		// Recurrence prevented: #5521, a fixture path past macOS PATH_MAX (1024)
+		// that only a Linux/Windows runner could create.
+		expect(file.length).toBeLessThan(1024);
 		fs.writeFileSync(
 			path.join(tmp, "Cargo.toml"),
-			`[workspace]\nmembers = ["${relative}"]\n`,
+			`[workspace]\nmembers = ["${pattern}"]\n`,
 		);
 		fs.mkdirSync(path.join(crateDir, "src"), { recursive: true });
 		fs.writeFileSync(
 			path.join(crateDir, "Cargo.toml"),
 			'[package]\nname = "deep"\n',
 		);
-		const file = path.join(crateDir, "src", "lib.rs");
 		fs.writeFileSync(file, "pub fn x() {}\n");
+		return { tmp, crateDir, file };
+	};
 
+	it("hoists the capped-member layout when its glob is a short literal (#5521 control)", async () => {
+		const { RustServer } = await import("../../../clients/lsp/server.js");
+		const { parts, relative } = capFixture();
+		const { tmp, file } = buildCapWorkspace(
+			"pi-lens-cargo-fit-",
+			parts,
+			relative,
+		);
+
+		await expect(RustServer.root(file)).resolves.toBe(tmp);
+	});
+
+	it("records a capped member glob through the Cargo consumer", async () => {
+		const { RustServer } = await import("../../../clients/lsp/server.js");
+		const { getDegradationSummary } =
+			await import("../../../clients/degradation-ledger.js");
+		const { parts } = capFixture();
+		const pattern = "z".repeat(20_000);
+		const { crateDir, file } = buildCapWorkspace(
+			"pi-lens-cargo-cap-",
+			parts,
+			pattern,
+		);
+
+		// The same layout as the control cell with the glob swapped for one past
+		// the cap: the crate is not claimed, so it roots at itself, and the cap is
+		// recorded with the pattern length as its subject.
 		await expect(RustServer.root(file)).resolves.toBe(crateDir);
 		expect(getDegradationSummary()).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
 					kind: "workspace-glob-cap",
 					latestReasons: [
-						expect.objectContaining({ subject: String(relative.length) }),
+						expect.objectContaining({ subject: String(pattern.length) }),
 					],
 				}),
 			]),
 		);
-		// Budget (#4638 r4 F1): the fixture nests 708 directories, and creating
-		// and walking a path that deep is filesystem-bound on the Windows runner.
-		// CI "Unit tests Windows" measured 1058, 1552, 2160, 2591 and 11405 ms on
-		// five earlier heads of this PR (the 11405 ms head predates every r3
-		// change) and 7475 ms on the next, against the lane's 5000 ms default. Locally
-		// it is ~100 ms.
-	}, 30_000);
+	});
 
 	it("RustServer.root hoists to the workspace root even when Cargo.toml opens with a UTF-8 BOM (#2498/#2520 round 2, F4)", async () => {
 		const { RustServer } = await import("../../../clients/lsp/server.js");

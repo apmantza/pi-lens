@@ -106,4 +106,41 @@ describe("getClientForFile — wait-timer cleanup (#1097)", () => {
 		// kept the one-shot process alive.
 		expect(vi.getTimerCount()).toBe(0);
 	});
+
+	// #5419 F1: PI_LENS_LSP_NAV_CLIENT_WAIT_MS=0 reached getClientForFile as
+	// maxWaitMs 0, the no-timeout branch, so a server that never initializes
+	// blocked a navigation call without a bound. Zero is the default (1500) in
+	// both nav readers; the constant is read through a fresh import under the
+	// row's environment.
+	it("bounds the nav wait at 1500 ms when PI_LENS_LSP_NAV_CLIENT_WAIT_MS=0", async () => {
+		process.env.PI_LENS_LSP_NAV_CLIENT_WAIT_MS = "0";
+		try {
+			vi.resetModules();
+			(
+				await import("../../../clients/lsp/config.js")
+			)._setServersForFileForTests(getServersForFileWithConfig);
+			const { LSPService, NAV_CLIENT_WAIT_TIMEOUT_MS } =
+				await import("../../../clients/lsp/index.js");
+			expect(NAV_CLIENT_WAIT_TIMEOUT_MS).toBe(1500);
+			// The spawn parks its resolver and the test never releases it, so the
+			// client is not ready when the wait gives up.
+			const parked: Array<(value: unknown) => void> = [];
+			getServersForFileWithConfig.mockReturnValue([
+				{
+					...makeServer("ts"),
+					spawn: vi.fn(() => new Promise((resolve) => parked.push(resolve))),
+				},
+			]);
+			let settled = false;
+			void new LSPService()
+				.getClientForFile(FILE, NAV_CLIENT_WAIT_TIMEOUT_MS)
+				.then(() => {
+					settled = true;
+				});
+			await vi.advanceTimersByTimeAsync(1600);
+			expect(settled).toBe(true);
+		} finally {
+			delete process.env.PI_LENS_LSP_NAV_CLIENT_WAIT_MS;
+		}
+	});
 });

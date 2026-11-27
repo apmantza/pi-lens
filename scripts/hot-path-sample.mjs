@@ -30,6 +30,18 @@
  *                    `createWorkspaceDiagnosticsCacheContext` loading a
  *                    persisted cache of 200 / 2000 entries, then one `lookup`
  *                    per file.
+ *   tool_call_first_touch /
+ *   tool_result_edit the registered `tool_call` of the first read of a
+ *                    42-line TypeScript file the process has not seen (the
+ *                    first touch, where the complexity baseline is taken,
+ *                    #5087), and the `tool_result` of an edit to it after
+ *                    the bytes change on disk. The project is a real git
+ *                    repository with the file committed on `main`, and the
+ *                    edit raises one function past the `high-complexity`
+ *                    threshold, so the edit pays the default-branch read
+ *                    (two `git` spawns and a parse of `main`'s copy) and the
+ *                    advisory (#5443 review F6). The row checks that a
+ *                    `tool_result` latency row for the file reached the log.
  *   tool_call_bash_home_overcap
  *                    three consecutive `bash` calls through the registered
  *                    `tool_call` handler, in a session whose cwd is a non-git
@@ -56,6 +68,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
 import { scratchHomeEnv } from "./lib/scratch-home-env.mjs";
 
 const SMALL_LINES = 40;
@@ -85,6 +98,45 @@ function fixtureSource(lines) {
 		n++;
 	}
 	return `${out.join("\n")}\n`;
+}
+
+/**
+ * Make `project` a git repository whose `main` holds every file in it, so the
+ * edit row reads the default branch for real. The fixture Git environment
+ * (`git-fixture-env.mjs`) reads only the repository's fixture config, so no
+ * user config is read and no background maintenance is forked; the identity
+ * is passed per command, and a failing command throws.
+ */
+function commitFixture(project) {
+	const git = (args) =>
+		gitExecFileSync(args, { cwd: project, stdio: "pipe", encoding: "utf8" });
+	git(["init", "-q", "-b", "main"]);
+	git(["add", "-A"]);
+	git([
+		"-c",
+		"user.name=hot-path",
+		"-c",
+		"user.email=hot-path@example.invalid",
+		"commit",
+		"-q",
+		"--no-gpg-sign",
+		"-m",
+		"fixture",
+	]);
+}
+
+/**
+ * An edit that gives the first function of a fixture file (`f0`) fifteen more
+ * branches: its cyclomatic complexity goes from 2 to 17, past
+ * `high-complexity`'s 15.
+ */
+function crossThreshold() {
+	const anchor = "\treturn b;\n}";
+	const branches = Array.from(
+		{ length: 15 },
+		(_, i) => `\tif (b === "${i}") return b + ${i};`,
+	).join("\n");
+	return { oldText: anchor, newText: `${branches}\n${anchor}` };
 }
 
 /** A recording stand-in for pi's ExtensionAPI: the host boundary. */
@@ -157,7 +209,6 @@ async function sample(tree, scratch) {
 	const imp = (rel) => import(pathToFileURL(path.join(tree, rel)).href);
 	const project = path.join(scratch, "project");
 	fs.mkdirSync(path.join(project, "src"), { recursive: true });
-	fs.writeFileSync(path.join(project, ".git"), "");
 	fs.writeFileSync(
 		path.join(project, "package.json"),
 		'{"name":"hot-path-fixture","version":"1.0.0","type":"module"}\n',
@@ -166,6 +217,11 @@ async function sample(tree, scratch) {
 	const largeFile = path.join(project, "src", "large.ts");
 	fs.writeFileSync(smallFile, fixtureSource(SMALL_LINES));
 	fs.writeFileSync(largeFile, fixtureSource(LARGE_LINES));
+	fs.writeFileSync(
+		path.join(project, "src", "edited.ts"),
+		fixtureSource(SMALL_LINES),
+	);
+	commitFixture(project);
 
 	const result = {};
 	const { pi, handlers, flags } = makeHost();
@@ -247,12 +303,96 @@ async function sample(tree, scratch) {
 			throw new Error(`${metric}: replay served ${served} of ${count} entries`);
 		}
 	}
+	Object.assign(result, await timeEditRoundTrip(imp, handlers, project));
 	result.tool_call_bash_home_overcap = await timeToolCallsAtOvercapHome(
 		imp,
 		handlers,
 		scratch,
 	);
 	return result;
+}
+
+/**
+ * Time one agent edit through the registered hooks, on a file the process has
+ * not seen: the `tool_call` of its first read (the first touch, where the
+ * per-file complexity baseline is taken, #5087), then the edit's `tool_result`
+ * after the bytes change on disk. The `edit` call's own `tool_call` runs
+ * between them, untimed. The row checks that a `tool_result` latency row for
+ * the file reached the log, so a tree whose handler skips the edit path is a
+ * harness failure, not a fast row.
+ */
+async function timeEditRoundTrip(imp, handlers, project) {
+	const toolCall = handlers.get("tool_call")?.[0];
+	const toolResult = handlers.get("tool_result")?.[0];
+	if (!toolCall || !toolResult)
+		throw new Error("no tool_call or tool_result handler registered");
+	const file = path.join(project, "src", "edited.ts");
+	const before = fs.readFileSync(file, "utf8");
+	const ctx = makeCtx(project);
+	const latency = await imp("clients/latency-logger.js");
+	await latency.flushLatencyLog();
+	const logPath = latency.getLatencyLogPath();
+	const logStart = fs.existsSync(logPath) ? fs.statSync(logPath).size : 0;
+
+	const tool_call_first_touch = await timed(() =>
+		toolCall(
+			{
+				type: "tool_call",
+				toolName: "read",
+				toolCallId: "hot-path-read",
+				input: { path: file },
+			},
+			ctx,
+		),
+	);
+	await toolResult(
+		{
+			type: "tool_result",
+			toolName: "read",
+			toolCallId: "hot-path-read",
+			input: { path: file },
+			content: [{ type: "text", text: before }],
+		},
+		ctx,
+	);
+	const edit = crossThreshold();
+	await toolCall(
+		{
+			type: "tool_call",
+			toolName: "edit",
+			toolCallId: "hot-path-edit",
+			input: { path: file, edits: [edit] },
+		},
+		ctx,
+	);
+	fs.writeFileSync(file, before.replace(edit.oldText, edit.newText));
+	const tool_result_edit = await timed(() =>
+		toolResult(
+			{
+				type: "tool_result",
+				toolName: "edit",
+				toolCallId: "hot-path-edit",
+				input: { path: file, edits: [edit] },
+				content: [{ type: "text", text: "Successfully replaced text." }],
+			},
+			ctx,
+		),
+	);
+	await latency.flushLatencyLog();
+	const rows = fs
+		.readFileSync(logPath, "utf8")
+		.slice(logStart)
+		.split("\n")
+		.filter(
+			(line) =>
+				line.includes('"type":"tool_result"') && line.includes("edited.ts"),
+		).length;
+	if (rows === 0) {
+		throw new Error(
+			"tool_result_edit: no tool_result latency row for the edit",
+		);
+	}
+	return { tool_call_first_touch, tool_result_edit };
 }
 
 /**

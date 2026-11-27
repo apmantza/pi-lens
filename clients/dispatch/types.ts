@@ -14,7 +14,10 @@
 import type { GenerationHandle } from "../generation-guard.js";
 import type { AnalysisRootMode } from "../analysis-root.js";
 import type { ExtensionLogLevel } from "../extension-log.js";
-import type { PrimaryUnavailableCause } from "../lsp/diagnostic-binding.js";
+import type {
+	PrimaryUnavailableCause,
+	TouchInconclusiveReason,
+} from "../lsp/diagnostic-binding.js";
 import type { FileKind } from "../file-kinds.js";
 import type { FileRole } from "../file-role.js";
 import type { GeneratedArtifactEvidence } from "../generated-artifacts.js";
@@ -162,6 +165,22 @@ export interface Diagnostic {
 	 */
 	positionStale?: true;
 	/**
+	 * #5784: a recorded blocker this write kept because its source gave no
+	 * verdict for it (`carryRecordedBlockers`' `keepUnobserved` arm): the id of
+	 * that language server, else that runner. Only a carry sets it, so an
+	 * observed copy never has it. The delivery gate
+	 * (`clients/finding-delivery-gate.ts`) reads it to word the blocker as
+	 * unconfirmed and to suppress an identical replay. Never part of identity.
+	 */
+	unconfirmedBy?: string;
+	/**
+	 * #5788 review F2: set with `unconfirmedBy` when the source's re-check is a
+	 * collect-later run still in flight (`InconclusiveSources.
+	 * collectLaterRunnerIds`), so its own answer retires or keeps the blocker
+	 * and the gate does not say fixing the code cannot. Never part of identity.
+	 */
+	recheckRunning?: true;
+	/**
 	 * #4130: the diagnostic reports the runner's own failure (`faultResult`), not
 	 * a finding about the code. Turn end delivers that fault once, as the
 	 * failure note, so the deferred verdict drops this row. Never part of
@@ -173,8 +192,8 @@ export interface Diagnostic {
 /**
  * The output tier of a finding at this severity (#5412). Only `error` blocks.
  * `warning`, `info` and `hint` are advisory warnings: the tier every CLI runner
- * gives a non-error finding (#1777, #1802). The LSP converter keeps its raw
- * `none` for a `hint` (`convertLspDiagnostics`); the auxiliary profile raises it.
+ * gives a non-error finding (#1777, #1802). The LSP converter uses the same
+ * tier for information and hint diagnostics.
  */
 export function semanticFor(severity: Diagnostic["severity"]): OutputSemantic {
 	return severity === "error" ? "blocking" : "warning";
@@ -192,6 +211,12 @@ export interface InconclusiveSources {
 	runnerIds: readonly string[];
 	/** Language servers a run named unconfirmed (`unconfirmedServerIds`). */
 	serverIds: readonly string[];
+	/**
+	 * #5727: per runner in `runnerIds`, the servers that answered these bytes
+	 * all the same (`RunnerResult.answeredServerIds`). A recorded blocker of
+	 * one of them is judged by that answer; any other stays.
+	 */
+	answeredServerIds?: ReadonlyMap<string, readonly string[]>;
 	/**
 	 * #4484 round 3: the subset of `runnerIds` still in flight (collect-later).
 	 * Their settled run answers for the write on its own, so the next write
@@ -373,6 +398,37 @@ export function checkedVerdict(
 }
 
 /**
+ * #5258: what a surface knows when it would claim "clean" for more than one
+ * file or lane. `scope` is how many units the claim speaks for; `proven` how
+ * many of them a check completed on, counted from completions only (a
+ * `checked` verdict, a fully confirmed server answer), never by subtracting
+ * the failures a surface happened to list; `findings` is what the claim would
+ * deny.
+ */
+export interface CleanEvidence {
+	scope: number;
+	proven: number;
+	findings: number;
+}
+
+/**
+ * #5258: the one clean predicate. A surface says clean, `No issues` or `✓`
+ * only when every unit it speaks for was proven and it shows no finding. An
+ * empty scope proves nothing, so `clean (0 files)` cannot be built, and a
+ * unit nobody counted as proven (a timed-out server, a cut-short scan, a state
+ * no one listed) withholds the claim without being named here. The per-file
+ * proof is {@link checkedVerdict}; `tests/clients/delivery-surface-ratchet.test.ts`
+ * registers every other emitter of a clean claim.
+ */
+export function cleanVerdict(evidence: CleanEvidence): boolean {
+	return (
+		evidence.findings === 0 &&
+		evidence.scope > 0 &&
+		evidence.proven === evidence.scope
+	);
+}
+
+/**
  * A dispatch that ran nothing: no findings, the given verdict. The one
  * literal for the five early returns (#5258: no kind, no runner group, an
  * adopted root that admits none, a generated file, `dispatchLintDetailed`'s
@@ -441,6 +497,15 @@ export interface RunnerDefinition {
 	 * config is never reported as selected.
 	 */
 	requiresConfig?: (cwd: string) => boolean;
+	/**
+	 * #5621: the runner lints `ctx.givenContent` instead of the file's own
+	 * bytes when the context carries it (a seed run over bytes not on disk): its
+	 * tool reads them from stdin under the file's real path, or the runner reads
+	 * them from the `file.content` fact. A runner without it reads the disk
+	 * through its tool's path argument, so a run that includes one is given a
+	 * copy of the bytes beside the file instead (`prepareSeedLaneRun`).
+	 */
+	lintsGivenContent?: true;
 	/** Execute the runner */
 	run(ctx: DispatchContext): Promise<RunnerResult>;
 }
@@ -453,7 +518,19 @@ export interface RunnerDefinition {
  * operator's own decision (`dispatch.disabledRunners`): the runner never ran,
  * which is neither a failure nor a verdict on the file. `not-enabled` is the
  * same for an opt-in runner left off (#5042): nothing failed, and nothing was
- * checked either. */
+ * checked either. The four reasons of #5258 say why a runner read none of the
+ * file, so the coverage notice names the cause instead of one sentence for all:
+ * `not-installed` (its tool was not found), `install-disabled` (not found, and
+ * the managed install is off by `PI_LENS_DISABLE_TOOL_INSTALL=1`),
+ * `not-configured` (it runs only where the project carries its config) and
+ * `not-preferred` (the project's lint policy picks another tool). Four more
+ * name why a tool that may well be installed was not usable: `probe-incomplete`
+ * (its availability probe timed out or could not finish, so it is not reported
+ * missing), `probe-rejected` (a binary it runs, the tool or a runtime it needs,
+ * was found and rejected its version probe),
+ * `trust-refused` (the project's own binary was refused by pi project trust)
+ * and `runtime-missing` (a runtime it needs, such as Java, is absent). None of
+ * them is a verdict on the file ({@link VERDICT_SKIP_REASONS}). */
 export const RUNNER_SKIP_REASONS = [
 	"no-files-matched",
 	"configured-non-biome-linter",
@@ -461,8 +538,73 @@ export const RUNNER_SKIP_REASONS = [
 	"covered-by-primary",
 	"disabled-by-config",
 	"not-enabled",
+	"not-installed",
+	"install-disabled",
+	"not-configured",
+	"not-preferred",
+	"probe-incomplete",
+	"probe-rejected",
+	"trust-refused",
+	"runtime-missing",
 ] as const;
 export type RunnerSkipReason = (typeof RUNNER_SKIP_REASONS)[number];
+
+/**
+ * The skip reasons that are a verdict about the file: the runner reached a
+ * conclusion without reading it (nothing matched, another lane owns it, the
+ * operator denied it). The one admission list {@link reachedNoVerdict} reads;
+ * every other reason, and any skip that states none, reads no verdict, so a
+ * reason added to {@link RUNNER_SKIP_REASONS} fails closed until it is listed
+ * here (#5258).
+ */
+export const VERDICT_SKIP_REASONS: readonly RunnerSkipReason[] = [
+	"no-files-matched",
+	"configured-non-biome-linter",
+	"dialect-unsupported",
+	"covered-by-primary",
+	"disabled-by-config",
+];
+
+/**
+ * The skip reasons that say the runner's tool could not be used here, each
+ * with its own true cause. They are the ones the session records once per
+ * (runner, reason) (`runner-skip-cause`); `not-configured` and
+ * `not-preferred` are the project's own choices.
+ */
+export const TOOL_UNUSABLE_SKIP_REASONS: readonly RunnerSkipReason[] = [
+	"not-installed",
+	"install-disabled",
+	"probe-incomplete",
+	"probe-rejected",
+	"trust-refused",
+	"runtime-missing",
+];
+
+/**
+ * The cause a coverage notice states for a runner that skipped with this
+ * reason (#5258). A `Record` over the closed set, so a reason added without a
+ * sentence does not compile.
+ */
+export const SKIP_REASON_PHRASE: Record<RunnerSkipReason, string> = {
+	"no-files-matched": "no file matched",
+	"configured-non-biome-linter": "the project is configured for another linter",
+	"dialect-unsupported": "its tool does not support this file's dialect",
+	"covered-by-primary": "the primary language server covers this file",
+	"disabled-by-config": "disabled in config by dispatch.disabledRunners",
+	"not-enabled": "not enabled",
+	"not-installed": "not installed",
+	"install-disabled":
+		"not installed, and the managed install is off (PI_LENS_DISABLE_TOOL_INSTALL=1)",
+	"not-configured": "not configured",
+	"not-preferred": "the project's lint policy prefers another tool",
+	"probe-incomplete": "its availability probe did not finish",
+	// The binary may be a runtime the tool needs (Java for SpotBugs), not the
+	// tool itself, so the phrase does not say the tool was found.
+	"probe-rejected": "a binary it runs was found but rejected its version probe",
+	"trust-refused":
+		"the project's own binary was refused (pi project trust is not granted)",
+	"runtime-missing": "a runtime it needs is not installed",
+};
 
 /**
  * The skip reasons that say a runner had nothing to check, so beside a
@@ -471,8 +613,8 @@ export type RunnerSkipReason = (typeof RUNNER_SKIP_REASONS)[number];
  * a reason added to the taxonomy reads as a failure until it is listed here.
  * `covered-by-primary` is left out on purpose: it defers to a lane whose answer
  * is what the denial may have removed. `disabled-by-config` is the denial
- * itself and the caller handles it. {@link reachedNoVerdict} admits the
- * taxonomy as a verdict except `not-enabled`; this is the narrower "not a tool
+ * itself and the caller handles it. {@link reachedNoVerdict} is an allow-list
+ * over {@link VERDICT_SKIP_REASONS}; this is a different, narrower "not a tool
  * failure" subset, and `not-enabled` is in it (#5042): an opt-in runner left
  * off failed at nothing.
  */
@@ -481,6 +623,8 @@ export const NOT_APPLICABLE_SKIP_REASONS: readonly RunnerSkipReason[] = [
 	"configured-non-biome-linter",
 	"dialect-unsupported",
 	"not-enabled",
+	"not-configured",
+	"not-preferred",
 ];
 
 /** Whether a skip reason states the runner had nothing to check. */
@@ -579,6 +723,13 @@ export interface RunnerResult {
 	 */
 	deferredServerIds?: readonly string[];
 	/**
+	 * #5727: on a run that reached no verdict, the servers whose answer about
+	 * these bytes it holds all the same (an auxiliary that answered while the
+	 * primary did not). Set only from the touch's own list, never inferred
+	 * from an id the touch left unnamed.
+	 */
+	answeredServerIds?: readonly string[];
+	/**
 	 * #4484 round 6: the verdict covers only the edit's ranges. napi's Gate B
 	 * skip sets it: the ast-grep server answers for the file, but its gate
 	 * withholds a blocking finding outside the edit (`outOfEditScope`) under
@@ -624,6 +775,8 @@ export interface RunnerResult {
 	 * report is not evidence of a clean file.
 	 */
 	inconclusive?: boolean;
+	/** Why the LSP touch could not confirm its answer, carried from the touch. */
+	inconclusiveReason?: TouchInconclusiveReason;
 }
 
 /**
@@ -704,6 +857,22 @@ export function faultSkip(fault: RunnerSkipFault): RunnerResult {
 }
 
 /**
+ * The one skip a runner returns when it states why it read none of the file
+ * (#5258). A skip with neither this, {@link faultSkip} nor an inline
+ * `skipReason` is a bare skip, which the coverage notice can only word as "a
+ * language tool is missing, timed out, or failed to run"
+ * (`tests/clients/dispatch/bare-skip-census.test.ts` bounds those).
+ */
+export function skipped(reason: RunnerSkipReason): RunnerResult {
+	return {
+		status: "skipped",
+		diagnostics: [],
+		semantic: "none",
+		skipReason: reason,
+	};
+}
+
+/**
  * Whether a runner result is usable coverage of the bytes it ran on (#3867).
  *
  * A `succeeded` run reached a verdict about the file. A `failed` run reached
@@ -757,14 +926,15 @@ export function reachedNoVerdict(
 		case "deferred":
 			return true;
 		case "skipped":
-			// #5042: an opt-in runner left off states why it did not run, which
-			// changes the notice's wording and nothing else. It still read nothing
-			// of the file, so it stays out of the verdicts exactly as its bare skip
-			// was: a recorded blocker of that runner is kept and its edited lines
-			// stay owed, not retired by a run that never happened.
-			return (
-				!isRunnerSkipReason(result.skipReason) ||
-				result.skipReason === "not-enabled"
+			// #5042, #5258: a skip that states why it did not run changes the
+			// notice's wording and nothing else. A reason outside
+			// {@link VERDICT_SKIP_REASONS} (`not-enabled`, a missing tool, a missing
+			// config) read nothing of the file, so it stays out of the verdicts
+			// exactly as its bare skip was: a recorded blocker of that runner is
+			// kept and its edited lines stay owed, not retired by a run that never
+			// happened.
+			return !VERDICT_SKIP_REASONS.some(
+				(reason) => reason === result.skipReason,
 			);
 		case "succeeded":
 		default:
@@ -940,6 +1110,12 @@ export interface DispatchContext {
 	 * reach the widget, and its log rows say so.
 	 */
 	readonly preEditCapture?: true;
+	/**
+	 * #5621: the bytes this run lints in place of the file's own, which are not
+	 * on disk (the seed of a credited write, a staged blob). Set only on a run
+	 * whose every runner declares `lintsGivenContent`, and read only by those.
+	 */
+	readonly givenContent?: string;
 	/**
 	 * #4509: the runners that hold a recorded blocker on this file when the
 	 * dispatch starts. A recorded blocker is judged only by a run of its own

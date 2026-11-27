@@ -11,6 +11,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAstGrepRuleSources } from "../sgconfig.js";
+import type { Diagnostic } from "./types.js";
 
 /** Derive language tags from shipped rule filenames, rather than a list. */
 export function deriveRuleIdLanguageSuffixes(ruleRoot: string): Set<string> {
@@ -85,4 +86,121 @@ export function normalizeRuleId(ruleId: string): string {
 		}
 	}
 	return normalized;
+}
+
+/**
+ * Cross-tool finding classes (#5416): the issues several linters name with
+ * their own rule ids. `const unused = 1;` is oxlint `no-unused-vars` (a
+ * warning), biome `noUnusedVariables` (an error) and ruff `F841`; one
+ * undefined name is ruff `F821` and pyright `reportUndefinedVariable`. A
+ * class gives its members one key (`findingClassKey`) and one severity
+ * (`withClassSeverity`), both read by the dispatcher's class merge after the
+ * per-copy filters, the delta and the pre-edit seed; the blocker record's merge
+ * reads the key too. So the verdict no longer depends on which tool of a
+ * fallback chain answered, and a tool that runs beside another reports the
+ * finding once.
+ *
+ * The table is closed and keyed by the EMITTED `tool` and the rule exactly as
+ * that tool spells it. A pair not listed is no member: it keeps its own key and
+ * its own severity, so another analyzer's same-named rule is never merged
+ * (the `LSP_SOURCE_PREFIXES` rule, #4629). A language server's rule reads
+ * `<source>:<code>`; only the two Pyright servers' spellings are members.
+ */
+export type FindingClass =
+	| "unused-variable"
+	| "unused-import"
+	| "undefined-name";
+
+const FINDING_CLASS_RULES: ReadonlyMap<
+	string,
+	ReadonlyMap<string, FindingClass>
+> = new Map([
+	[
+		"eslint",
+		new Map<string, FindingClass>([
+			["no-unused-vars", "unused-variable"],
+			["@typescript-eslint/no-unused-vars", "unused-variable"],
+			["no-undef", "undefined-name"],
+		]),
+	],
+	[
+		"oxlint",
+		new Map<string, FindingClass>([
+			["no-unused-vars", "unused-variable"],
+			["no-undef", "undefined-name"],
+		]),
+	],
+	[
+		"biome",
+		new Map<string, FindingClass>([
+			["lint/correctness/noUnusedVariables", "unused-variable"],
+			["lint/correctness/noUnusedImports", "unused-import"],
+			["lint/correctness/noUndeclaredVariables", "undefined-name"],
+		]),
+	],
+	[
+		"ruff",
+		new Map<string, FindingClass>([
+			["F841", "unused-variable"],
+			["F401", "unused-import"],
+			["F821", "undefined-name"],
+		]),
+	],
+	[
+		"pyright",
+		new Map<string, FindingClass>([
+			["reportUnusedVariable", "unused-variable"],
+			["reportUnusedImport", "unused-import"],
+			["reportUndefinedVariable", "undefined-name"],
+		]),
+	],
+	["mypy", new Map<string, FindingClass>([["name-defined", "undefined-name"]])],
+]);
+
+/** The two servers whose analyzer the `pyright` CLI runner also runs. */
+const PYRIGHT_LSP_SOURCE = /^(?:Pyright|basedpyright):(.+)$/;
+
+/** The class a finding belongs to, or `undefined` for any pair not listed. */
+export function findingClassOf(
+	d: Pick<Diagnostic, "tool" | "rule">,
+): FindingClass | undefined {
+	const rule = d.rule;
+	if (!rule) return undefined;
+	const tool = d.tool;
+	if (tool === "lsp") {
+		const code = PYRIGHT_LSP_SOURCE.exec(rule)?.[1];
+		return code === undefined
+			? undefined
+			: FINDING_CLASS_RULES.get("pyright")?.get(code);
+	}
+	return FINDING_CLASS_RULES.get(tool)?.get(rule);
+}
+
+/**
+ * The dedupe key of a class member at one place, or `undefined` for a finding
+ * outside every class. The tool and the rule are not part of it: that is what
+ * makes two tools' copies one finding.
+ */
+export function findingClassKey(
+	d: Pick<Diagnostic, "tool" | "rule" | "filePath" | "line" | "column">,
+): string | undefined {
+	const cls = findingClassOf(d);
+	return cls === undefined
+		? undefined
+		: `${d.filePath}:${d.line ?? 1}:${d.column ?? 1}:class:${cls}`;
+}
+
+/**
+ * A class member at a non-blocking tier, raised to the class's one severity:
+ * `error`, a blocker. The delta already blocks a new unused value whatever its
+ * tool says, with its note (`promoteDeltaUnusedToBlockers`, which runs first);
+ * this makes the first dispatch of a file, and `--no-delta`, answer the same
+ * way for every tool. A blocker, a runner fault and any other tier (`fixed`,
+ * `silent`) pass unchanged, as the same object.
+ */
+export function withClassSeverity<T extends Diagnostic>(d: T): T {
+	if (d.runnerFault === true) return d;
+	if (d.semantic !== "warning" && d.semantic !== "none") return d;
+	if (findingClassOf(d) === undefined) return d;
+	return { ...d, severity: "error", semantic: "blocking" };
 }

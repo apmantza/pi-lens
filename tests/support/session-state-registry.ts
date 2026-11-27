@@ -6,7 +6,7 @@
  * function that either nobody calls at `session_start` or that no test proves
  * re-arms anything. `#1266` (install-failure suppression), `#1490`/`#1540`
  * (PSScriptAnalyzer latches), `#1497` (install-retry ceiling), `#1535` (zizmor
- * token), `#1537` (lazy-install hold), `#1570` (classic-TS repair guard),
+ * token), `#1537` (lazy-install hold, deleted by #5410 D9), `#1570` (classic-TS repair guard),
  * `#1618` (workspace sweep hold), `#1625` (deferred dispositions) — each was
  * found in production, one at a time, by a human noticing a tool stayed off.
  *
@@ -93,6 +93,11 @@ import {
 	isSameOrWithin,
 	resetLSPCaseSensitivityState,
 } from "../../clients/lsp/server.js";
+import {
+	admitBlockerReplay,
+	commitBlockerReplay,
+	resetBlockerReplayState,
+} from "../../clients/finding-delivery-gate.js";
 import {
 	hasAnyDispositionMarks,
 	isDeferredThisSession,
@@ -293,6 +298,36 @@ const scratchDirs: string[] = [];
 let observedRunnerProbeRoot: string | undefined;
 
 /** Throwaway cwd for probes that need a project root on disk. */
+/**
+ * #5784 probe: one identical unconfirmed replay of a fixed probe file. The
+ * first call after a reset delivers; a second one is held back. The gate has no
+ * read-only accessor, so `isArmed` itself makes the first delivery and `arm`
+ * the held-back second: armed means the next call delivers. Each delivered
+ * call commits its latch write, as the tool result's delivered return does
+ * (#5788 review F4).
+ */
+function admitBlockerReplayProbe(): "deliver" | "suppress" {
+	const filePath = path.join(os.tmpdir(), "session-state-replay-probe.ts");
+	const decision = admitBlockerReplay({
+		surface: "withheld-line",
+		filePath,
+		blockers: [
+			{
+				id: "probe:1",
+				message: "armed by the #1635 conformance probe",
+				filePath,
+				line: 1,
+				severity: "error",
+				semantic: "blocking",
+				tool: "lsp",
+				unconfirmedBy: "probe",
+			},
+		],
+	});
+	if (decision.commit !== undefined) commitBlockerReplay(decision.commit);
+	return decision.shown;
+}
+
 function scratchCwd(): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-session-state-"));
 	scratchDirs.push(dir);
@@ -675,14 +710,14 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 		id: "dispatch-integration:sessionCaches",
 		module: "dispatch/integration.ts",
 		state:
-			"primaryFilesThisTurn, sessionSlopRuleCounts, sessionFacts, preEditCaptureFacts",
+			"primaryFilesThisTurn, sessionSlopRuleCounts, sessionFacts, preEditCaptureFacts, stagedDeltaFacts",
 		policy: "session_start",
 		ownerKey: "session",
 		sessionSeamException:
 			"FactStore keeps one process-wide session-fact map and file-fact map keyed by fact id and path, plus per-process slop counters, with no session in any key (shape 72 member, no open issue)",
 		resetName: "resetDispatchBaselines",
 		reason:
-			"Every one of these is a claim about the tree as this session found it; `sessionFacts` and `preEditCaptureFacts` (#4483) are cleared by a method call inside this same reset, so the reset is the registered seam.",
+			"Every one of these is a claim about the tree as this session found it; `sessionFacts`, `preEditCaptureFacts` (#4483) and `stagedDeltaFacts` (#5553) are cleared by a method call inside this same reset, so the reset is the registered seam.",
 	},
 	{
 		id: "dispatcher:coverageNoticeSeen",
@@ -709,6 +744,25 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 			"Migration notices belong to the session that resolves the project data directory; clearing the bounded queue at session_start prevents a prior session's migration from being emitted again.",
 	},
 	{
+		id: "finding-delivery-gate:deliveredUnconfirmedReplay",
+		module: "finding-delivery-gate.ts",
+		state: "deliveredUnconfirmedReplay",
+		policy: "session_start",
+		ownerKey: "session",
+		sessionSeamException:
+			"one process LRU map capped at 256 files, keyed by file with no session in the key, so a second live session in the process shares which unconfirmed blocker lines were delivered (shape 72 member, no open issue)",
+		resetName: "resetBlockerReplayState",
+		reason:
+			"#5784: the latch holds back an identical unconfirmed blocker line the session already delivered; carried into the next session it would hide the first line that session owes its agent. `resetSessionScopedState` (reached from `handleSessionStart`) calls the reset.",
+		probe: {
+			arm: () => {
+				admitBlockerReplayProbe();
+			},
+			isArmed: () => admitBlockerReplayProbe() === "deliver",
+			reset: () => resetBlockerReplayState(),
+		},
+	},
+	{
 		id: "formatters:runtimeState",
 		module: "formatters.ts",
 		state: "detectionCache",
@@ -716,7 +770,7 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 		ownerKey: "project",
 		resetName: "clearFormatterRuntimeState",
 		reason:
-			"Formatter resolution is re-derived every turn through `resetFormatService()`; #1537's note explains why the lazy-install hold specifically must NOT ride this turn-scoped reset.",
+			"Formatter resolution is re-derived every turn through `resetFormatService()`.",
 	},
 	{
 		id: "formatters:whichLatches",
@@ -871,17 +925,6 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 		sessionStartClosureReset: true,
 		reason:
 			"#2526: `config_resolved` is a SESSION fact written by `loadLSPConfig`, which runs many times per session (session start, each served root, the MCP `ensureReady` boot, the first edit's ensure). The claim set is what collapses those to one row per session and served root. Review round 2 F1 MOVED the re-arm out of handleSessionStart's body into index.ts's session_start closure, beside resetCurrentPhaseForSession and behind the same #473 gate: index.ts's ensureLSPConfigInitialized resolves this session's config BEFORE handleSessionStart runs, so a re-arm inside the handler fired between the session's own two resolutions and the deferred loadLSPConfig wrote a second row for one session. Behind the #473 gate for the same reason as liveBrackets - a concurrent secondary never reaches handleSessionStart, so it never publishes an expectation line and must not re-arm a live primary's claims. Catalog shape 17 still applies in the other direction: a claim never re-armed silences a positive-observability record for the rest of the process.",
-	},
-	{
-		id: "lazy-installer:attempts",
-		module: "dispatch/runners/utils/lazy-installer.ts",
-		state: "attempts",
-		policy: "session_start",
-		ownerKey:
-			"process-wide: install attempts are a fact about this machine, keyed by tool",
-		resetName: "resetLazyInstallAttempts",
-		reason:
-			"#1537: the lazy-install hold is durable for a SESSION; it deliberately sits here and not on the turn_end path, where a failing install would re-spawn every turn.",
 	},
 	{
 		id: "lsp-index:globalLSPService",
@@ -1709,11 +1752,6 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<
 		reason:
 			"the rule manager reads the project's rule directory; the runner holds the sg binary",
 	},
-	"biome-client.ts": {
-		ownerKey: "project",
-		reason:
-			"the resolved biome binary is cached per cwd so monorepo sub-packages keep their own",
-	},
 	"blocker-freshness.ts": {
 		ownerKey: "project",
 		reason:
@@ -1953,6 +1991,12 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<
 		reason:
 			"anchor index entries are keyed by file path and bounded to the tool call",
 	},
+	"held-children.ts": {
+		ownerKey:
+			"process-wide: the held-children ledger safe-spawn.ts provides at load (#5699)",
+		reason:
+			"one process singleton cell holding the provider of the held-children answers; the held LSP children it answers for belong to the process and its exit, not to a session, and the provider is a function pair, not session data",
+	},
 	"instance-registry-lock.ts": {
 		ownerKey:
 			"process-wide: the locks this process holds on the instance registry",
@@ -2128,7 +2172,7 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<
 		ownerKey:
 			"process-wide: the probe-home redirect decision is fixed by this process's cwd and environment",
 		reason:
-			"#2506: the globalThis-keyed probe-home-redirect RESOLUTION (the memoized decision plus the degradation event it produced), the same shape as process-singletons.ts's container just below — a PROCESS boundary, not a session one. getGlobalPiLensLogDir()'s redirect decision is fixed by cwd/env at process start and is memoized once, so a session_start reset would only hide the fact from every session after the first in the same probe process. The slot key is a module-scope Symbol.for constant, which the container scan does not count. #2516 round 2 moved getGlobalPiLensLogDir() and the whole redirect decision into this module: it is off file-utils.ts's import cycle, so its own bindings can never be observed mid-initialization the way a resolver living in file-utils.ts could.",
+			"#2506: the probe-home-redirect RESOLUTION (the memoized decision plus the degradation event it produced), one cell of process-singletons.ts's container (the `probe-home-resolution` family) — a PROCESS boundary, not a session one. getGlobalPiLensLogDir()'s redirect decision is fixed by cwd/env at process start and is memoized once, so a session_start reset would only hide the fact from every session after the first in the same probe process. #2516 round 2 moved getGlobalPiLensLogDir() and the whole redirect decision into this module: it is off file-utils.ts's import cycle, so its own bindings can never be observed mid-initialization the way a resolver living in file-utils.ts could.",
 	},
 	"process-bridge.ts": {
 		ownerKey:
@@ -2386,7 +2430,6 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"agent-behavior-client.ts": 3,
 	"agent-nudge.ts": 1,
 	"ast-grep-client.ts": 2,
-	"biome-client.ts": 1,
 	"blocker-freshness.ts": 4,
 	// #2467: flagged because the file now exports a session_start reset; the
 	// scan counts no module-scope CONTAINER here (the gate is a boolean and the
@@ -2433,10 +2476,18 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"diagnostics-publish.ts": 1,
 	"disk-changes.ts": 0,
 	"dispatch/auxiliary-lsp.ts": 1,
-	"dispatch/collect-later-tier.ts": 1,
+	// #5413: 1 -> 2. `flights`, the collect-later run in flight per (project,
+	// runner), is cleared by the same resetObservedRunnerLatency as
+	// `slowRunners`; runner-collect-later.test.ts "a session reset drops the
+	// queued rerun..." proves the reset.
+	"dispatch/collect-later-tier.ts": 2,
 	// #2346 added `generatedSkipRecorded` beside `coverageNoticeSeen` (1 → 2);
 	// both are cleared by the same session-start reset seam.
-	"dispatch/dispatcher.ts": 3,
+	// #5410: 3 -> 4. `commandCheckers` holds one PATH-only checker per
+	// `hasTool` command (a closed vocabulary); the checkers' per-cwd latches
+	// clear at the availability generation bump resetDispatchAvailabilityState
+	// makes at session_start. (`dispatcherProbeFlights` left with the copy.)
+	"dispatch/dispatcher.ts": 4,
 	"dispatch/fact-store.ts": 5,
 	// #1899 removed the dead `neighborTouchCache` (10 → 9); #2282 removed the
 	// redundant `cascadeDiagnosticBaselines` shadow map (9 → 8).
@@ -2464,7 +2515,10 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// `preEditCapturesInFlight`, which holds an entry only while that file's
 	// capture runs (at most four); reset aborts each controller and each capture
 	// releases its slot after teardown, preventing overlap across resets.
-	"dispatch/integration.ts": 8,
+	// #5553 (8 -> 9): `stagedDeltaFacts`, the commit gate's staged read's own
+	// file facts, cleared by `resetDispatchBaselines` (the sessionCaches entry);
+	// each file's facts are released when its lane run settles.
+	"dispatch/integration.ts": 9,
 	// #3968: the runner-id identity leaf beside the dispatcher — one Set fed
 	// by `RunnerRegistry.register` and re-derived at every process start
 	// (registration state, not session state); see the file-level exemption
@@ -2489,7 +2543,9 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// BoundedLruCache, so this file's module-level bounded cache is counted.
 	"dispatch/runners/spotbugs.ts": 1,
 	"dispatch/runners/tree-sitter.ts": 1,
-	"dispatch/runners/utils/lazy-installer.ts": 2,
+	// #5410: 7 -> 8, then 8 -> 7 when `uncorrectedEmissionsByCwd` went with the
+	// compensating-row branch it fed. `toolBinaryCheckers`, one resolver checker per registry
+	// tool id; its per-cwd latches clear at the same generation bump.
 	"dispatch/runners/utils/runner-helpers.ts": 7,
 	"dispatch/runners/yaml-rule-parser.ts": 4,
 	"disposition-publish.ts": 0,
@@ -2504,6 +2560,8 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// to register. This pin counts all three module-level containers, not the
 	// migration queue array.
 	"file-utils.ts": 3,
+	// #5784: the unconfirmed-blocker replay latch (registered above).
+	"finding-delivery-gate.ts": 1,
 	"format-events-publish.ts": 0,
 	"format-service.ts": 1,
 	// #2442 review F2: the container regex now recognises BoundedFifoMap /
@@ -2541,9 +2599,16 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"go-client.ts": 1,
 	"hard-failure-summary.ts": 1,
 	"hashline-anchor.ts": 1,
+	// #5699: the provider cell rides getProcessSingleton, so the scan sees no
+	// module-scope container; the getProcessSingleton SIGNAL flags the file.
+	"held-children.ts": 0,
 	// #2442 review F2: the container regex now recognises BoundedFifoMap /
 	// BoundedLruCache, so this file's module-level bounded cache is counted.
-	"installer/index.ts": 12,
+	// 12 -> 13 (#5657): `_probeCacheUpdatesPending` holds the `updateProbeCache`
+	// calls until they settle. Each entry deletes itself when its call settles,
+	// and `resetProbeCacheStateForTesting` clears the rest, so no entry outlives
+	// a session.
+	"installer/index.ts": 13,
 	"instance-registry-lock.ts": 0,
 	"instance-registry-tail.ts": 0,
 	"instance-registry.ts": 0,
@@ -2624,8 +2689,9 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// entry above.
 	"mcp/session.ts": 4,
 	// #5086: the frozen node-kind tables moved here from complexity-client.ts,
-	// which pinned 24.
-	"metrics/function-metrics.ts": 20,
+	// which pinned 24. #5087: 20 -> 24, each table's `containers` set (the
+	// classes and impls that own a function key), frozen like the others.
+	"metrics/function-metrics.ts": 24,
 	// #5036 N1: `NO_LSP.byName` (a member of the module-level `NO_LSP` literal).
 	"module-report-lsp.ts": 1,
 	"module-report.ts": 3,
@@ -2709,7 +2775,9 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"runtime-config.ts": 0,
 	// #5120 r2: 31 -> 32 for _partialApplies, a WeakMap keyed by one call's own
 	// input object, so no session reads another's entry and none needs a reset.
-	"runtime-coordinator.ts": 32,
+	// #5551: 32 -> 33 for _callWrites, a per-call written set the session
+	// reset clears (session-scope-sweep pins it "reset").
+	"runtime-coordinator.ts": 33,
 	// #2060: 3 -> 5 for GIT_INTEGRATION_SUBCOMMANDS and
 	// GIT_GLOBAL_OPTIONS_WITH_VALUE — command-shape vocabulary, not state.
 	"runtime-tool-result.ts": 3,
@@ -2740,6 +2808,16 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// the shutdown ladder is done, plus a sweep that drops every pid whose
 	// process GROUP no longer exists), never by age, because age is exactly
 	// what evicted a long-lived server's verdict from the FIFO above.
+	//
+	// #5699: back to 3. The held store moved onto the process singleton
+	// (`lifetimeState.held`), because it is also the host-exit ledger the
+	// once-per-process exit handler reads; the scan sees no container for it.
+	//
+	// #5745 r7: 3 -> 4 with `ownedChildLedgerWork`, the owned-child ledger
+	// chains still in flight, which the module's background-write drain joins.
+	// Not reset at session_start: each entry is a registry write about an OS
+	// child, not session state, and it deletes itself when it settles. A reset
+	// would hide running work from the drain that exists to wait for it.
 	"safe-spawn.ts": 4,
 	"security-scan-client.ts": 1,
 	// #2146 moved the four registration fields onto the process singleton, so the

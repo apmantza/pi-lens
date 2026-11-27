@@ -4,32 +4,11 @@ import { BoundedFifoMap } from "./bounded-cache.js";
 import { load as loadYaml } from "./deps/js-yaml.js";
 import { findNearestMarkerRoot, toPosix } from "./path-utils.js";
 import { getDegradationLedgerGeneration } from "./degradation-ledger.js";
+import { hasToolConfig } from "./tool-config-presence.js";
 import {
-	hasBlackConfig,
-	hasClangFormatConfig,
-	hasCljfmtConfig,
-	hasCmakeFormatConfig,
-	hasCsharpierConfig,
-	hasDetektConfig,
-	hasFantomasConfig,
-	hasGoogleJavaFormatConfig,
 	hasGradleKtlintPlugin,
-	hasGolangciConfig,
 	hasKtfmtConfig,
 	hasKtlintConfig,
-	hasMarkdownlintConfig,
-	hasMixFormatConfig,
-	hasOcamlformatConfig,
-	hasOrmoluConfig,
-	hasPhpCsFixerConfig,
-	hasRubocopConfig,
-	hasRuffConfig,
-	hasSqlfluffConfig,
-	hasStandardrbConfig,
-	hasStyluaConfig,
-	hasSwiftformatConfig,
-	hasTaploConfig,
-	hasTerraformConfig,
 } from "./tool-policy.js";
 
 export type ToolAgreementDeclineReason =
@@ -109,7 +88,7 @@ export const TOOL_AGREEMENT_POLICIES: Readonly<
 	markdownlint: {
 		bucket: "node-lockfile",
 		withoutEvidence: "decline",
-		check: hasMarkdownlintConfig,
+		check: (cwd) => hasToolConfig("markdownlint", cwd),
 	},
 	oxfmt: { bucket: "node-lockfile", withoutEvidence: "decline" },
 	oxlint: { bucket: "node-lockfile", withoutEvidence: "decline" },
@@ -118,27 +97,27 @@ export const TOOL_AGREEMENT_POLICIES: Readonly<
 	ruff: {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasRuffConfig,
+		check: (cwd) => hasToolConfig("ruff", cwd),
 	},
 	black: {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasBlackConfig,
+		check: (cwd) => hasToolConfig("black", cwd),
 	},
 	sqlfluff: {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasSqlfluffConfig,
+		check: (cwd) => hasToolConfig("sqlfluff", cwd),
 	},
 	rubocop: {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasRubocopConfig,
+		check: (cwd) => hasToolConfig("rubocop", cwd),
 	},
 	standardrb: {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasStandardrbConfig,
+		check: (cwd) => hasToolConfig("standardrb", cwd),
 	},
 	ktlint: { bucket: "standalone-cli", withoutEvidence: "decline" },
 	// typstyle is a standalone formatter binary. Its smart-default policy is
@@ -163,12 +142,12 @@ export const TOOL_AGREEMENT_POLICIES: Readonly<
 	"golangci-lint": {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasGolangciConfig,
+		check: (cwd) => hasToolConfig("golangci-lint", cwd),
 	},
 	detekt: {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasDetektConfig,
+		check: (cwd) => hasToolConfig("detekt", cwd),
 	},
 	gofmt: {
 		bucket: "project-config",
@@ -201,17 +180,17 @@ export const TOOL_AGREEMENT_POLICIES: Readonly<
 	mix: {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasMixFormatConfig,
+		check: (cwd) => hasToolConfig("mixFormat", cwd),
 	},
 	ocamlformat: {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasOcamlformatConfig,
+		check: (cwd) => hasToolConfig("ocamlformat", cwd),
 	},
 	"clang-format": {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasClangFormatConfig,
+		check: (cwd) => hasToolConfig("clang-format", cwd),
 	},
 	gleam: {
 		bucket: "project-config",
@@ -221,7 +200,7 @@ export const TOOL_AGREEMENT_POLICIES: Readonly<
 	terraform: {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasTerraformConfig,
+		check: (cwd) => hasToolConfig("terraform", cwd),
 	},
 	"terragrunt-hcl": {
 		bucket: "project-config",
@@ -231,61 +210,57 @@ export const TOOL_AGREEMENT_POLICIES: Readonly<
 	"php-cs-fixer": {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasPhpCsFixerConfig,
+		check: (cwd) => hasToolConfig("php-cs-fixer", cwd),
 	},
 	csharpier: {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasCsharpierConfig,
+		check: (cwd) => hasToolConfig("csharpier", cwd),
 	},
 	fantomas: {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasFantomasConfig,
+		check: (cwd) => hasToolConfig("fantomas", cwd),
 	},
 	swiftformat: {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasSwiftformatConfig,
+		check: (cwd) => hasToolConfig("swiftformat", cwd),
 	},
 	stylua: {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasStyluaConfig,
+		check: (cwd) => hasToolConfig("stylua", cwd),
 	},
 	ormolu: {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasOrmoluConfig,
+		check: (cwd) => hasToolConfig("ormolu", cwd),
 	},
 	taplo: {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasTaploConfig,
+		check: (cwd) => hasToolConfig("taplo", cwd),
 	},
 	"google-java-format": {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasGoogleJavaFormatConfig,
+		check: (cwd) => hasToolConfig("google-java-format", cwd),
 	},
 	cljfmt: {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasCljfmtConfig,
+		check: (cwd) => hasToolConfig("cljfmt", cwd),
 	},
 	"cmake-format": {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasCmakeFormatConfig,
+		check: (cwd) => hasToolConfig("cmake-format", cwd),
 	},
 	"psscriptanalyzer-format": {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: (cwd) =>
-			hasMarker(cwd, [
-				"PSScriptAnalyzerSettings.psd1",
-				"ScriptAnalyzerSettings.psd1",
-			]),
+		check: (cwd) => hasToolConfig("psscriptanalyzer", cwd),
 	},
 	cue: {
 		bucket: "project-config",

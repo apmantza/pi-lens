@@ -1,6 +1,12 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
-import { findLocalBinUpwards, localBinPath } from "../../package-manager.js";
+import {
+	findLocalBinUpwards,
+	isLocalBinTrustRefusal,
+	localBinPath,
+} from "../../package-manager.js";
 import { stripAnsi } from "../../sanitize.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
@@ -13,7 +19,6 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import {
-	createAvailabilityChecker,
 	coveringLaneAvailable,
 	lspPrimaryCoversFile,
 	resolveToolCommandWithInstallFallback,
@@ -21,8 +26,6 @@ import {
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-const taplo = createAvailabilityChecker("taplo", ".exe");
 
 // Verified against taplo 0.10.0: 0 = clean, 1 = the file is invalid (lint
 // findings, or a schema it could not load), 2 = clap rejected the invocation.
@@ -149,7 +152,7 @@ const taploRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "taplo");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("taplo")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 
 		// #233, generalized (#3968): the `toml` LSP server IS `taplo lsp` (same
@@ -177,26 +180,27 @@ const taploRunner: RunnerDefinition = {
 			};
 		}
 
-		// Project binary first (#1731, discipline B): `taplo.isAvailableAsync`
-		// resolves through `findManagedNodeToolBinary`, pi-lens's own managed
-		// shim — checked BEFORE any project-local candidate, so a project's own
-		// `node_modules/.bin/taplo` (npm `@taplo/cli`) never won once the managed
-		// copy answered. `findLocalBinUpwards` defaults to `.cmd` on Windows,
-		// matching that npm shim; the availability checker's `.exe` extension is
-		// correct for pi-lens's OWN managed install (a GitHub-release binary,
-		// `clients/installer/index.ts` taplo entry), a different artifact with a
-		// different extension, so it stays as the checker's fallback only.
-		let cmd: string | null =
-			localBinPath(findLocalBinUpwards("taplo", cwd)) ?? null;
+		// Project binary first (#1731, discipline B): the project's own
+		// `node_modules/.bin/taplo` (npm `@taplo/cli`), found by the upward walk,
+		// wins outright. `findLocalBinUpwards` defaults to `.cmd` on Windows,
+		// matching that npm shim. Only when it is absent does the shared
+		// resolver (`resolveToolCommandWithInstallFallback`) run its ladder:
+		// the project rung at exactly `cwd` (trusted), then pi-lens's managed
+		// install, then PATH. Its `.exe` (the registry spec) matches pi-lens's
+		// OWN managed install, a GitHub-release binary
+		// (`clients/installer/index.ts` taplo entry), a different artifact.
+		const projectTaplo = findLocalBinUpwards("taplo", cwd);
+		let cmd: string | null = localBinPath(projectTaplo) ?? null;
 		if (!cmd) {
-			if (await taplo.isAvailableAsync(cwd)) {
-				cmd = taplo.getCommand(cwd);
-			} else {
-				cmd = await resolveToolCommandWithInstallFallback(cwd, "taplo");
-			}
+			cmd = await resolveToolCommandWithInstallFallback(cwd, "taplo");
 		}
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		// #5258: the walk can refuse an ancestor's taplo the ladder never sees.
+		if (!cmd)
+			return toolAbsentSkip(cwd, {
+				id: "taplo",
+				trustRefused: isLocalBinTrustRefusal(projectTaplo),
+			});
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		// #1937: `--output=json` is not a taplo flag. taplo rejected it with a

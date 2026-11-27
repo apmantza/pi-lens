@@ -210,15 +210,30 @@ export function stripSource(
 	options: StripOptions = {},
 ): string {
 	const blankStrings = (options.strings ?? "blank") === "blank";
-	const out = source.split("");
+	// The output as UTF-16 code units in a typed array: one native copy in and
+	// one out, instead of a one-string-per-character array and a join.
+	const length = source.length;
+	const outBytes = Buffer.alloc(length * 2);
+	outBytes.write(source, "utf16le");
+	const out = new Uint16Array(outBytes.buffer, outBytes.byteOffset, length);
+	// A backslash as the very last character asks to blank the position past
+	// the end; the array this replaced grew by one space there, so keep that.
+	let pastEnd = false;
 	const blank = (index: number) => {
-		if (out[index] !== "\n") out[index] = " ";
+		if (index >= length) pastEnd = true;
+		else if (out[index] !== 10) out[index] = 32;
 	};
+	const isWordCode = (code: number): boolean =>
+		(code >= 48 && code <= 57) ||
+		(code >= 65 && code <= 90) ||
+		(code >= 97 && code <= 122) ||
+		code === 95 ||
+		code === 36;
 	const regexMayStart = (index: number): boolean => {
 		let end = -1;
 		for (let j = index - 1; j >= 0; j--) {
 			const prev = out[j];
-			if (prev === " " || prev === "\t" || prev === "\n" || prev === "\r") {
+			if (prev === 32 || prev === 9 || prev === 10 || prev === 13) {
 				continue;
 			}
 			end = j;
@@ -226,10 +241,14 @@ export function stripSource(
 		}
 		if (end < 0) return true; // start of file
 		const prev = out[end];
-		if (!/[\w$]/.test(prev)) return !/[)\]"'`]/.test(prev);
+		if (!isWordCode(prev)) {
+			return !/[)\]"'`]/.test(String.fromCharCode(prev));
+		}
 		let start = end;
-		while (start > 0 && /[\w$]/.test(out[start - 1])) start--;
-		return KEYWORDS_BEFORE_REGEX.has(out.slice(start, end + 1).join(""));
+		while (start > 0 && isWordCode(out[start - 1])) start--;
+		return KEYWORDS_BEFORE_REGEX.has(
+			outBytes.toString("utf16le", start * 2, (end + 1) * 2),
+		);
 	};
 	let quote: string | undefined;
 	let lineComment = false;
@@ -252,7 +271,23 @@ export function stripSource(
 	// remaining text, including this nested template's own stray delimiters,
 	// to fall through as ordinary unmasked code.
 	const templateStack: { braceDepth: number }[] = [];
+	// Plain code outside every template: only a `/` or a quote opens another
+	// state, and every other character falls through all the branches below
+	// untouched, so the loop jumps to the next one.
+	const plainCodeStop = /["'`/]/g;
 	for (let i = 0; i < source.length; i++) {
+		if (
+			!regex &&
+			!lineComment &&
+			!blockComment &&
+			quote === undefined &&
+			templateStack.length === 0
+		) {
+			plainCodeStop.lastIndex = i;
+			const stop = plainCodeStop.exec(source);
+			if (stop === null) break;
+			i = stop.index;
+		}
 		const ch = source[i];
 		const next = source[i + 1];
 		if (regex) {
@@ -368,7 +403,7 @@ export function stripSource(
 			}
 		}
 	}
-	return out.join("");
+	return outBytes.toString("utf16le") + (pastEnd ? " " : "");
 }
 
 function matchIsCode(
@@ -2027,7 +2062,8 @@ export interface SymbolCountAuditInput {
 
 /**
  * A per-file stateful-SYMBOL-COUNT pin, layered on {@link auditRegistry}'s
- * registered-or-fail semantics rather than a parallel mechanism (#1817).
+ * registered-or-fail semantics (#1817), plus one stale-pin check that audit
+ * cannot see: a pinned file the scan no longer measures.
  *
  * The session-state sweep's file-level coverage audit ({@link auditRegistry}
  * called directly on file paths) answers "is this FILE registered or
@@ -2053,7 +2089,7 @@ export interface SymbolCountAuditInput {
  */
 export function auditSymbolCounts(input: SymbolCountAuditInput): RegistryAudit {
 	const key = (file: string, count: number) => `${file}@${count}`;
-	return auditRegistry({
+	const audit = auditRegistry({
 		sweepName: input.sweepName,
 		flagged: Object.entries(input.counts).map(([file, count]) =>
 			key(file, count),
@@ -2073,6 +2109,22 @@ export function auditSymbolCounts(input: SymbolCountAuditInput): RegistryAudit {
 				"import-time constant the scan cannot distinguish (SWEEP_HEURISTIC_LIMITS " +
 				"item 5) — THEN update the pin to the new count.",
 	});
+	// A pin for a file the scan no longer measures at all is invisible to the
+	// registered-or-fail audit above, which permits a registered id nothing
+	// flags: the row stays and pre-admits the file's old count if the file comes
+	// back (hook-await-bounds' HELPER_UNBOUNDED kept `clients/zz-gone.ts: 3`
+	// green). A pin whose count merely moved is already an unaccounted `file@N`.
+	const stalePins = Object.keys(input.pinned).filter(
+		(file) => !Object.hasOwn(input.counts, file),
+	);
+	if (stalePins.length > 0) {
+		audit.problems.push(
+			`${input.sweepName}: ${stalePins.length} pinned file(s) the scan no longer ` +
+				"measures — remove them, a stale pin pre-admits the file's old count:\n" +
+				stalePins.map((file) => `  ${file}`).join("\n"),
+		);
+	}
+	return audit;
 }
 
 // ── 4. The emptiness guard ──────────────────────────────────────────────────

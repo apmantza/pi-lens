@@ -30,6 +30,7 @@ import {
 	relativePosix,
 } from "../support/sweep-kit.js";
 import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
+import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
 
 // #3902: the PR-body lint cases inject a fake git, so none may spawn a real
 // one. The child-process boundary records every `execFileSync` spawn and
@@ -800,6 +801,20 @@ describe("TLA+ coverage map (#3802)", () => {
 
 	it("matches every glob to a file and every family to a model", () => {
 		expect(validateCoverageMap(map, REPO_ROOT)).toEqual([]);
+	});
+
+	it("reds a planted map row whose glob matches no file (#5072)", () => {
+		// The map's row-without-producer direction, through the validator the
+		// case above runs, over the real tree.
+		const planted = "clients/5072-gone-module.ts";
+		expectPlantedStaleRow({
+			baseline: "formal/coverage-map.json",
+			rowKey: planted,
+			verdict: validateCoverageMap(
+				{ ...map, map: { [planted]: "unmodelled" } },
+				REPO_ROOT,
+			),
+		});
 	});
 
 	describe("tree-to-map validation", () => {

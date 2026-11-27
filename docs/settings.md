@@ -48,7 +48,12 @@ For a single toggle, highest priority first:
    project-scoped keys only: the three mutation controls (`format.enabled`,
    `autofix.enabled`, `actionableWarnings.autoFix.enabled`) and the per-tool
    switches `tools.<name>.enabled` (`tools.lazy` itself stays global-only). In a
-   monorepo the closest config to the edited file wins.
+   monorepo the closest config to the edited file wins for the three mutation
+   controls. The per-tool switches are read once per session from the
+   repository's `.pi-lens.json` files at your working directory, up to the git
+   root, so a package's own file does not switch a tool off or on. A repository
+   with no `.pi-lens.json` of its own still inherits the nearest one above it,
+   whole: the git-root limit applies to layered reads, not to that fallback.
 4. **Global `~/.pi-lens/config.json`**.
 5. **Built-in default**.
 
@@ -94,6 +99,7 @@ column is the effective behavior when nothing is set.
 | `--lens-compact-lsp-status` | `ui.compactLspStatus` | global | **off** (footer lists the active server names) |
 | `--lens-hide-lsp-status` | `ui.hideLspStatus` | global | **off** (footer publishes the `pi-lens-lsp` status; outranks `ui.compactLspStatus` when both are set) |
 | `--lens-compact-widget` | `ui.compactWidget` | global | **off** (widget stacks file rows, suppressed count and blocker details below its summary header; **on** renders only that header — languages + totals, plus the `LSP↑` chip while servers are spawning) |
+| `--lens-issues-status` | `ui.issuesStatus` | global | **off** (footer publishes no `pi-lens-issues` status; **on** publishes `●<N>E`, `!<N>W`, `⚠ <N> unchecked`, or `✓ clean` from the widget header's tallies) |
 | `--no-lazy-tools` | `tools.lazy` | global | `true`: the five situational tools start inactive on every model (`"auto"` only on a model that keeps mid-conversation system messages, `false` never) |
 | `--no-tool=<name>` | `tools.<name>.enabled` | project | every lens tool **on** |
 | `--lens-turn-end-madge` | `turnEnd.madge.enabled` | global | **off** (madge runs at session start, not per turn) |
@@ -159,9 +165,12 @@ add a denial but never re-enable one. See
 | --- | --- | --- | --- |
 | `ignore` | global + project | `[]` | Gitignore-style globs excluded from every scan |
 | `widget.visible` | global | `true` | Whether the diagnostics widget shows at session start |
+| `widget.position` | global | `"belowEditor"` | `"aboveEditor"` or `"belowEditor"`: where the widget draws relative to the input box |
+| `widget.hideWhenClean` | global | `false` | Hide the widget 5 s after it first shows `✓ clean`. See [globalconfig](globalconfig.md#widget-position-and-hiding) |
 | `dispatch.runnerTimeoutFloorMs` | global | none (no floor) | Minimum wall-clock budget per dispatch runner |
 | `lsp.queryMaxFileLines` | global | `5000` | Line limit of the explicit single-file `lens_diagnostics source=lsp` query only; a whole number from `5000` to `40000` (suggested `20000`). See [globalconfig](globalconfig.md#explicit-diagnostics-query-line-limit) |
 | `dispatch.disabledRunners` | global + project | `[]` | Dispatch runner ids that never run (for example `["dotnet-build"]`). A denial: the union of every tier, so a project can add but never re-enable. Unknown ids are dropped with a warning. See [configuration](configuration.md#dispatchdisabledrunners--turning-a-dispatch-runner-off) |
+| `opaqueScan.nonWriterTools` | global + project | `[]` | Tool names you know never write, so a call to one skips the before/after working-tree comparison (two `git status` runs in a repository). Exact names; a shell or pi-lens tool is refused. A project file's list counts only when pi trusts the project. See [configuration](configuration.md#opaquescannonwritertools--telling-pi-lens-a-tool-never-writes) |
 | `format.mode` | global | `"deferred"` | `"deferred"` (at `agent_end`) or `"immediate"` |
 | `actionableWarnings.autoFix.maxFixes` | global | `5` | Cap on quickfixes applied per turn (`0` = report only) |
 | `rules.high-complexity.threshold` | global + project | `15` | Cyclomatic-complexity threshold. Read per file from its nearest `.pi-lens.json` field by field, like `rules.<id>.disable`, so a nested file governs the files under it and a global file applies where no project file sets one. See [configuration](configuration.md#rulesid--read-from-each-files-own-config) |
@@ -181,7 +190,7 @@ add a denial but never re-enable one. See
 User-level. The file is selected by the [global-location table](configuration.md#global-config-location)
 and applies to **every** project. It honors **all** flag keys from the
 table above plus the non-flag global knobs (`ignore`, `widget.visible`,
-`dispatch.runnerTimeoutFloorMs`, `dispatch.disabledRunners`, `format.mode`,
+`widget.position`, `widget.hideWhenClean`, `dispatch.runnerTimeoutFloorMs`, `dispatch.disabledRunners`, `opaqueScan.nonWriterTools`, `format.mode`,
 `actionableWarnings.autoFix.maxFixes`, `lsp.queryMaxFileLines`). On Windows the path is
 `%USERPROFILE%\.pi-lens\config.json`.
 
@@ -209,7 +218,8 @@ A project file honors **only**:
 
 - the three mutation controls — `format.enabled`, `autofix.enabled`,
   `actionableWarnings.autoFix.enabled`;
-- `ignore`, `rules`, `maxProjectFiles`, `reviewGraph`, `trivy`, and `helm`.
+- `ignore`, `rules`, `maxProjectFiles`, `reviewGraph`, `trivy`, and `helm`;
+- `opaqueScan.nonWriterTools`, honored only when the host trusts the project.
 
 ### `helm.renderValidation.enabled` needs trust as well as consent
 

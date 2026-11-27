@@ -1194,6 +1194,61 @@ describe("#1549 — resolveTouchVerdict (the merge rule, in isolation)", () => {
 			}),
 		).toEqual({ inconclusive: true, inconclusiveReason: "diagnostics-wait" });
 	});
+
+	// #5487: a wait that lapsed on a primary still announcing it was loading is
+	// named for that, so a cold rust-analyzer does not read as a silent server.
+	it("names the loading cause when every lapsed primary announced it was loading", () => {
+		expect(
+			resolveTouchVerdict({
+				primaryNotifyWriteTimedOutServerIds: [],
+				diagnosticsTimedOut: true,
+				diagnosticsUnansweredServerIds: ["rust"],
+				loadingServerIds: ["rust"],
+			}),
+		).toEqual({
+			inconclusive: true,
+			inconclusiveServerIds: ["rust"],
+			inconclusiveReason: "server-loading",
+		});
+	});
+
+	it("keeps diagnostics-wait when a lapsed primary was not loading", () => {
+		expect(
+			resolveTouchVerdict({
+				primaryNotifyWriteTimedOutServerIds: [],
+				diagnosticsTimedOut: true,
+				diagnosticsUnansweredServerIds: ["rust", "typescript"],
+				loadingServerIds: ["rust"],
+			}),
+		).toEqual({
+			inconclusive: true,
+			inconclusiveServerIds: ["rust", "typescript"],
+			inconclusiveReason: "diagnostics-wait",
+		});
+	});
+
+	it("does not call an unattributed lapse a loading one, nor lets loading hide a write timeout", () => {
+		expect(
+			resolveTouchVerdict({
+				primaryNotifyWriteTimedOutServerIds: [],
+				diagnosticsTimedOut: true,
+				diagnosticsUnansweredServerIds: [],
+				loadingServerIds: ["rust"],
+			}),
+		).toEqual({ inconclusive: true, inconclusiveReason: "diagnostics-wait" });
+		expect(
+			resolveTouchVerdict({
+				primaryNotifyWriteTimedOutServerIds: ["rust"],
+				diagnosticsTimedOut: false,
+				diagnosticsUnansweredServerIds: [],
+				loadingServerIds: ["rust"],
+			}),
+		).toEqual({
+			inconclusive: true,
+			inconclusiveServerIds: ["rust"],
+			inconclusiveReason: "notify-write",
+		});
+	});
 });
 
 /**
@@ -1313,5 +1368,40 @@ describe("#5128 — a publish after the first-contact latch clears it", () => {
 		expect(latched(service, "dexter")).toBe(false);
 		expect(result?.diagnosticsUnsupportedServerIds).toBeUndefined();
 		expect(result?.inconclusive).toBe(true);
+	});
+
+	// #5487 (review of #5495, F1): a failed workspace load is its own reason and
+	// carries the server's message; a loading primary beside it does not hide it.
+	it("names a failed load, with the server's message, ahead of a loading one", () => {
+		expect(
+			resolveTouchVerdict({
+				primaryNotifyWriteTimedOutServerIds: [],
+				diagnosticsTimedOut: true,
+				diagnosticsUnansweredServerIds: ["rust", "go"],
+				loadingServerIds: ["go"],
+				loadFailedServerIds: ["rust"],
+				loadFailureDetail: "Failed to load workspaces.",
+			}),
+		).toEqual({
+			inconclusive: true,
+			inconclusiveServerIds: ["rust", "go"],
+			inconclusiveReason: "server-load-failed",
+			inconclusiveDetail: "Failed to load workspaces.",
+		});
+	});
+
+	it("keeps diagnostics-wait when a lapsed primary neither loaded nor failed", () => {
+		expect(
+			resolveTouchVerdict({
+				primaryNotifyWriteTimedOutServerIds: [],
+				diagnosticsTimedOut: true,
+				diagnosticsUnansweredServerIds: ["rust", "typescript"],
+				loadFailedServerIds: ["rust"],
+			}),
+		).toEqual({
+			inconclusive: true,
+			inconclusiveServerIds: ["rust", "typescript"],
+			inconclusiveReason: "diagnostics-wait",
+		});
 	});
 });

@@ -73,6 +73,9 @@ import {
 	type GitleaksFinding,
 } from "../../clients/gitleaks-client.js";
 import { JscpdClient } from "../../clients/jscpd-client.js";
+import { resetProjectLensConfigCache } from "../../clients/project-lens-config.js";
+import { gitleaksFindingToProjectDiagnostic } from "../../clients/project-diagnostics/runner-adapters/gitleaks.js";
+import { SECRETS_LANE_SCRATCH_DIR_NAMES } from "../../clients/scratch-tree-policy.js";
 import { OpengrepClient } from "../../clients/opengrep-client.js";
 import { listNestedLinkedWorktreeRoots } from "../../clients/review-graph/git-identity.js";
 import { TrivyClient, worktreeSkipDirs } from "../../clients/trivy-client.js";
@@ -208,7 +211,9 @@ describe("#4117 vulture excludes every linked worktree under the scanned root", 
 		const exclude = optionValue(await vultureArgs(), "--exclude") ?? "";
 
 		expect(exclude.split(",")).toContain(`${realPath(alpha)}/*`);
-		expect(exclude.split(",")).toContain("*/.worktrees/*");
+		// The built-in exclusions are anchored at the real root (#5500).
+		expect(exclude.split(",")).toContain(`${realPath(main)}/.worktrees/*`);
+		expect(exclude.split(",")).toContain(`${realPath(main)}/*/.worktrees/*`);
 		expect(optionValue(scanArgs(), "--min-confidence")).toBeDefined();
 		// The record the turn_end row and the dead-code log carry (#4117).
 		expect(lastResult.excludedWorktrees).toBe(1);
@@ -650,7 +655,8 @@ describe("#4132 gitleaks, trivy and opengrep leave every linked worktree under t
 		it("adds nothing beyond the secrets-lane names when the root holds no linked worktree", async () => {
 			const { paths } = await gitleaksRun(main);
 
-			expect(paths.every((p) => p.startsWith("(?:^|[/\\\\])"))).toBe(true);
+			// One entry per secrets-lane name, none for a worktree.
+			expect(paths).toHaveLength(SECRETS_LANE_SCRATCH_DIR_NAMES.length);
 		});
 
 		it("builds the entry from the root's own spelling when the root is a symlink", async () => {
@@ -709,5 +715,182 @@ describe("#4132 gitleaks, trivy and opengrep leave every linked worktree under t
 
 			expect(classified?.pathStatus).toBe("nested-repository");
 		});
+	});
+});
+
+// #5500: gitleaks, opengrep and vulture each matched a scratch-NAME exclusion
+// against an absolute path, so a scratch-named directory ABOVE the scanned root
+// (Claude Code's own `.claude/worktrees/<lane>` layout) dropped or demoted the
+// whole project's findings. Recurrence prevented: a scanner argv or config that
+// names a scratch directory without anchoring it at the scan root. Real-binary
+// transcripts (gitleaks 8.30.1, opengrep, vulture 2.16) are in the PR body, and
+// `scripts/smoke-gitleaks-scratch-exclusion.mjs` runs the real gitleaks under
+// such an ancestor in CI.
+describe("#5500 a scratch-named ancestor of the scanned root does not touch the scanners' coverage", () => {
+	let root: string;
+
+	beforeEach(() => {
+		safeSpawnAsync.mockImplementation(async () => ({
+			error: undefined,
+			status: 0,
+			stdout: "",
+			stderr: "",
+		}));
+		root = path.join(main, ".claude/worktrees/lane");
+		initRepo(root);
+	});
+
+	it("gitleaks: the generated allowlist spares the project's files, and its finding stays a blocking diagnostic", async () => {
+		let paths: string[] = [];
+		safeSpawnAsync.mockImplementation(async (...call: unknown[]) => {
+			const args = call[1] as string[];
+			if (args[0] === "detect") {
+				const toml = fs.readFileSync(
+					args[args.indexOf("--config") + 1] as string,
+					"utf-8",
+				);
+				const block = toml.match(/paths = \[\n([\s\S]*?)\n\]/)?.[1] ?? "";
+				paths = block
+					.split("\n")
+					.map((line) => JSON.parse(line.trim().replace(/,$/, "")) as string);
+				// gitleaks reports `File` as `--source` joined with the relative path.
+				fs.writeFileSync(
+					args[args.indexOf("--report-path") + 1] as string,
+					JSON.stringify([
+						{
+							RuleID: "generic-api-key",
+							StartLine: 1,
+							File: path.join(root, "src/a.js"),
+						},
+					]),
+				);
+			}
+			return { error: undefined, status: 0, stdout: "", stderr: "" };
+		});
+		const client = new GitleaksClient(false) as unknown as {
+			runScan: (cwd: string) => Promise<{ findings: GitleaksFinding[] }>;
+		};
+
+		const { findings } = await client.runScan(root);
+
+		const allowlisted = (file: string) =>
+			paths.some((p) => new RegExp(p).test(file));
+		expect(allowlisted(path.join(root, "src/a.js"))).toBe(false);
+		expect(allowlisted(path.join(root, ".pi/notes.md"))).toBe(true);
+		expect(allowlisted(path.join(root, "pkg/.claude/notes.md"))).toBe(true);
+		expect(findings.map((f) => f.pathStatus)).toEqual(["tracked"]);
+		expect(gitleaksFindingToProjectDiagnostic(root, findings[0]).semantic).toBe(
+			"blocking",
+		);
+	});
+
+	it("opengrep: scans the relative target `.`, so `--exclude <name>` meets only paths inside the root", async () => {
+		const client = new OpengrepClient(false) as unknown as {
+			runScan: (cwd: string) => Promise<unknown>;
+		};
+		await client.runScan(root);
+		const call = safeSpawnAsync.mock.calls.find(
+			(c) => (c[1] as string[] | undefined)?.[0] === "scan",
+		);
+		const args = (call?.[1] as string[] | undefined) ?? [];
+
+		expect(args.at(-1)).toBe(".");
+		expect(args).toContain(".claude");
+		expect(args.some((a) => a === root || a === realPath(root))).toBe(false);
+		expect((call?.[2] as { cwd?: string } | undefined)?.cwd).toBe(
+			realPath(root),
+		);
+	});
+
+	it("vulture: every built-in exclusion starts at the real root", async () => {
+		await new PythonDeadCodeClient(false).analyze(root);
+		const exclude = (optionValue(scanArgs(), "--exclude") ?? "").split(",");
+		// The fixture path holds no glob character, so it is its own fnmatch literal.
+		const anchor = realPath(root);
+
+		expect(exclude.length).toBeGreaterThan(0);
+		expect(exclude.every((pattern) => pattern.startsWith(`${anchor}/`))).toBe(
+			true,
+		);
+		expect(exclude).toContain(`${anchor}/.pi/*`);
+		// The Python-only names ride the same anchored list.
+		expect(exclude).toContain(`${anchor}/*/site-packages/*`);
+		expect(exclude).toContain(`${anchor}/*/.eggs/*`);
+	});
+
+	// The path-boundary audit of #5500: gitleaks and trivy took `path.resolve`
+	// of the root where opengrep takes `realpathOrResolve`, so a symlinked root
+	// reached `gitleaks detect --source <link>`, which walked ~0 bytes and said
+	// "no leaks found" while the real path reports its findings (measured,
+	// gitleaks 8.30.1). Recurrence prevented: a scanner scanning the spelling of
+	// the root the caller used rather than the directory it names.
+	function linkTo(target: string): string {
+		const link = `${target}-link`;
+		fs.symlinkSync(target, link, "dir");
+		return link;
+	}
+
+	it("gitleaks: scan(<symlink>) spawns on the real root, the same source as scan(<real>)", async () => {
+		const sources: string[] = [];
+		safeSpawnAsync.mockImplementation(async (...call: unknown[]) => {
+			const args = call[1] as string[];
+			if (args[0] === "detect")
+				sources.push(args[args.indexOf("--source") + 1]);
+			return { error: undefined, status: 0, stdout: "", stderr: "" };
+		});
+		const client = new GitleaksClient(false) as unknown as {
+			ensureAvailable: () => Promise<boolean>;
+			scan: (cwd: string, o: { requireSignal: boolean }) => Promise<unknown>;
+		};
+		vi.spyOn(client, "ensureAvailable").mockResolvedValue(true);
+
+		await client.scan(root, { requireSignal: false });
+		await client.scan(linkTo(root), { requireSignal: false });
+
+		expect(sources).toEqual([realPath(root), realPath(root)]);
+	});
+
+	it("trivy: scan(<symlink>) spawns on the real root, the same target as scan(<real>)", async () => {
+		write(root, ".pi-lens.json", JSON.stringify({ trivy: { enabled: true } }));
+		write(root, "package.json", "{}");
+		resetProjectLensConfigCache();
+		const targets: string[] = [];
+		safeSpawnAsync.mockImplementation(async (...call: unknown[]) => {
+			const args = call[1] as string[];
+			if (args[0] === "fs") targets.push(args.at(-1) as string);
+			return { error: undefined, status: 0, stdout: "", stderr: "" };
+		});
+		const client = new TrivyClient(false) as unknown as {
+			ensureAvailable: () => Promise<boolean>;
+			scan: (cwd: string) => Promise<unknown>;
+		};
+		vi.spyOn(client, "ensureAvailable").mockResolvedValue(true);
+
+		await client.scan(root);
+		await client.scan(linkTo(root));
+
+		expect(targets).toEqual([realPath(root), realPath(root)]);
+	});
+
+	it("gitleaks: a finding in the real spelling of a symlinked root still judges scratch below the root only", async () => {
+		const link = linkTo(root);
+		const [kept, scratch] = await classifyAndFilterFindings(
+			[
+				{
+					ruleId: "r",
+					file: path.join(realPath(root), "src/a.js"),
+					startLine: 1,
+				},
+				{
+					ruleId: "r",
+					file: path.join(realPath(root), ".pi/x.md"),
+					startLine: 1,
+				},
+			],
+			link,
+		);
+
+		expect(kept?.pathStatus).not.toBe("scratch");
+		expect(scratch?.pathStatus).toBe("scratch");
 	});
 });

@@ -17,6 +17,7 @@ import {
 } from "../../clients/mutation-bridge.js";
 import { countFileLines } from "../../clients/read-guard-tool-lines.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { complexityBaselineKey } from "../../clients/metrics/complexity-baseline.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import type { TreeSitterClient } from "../../clients/tree-sitter-client.js";
 import { createLensDiagnosticMarkTool } from "../../tools/lens-diagnostic-mark.js";
@@ -198,7 +199,9 @@ describe("handleToolCall", () => {
 					}),
 				),
 			);
-			expect(runtime.complexityBaselines.has(filePath)).toBe(false);
+			expect(
+				runtime.complexityBaselines.has(complexityBaselineKey(filePath)),
+			).toBe(false);
 			expect(
 				getDegradationSummary().some(
 					(entry) => entry.kind === "startup-analyzer-disabled",
@@ -220,7 +223,10 @@ describe("handleToolCall", () => {
 				"src/done.ts",
 				"export {};\n",
 			);
-			runtime.complexityBaselines.add(baselined);
+			runtime.complexityBaselines.set(complexityBaselineKey(baselined), {
+				main: { kind: "unavailable", reason: "test" },
+				last: undefined,
+			});
 			// Only the two .java reads should record: the rest are a data file, a
 			// measured file already baselined, a vendored file, and a read with
 			// complexity disabled.
@@ -243,7 +249,9 @@ describe("handleToolCall", () => {
 					),
 				);
 			}
-			expect(runtime.complexityBaselines.has(baselined)).toBe(true);
+			expect(
+				runtime.complexityBaselines.has(complexityBaselineKey(baselined)),
+			).toBe(true);
 			expect(runtime.complexityBaselines.size).toBe(1);
 			expect(
 				getDegradationSummary()
@@ -675,6 +683,47 @@ describe("handleToolCall", () => {
 
 			expect(result).toMatchObject({ block: true });
 			expect((result as { reason: string }).reason).toContain("shared");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// RECURRENCE GUARDED: shape 32 / #2556 remainder (see the tool_result cell
+	// "cachedExports compares files by identity, not spelling"). A cached export
+	// whose file this write names through a link is that file, not "another".
+	it("does not block a write that re-declares an export its own file holds under another spelling", async () => {
+		const env = setupTestEnvironment("pi-lens-runtime-tool-call-dupe-alias-");
+		try {
+			const real = createTempFile(
+				env.tmpDir,
+				"real/src/a.ts",
+				"export const y = 1;\n",
+			);
+			fs.symlinkSync(
+				path.join(env.tmpDir, "real"),
+				path.join(env.tmpDir, "link"),
+			);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.cachedExports.set(
+				"shared",
+				path.join(env.tmpDir, "link/src/a.ts"),
+			);
+
+			const result = await runHandlerExpectingNoThrow(() =>
+				handleToolCall(
+					baseDeps({
+						runtime,
+						ctx: { cwd: env.tmpDir },
+						event: {
+							toolName: "write",
+							input: { path: real, content: "export function shared() {}\n" },
+						},
+					}),
+				),
+			);
+
+			expect(result).toBeUndefined();
 		} finally {
 			env.cleanup();
 		}
@@ -2177,7 +2226,7 @@ describe("#4187 R4-1 — a bytes-less write advances only what its own call name
 				"typescript",
 				[path.join(env.tmpDir, "src")],
 				true,
-				{ toolCallId: "call-ast-grep-dir" },
+				{ toolCallId: "call-ast-grep-dir", sessionRoot: env.tmpDir },
 			);
 			expect(runtime.readGuard.checkEdit(target, [2, 2]).action).toBe("block");
 		} finally {
@@ -2209,7 +2258,7 @@ describe("#4187 R4-1 — a bytes-less write advances only what its own call name
 				"typescript",
 				[env.tmpDir],
 				true,
-				{ toolCallId: "call-ast-grep-none" },
+				{ toolCallId: "call-ast-grep-none", sessionRoot: env.tmpDir },
 			);
 			expect(runtime.readGuard.checkEdit(target, [2, 2]).action).toBe("block");
 		} finally {
@@ -2240,7 +2289,7 @@ describe("#4187 R4-1 — a bytes-less write advances only what its own call name
 				"typescript",
 				[target],
 				true,
-				{ toolCallId: "call-ast-grep-file" },
+				{ toolCallId: "call-ast-grep-file", sessionRoot: env.tmpDir },
 			);
 			// No other writer moved the file, so the licensed advance stands and
 			// the next positional edit needs no read.

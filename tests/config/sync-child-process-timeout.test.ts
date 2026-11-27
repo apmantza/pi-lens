@@ -36,6 +36,7 @@ import {
 	listSourceFiles,
 	relativePosix,
 } from "../support/sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -74,9 +75,9 @@ const EXEMPT_SITES: Readonly<Record<string, string>> = {
 	'clients/safe-spawn.ts:"/F", "/T", "/PID"':
 		"killPidTreeSync runs from process exit and signal handlers. The process is already tearing down, so there is no event loop left to protect, and a timeout would only orphan the kill it was asked to perform.",
 	"clients/safe-spawn.ts:spawnCmd, spawnArgs,":
-		"safeSpawn's Windows-resolved-path spawnSync fallback (the PATH+PATHEXT resolved-path branch) spreads the CALLER's options, which is where the timeout comes from. Its three in-repo callers: isCommandAvailable and findCommand in safe-spawn.ts (timeout: 5000 each), and test-runner-client.ts's detectRunner (timeout: 2000).",
+		"safeSpawn's Windows-resolved-path spawnSync fallback (the PATH+PATHEXT resolved-path branch) spreads the CALLER's options, which is where the timeout comes from. Its in-repo callers each pass one: metrics-history.ts (timeout: 5000), lsp/launch.ts (timeout: 3000).",
 	"clients/safe-spawn.ts:// Explicit override, not just the spread above":
-		"safeSpawn's plain-command spawnSync fallback (the non-Windows-resolved branch) spreads the CALLER's options for the identical reason as the Windows-resolved-path sibling above: the timeout comes from the caller. Same three in-repo callers — isCommandAvailable and findCommand in safe-spawn.ts (timeout: 5000 each), and test-runner-client.ts's detectRunner (timeout: 2000).",
+		"safeSpawn's plain-command spawnSync fallback (the non-Windows-resolved branch) spreads the CALLER's options for the identical reason as the Windows-resolved-path sibling above: the timeout comes from the caller. Same in-repo callers: metrics-history.ts (timeout: 5000), lsp/launch.ts (timeout: 3000).",
 };
 
 interface CallSite {
@@ -192,30 +193,42 @@ describe("#1980 every synchronous child-process call bounds the event-loop park"
 			"Pass an explicit `timeout` (5000 matches every other sync child-process site), or add an entry to EXEMPT_SITES with a real reason.",
 	});
 
-	it("actually finds the family (a dead scan must not read as clean)", () => {
-		// Vacuity guard on the DETECTOR, separate from the audit's floors: if
-		// the call-site regex breaks, every assertion below passes for free.
-		// There were 7 sites across 3 files when this landed. #4530 moved the
-		// LSP launcher's version probe and metrics-history's git probe onto the
-		// spawn seam, leaving the 4 in clients/safe-spawn.ts (the seam's own
-		// sync path, its taskkill teardown and its code-page switch).
-		expect(sites.length).toBeGreaterThanOrEqual(4);
-		expect(new Set(sites.map((s) => s.file)).size).toBeGreaterThanOrEqual(1);
-	});
+	it(
+		"actually finds the family (a dead scan must not read as clean)",
+		() => {
+			// Vacuity guard on the DETECTOR, separate from the audit's floors: if
+			// the call-site regex breaks, every assertion below passes for free.
+			// There were 7 sites across 3 files when this landed. #4530 moved the
+			// LSP launcher's version probe and metrics-history's git probe onto the
+			// spawn seam, leaving the 4 in clients/safe-spawn.ts (the seam's own
+			// sync path, its taskkill teardown and its code-page switch).
+			expect(sites.length).toBeGreaterThanOrEqual(4);
+			expect(new Set(sites.map((s) => s.file)).size).toBeGreaterThanOrEqual(1);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("bounds every site, or exempts it with a reason", () => {
-		// Pre-fix, `audit.unaccounted` reads:
-		//   clients/lsp/launch.ts:310 execFileSync
-		//   clients/safe-spawn.ts:1062 spawnSync
-		expect(audit.problems).toEqual([]);
-	});
+	it(
+		"bounds every site, or exempts it with a reason",
+		() => {
+			// Pre-fix, `audit.unaccounted` reads:
+			//   clients/lsp/launch.ts:310 execFileSync
+			//   clients/safe-spawn.ts:1062 spawnSync
+			expect(audit.problems).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("keeps the exemption list live and reasoned", () => {
-		// An exemption whose site no longer exists must be deleted, not left to
-		// silently cover some future call it was never reasoned about.
-		expect(audit.staleExemptions).toEqual([]);
-		expect(audit.reasonlessExemptions).toEqual([]);
-	});
+	it(
+		"keeps the exemption list live and reasoned",
+		() => {
+			// An exemption whose site no longer exists must be deleted, not left to
+			// silently cover some future call it was never reasoned about.
+			expect(audit.staleExemptions).toEqual([]);
+			expect(audit.reasonlessExemptions).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });
 
 describe("#2487 review round 4 F1: a paren inside a string/comment argument cannot unbalance the depth scan", () => {

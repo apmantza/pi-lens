@@ -1371,24 +1371,27 @@ export function escapeRowKey(key: string): string {
 }
 
 /**
- * The close evidence a file's findings sit on, re-derived from the source. The
- * admissions guard requires the admitted mechanism to be one of these, so a
- * row cannot claim `teardown` for a close that only appears in a `helper`.
+ * The close-evidence mechanisms a classification recorded for the named
+ * servers. The admissions guard requires the admitted mechanism to be one of
+ * these, so a row cannot claim `teardown` for a close that only appears in a
+ * `helper`.
+ *
+ * The caller passes the classification it already holds rather than the source
+ * (#5508): the mechanisms are the `mechanism` the classifier recorded on these
+ * very findings, so re-running {@link findUnclosedServerStarts} over the source
+ * here classified the same file a second time per admission row, which is what
+ * made the guard's re-check a multi-second test. Passing the classification
+ * keeps the derivation inside this module — the guard does not read
+ * `finding.mechanism` beside it — and leaves one classifier run per file.
  */
 export function serverTeardownMechanisms(
-	source: string,
-	findings: readonly ServerTeardownFinding[],
+	classification: readonly ServerTeardownFinding[],
+	servers: Iterable<string>,
 ): ServerTeardownMechanism[] {
-	const fresh = findUnclosedServerStarts("probe.test.ts", source);
-	const servers = new Set(findings.map((finding) => finding.server));
+	const wanted = new Set(servers);
 	const mechanisms = new Set<ServerTeardownMechanism>();
-	for (const finding of fresh) {
-		if (servers.has(finding.server)) mechanisms.add(finding.mechanism);
-	}
-	for (const finding of fresh) {
-		if (servers.has(finding.server) && finding.mechanism === "none") {
-			mechanisms.add("none");
-		}
+	for (const finding of classification) {
+		if (wanted.has(finding.server)) mechanisms.add(finding.mechanism);
 	}
 	return [...mechanisms].sort();
 }

@@ -45,11 +45,7 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: vi.fn(() => ({
-			isAvailableAsync: vi.fn(async () => true),
-			getCommand: vi.fn(() => "/fake/ruff"),
-		})),
-		resolveAvailableOrInstall: vi.fn(async () => "/fake/ruff"),
+		resolveToolCommandWithInstallFallback: vi.fn(async () => "/fake/ruff"),
 	}),
 );
 

@@ -1,3 +1,4 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -9,14 +10,9 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import {
-	createAvailabilityChecker,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-const swiftlint = createAvailabilityChecker("swiftlint", ".exe");
 
 /**
  * SwiftLint JSON output is a flat array of violation objects:
@@ -175,14 +171,9 @@ const swiftlintRunner: RunnerDefinition = {
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "swiftlint");
 
-		let cmd: string | null = null;
-		if (await swiftlint.isAvailableAsync(cwd)) {
-			cmd = swiftlint.getCommand(cwd);
-		} else {
-			cmd = await resolveToolCommandWithInstallFallback(cwd, "swiftlint");
-		}
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "swiftlint");
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip(cwd, { id: "swiftlint" });
 
 		const result = await safeSpawnAsync(
 			cmd,

@@ -189,6 +189,16 @@ The seam:
     The as-built carry refines two rules for it: a failed write's kept entry
     whose line it edited joins `unpos`, and the edit-scoped keep holds an
     `unpos` entry whatever the edit.
+  - #5727 (environment `PrimarySilent`; fix `CarryByServer`, pinned TRUE).
+    The fast runner hosts two servers, as the `lsp` runner hosts a primary
+    and the ast-grep auxiliary. On the outcome `"psilent"` the primary gives
+    no answer while the auxiliary answers the bytes: "b" and "u" are the
+    primary's findings and go unseen; "a" and "p" are the auxiliary's and are
+    judged. The runner as a whole has no verdict, so the write's lines stay
+    owed. `CarryByServer` keeps only the silent primary's recorded blockers
+    (`answeredServerIds`). FALSE is the code before #5727: it kept every
+    recorded blocker of the runner, so the auxiliary's fixed blocker pinned
+    the commit gate and replayed as "Still unfixed".
 
 ## Invariants
 
@@ -269,6 +279,8 @@ States are as TLC reported them with `-workers 1` (generated / distinct).
 | `CarryGateBSettle` | pass | 16437 / 1366 | The round-7 fix. A collect-later Gate B skip may settle, and the gated runner's lane may stay silent: nothing retires without a run that read the bytes. |
 | `MutSettleCover` | violated `RecordedKept` | 967 / 123 | The round-6 code (`SettleCoverKeep` FALSE). A settled Gate B skip retires a collect-later blocker the bytes still hold (verify probe P34). |
 | `MutRecordedRuns` | violated `ConclusiveRetires` | 1208 / 131 | The code before #4509 (`RecordedRuns` FALSE). A failed write keeps a's entry without a position, and Gate B's covered skip then keeps it outside the edit after its fix: a pin (verify probe P42). |
+| `CarryByServer` | pass | 160443 / 9894 | The #5727 fix. The fast runner's primary may be silent while its auxiliary answers: no fixed auxiliary blocker pins, and no recorded blocker of the silent primary leaves the record unseen. |
+| `MutCarryByServer` | violated `ConclusiveRetires` | 1353 / 151 | The code before #5727 (`CarryByServer` FALSE). A run with a silent primary keeps the auxiliary's fixed, answered blocker: a pin. |
 | `MutLaneVoids` | violated `RecordedKept` | 481 / 65 | The round-6 code (`LaneVoids` FALSE). With the server's host silent, the edit-scoped verdict retires a blocker on an edited line that still holds it (verify probe P33). |
 
 The `MutDeltaClear` trace is write, ignore, write:
@@ -318,6 +330,11 @@ Each switch has a config that flips when it is turned:
 - `EditScopedOwed`: `CarryGateB` to `MutEditScopedOwed`.
 - `LaneVoids`: `CarryGateB` to `MutLaneVoids`.
 - `SettleCoverKeep`: `CarryGateBSettle` to `MutSettleCover`.
+- `CarryByServer`: `CarryByServer` to `MutCarryByServer`. The fail-closed
+  direction is checked by hand: with `KP` keeping nothing on `"psilent"`,
+  `CarryByServer` is red on `RecordedKept` (2977 / 392): the silent
+  primary's blocker must stay.
+- `PrimarySilent`: `CarryInconclusive` to `CarryByServer` (both pass).
 - `RecordedRuns`: `CarryGateB` to `MutRecordedRuns`. `MutEditScopedKeep`,
   `MutLaneVoids` and `MutSettleCover` set it FALSE: with it TRUE their
   scenario (a covered skip over a gated record) cannot occur and they pass.

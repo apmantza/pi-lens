@@ -8,7 +8,12 @@ const safeSpawnAsync = vi.fn();
 const ensureTool = vi.fn();
 const getLinterPolicyForCwd = vi.fn();
 
-vi.mock("../../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
+vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/safe-spawn.js")
+	>()),
+	safeSpawnAsync,
+}));
 vi.mock("../../../../clients/installer/index.js", () => ({ ensureTool }));
 vi.mock("../../../../clients/tool-policy.js", () => ({
 	getLinterPolicyForCwd,
@@ -20,10 +25,10 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: (command: string) => ({
-			isAvailableAsync: async () => true,
-			getCommand: () => command,
-		}),
+		// The runner resolves through the registry resolver, which binds the real
+		// checker inside runner-helpers, so a checker double never reaches it
+		// (#5410 S2). Same answer, at the seam the runner now calls.
+		resolveToolCommandWithInstallFallback: async () => "tflint",
 	}),
 );
 

@@ -191,7 +191,8 @@ const spawnVerdict = vi.hoisted(() => ({
 	// Undefined by default: every other test in this file is unaffected.
 	onCall: undefined as ((command: string, args: string[]) => void) | undefined,
 }));
-vi.mock("../../../clients/safe-spawn.js", () => ({
+vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal()),
 	safeSpawn: vi.fn(() => ({ stdout: "", stderr: "", status: 0 })),
 	safeSpawnAsync: async (
 		command: string,
@@ -268,6 +269,7 @@ import {
 	checkProbeCache,
 	ensureTool,
 	getToolPath,
+	installTool,
 	resetProbeCacheStateForTesting,
 } from "../../../clients/installer/index.js";
 
@@ -963,6 +965,11 @@ describe("install lock lost mid-install aborts before a second write (#3515)", (
 				(group) => group.kind === "install-lock-lost-mid-install",
 			)?.count,
 		).toBe(1);
+		expect(
+			getDegradationSummary().find(
+				(group) => group.kind === "managed-tool-install",
+			),
+		).toBeUndefined();
 	});
 
 	// Mutation / red-first: with the competing generation removed, the SAME
@@ -998,4 +1005,24 @@ describe("install lock lost mid-install aborts before a second write (#3515)", (
 			),
 		).toBeUndefined();
 	});
+});
+
+describe("package-manager exception delivery (#5574 R2-3)", () => {
+	it.each([
+		["npm", "stylelint"],
+		["gem", "rubocop"],
+	] as const)(
+		"does not publish a managed-tool-install row for %s failure",
+		async (_strategy, toolId) => {
+			spawnVerdict.status = 1;
+			spawnVerdict.stderr = "deliberate package-manager failure";
+
+			await expect(installTool(toolId)).resolves.toBe(false);
+			expect(
+				getDegradationSummary().find(
+					(group) => group.kind === "managed-tool-install",
+				),
+			).toBeUndefined();
+		},
+	);
 });

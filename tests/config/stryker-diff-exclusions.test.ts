@@ -9,6 +9,7 @@ import {
 } from "../support/sweep-kit.js";
 import { mutationLaneExclusion } from "../../scripts/lib/stryker-diff.mjs";
 import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
+import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 const REGISTRY_PATH = path.join(
@@ -56,6 +57,25 @@ describe("mutation-lane exclusion registry", () => {
 		},
 		TREE_WALK_TIMEOUT_MS,
 	);
+
+	it("reds a planted registry row no marker backs (#5072)", () => {
+		// The registry's row-without-producer direction, through the same audit
+		// the lockstep case above runs: a row for a file that carries no marker.
+		const planted = "tests/clients/5072-gone-mutation-marker.test.ts";
+		const audit = auditRegistry({
+			sweepName: "mutation-lane exclusion markers",
+			flagged: [],
+			registered: [],
+			exemptions: { [planted]: "a planted row for the #5072 cell" },
+			scannedCount: 1,
+			minScanned: 1,
+		});
+		expectPlantedStaleRow({
+			baseline: "tests/config/stryker-diff-exclusions.json",
+			rowKey: planted,
+			verdict: audit.problems,
+		});
+	});
 
 	it("crosses a real registry row through the selector seam", () => {
 		const file = "tests/mcp/server.smoke.test.ts";

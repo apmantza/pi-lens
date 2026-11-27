@@ -997,12 +997,12 @@ export function findNearestContaining(
  * to read on its own, so pi-lens silently fell back to (or, for typos,
  * injected and let its own shipped `_typos.toml` merge over) the user's
  * config where the tool's own resolver would have honored it. `php-cs-fixer`
- * makes the same mismatch concrete: its detection gates
- * (`hasPhpCsFixerConfig` via `findNearestContaining`, `phpCsFixerFormatter
- * .detect` via its own `findUp`) are both unceilinged, so a ceilinged
- * carriage here disagreed with its own gate — "config exists" from the gate,
- * "config not found" from the resolver — and dropped the very `--config`
- * argv #2472 exists to carry. Pass `options.homeDir` only when a caller
+ * makes the same mismatch concrete: its detection gate (`hasToolConfig(
+ * "php-cs-fixer")`, which visits `$HOME` and stops there since #5408) must
+ * agree with the carriage for a config AT `$HOME`, so a ceilinged carriage
+ * disagreed with its own gate — "config exists" from the gate, "config not
+ * found" from the resolver — and dropped the very `--config` argv #2472
+ * exists to carry. Pass `options.homeDir` only when a caller
  * affirmatively wants the ceiling (a config found at or above THAT directory
  * is never returned); omitting it walks all the way to the filesystem root,
  * matching `findNearestContaining`'s unceilinged behavior and every
@@ -1299,10 +1299,33 @@ export function homeRelativePath(
  * realpath, so it could only repeat the first.
  */
 export function isUnderDir(child: string, parent: string): boolean {
+	if (backslashIsNameChar(child, parent)) {
+		return (
+			isWithinForm(path.resolve(child), path.resolve(parent)) ||
+			isWithinIdentity(child, parent)
+		);
+	}
 	if (isWithinForm(normalizePathSpelling(child), normalizePathSpelling(parent)))
 		return true;
 	if (process.platform === "win32") return false;
 	return isWithinIdentity(child, parent);
+}
+
+/**
+ * A POSIX host reads a backslash in a non-Windows-shaped value as a file NAME
+ * character, so the folds below must not turn it into a separator: a sibling
+ * directory literally named `<root>\evil` is not `<root>/evil`. The value's
+ * SHAPE selects the fold, never the host (shapes 2 and 35, #4876 review r2 F1,
+ * which fixed `isWithinPathForm` and left this seam folding). A Windows-shaped
+ * value (drive letter, UNC) keeps the fold on every host.
+ */
+function backslashIsNameChar(child: string, parent: string): boolean {
+	return (
+		process.platform !== "win32" &&
+		(child.includes("\\") || parent.includes("\\")) &&
+		!isWindowsPath(child) &&
+		!isWindowsPath(parent)
+	);
 }
 
 /**
@@ -1312,6 +1335,9 @@ export function isUnderDir(child: string, parent: string): boolean {
  * must stay outside (a chart's template tree, #2556).
  */
 export function isWithinIdentity(child: string, parent: string): boolean {
+	if (backslashIsNameChar(child, parent)) {
+		return isWithinForm(realpathOrResolve(child), realpathOrResolve(parent));
+	}
 	return isWithinForm(normalizeFilePath(child), normalizeFilePath(parent));
 }
 
@@ -1325,6 +1351,18 @@ export function isWithinForm(child: string, parent: string): boolean {
 	// Ensure parent ends with / for prefix matching
 	const parentPrefix = parent.endsWith("/") ? parent : `${parent}/`;
 	return child === parent || child.startsWith(parentPrefix);
+}
+
+/**
+ * The same directory, or one contains the other, on segment boundaries
+ * (`/repo-backup` never overlaps `/repo`): {@link isWithinForm} both ways, for
+ * two paths already in one form. The live clients an install at a root
+ * restarts (`ClientRegistry.restartPrimaryClientsUnder`) and the clients whose
+ * epoch a first look names (`clients/out-of-band-changes.ts`, #5501) are one
+ * set by this test.
+ */
+export function rootsOverlap(a: string, b: string): boolean {
+	return isWithinForm(a, b) || isWithinForm(b, a);
 }
 
 /** True when a path is outside the session's project root. */

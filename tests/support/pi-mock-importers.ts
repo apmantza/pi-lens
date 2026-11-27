@@ -57,6 +57,10 @@ export const PI_MOCK_IMPORTERS: Readonly<Record<string, string>> = {
 	"index-4504-opaque-prescan-root-witness.test.ts": "internal-seam",
 	"index-drain-refresh-straddle.test.ts": "internal-seam",
 	"index-integration.test.ts": "internal-seam",
+	// Seeds the process-global widget store and the session sidecar that the
+	// extension's adopt path reads, then observes the status port the factory
+	// publishes through.
+	"index-issues-status.test.ts": "internal-seam",
 	"index-loop-block-wiring.test.ts": "internal-seam",
 	"index-lsp-idle-reset.test.ts": "internal-seam",
 	"index-lsp-config-root-eviction.test.ts": "internal-seam",

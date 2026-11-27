@@ -1,8 +1,11 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
+import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
-import { pathsEqual } from "../../path-utils.js";
+import { pathsEqual, relativeInside } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
-import { logRunnerAdvisoryOnce } from "../../tool-cwd.js";
-import { getLinterPolicyForCwd, hasYamllintConfig } from "../../tool-policy.js";
+import { logRunnerAdvisoryOnce, resolveRunnerCwd } from "../../tool-cwd.js";
+import { getLinterPolicyForCwd } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -10,18 +13,10 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import {
-	createAvailabilityChecker,
-	resolveRunnerCwd,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-const yamllint = createAvailabilityChecker("yamllint", ".exe");
-
-export { hasYamllintConfig };
 
 function parseYamllintParsable(
 	raw: string,
@@ -64,9 +59,9 @@ const yamllintRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "yamllint");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("yamllint")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
-		const hasConfig = hasYamllintConfig(cwd);
+		const hasConfig = hasToolConfig("yamllint", cwd);
 		if (!hasConfig) {
 			logRunnerAdvisoryOnce(
 				ctx,
@@ -76,19 +71,36 @@ const yamllintRunner: RunnerDefinition = {
 			);
 		}
 
-		let cmd: string | null = null;
-		if (await yamllint.isAvailableAsync(cwd)) {
-			cmd = yamllint.getCommand(cwd);
-		} else {
-			cmd = await resolveToolCommandWithInstallFallback(cwd, "yamllint");
-		}
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "yamllint");
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip(cwd, { id: "yamllint" });
 
-		const result = await safeSpawnAsync(cmd, ["-f", "parsable", ctx.filePath], {
-			cwd,
-			timeout: 15000,
-		});
+		// #5544: the CLI matches its config's `ignore` globs against the path string
+		// it is handed, so an absolute argument lets a glob that names an ANCESTOR of
+		// the file exclude the file from its own lint — a lane under
+		// `<scratch>/.claude/worktrees/lane1` with a `.yamllint` of `ignore: .claude/`
+		// answered "no files selected", exit 0, and the runner reported a silent
+		// clean. The spawn cwd is the project, so the argument is the
+		// project-relative path, actionlint's form
+		// (clients/dispatch/runners/actionlint.ts); a dispatched file outside the
+		// project keeps today's absolute form, as it has no project-relative spelling.
+		const targetRel = relativeInside(cwd, ctx.filePath) ?? ctx.filePath;
+
+		// #5544 round 2: the `--` is the price of a relative argument. A root-level
+		// file named `-a.yml` reached argparse as an unknown option, so yamllint
+		// answered `one of the arguments FILE_OR_DIR - is required` and exited 2 — a
+		// visible skipped run, never the file's findings. The option terminator makes
+		// argparse stop reading flags, and it is inert for every ordinary name.
+		// (Probed: `yamllint -f parsable -a.yml` exit 2, no lint; `-- -a.yml` reports
+		// document-start and trailing-spaces.)
+		const result = await safeSpawnAsync(
+			cmd,
+			["-f", "parsable", "--", targetRel],
+			{
+				cwd,
+				timeout: 15000,
+			},
+		);
 
 		// #1816: this runner read `result.status` zero times, so a yamllint
 		// that rejected its config reported a clean YAML file.
@@ -110,6 +122,8 @@ const yamllintRunner: RunnerDefinition = {
 				// EXIT TABLE (yamllint 1.35 docs https://yamllint.readthedocs.io/en/stable/): 0 clean; 1 findings; 2 error; other nonzero rejected.
 				exitCodes: { ran: [1, 2] },
 			},
+			// ADR 0009: the finding is attributed to the dispatched path; the parser
+			// resolves the tool's project-relative report against the spawn cwd.
 			(out) => parseYamllintParsable(out, ctx.filePath, cwd),
 			{ parseOutput: raw },
 		);

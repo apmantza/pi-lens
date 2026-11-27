@@ -1,8 +1,9 @@
 /**
  * #4414 F3: `where` (Windows) prints one match per line with CRLF endings, and
  * `where tsc` lists both `tsc` and `tsc.cmd` for an npm-global install.
- * `findCommandAsync` and its sync twin split on `"\n"` only, so the first match
- * kept a trailing `\r` and `realpath` of it rejected, which the TypeScript
+ * `findCommandAsync` split on `"\n"` only (its sync twin, deleted in #5410 S5,
+ * did too), so the first match kept a trailing `\r` and `realpath` of it
+ * rejected, which the TypeScript
  * server lookup read as "no compiler". Only the child-process boundary is
  * doubled; the output is the CRLF text `where` prints.
  */
@@ -20,8 +21,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 	return { ...actual, spawn: spawnMock, spawnSync: spawnSyncMock };
 });
 
-const { findCommand, findCommandAsync } =
-	await import("../../clients/safe-spawn.js");
+const { findCommandAsync } = await import("../../clients/safe-spawn.js");
 const { resetProjectTrust, setProjectTrustState } =
 	await import("../../clients/project-trust.js");
 
@@ -38,18 +38,7 @@ afterEach(() => {
 	resetProjectTrust();
 });
 
-describe("findCommand keeps the first match free of CRLF (#4414)", () => {
-	it("sync: returns the first `where` line without a trailing carriage return", () => {
-		spawnSyncMock.mockReturnValue({
-			stdout: Buffer.from(WHERE_OUTPUT),
-			stderr: Buffer.from(""),
-			status: 0,
-			error: undefined,
-		});
-
-		expect(findCommand("tsc")).toBe(FIRST_MATCH);
-	});
-
+describe("findCommandAsync keeps the first match free of CRLF (#4414)", () => {
 	it("async: returns the first `where` line without a trailing carriage return", async () => {
 		const finder = makeFakeChild(4243);
 		spawnMock.mockImplementation((command: string) =>

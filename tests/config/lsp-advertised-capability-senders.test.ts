@@ -197,6 +197,11 @@ const DISPOSITIONS: Record<string, Disposition> = {
 		kind: "modifier",
 		of: "textDocument/documentSymbol",
 	},
+	// #5476: this changes the response shape of the existing request.
+	"textDocument.documentSymbol.hierarchicalDocumentSymbolSupport": {
+		kind: "modifier",
+		of: "textDocument/documentSymbol",
+	},
 	"textDocument.documentSymbol": {
 		kind: "sends",
 		method: "textDocument/documentSymbol",
@@ -237,6 +242,12 @@ const DISPOSITIONS: Record<string, Disposition> = {
 	"textDocument.publishDiagnostics": {
 		kind: "consumes",
 		method: "textDocument/publishDiagnostics",
+	},
+	// #5487: the readiness notice rust-analyzer sends only to a client that asks.
+	experimental: { kind: "namespace" },
+	"experimental.serverStatusNotification": {
+		kind: "consumes",
+		method: "experimental/serverStatus",
 	},
 };
 

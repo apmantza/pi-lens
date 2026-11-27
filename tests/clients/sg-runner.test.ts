@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { capKilledSpawnResult } from "../support/spawn-shapes.js";
 import { removeTempDirSync } from "./test-utils.js";
+import { resetDegradationLedger } from "../../clients/degradation-ledger.js";
 import {
 	resetProjectTrust,
 	setProjectTrustState,
@@ -358,6 +359,81 @@ describe("SgRunner", () => {
 			}
 		});
 
+		// #5545: the npx child remains isolated, but a tree with no repository
+		// marker must retain the pre-anchor project globs so ignored directories
+		// do not enter the result.
+		it("retains project excludes on the npx tier over a tree with no git marker (#5545)", async () => {
+			const env = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-sg-unanchored-"),
+			);
+			const piLensHome = path.join(env, "pi-lens-home");
+			vi.stubEnv("PI_LENS_HOME", piLensHome);
+			const scanArgs: string[][] = [];
+			safeSpawnAsync.mockImplementation(async (cmd: string, args: string[]) => {
+				if (cmd !== "npx")
+					return { status: 1, error: undefined, stdout: "", stderr: "" };
+				if (args.includes("--version"))
+					return { status: 0, stdout: "ast-grep 0.45.3", stderr: "" };
+				scanArgs.push(args);
+				return { status: 1, error: undefined, stdout: "", stderr: "" };
+			});
+			// The walk `sgScanAnchor` takes has to be able to miss a marker, so the
+			// fixture asserts its own ancestors carry none: a stray `.git` above the
+			// pinned tmp root is a host fault this cell names instead of folding in.
+			const markerAbove = (dir: string): string | undefined => {
+				let current = path.resolve(dir);
+				for (;;) {
+					if (fs.existsSync(path.join(current, ".git"))) return current;
+					const parent = path.dirname(current);
+					if (parent === current) return undefined;
+					current = parent;
+				}
+			};
+			try {
+				const rule =
+					"id: r\nlanguage: TypeScript\nrule: { kind: function_declaration }\n";
+				for (const withMarker of [true, false]) {
+					const tree = path.join(env, withMarker ? "repo" : "plain");
+					fs.mkdirSync(path.join(tree, "node_modules"), { recursive: true });
+					fs.writeFileSync(path.join(tree, ".gitignore"), "node_modules/\n");
+					if (withMarker) fs.mkdirSync(path.join(tree, ".git"));
+					else {
+						// #5545 r2 N3: this used to `continue` past the marker-less half when
+						// a `.git` sat above the temp root, so the cell went green with the
+						// npx tier's project globs unchecked (mutation: marker-less branch
+						// forced to `[]`, green). The half needs a temp root with no repository
+						// above it. The real-binary cells use `setupTestEnvironment`, which
+						// plants a `.git`, so this mocked argv cell is the only one that
+						// reaches the marker-less branch.
+						const ancestor = markerAbove(tree);
+						expect(
+							ancestor,
+							`TMPDIR ${os.tmpdir()} sits under the repository at ${ancestor}: point TMPDIR outside it so the marker-less half can run`,
+						).toBeUndefined();
+					}
+					scanArgs.length = 0;
+					resetDegradationLedger();
+					const { SgRunner } = await import("../../clients/sg-runner.js");
+					const runner = new SgRunner();
+					expect(await runner.ensureAvailable()).toBe(true);
+					await runner.tempScanDetailedAsync(tree, "r", rule);
+					expect(scanArgs.length).toBeGreaterThan(0);
+					for (const args of scanArgs) {
+						expect(args).toContain(path.resolve(tree));
+					}
+					if (withMarker) {
+						expect(scanArgs.flat()).not.toContain("--globs");
+					} else {
+						expect(scanArgs.flat()).toContain("--globs");
+						expect(scanArgs.flat()).toContain("!node_modules/**");
+					}
+				}
+			} finally {
+				vi.unstubAllEnvs();
+				removeTempDirSync(env);
+			}
+		});
+
 		// #5247: the temp scans ran the module-level sweep's command, which falls
 		// back to `npx --no ...` before the module sweep ran and appended the npx
 		// preamble to a resolved bare binary after it. A structural ast_grep_replace
@@ -676,6 +752,127 @@ describe("SgRunner", () => {
 				expect(args).toContain("--globs");
 				expect(args).toContain("!profiles/**");
 				expect(args).toContain("!**/*.snap");
+				// #5545: those patterns only mean what the project meant when the
+				// child runs AT the scanned tree with the scan path spelled for it.
+				expect(args.at(-1)).toBe(".");
+				expect((safeSpawnAsync.mock.calls[0][2] as { cwd?: string }).cwd).toBe(
+					root,
+				);
+			} finally {
+				removeTempDirSync(root);
+			}
+		});
+
+		it("anchors a missing path below its nearest existing directory (#5545)", async () => {
+			const env = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-sg-missing-"));
+			const managed = path.join(env, "ast-grep");
+			const scanPath = path.join(env, "missing", "nested", "file.ts");
+			const calls: Array<{ args: string[]; cwd?: string }> = [];
+			ensureTool.mockResolvedValue(managed);
+			safeSpawnAsync.mockImplementation(
+				async (cmd: string, args: string[], options?: { cwd?: string }) => {
+					if (cmd === managed && args.includes("--version"))
+						return { status: 0, stdout: "ast-grep 0.51.1", stderr: "" };
+					calls.push({ args, cwd: options?.cwd });
+					// The real CLI (ast-grep 0.51.1) answers a scan path that does not
+					// exist with exit 0 and `[]` on stdout; the reason goes to stderr and
+					// names the argument it was given. Captured from `ast-grep scan --json
+					// missing/nested/file.ts` run in the anchored cwd:
+					//   ERROR: missing/nested/file.ts: No such file or directory (os error 2)
+					//   []
+					return {
+						status: 0,
+						stdout: "[]",
+						stderr: `ERROR: ${args.at(-1)}: No such file or directory (os error 2)`,
+					};
+				},
+			);
+			try {
+				const { SgRunner } = await import("../../clients/sg-runner.js");
+				const result = await new SgRunner().tempScanDetailedAsync(
+					scanPath,
+					"missing",
+					"id: missing\nlanguage: TypeScript\nrule: { kind: function_declaration }\n",
+				);
+				expect(calls).toHaveLength(1);
+				expect(calls[0]?.cwd).toBe(env);
+				expect(calls[0]?.args.at(-1)).toBe(path.relative(env, scanPath));
+				// The CLI's stderr line is not an error: the scan answers no matches, as
+				// master did for a missing path (#5545 N3).
+				expect(result.matches).toEqual([]);
+				expect(result.error).toBeUndefined();
+				expect(result.failure).toBeUndefined();
+			} finally {
+				removeTempDirSync(env);
+			}
+		});
+
+		it("anchors an explicit file at its containing directory (#5545)", async () => {
+			const env = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-sg-file-"));
+			const managed = path.join(env, "ast-grep");
+			const file = path.join(env, "src", "file.ts");
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			fs.writeFileSync(file, "function answer() { return 42; }\n");
+			const calls: Array<{ args: string[]; cwd?: string }> = [];
+			ensureTool.mockResolvedValue(managed);
+			safeSpawnAsync.mockImplementation(
+				async (cmd: string, args: string[], options?: { cwd?: string }) => {
+					if (cmd === managed && args.includes("--version"))
+						return { status: 0, stdout: "ast-grep 0.51.1", stderr: "" };
+					calls.push({ args, cwd: options?.cwd });
+					return { status: 0, stdout: "[]", stderr: "" };
+				},
+			);
+			try {
+				const { SgRunner } = await import("../../clients/sg-runner.js");
+				const result = await new SgRunner().tempScanDetailedAsync(
+					file,
+					"file",
+					"id: file\nlanguage: TypeScript\nrule: { kind: function_declaration }\n",
+				);
+				expect(calls).toHaveLength(1);
+				expect(calls[0]?.cwd).toBe(path.dirname(file));
+				expect(calls[0]?.args.at(-1)).toBe("file.ts");
+				expect(result.error).toBeUndefined();
+			} finally {
+				removeTempDirSync(env);
+			}
+		});
+
+		// #5545: the anchored child prints each match path RELATIVE to the scan
+		// root, while `matchedFilePath`, the replace root guard and the mutation
+		// bridge all key the written set off an absolute path. The payload below is
+		// the real stdout of `ast-grep scan --json src` (0.51.1) started inside the
+		// scanned tree, not a hand-written shape.
+		it("folds the anchored child's relative match paths back to the scan root (#5545)", async () => {
+			const root = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-sg-relpath-"),
+			);
+			try {
+				fs.mkdirSync(path.join(root, "src"), { recursive: true });
+				fs.writeFileSync(
+					path.join(root, "src", "a.js"),
+					"const answer = 42;\nexport default answer;\n",
+				);
+				safeSpawnAsync.mockResolvedValueOnce({
+					status: 0,
+					error: null,
+					stdout:
+						'[{"text":"const answer = 42;","range":{"byteOffset":{"start":0,"end":18},"start":{"line":0,"column":0},"end":{"line":0,"column":18}},"file":"src/a.js","lines":"const answer = 42;","charCount":{"leading":0,"trailing":0},"language":"JavaScript","metaVariables":{"single":{"NAME":{"text":"answer","range":{"byteOffset":{"start":6,"end":12},"start":{"line":0,"column":6},"end":{"line":0,"column":12}}}},"multi":{},"transformed":{}},"ruleId":"fix5545","severity":"warning","note":null,"message":"Replace the 42 literal","labels":[{"text":"const answer = 42;","range":{"byteOffset":{"start":0,"end":18},"start":{"line":0,"column":0},"end":{"line":0,"column":18}},"style":"primary"}]}]',
+					stderr: "",
+				});
+
+				const { SgRunner } = await import("../../clients/sg-runner.js");
+				const runner = new SgRunner();
+				const scan = await runner.tempScanDetailedAsync(
+					root,
+					"fix5545",
+					'id: fix5545\nlanguage: javascript\nrule: { pattern: "const $NAME = 42" }\n',
+				);
+
+				expect(scan.matches.map((match) => match.file)).toEqual([
+					path.join(root, "src", "a.js"),
+				]);
 			} finally {
 				removeTempDirSync(root);
 			}

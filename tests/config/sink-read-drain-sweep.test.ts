@@ -497,8 +497,10 @@ function guardedAlike(node: SgNode, pair: SgNode): boolean {
 	}
 }
 
-const nameNeedle = (name: string, member: boolean): RegExp =>
+const nameNeedleOf = (name: string, member: boolean): RegExp =>
 	new RegExp(`${member ? "\\b" : "(?<![\\w$.])"}${escapeRegExp(name)}\\b`);
+
+const nameNeedle = nameNeedleOf;
 
 interface Binding {
 	name: string;
@@ -519,8 +521,27 @@ function scanUndrainedSinkReads(
 		for (const symbol of sink.pathSymbols) symbolOwner.set(symbol, sink.module);
 		for (const base of sink.basenames) basenameOwner.set(base, sink.module);
 	}
-	const literalNeedle = (base: string): RegExp =>
-		new RegExp(`["'\`]${escapeRegExp(base)}["'\`]`);
+	// Needles are pure in their arguments; build each once per scan, not once
+	// per `sinksIn` call.
+	const literalNeedles = new Map<string, RegExp>();
+	const literalNeedle = (base: string): RegExp => {
+		let needle = literalNeedles.get(base);
+		if (!needle) {
+			needle = new RegExp(`["'\`]${escapeRegExp(base)}["'\`]`);
+			literalNeedles.set(base, needle);
+		}
+		return needle;
+	};
+	const nameNeedles = new Map<string, RegExp>();
+	const nameNeedle = (name: string, member: boolean): RegExp => {
+		const key = `${member ? "m" : "b"}${name}`;
+		let needle = nameNeedles.get(key);
+		if (!needle) {
+			needle = nameNeedleOf(name, member);
+			nameNeedles.set(key, needle);
+		}
+		return needle;
+	};
 	// Cheap admission on code text: no sink named, nothing to parse.
 	if (
 		![...symbolOwner.keys()].some((s) => nameNeedle(s, true).test(blanked)) &&
@@ -559,7 +580,15 @@ function scanUndrainedSinkReads(
 		hoisted: boolean;
 		read: boolean;
 	}
-	const readAliasDecls: ReadAliasDecl[] = [];
+	// Indexed by name: `readAliasAt` is asked about every call's callee, and
+	// almost none of those names is declared at all. Insertion order inside a
+	// name is the declaration order the unindexed array had.
+	const readAliasDecls = new Map<string, ReadAliasDecl[]>();
+	const addReadAliasDecl = (decl: ReadAliasDecl): void => {
+		const known = readAliasDecls.get(decl.name);
+		if (known) known.push(decl);
+		else readAliasDecls.set(decl.name, [decl]);
+	};
 	const rootRange = root.range();
 	const spanOf = (
 		node: SgNode | null | undefined,
@@ -612,13 +641,14 @@ function scanUndrainedSinkReads(
 	 * position (Greptile r7 P1: a `var` alias before the read was hidden).
 	 */
 	const readAliasAt = (name: string, at: SgNode): ReadAliasDecl | undefined => {
+		const named = readAliasDecls.get(name);
+		if (named === undefined) return undefined;
 		const position = at.range().start.index;
 		let crossedFunction = false;
 		for (let current = at.parent(); current; current = current.parent()) {
 			const span = spanOf(current);
-			const here = readAliasDecls.filter(
+			const here = named.filter(
 				(decl) =>
-					decl.name === name &&
 					decl.scopeStart === span.start &&
 					decl.scopeEnd === span.end &&
 					(crossedFunction || decl.hoisted || decl.declaredAt <= position),
@@ -648,7 +678,7 @@ function scanUndrainedSinkReads(
 						? value.text()
 						: undefined
 					: readCalleeOf(value);
-		readAliasDecls.push({
+		addReadAliasDecl({
 			name: name.text(),
 			declaredAt: declarator.range().start.index,
 			...scopeFields(bindingScopeSpan(declarator)),
@@ -669,7 +699,7 @@ function scanUndrainedSinkReads(
 	})) {
 		const name = fn.field("name");
 		if (name?.kind() === "identifier")
-			readAliasDecls.push({
+			addReadAliasDecl({
 				name: name.text(),
 				declaredAt: fn.range().start.index,
 				...scopeFields(spanOf(lexicalScopeOf(fn))),
@@ -679,7 +709,7 @@ function scanUndrainedSinkReads(
 		for (const parameter of fn.field("parameters")?.namedChildren() ?? []) {
 			const pattern = parameter.field("pattern") ?? parameter;
 			if (pattern.kind() !== "identifier") continue;
-			readAliasDecls.push({
+			addReadAliasDecl({
 				name: pattern.text(),
 				declaredAt: parameter.range().start.index,
 				...scopeFields(spanOf(lexicalScopeOf(parameter))),
@@ -747,27 +777,53 @@ function scanUndrainedSinkReads(
 	const functionDecls = root.findAll({
 		rule: { kind: "function_declaration" },
 	});
-	for (let pass = 0; pass < 3; pass++) {
-		for (const decl of declarators) {
-			const name = decl.field("name");
-			const value = decl.field("value");
-			if (name?.kind() !== "identifier" || !value || readsInside(value))
-				continue;
-			const start = value.range().start.index;
-			const end = value.range().end.index;
-			const owners = sinksIn(start, end);
-			if (owners.size > 0) bind(sinkAliases, name.text(), decl, owners);
-			else if (namesRoot(start, end))
-				bind(rootAliases, name.text(), decl, new Set());
+	// What the three passes ask of each declarator and function never changes
+	// between passes (only the alias tables grow), so read it from the tree
+	// once: the name, the value's span, and the non-reading returns' spans.
+	const aliasCandidates: Array<{
+		decl: SgNode;
+		name: string;
+		start: number;
+		end: number;
+	}> = [];
+	for (const decl of declarators) {
+		const name = decl.field("name");
+		const value = decl.field("value");
+		if (name?.kind() !== "identifier" || !value || readsInside(value)) continue;
+		const range = value.range();
+		aliasCandidates.push({
+			decl,
+			name: name.text(),
+			start: range.start.index,
+			end: range.end.index,
+		});
+	}
+	const functionCandidates: Array<{
+		fn: SgNode;
+		name: string;
+		returns: Array<{ start: number; end: number }>;
+	}> = [];
+	for (const fn of functionDecls) {
+		const name = fn.field("name")?.text();
+		if (!name) continue;
+		const returns: Array<{ start: number; end: number }> = [];
+		for (const ret of fn.findAll({ rule: { kind: "return_statement" } })) {
+			if (readsInside(ret)) continue;
+			const range = ret.range();
+			returns.push({ start: range.start.index, end: range.end.index });
 		}
-		for (const fn of functionDecls) {
-			const name = fn.field("name")?.text();
-			if (!name) continue;
+		functionCandidates.push({ fn, name, returns });
+	}
+	for (let pass = 0; pass < 3; pass++) {
+		for (const { decl, name, start, end } of aliasCandidates) {
+			const owners = sinksIn(start, end);
+			if (owners.size > 0) bind(sinkAliases, name, decl, owners);
+			else if (namesRoot(start, end)) bind(rootAliases, name, decl, new Set());
+		}
+		for (const { fn, name, returns } of functionCandidates) {
 			const owners = new Set<string>();
-			for (const ret of fn.findAll({ rule: { kind: "return_statement" } })) {
-				if (readsInside(ret)) continue;
-				const range = ret.range();
-				for (const owner of sinksIn(range.start.index, range.end.index)) {
+			for (const ret of returns) {
+				for (const owner of sinksIn(ret.start, ret.end)) {
 					owners.add(owner);
 				}
 			}

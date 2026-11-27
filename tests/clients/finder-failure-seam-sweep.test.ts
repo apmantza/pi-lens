@@ -72,11 +72,6 @@ const FINDER_FILES: ReadonlyArray<readonly [string, FinderForm, string]> = [
 		"`which()` latches a per-command verdict and replays its cooldown",
 	],
 	[
-		"clients/lsp/jvm-runtime.ts",
-		"seam",
-		"`runJavaProbe` latches the java verdict",
-	],
-	[
 		"clients/package-manager.ts",
 		"seam",
 		"`probeAvailability` latches one verdict per package manager",
@@ -84,12 +79,7 @@ const FINDER_FILES: ReadonlyArray<readonly [string, FinderForm, string]> = [
 	[
 		"clients/safe-spawn.ts",
 		"status-only",
-		"`findCommand*` and `isCommandAvailableAsync` reduce each call to a path or a boolean",
-	],
-	[
-		"clients/test-runner-client.ts",
-		"status-only",
-		"the pytest-on-PATH probe reads `status === 0` per call",
+		"`findCommandAsync` and `isCommandAvailableAsync` reduce each call to a path or a boolean",
 	],
 	[
 		"scripts/smoke-availability-lifecycle.mjs",

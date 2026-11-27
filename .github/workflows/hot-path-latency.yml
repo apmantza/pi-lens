@@ -2,7 +2,8 @@ name: Hot-path latency
 
 # #4363: times session_start, dispatch and the diagnostics-cache replay, and
 # (#4905) three bash tool_calls at a non-git home over the opaque file cap
-# (row tool_call_bash_home_overcap), on the
+# (row tool_call_bash_home_overcap), and (#5087) a first-read tool_call and an
+# edit's tool_result (rows tool_call_first_touch, tool_result_edit), on the
 # checked-out commit and on its first parent, and fails only on a regression
 # that is both statistically significant and above a stated threshold. A pull
 # request checks out GitHub's merge of its head into master's tip, so the first
@@ -89,6 +90,13 @@ concurrency:
   group: hot-path-latency-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# #5420: one transient registry 5xx must not red npm ci or npx; npm's default
+# is 2 retries. The gate (workflow-level, literal, floored) is
+# tests/config/release-download-helper-workflow.test.ts.
+env:
+  npm_config_fetch_retries: 5
+  npm_config_fetch_retry_maxtimeout: 120000
+
 jobs:
   latency:
     name: Hot-path latency (advisory)
@@ -108,6 +116,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: true
           node-version: "22"
 
       # hotpath is `true` for a push, a manual run and every doubt (an

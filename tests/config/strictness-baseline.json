@@ -7,7 +7,7 @@
 		"vitest.mutation.config.ts": "The per-test mutation campaign's test runner config (#4365): it never ships, and the spike measures production code."
 	},
 	"tsconfig.strict-indexed.json": {
-		"clients": 397,
+		"clients": 396,
 		"clients/config-core": 18,
 		"clients/dispatch": 27,
 		"clients/dispatch/rules": 12,
@@ -24,11 +24,11 @@
 		"tools": 4
 	},
 	"tsconfig.strict-optional.json": {
-		"clients": 330,
+		"clients": 329,
 		"clients/config-core": 1,
 		"clients/dispatch": 20,
 		"clients/dispatch/facts": 1,
-		"clients/dispatch/runners": 30,
+		"clients/dispatch/runners": 29,
 		"clients/dispatch/runners/utils": 9,
 		"clients/dispatch/utils": 2,
 		"clients/installer": 25,

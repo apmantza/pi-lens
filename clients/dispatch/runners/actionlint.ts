@@ -1,3 +1,4 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import path from "node:path";
 import { pathsEqual, toPosix } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -9,13 +10,8 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import {
-	createAvailabilityChecker,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
-
-const actionlint = createAvailabilityChecker("actionlint", ".exe");
 
 type ActionlintIssue = {
 	message?: string;
@@ -109,13 +105,9 @@ const actionlintRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "actionlint");
 		let cmd: string | null = null;
 
-		if (await actionlint.isAvailableAsync(cwd)) {
-			cmd = actionlint.getCommand(cwd);
-		} else {
-			cmd = await resolveToolCommandWithInstallFallback(cwd, "actionlint");
-		}
+		cmd = await resolveToolCommandWithInstallFallback(cwd, "actionlint");
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip(cwd, { id: "actionlint" });
 
 		const relativeFilePath = path.relative(cwd, ctx.filePath) || ctx.filePath;
 		const result = await safeSpawnAsync(

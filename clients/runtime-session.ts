@@ -7,6 +7,7 @@ import { rotateMessageEndAttribution } from "./message-end-attribution.js";
 import type { CacheManager } from "./cache-manager.js";
 import { createDeadline, yieldIfOverBudget } from "./cooperative-budget.js";
 import { bounded, withBudget } from "./deadline-utils.js";
+import { nonNegativeIntEnv } from "./env-utils.js";
 import type { DeadCodeResult } from "./dead-code-client.js";
 import { deadCodeIssueCount } from "./dead-code-client.js";
 import { logDeadCodeScan } from "./dead-code-logger.js";
@@ -16,10 +17,10 @@ import {
 	resetDegradationLedger,
 } from "./degradation-ledger.js";
 import { resetDeferredDispositions } from "./diagnostic-dispositions.js";
+import { resetBlockerReplayState } from "./finding-delivery-gate.js";
 import { getDiagnosticTracker } from "./diagnostic-tracker.js";
 import { resetPsScriptAnalyzerAvailability } from "./dispatch/runners/psscriptanalyzer.js";
 import { resetInstallRetryLatches } from "./dispatch/runners/utils/availability-policy.js";
-import { resetLazyInstallAttempts } from "./dispatch/runners/utils/lazy-installer.js";
 import { resetDispatchAvailabilityState } from "./dispatch/runners/utils/runner-helpers.js";
 import { resetObservedRunnerLatency } from "./dispatch/collect-later-tier.js";
 import { resetPendingRunnerFindings } from "./dispatch/pending-runner-findings.js";
@@ -88,6 +89,7 @@ import {
 	saveRuntimeProjectSnapshot,
 } from "./project-snapshot.js";
 import { scanProjectRules } from "./rules-scanner.js";
+import type { SessionStartGuidanceRecord } from "./runtime-context.js";
 import type {
 	RuntimeCoordinator,
 	StartupTaskName,
@@ -123,6 +125,7 @@ import {
 } from "./subagent-mode.js";
 import { TrivyClient, type TrivyResult } from "./trivy-client.js";
 import { TOOL_REGISTRY } from "./tool-config.js";
+import { shouldAutoInstallTool } from "./tool-policy.js";
 import { isWarmAttached } from "./warm-attach.js";
 import { setSessionLanguages } from "./widget-state.js";
 import { logWordIndex } from "./word-index-logger.js";
@@ -1076,6 +1079,14 @@ function firePreinstallDefaults(
 	startupDefaults: string[],
 ): void {
 	for (const tool of startupDefaults) {
+		// Only a tool whose installer entry opts in is installed unasked (#5410 D9);
+		// a runner or formatter reports any other one "not installed".
+		if (!shouldAutoInstallTool(tool)) {
+			dbg(
+				`session_start preinstall ${tool}: skipped (installer entry does not opt in)`,
+			);
+			continue;
+		}
 		const startedAt = Date.now();
 		dbg(`session_start preinstall ${tool}: start`);
 		ensureTool(tool)
@@ -1143,12 +1154,13 @@ function cancelScheduledManagedToolRefresh(): void {
  * `runManagedToolRefresh` against a PERSISTED per-tool stamp, so a launch loop
  * cannot escalate the weekly cadence.
  */
-function scheduleManagedToolRefresh(
+export function scheduleManagedToolRefresh(
 	dbg: SessionStartDeps["dbg"],
 	rulePack: boolean,
 ): void {
-	const delayMs = Number(
-		process.env.PI_LENS_TOOL_REFRESH_DELAY_MS ?? MANAGED_TOOL_REFRESH_DELAY_MS,
+	const delayMs = nonNegativeIntEnv(
+		"PI_LENS_TOOL_REFRESH_DELAY_MS",
+		MANAGED_TOOL_REFRESH_DELAY_MS,
 	);
 	const timer = setTimeout(
 		() => {
@@ -2258,6 +2270,8 @@ export function resetSessionScopedState(
 	// project stayed "marked" to the read-only turn's cost guard — for the life
 	// of the PROCESS.
 	resetDeferredDispositions();
+	// #5784: which unconfirmed blocker lines this session already delivered.
+	resetBlockerReplayState();
 	// #817/#1199: Windows command resolution is cached per (command, canonical
 	// effective child PATH/PATHEXT/cwd/per-drive provenance); drop it each
 	// session so environment changes (e.g.
@@ -2317,13 +2331,6 @@ export function resetSessionScopedState(
 	// the session" is terminal for the process, and a repaired network never
 	// re-earns its `go install`.
 	resetInstallRetryLatches();
-	// #1537: the lazy-install seam's hold (`gem install rubocop`, `rustup
-	// component add`) is durable for a SESSION. Its map is module-local, so the
-	// generation counter above does not reach it — same #1490/#1497 shape. It
-	// belongs on THIS line and not on the turn_end path: the first cut cleared it
-	// from `clearFormatterRuntimeState()`, which runs every turn, so a failing
-	// install re-spawned every turn instead of once per session.
-	resetLazyInstallAttempts();
 	// #1897: direct-LSP negative availability and bare installer paths are
 	// session facts. A command or PATH entry can appear between sessions.
 	resetDirectLspCommandAvailability();
@@ -2626,7 +2633,7 @@ export async function handleSessionStart(
 		!processGlobals.__piLensWarmupScheduled
 	) {
 		processGlobals.__piLensWarmupScheduled = true;
-		const warmupDelayMs = Number(process.env.PI_LENS_WARMUP_DELAY_MS ?? 2000);
+		const warmupDelayMs = nonNegativeIntEnv("PI_LENS_WARMUP_DELAY_MS", 2000);
 		const warmupCwd = deps.ctxCwd ?? process.cwd();
 		const warmupDbg = deps.dbg;
 		// #1154: `.unref()` the warmup timer so — even for a warmup that IS
@@ -2916,34 +2923,44 @@ export async function handleSessionStart(
 	});
 
 	// #1019: log cleanup is deferred OFF the interactive critical path. It does
-	// synchronous fs sweeps (~7ms) whose only consumer is an async notification —
+	// fs sweeps (~7ms) whose only consumer is an async notification —
 	// nothing on the hot path reads its result — so running it inline just taxed
 	// every session start. It still runs every session (correctness unchanged),
 	// now on the next tick, and notifies when done. Errors are swallowed to a
 	// dbg line: a best-effort log sweep must never surface as a session failure.
+	// #5702: the sweep is async (the socket row dials stale endpoints) and the
+	// callback is not awaited by this hook, so its failure path stays inside.
 	const cleanupCwd = ctxCwd ?? process.cwd();
 	setImmediate(() => {
-		const logCleanupStartedAt = Date.now();
-		try {
-			const logCleanup = runLogCleanup(dbg);
-			logLatency({
-				type: "phase",
-				phase: "session_start_log_cleanup",
-				filePath: cleanupCwd,
-				startedAt: new Date(logCleanupStartedAt).toISOString(),
-				durationMs: Date.now() - logCleanupStartedAt,
-				metadata: {
-					mode: startupMode,
-					reason: deps.sessionReason,
-					deferred: true,
-				},
-			});
-			if (logCleanup.cleaned > 0 || logCleanup.rotated > 0) {
-				notify(`🧹 ${logCleanup.report}`, "info");
+		void (async () => {
+			const logCleanupStartedAt = Date.now();
+			try {
+				const logCleanup = await runLogCleanup(dbg, {
+					cwd: cleanupCwd,
+					// The same id the turn-end arm persists session state under
+					// (index.ts's persistScope call), so the sweep exempts the
+					// file a live session saves into.
+					currentSessionId: deps.runtime.telemetrySessionId,
+				});
+				logLatency({
+					type: "phase",
+					phase: "session_start_log_cleanup",
+					filePath: cleanupCwd,
+					startedAt: new Date(logCleanupStartedAt).toISOString(),
+					durationMs: Date.now() - logCleanupStartedAt,
+					metadata: {
+						mode: startupMode,
+						reason: deps.sessionReason,
+						deferred: true,
+					},
+				});
+				if (logCleanup.cleaned > 0 || logCleanup.rotated > 0) {
+					notify(`🧹 ${logCleanup.report}`, "info");
+				}
+			} catch (err) {
+				dbg(`session_start: deferred log cleanup failed: ${err}`);
 			}
-		} catch (err) {
-			dbg(`session_start: deferred log cleanup failed: ${err}`);
-		}
+		})();
 	});
 	dbg(`session_start startup mode: ${startupMode}`);
 
@@ -3351,11 +3368,20 @@ export async function handleSessionStart(
 		dbg("session_start: no project rules found");
 	}
 
-	cacheManager.writeCache(
-		"session-start-guidance",
-		{ content: agentStartupGuidance.join("\n") },
-		analysisRoot,
-	);
+	// #5792: stamped with this session's id (`consumeSessionStartGuidance`
+	// compares it), the same id its `context` requests read as. A post-await
+	// publish like its siblings, so a start a later one superseded stamps
+	// nothing: the id read here would be the successor's (catalog shape 22).
+	if (runtime.isCurrentSession(sessionGeneration)) {
+		cacheManager.writeCache<SessionStartGuidanceRecord>(
+			"session-start-guidance",
+			{
+				content: agentStartupGuidance.join("\n"),
+				sessionId: runtime.telemetrySessionId,
+			},
+			analysisRoot,
+		);
+	}
 
 	// `sessionGeneration` was captured earlier (#1162's bounded sequence read
 	// needs it before this point) and is stable across this whole call.

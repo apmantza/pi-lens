@@ -178,6 +178,10 @@ export interface RefreshState {
 		{ pendingBehavior: string; pendingTier: string; runs: number }
 	>;
 	"idle-eviction"?: Record<string, { nights: IdleEvictionNight[] }>;
+	/** #3405: the settled save verdict a night measured against the published one. */
+	"save-verdict"?: Record<string, { pendingSaveVerdict: string; runs: number }>;
+	/** #5667: the settled idle-eviction row a night measured against the published one. */
+	"idle-eviction-doc"?: Record<string, { pendingCells: string; runs: number }>;
 	/** #4512: consecutive-night misses per lang and axis behind the `stale` column. */
 	"missed-probe"?: Record<
 		string,
@@ -195,16 +199,44 @@ export function parseRefreshState(text: string): RefreshState;
 /** #3989: the refresh-state key holding the idle-eviction promotion bookkeeping. */
 export const IDLE_EVICTION_KEY: "idle-eviction";
 
+/** #3405: the refresh-state key holding the pending save-verdict flips. */
+export const SAVE_VERDICT_KEY: "save-verdict";
+
+/** #5667: the refresh-state key holding the pending idle-eviction doc flips. */
+export const IDLE_EVICTION_DOC_KEY: "idle-eviction-doc";
+
+/** #3405, #5667: the well-formed pending flips of a parsed key, by server; `field` names the pending value. */
+export function sanitizePendingFlips(
+	map: unknown,
+	field: string,
+): Record<string, Record<string, string | number>>;
+
+/** #3405, #5667: the two-night hold of one published cell group. */
+export function holdSettledCell(night: {
+	prior: string;
+	observed: string;
+	pending?: { value: string; runs: number };
+	isSettled: (value: string) => boolean;
+}): {
+	publish: boolean;
+	pending?: { value: string; runs: number };
+	held?: "unsettled" | "pending";
+};
+
 export interface IdleEvictionNight {
 	day: string;
 	rssMb: number | null;
 	coldMs: number;
 }
 
-/** #3989: replace the `idle-eviction` key of the refresh-state block. */
-export function setIdleEvictionState(
+/**
+ * Replace one key of the refresh-state block (`idle-eviction`, `save-verdict`),
+ * leaving the others as parsed.
+ */
+export function setRefreshStateKey(
 	text: string,
-	idleEviction: Record<string, { nights: IdleEvictionNight[] }>,
+	key: string,
+	value: Record<string, unknown>,
 ): string;
 
 export function refreshCapabilityMatrix(

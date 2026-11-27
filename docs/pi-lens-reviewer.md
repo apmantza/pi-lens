@@ -272,6 +272,14 @@ instead of rebuilding the probe.
   `// flake-shape: <detector> — <reason>` header and `wallClockBudgetInclude`
   membership (#2547). A pinned file whose count falls below its pin needs its
   baseline tightened; a stale ceiling re-admits regrowth.
+- **Self-judging gate.** CI runs the governance suite from the PR head, so a
+  diff that touches a ratchet baseline, a governance test, a shape scanner or a
+  gate script (`scripts/hooks/`, `scripts/governance-rules/`, a `scripts/check-*`
+  gate) can loosen the gate that judges it while staying green (#5753). Name
+  each such change in the review and judge whether it loosens the gate (a
+  raised ceiling, a new exemption, a narrowed scan, a removed row); a review
+  that does not name it is incomplete. Record the verdict in `gateChanges`
+  (`FINDINGS_<pr>.json`, below): one row per gate file the diff touches.
 - **Hot-path timing.** When the diff touches dispatch, `session_start`, LSP
   diagnostics, a cache lookup or turn-end, re-run the body's before/after
   timing on the real path, at a small and a large input (file size, file
@@ -390,13 +398,16 @@ never commit it. The orchestrator's validator reads it before routing the
 round. Shape:
 
 ```json
-{"pr": 4710, "head": "<40-hex sha reviewed>", "verdict": "merge-ready|needs changes|redesign|conflicted", "oneWayDoors": ["..."], "findings": [{"id": "F1", "severity": "<one of the five severity words>", "file": "path", "line": 1, "claim": "one sentence", "probe": "command or probe name whose output proves it", "remedy": "the prescribed change, or null", "addsMechanism": true, "class": "fold|accepted residual|file", "source": "reviewer|greptile|coderabbit|qodo|sourcery", "matched": ["<other sources>"], "status": "confirmed|refuted"}]}
+{"pr": 4710, "head": "<40-hex sha reviewed>", "verdict": "merge-ready|needs changes|redesign|conflicted", "oneWayDoors": ["..."], "gateChanges": [{"file": "<gate file the diff touches>", "verdict": "tightens|neutral|loosens-justified", "note": "one sentence"}], "findings": [{"id": "F1", "severity": "<one of the five severity words>", "file": "path", "line": 1, "claim": "one sentence", "probe": "command or probe name whose output proves it", "remedy": "the prescribed change, or null", "addsMechanism": true, "class": "fold|accepted residual|file", "source": "reviewer|greptile|coderabbit|qodo|sourcery", "matched": ["<other sources>"], "status": "confirmed|refuted"}]}
 ```
 
 Write one entry per finding, with the same ids as the prose. `remedy: null`
 means the fixer must design the change. `addsMechanism` is true when the
 remedy adds a guard, branch, state, record, or lifecycle step, rather than a
-fix to an existing line. `source` is `reviewer` for your blind pass, or the
+fix to an existing line. `gateChanges` carries one row per gate file the diff
+touches (see **Self-judging gate**), and `[]` when it touches none; the
+orchestrator's `land.sh` refuses a review artifact that changes a gate file
+without a row. `source` is `reviewer` for your blind pass, or the
 exact bot name (`greptile`, `coderabbit`, `qodo`, `sourcery`) for a row you
 added from a bot finding. The names stand for the GitHub logins
 `greptile-apps`, `coderabbitai`, `qodo-code-review` and `sourcery-ai`, in that
@@ -425,8 +436,7 @@ Use short, active, plain prose.
 
 ## Documentation and prose standard
 
-Apply this standard to PR and issue bodies, review comments, commit messages, documentation, and changelog entries. Lead with the outcome. Remove words that do no work. Use active voice and present tense. Use second person for instructions, and use the imperative for steps. Keep one idea per sentence, with about 20–25 words and no more than 30 words. Use consistent terminology and sentence-case headings. Define acronyms on first use. Prefer plain words over jargon. Avoid `please`, filler, noun piles, nested parentheticals, and em-dash chains. Use the Oxford comma.
-
-The mechanical rules are checked by `scripts/check-prose.mjs`. The checker ignores fenced code, inline code, URLs, quoted log lines, blockquotes, and tables. It warns on long sentences, filler, and passive voice, and it blocks title-case headings (#5110). The CLI accepts a body file or standard input and supports `--json`.
-
-Reviewers judge clarity, terminology, active voice, sentence structure, and whether each list uses parallel grammar. Treat a mechanically clean result as necessary, not sufficient. Report prose that obscures the outcome or makes a user infer the action.
+The standard lives in `docs/prose-standard.md`. Judge prose against it. A
+review or verify text that will be posted as an issue or PR comment over 12
+lines follows its "Comment layout" and passes
+`node scripts/check-prose.mjs --comment --body-file <f>` first.

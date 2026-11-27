@@ -40,11 +40,15 @@ import {
 	type Resolved,
 	type SourceTier,
 } from "./config-core/provenance.js";
-import { LSP_NAMESPACE_KEY } from "./config-locations.js";
+import {
+	holdsCanonicalProjectConfig,
+	LSP_NAMESPACE_KEY,
+} from "./config-locations.js";
 import {
 	type ConfigDocumentSummary,
 	lspSectionOf,
 	type PiLensConfigResolution,
+	resolveOnePiLensConfigDocument,
 	resolvePiLensConfig,
 	summarizeConfigResolution,
 } from "./config-resolve.js";
@@ -55,6 +59,7 @@ import { detectFileKind } from "./file-kinds.js";
 import { getGlobalPiLensDir } from "./file-utils.js";
 import { type LanguageEntry, resolveLanguage } from "./language-registry.js";
 import { getPiLensGlobalConfigPath } from "./lens-config.js";
+import { peekPiLensProjectConfig } from "./project-lens-config.js";
 import {
 	customServerSpecsOf,
 	disabledServerRecords,
@@ -71,10 +76,13 @@ import {
 // hand-rolled `path.relative`/prefix check here is how the two would drift
 // apart on a Windows-shaped path (AGENTS.md defect shape 2).
 import { isSameOrWithin } from "./lsp/server.js";
-import { homeRelativePath } from "./path-utils.js";
+import { homeRelativePath, resolveHostToolPath } from "./path-utils.js";
 import { resolveToolCwd } from "./tool-cwd.js";
 import { compareOrdinal } from "./string-utils.js";
 import { LENS_TOOL_NAMES, resolveLensToolEnabled } from "./tool-config.js";
+
+/** A tool's on/off switch as a provenance pointer (`/tools/<name>/enabled`). */
+const TOOL_SWITCH_POINTER = /^\/tools\/[^/]+\/enabled$/;
 
 export interface EffectiveConfigOptions {
 	/** Workspace the resolution is performed for. Defaults to `process.cwd()`. */
@@ -418,7 +426,10 @@ export async function effectiveConfig(
 	// here reports at all, which is why the query no longer routes through
 	// `loadLSPConfig`: that loader's whole difference from this call is the
 	// notices, and the query wants the resolution, not the notices.
-	const resolveAt = (dir: string): PiLensConfigResolution =>
+	const resolveAt = (
+		dir: string,
+		excludeLegacyProjectDocuments = false,
+	): PiLensConfigResolution =>
 		resolvePiLensConfig({
 			cwd: dir,
 			globalDir: getGlobalPiLensDir(),
@@ -426,6 +437,7 @@ export async function effectiveConfig(
 			// comment (global-config-location PR, refs #2457).
 			globalConfigPath: getPiLensGlobalConfigPath(),
 			homeDir,
+			excludeLegacyProjectDocuments,
 		});
 
 	// The queried path resolves HERE, beside the resolution root it selects, so
@@ -434,9 +446,12 @@ export async function effectiveConfig(
 	// caller that names a workspace and then a file inside it means that file,
 	// and a bare `path.resolve` would silently answer for a same-named path
 	// under the host process's own directory — a wrong answer wearing a
-	// confident shape.
+	// confident shape. The host spelling (`~`, `@`, `file://`) resolves first,
+	// as pi opens it (shape 74, #4907).
 	const requestedFile =
-		options.file === undefined ? undefined : path.resolve(cwd, options.file);
+		options.file === undefined
+			? undefined
+			: resolveHostToolPath(options.file, cwd);
 
 	// CONFINED, not assumed (#2520). A `file` that resolves outside `cwd` has
 	// no containment relationship to the workspace this view is `cwd`-labelled
@@ -469,13 +484,52 @@ export async function effectiveConfig(
 	//
 	// A rejected (outside-`cwd`) file falls back to `cwd` itself here, same as
 	// no file at all — the walk never touches the foreign tree.
-	const resolution = resolveAt(
-		absolute === undefined ? cwd : path.dirname(absolute),
-	);
+	const resolutionRoot = absolute === undefined ? cwd : path.dirname(absolute);
+	const resolution = resolveAt(resolutionRoot);
 
+	// THREE readers, one question each (#5739, #5740), each asked the way the
+	// runtime asks it rather than from the wide resolution above, which mirrors
+	// the LSP loader (past the git root, legacy documents merged for their
+	// deprecation window):
+	//  - the LSP half, the document list and the provenance: that wide
+	//    resolution;
+	//  - the dispatch policy (`dispatch.disabledRunners`): the same resolution
+	//    without the legacy documents once a canonical file is in the chain,
+	//    which is what `resolveDispatchPolicyConfig` reads;
+	//  - `tools.<name>.enabled`: the layered project loader at the workspace
+	//    root plus the global tier, which is what registration reads.
+	const policyResolution =
+		holdsCanonicalProjectConfig(resolutionRoot, homeDir) &&
+		resolution.documents.some((document) => document.location.legacy)
+			? resolveAt(resolutionRoot, true)
+			: resolution;
+	const globalDocument = resolution.documents.find(
+		(document) => document.tier === "global" && !document.location.legacy,
+	);
+	const globalValue =
+		globalDocument === undefined
+			? undefined
+			: resolveOnePiLensConfigDocument(globalDocument).value;
+	// Quiet: asking must not warn (rule 2), and `peekPiLensProjectConfig` leaves
+	// every report owed to the loader that owns it.
+	const projectRaw = peekPiLensProjectConfig(cwd).raw;
+
+	// The `tools.<name>.enabled` leaves of the wide resolution describe a
+	// resolution that no longer decides the `tools` answer below, so they are
+	// not reported as its provenance (#5739); neither are they counted.
+	const reportedProvenance = new Map<string, Provenance>();
+	for (const [pointer, entry] of resolution.provenance) {
+		if (!TOOL_SWITCH_POINTER.test(entry.key)) {
+			reportedProvenance.set(pointer, entry);
+		}
+	}
+	const reportedResolution: PiLensConfigResolution = {
+		...resolution,
+		provenance: reportedProvenance,
+	};
 	const resolved = {
 		value: resolution.value,
-		provenance: resolution.provenance,
+		provenance: reportedResolution.provenance,
 	};
 
 	// The redacted document list and the per-tier counts come from the SHARED
@@ -483,7 +537,7 @@ export async function effectiveConfig(
 	// `config_resolved` latency phase writes the same summary at session start,
 	// and a surface that answers "what is my config" must not be able to
 	// disagree with the record that says what was resolved.
-	const summary = summarizeConfigResolution(resolution, homeDir);
+	const summary = summarizeConfigResolution(reportedResolution, homeDir);
 
 	// Home-relative, like every path this module reports (rule 3) — including
 	// the one named back in the rejection message below, so an agent reading
@@ -509,7 +563,7 @@ export async function effectiveConfig(
 		recordCounts: countBy(
 			[
 				...resolution.records,
-				...disabledRunnersOf(resolution).records,
+				...disabledRunnersOf(policyResolution).records,
 				...disabledServerRecords(resolution, lspProblems),
 			],
 			(record) => record.code,
@@ -518,8 +572,8 @@ export async function effectiveConfig(
 			name,
 			enabled: resolveLensToolEnabled(
 				name,
-				resolved.value,
-				undefined,
+				globalValue,
+				projectRaw,
 				options.noTools,
 			),
 		})),
@@ -536,7 +590,7 @@ export async function effectiveConfig(
 				: {
 						file: await fileView(
 							absolute,
-							resolution,
+							policyResolution,
 							resolved,
 							homeDir,
 							cwd,

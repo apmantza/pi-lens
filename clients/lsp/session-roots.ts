@@ -148,11 +148,6 @@ export function setSessionRootConfig(
 	return noteEvictedRoots(sessionRoots.set(path.resolve(cwd), config));
 }
 
-function isSameOrChildPath(filePath: string, candidateRoot: string): boolean {
-	if (filePath === candidateRoot) return true;
-	return filePath.startsWith(`${candidateRoot}${path.sep}`);
-}
-
 /**
  * The loaded config of the deepest served root that holds `filePath`, or
  * undefined when none does. Entries still awaiting their first load are
@@ -172,7 +167,7 @@ export function sessionRootConfigForFile(
 	// a config for exactly the roots the registry still serves.
 	for (const [root, config] of sessionRoots) {
 		if (config === undefined) continue;
-		if (!isSameOrChildPath(resolvedFilePath, root)) continue;
+		if (!isSameOrWithin(root, resolvedFilePath)) continue;
 		if (!bestMatch || root.length > bestMatch.root.length) {
 			bestMatch = { root, config };
 		}

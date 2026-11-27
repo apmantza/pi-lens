@@ -69,8 +69,9 @@ const expected = {
 	lsp_navigation: {
 		// 1729 -> 1851 (#5041): `file` and `filePath` are declared aliases of
 		// `path`, for the same shared-schema reason.
-		// 1851 -> 2145 (#1449): `view` adds the JSON hatch to the text default.
-		total: 2145,
+		// 1851 -> 2205 (#1449, #5506): `view` adds the JSON hatch to the text
+		// default, and strict providers need typed items for command arguments.
+		total: 2205,
 		maximum: 2593,
 		keys: [
 			"operation",

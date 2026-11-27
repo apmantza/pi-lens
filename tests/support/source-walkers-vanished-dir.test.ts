@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { getWin32GateFiles } from "../../scripts/lib/win32-gate-population.mjs";
 import { testSourceFiles } from "./module-instance-scan.js";
 import { clientSourceFiles } from "./session-state-scan.js";
+import { TREE_WALK_TIMEOUT_MS } from "./test-timeout-scale.js";
 
 /**
  * Named recurrence (#4104, sibling of #4097): a directory that a sibling
@@ -88,17 +89,21 @@ function walkWithVanishingSiblings(
 }
 
 describe("repo walkers tolerate a directory that vanished mid-walk (#4104)", () => {
-	it("testSourceFiles skips it and records each vanished directory", () => {
-		const { found, records } = walkWithVanishingSiblings(
-			"tests",
-			"a.test.ts",
-			"",
-			(_root, walkedRoot) => testSourceFiles(walkedRoot),
-		);
-		expect(found).toHaveLength(1);
-		expect(records).toHaveLength(3);
-		expect(records[0]).toMatch(/vanished between the walk and its descent/);
-	});
+	it(
+		"testSourceFiles skips it and records each vanished directory",
+		() => {
+			const { found, records } = walkWithVanishingSiblings(
+				"tests",
+				"a.test.ts",
+				"",
+				(_root, walkedRoot) => testSourceFiles(walkedRoot),
+			);
+			expect(found).toHaveLength(1);
+			expect(records).toHaveLength(3);
+			expect(records[0]).toMatch(/vanished between the walk and its descent/);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("the win32 gate population skips it and records each vanished directory", () => {
 		const { found, records } = walkWithVanishingSiblings(
@@ -128,27 +133,31 @@ describe("folded walkers keep their populations (#4104)", () => {
 	const posix = (root: string, files: string[]) =>
 		files.map((file) => path.relative(root, file).split(path.sep).join("/"));
 
-	it("testSourceFiles keeps .ts, .mts and declarations, minus the top-level non-repo trees", () => {
-		const tests = plant({
-			"a.ts": "",
-			"b.mts": "",
-			"c.d.mts": "",
-			"nested/d.test.ts": "",
-			"nested/fixtures/z.ts": "",
-			"n.js": "",
-			"fixtures/x.ts": "",
-			"native-ts7-live-1/y.ts": "",
-			"native-ts7-live-2.ts": "",
-			"nested/node_modules/m.ts": "",
-		});
-		expect(posix(tests, testSourceFiles(tests))).toEqual([
-			"a.ts",
-			"b.mts",
-			"c.d.mts",
-			"nested/d.test.ts",
-			"nested/fixtures/z.ts",
-		]);
-	});
+	it(
+		"testSourceFiles keeps .ts, .mts and declarations, minus the top-level non-repo trees",
+		() => {
+			const tests = plant({
+				"a.ts": "",
+				"b.mts": "",
+				"c.d.mts": "",
+				"nested/d.test.ts": "",
+				"nested/fixtures/z.ts": "",
+				"n.js": "",
+				"fixtures/x.ts": "",
+				"native-ts7-live-1/y.ts": "",
+				"native-ts7-live-2.ts": "",
+				"nested/node_modules/m.ts": "",
+			});
+			expect(posix(tests, testSourceFiles(tests))).toEqual([
+				"a.ts",
+				"b.mts",
+				"c.d.mts",
+				"nested/d.test.ts",
+				"nested/fixtures/z.ts",
+			]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("the win32 gate population reads real .test.ts files only, outside scratch trees", () => {
 		const root = plant({
@@ -160,55 +169,63 @@ describe("folded walkers keep their populations (#4104)", () => {
 		expect(getWin32GateFiles(root)).toEqual(["tests/a.test.ts"]);
 	});
 
-	it("clientSourceFiles (the atomic-write scan's walker) keeps .ts, drops declarations and tests", () => {
-		const clients = plant({
-			"a.ts": "",
-			"b.d.ts": "",
-			"c.test.ts": "",
-			"nested/d.ts": "",
-			"nested/e.mjs": "",
-		});
-		expect(posix(clients, clientSourceFiles(clients))).toEqual([
-			"a.ts",
-			"nested/d.ts",
-		]);
-	});
+	it(
+		"clientSourceFiles (the atomic-write scan's walker) keeps .ts, drops declarations and tests",
+		() => {
+			const clients = plant({
+				"a.ts": "",
+				"b.d.ts": "",
+				"c.test.ts": "",
+				"nested/d.ts": "",
+				"nested/e.mjs": "",
+			});
+			expect(posix(clients, clientSourceFiles(clients))).toEqual([
+				"a.ts",
+				"nested/d.ts",
+			]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("every folded walker returns sorted paths whatever order the filesystem lists", () => {
-		const tests = plant({
-			"b.ts": "",
-			"a/z.ts": "",
-			"a/y.ts": "",
-			"c.ts": "",
-		});
-		const gates = plant({
-			"tests/b.test.ts": GATE,
-			"tests/a/z.test.ts": GATE,
-			"tests/c.test.ts": GATE,
-		});
-		hooks.reverse = true;
-		try {
-			expect(posix(tests, testSourceFiles(tests))).toEqual([
-				"a/y.ts",
-				"a/z.ts",
-				"b.ts",
-				"c.ts",
-			]);
-			expect(posix(tests, clientSourceFiles(tests))).toEqual([
-				"a/y.ts",
-				"a/z.ts",
-				"b.ts",
-				"c.ts",
-			]);
-			expect(getWin32GateFiles(gates)).toEqual([
-				"tests/a/z.test.ts",
-				"tests/b.test.ts",
-				"tests/c.test.ts",
-			]);
-		} finally {
-			hooks.reverse = false;
-		}
-	});
+	it(
+		"every folded walker returns sorted paths whatever order the filesystem lists",
+		() => {
+			const tests = plant({
+				"b.ts": "",
+				"a/z.ts": "",
+				"a/y.ts": "",
+				"c.ts": "",
+			});
+			const gates = plant({
+				"tests/b.test.ts": GATE,
+				"tests/a/z.test.ts": GATE,
+				"tests/c.test.ts": GATE,
+			});
+			hooks.reverse = true;
+			try {
+				expect(posix(tests, testSourceFiles(tests))).toEqual([
+					"a/y.ts",
+					"a/z.ts",
+					"b.ts",
+					"c.ts",
+				]);
+				expect(posix(tests, clientSourceFiles(tests))).toEqual([
+					"a/y.ts",
+					"a/z.ts",
+					"b.ts",
+					"c.ts",
+				]);
+				expect(getWin32GateFiles(gates)).toEqual([
+					"tests/a/z.test.ts",
+					"tests/b.test.ts",
+					"tests/c.test.ts",
+				]);
+			} finally {
+				hooks.reverse = false;
+			}
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// lane: Linux Unit tests; Windows symlink creation requires privilege.
 	it.skipIf(process.platform === "win32")(

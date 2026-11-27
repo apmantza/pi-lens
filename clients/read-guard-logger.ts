@@ -26,12 +26,9 @@ const VERBOSE_READ_GUARD_LOG =
 	process.env.PI_LENS_READ_GUARD_VERBOSE === "1" ||
 	process.env.PI_LENS_READ_GUARD_LOG === "verbose";
 const LOG_ALLOWED_EDITS = process.env.PI_LENS_READ_GUARD_LOG_ALLOWS === "1";
-const SNAPSHOT_LOG_SETTING = (
-	process.env.PI_LENS_READ_GUARD_LOG_SNAPSHOTS ?? "1"
-).toLowerCase();
-const LOG_SNAPSHOT_VALIDATION = !["0", "false", "off"].includes(
-	SNAPSHOT_LOG_SETTING,
-);
+// Only the literal `"0"` turns the snapshot-validation log off (#5419).
+const LOG_SNAPSHOT_VALIDATION =
+	process.env.PI_LENS_READ_GUARD_LOG_SNAPSHOTS !== "0";
 
 const MAX_EDIT_BATCH_ITEMS = 100;
 

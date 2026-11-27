@@ -46,6 +46,11 @@ import {
 } from "./review-graph/git-identity.js";
 import { collectSourceFilesWithBudgetAsync } from "./source-filter.js";
 
+import { warnIgnoredConfigOnce } from "./config-warn.js";
+import { getPiLensGlobalConfigPath } from "./config-locations.js";
+import { loadPiLensGlobalConfig } from "./lens-config.js";
+import { loadPiLensProjectConfig } from "./project-lens-config.js";
+import { getProjectTrustState } from "./project-trust.js";
 import { BoundedFifoMap } from "./bounded-cache.js";
 import { hashContentBytes } from "./content-stamp.js";
 import { scanShellWriteScopes } from "./bash-file-access.js";
@@ -55,10 +60,12 @@ import {
 } from "./degradation-ledger.js";
 import {
 	isAtOrAboveHomeDir,
+	isWithinForm,
 	normalizeMapKey,
 	realpathOrResolve,
 } from "./path-utils.js";
 import { freshnessFromMtime } from "./freshness.js";
+import { getProcessSingleton } from "./process-singletons.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { createSingleFlight } from "./single-flight.js";
 import { truncatedByOutputCap } from "./spawn-output-cap.js";
@@ -133,6 +140,12 @@ export interface PendingOpaqueBaseline {
 	 * which is a different fact.
 	 */
 	dirtyPaths?: readonly string[];
+	/**
+	 * #5616: the coordinator's `projectSeq` when the command started. A file
+	 * pi-lens recorded a write to after it (`getFilesChangedSince`) had another
+	 * observed writer in the call's window, so the call is not credited with it.
+	 */
+	projectSeq: number;
 }
 
 /** A literal tool name of one member of pi's typed `tool_call` union. */
@@ -177,7 +190,8 @@ const PI_BUILTIN_TOOL_WRITES = new Map<string, "opaque" | "named" | "none">(
  * ({@link PI_BUILTIN_TOOL_WRITES}) and pi-lens's own pi tools
  * ({@link isPiLensToolName}), which are read-only or record every write through the
  * mutation bridge. Every other name (another extension's tool, an MCP tool
- * routed through pi, the outer codemode call) is opaque. A tool whose EVENT the
+ * routed through pi, the outer codemode call) is opaque, unless the user listed
+ * it in `opaqueScan.nonWriterTools` (#5793; no list ships by default). A tool whose EVENT the
  * structured classifier recognizes is excluded at the record site, which has
  * the event.
  */
@@ -187,8 +201,102 @@ export function shouldRunOpaqueRecovery(
 ): workspaceRoot is string {
 	if (workspaceRoot === undefined) return false;
 	const builtin = PI_BUILTIN_TOOL_WRITES.get(toolName);
-	if (builtin !== undefined) return builtin === "opaque";
-	return !isPiLensToolName(toolName);
+	if (builtin === "named" || builtin === "none") return false;
+	if (isPiLensToolName(toolName)) return false;
+	// A shell reaches the lists too, so an entry naming one is reported; the
+	// lists never hold a name pi decides, so it stays opaque.
+	return !isDeclaredNonWriter(toolName, workspaceRoot);
+}
+
+/**
+ * #5793: the one form an entry of `opaqueScan.nonWriterTools` may take: an
+ * exact tool name, spelled with characters a tool name carries. Everything
+ * else (empty, padded, a pattern, a number) is refused, so the list admits a
+ * short known-good form and a spelling nobody planned for leaves the tool
+ * opaque (principles section 1, fail closed).
+ */
+const NON_WRITER_TOOL_NAME = /^[A-Za-z0-9_.:/-]{1,128}$/;
+
+/** Refused entries one notice names before it counts the rest. */
+const NON_WRITER_NOTICE_ENTRIES = 3;
+
+/**
+ * The names a list admits. A refused entry (not a name, or a name pi or
+ * pi-lens already decides: a shell, a structured writer, a read-only built-in,
+ * a pi-lens tool) is not exempted, and one notice per list names the first few,
+ * so a setting is never silently ignored.
+ */
+function admitNonWriters(
+	entries: readonly unknown[],
+	subsystem: "lens-config" | "project-lens-config",
+	file: string,
+): readonly string[] {
+	const admitted: string[] = [];
+	const refused: string[] = [];
+	for (const entry of entries) {
+		if (typeof entry !== "string" || !NON_WRITER_TOOL_NAME.test(entry)) {
+			refused.push(`${JSON.stringify(entry)?.slice(0, 40)} (not a tool name)`);
+		} else if (PI_BUILTIN_TOOL_WRITES.has(entry) || isPiLensToolName(entry)) {
+			refused.push(`"${entry}" (pi or pi-lens already decides it)`);
+		} else if (!admitted.includes(entry)) admitted.push(entry);
+	}
+	if (refused.length > 0) {
+		const named = refused.slice(0, NON_WRITER_NOTICE_ENTRIES).join(", ");
+		const rest = refused.length - NON_WRITER_NOTICE_ENTRIES;
+		warnIgnoredConfigOnce({
+			subsystem,
+			file,
+			key: "opaqueScan.nonWriterTools",
+			code: "PILENS_CFG_0005",
+			reason: `opaqueScan.nonWriterTools entries refused, so those tools stay opaque: ${named}${rest > 0 ? ` and ${rest} more` : ""}`,
+		});
+	}
+	return admitted;
+}
+
+/**
+ * The global list, read once per session: `resetOpaqueMutationState` clears it
+ * at the session boundary, which is also when the ledger resets, so a refused
+ * entry is recorded again in the next session.
+ */
+let globalNonWriters: readonly string[] | undefined;
+
+/**
+ * The project list, read per call through the loader's own file cache. It is
+ * a repository's statement, so a cloned repo could switch write detection off
+ * for a tool with it: honored only while pi trusts the project. Anything else
+ * (untrusted, or a host that gave no answer) ignores it with one notice.
+ */
+function projectNonWriterTools(workspaceRoot: string): readonly string[] {
+	const project = loadPiLensProjectConfig(workspaceRoot);
+	const entries = project.opaqueScan?.nonWriterTools;
+	if (entries === undefined || entries.length === 0) return [];
+	const file = project.configPath ?? workspaceRoot;
+	const trust = getProjectTrustState();
+	if (trust !== "trusted") {
+		warnIgnoredConfigOnce({
+			subsystem: "project-lens-config",
+			file,
+			key: "opaqueScan.nonWriterTools",
+			code: "PILENS_CFG_0004",
+			reason: `opaqueScan.nonWriterTools is honored in a project .pi-lens.json only when pi trusts the project (trust is ${trust}); ignored, so those tools stay opaque`,
+		});
+		return [];
+	}
+	return admitNonWriters(entries, "project-lens-config", file);
+}
+
+/** Whether the user declared this tool a non-writer, at a scope that counts. */
+function isDeclaredNonWriter(toolName: string, workspaceRoot: string): boolean {
+	globalNonWriters ??= admitNonWriters(
+		loadPiLensGlobalConfig()?.opaqueScan?.nonWriterTools ?? [],
+		"lens-config",
+		getPiLensGlobalConfigPath(),
+	);
+	return (
+		globalNonWriters.includes(toolName) ||
+		projectNonWriterTools(workspaceRoot).includes(toolName)
+	);
 }
 
 /**
@@ -449,6 +557,13 @@ export interface OpaqueRecoveryRoots {
 	refused: Array<{ root: string; reason: OpaqueRootRefusal }>;
 	/** Named checkouts past {@link OPAQUE_RECOVERY_ROOT_CAP}. */
 	capped: string[];
+	/**
+	 * Directories the command fills with files it does not name one by one
+	 * (`rsync`, `tar x`, #5552): the scopes a recovery credits by content.
+	 */
+	writtenDirs: string[];
+	/** A scope in `writtenDirs` is the working directory standing in for an unreadable one. */
+	scopeGuessed: boolean;
 }
 
 /**
@@ -492,6 +607,8 @@ export function resolveOpaqueRecoveryRoots(
 			owner: file,
 			lookup: path.dirname(file),
 		})),
+		// A directory the command fills is a tree of its own (#5552).
+		...scan.writtenDirs.map((dir) => ({ owner: dir, lookup: dir })),
 	];
 	const considered = new Set<string>();
 	let extra = 0;
@@ -527,7 +644,27 @@ export function resolveOpaqueRecoveryRoots(
 		admitted.add(rootKey);
 		roots.push(checkout.root);
 	}
-	return { roots, refused, capped };
+	return {
+		roots,
+		refused,
+		capped,
+		writtenDirs: scan.writtenDirs,
+		scopeGuessed: scan.scopeGuessed,
+	};
+}
+
+/**
+ * One record per root per session that a bash command filled a directory the
+ * scan could not read, so the working directory stood in for it and what git
+ * lists as changed there is credited as the command's write (#5552).
+ */
+export function recordGuessedWriteScope(root: string): void {
+	recordDegradationOnce({
+		kind: "bash-write-scope-guessed",
+		subject: normalizeMapKey(root),
+		reason:
+			"a bash command filled a directory the scan could not read (an unresolved variable or substitution), so the working directory stood in for it; files that changed there are credited as its writes",
+	});
 }
 
 const ROOT_REFUSAL_REASONS: Record<OpaqueRootRefusal, string> = {
@@ -693,19 +830,17 @@ function recordBaselineLoss(cause: keyof typeof BASELINE_LOSS_REASONS): void {
 	});
 }
 
-const globalStoreSymbol = Symbol.for("pi-lens:opaque-snapshot-store");
-
-interface GlobalSlot {
-	store?: OpaqueBaselineStore;
-}
-const globalSlot = globalThis as typeof globalThis & Record<symbol, GlobalSlot>;
-
+/**
+ * The one pending-baseline store of the process: `tool_call` records it in one
+ * module evaluation and `tool_result` takes it in another, so it lives in a
+ * process singleton rather than module scope.
+ */
 export function getOpaqueBaselineStore(): OpaqueBaselineStore {
-	const existing = globalSlot[globalStoreSymbol]?.store;
-	if (existing) return existing;
-	const created = new OpaqueBaselineStore();
-	globalSlot[globalStoreSymbol] = { store: created };
-	return created;
+	return getProcessSingleton(
+		"opaque-baseline-store",
+		1,
+		() => new OpaqueBaselineStore(),
+	);
 }
 
 const gitRepoMemo = new Map<string, boolean>();
@@ -725,6 +860,7 @@ const overCapRootMemo = new BoundedFifoMap<string, true>(16);
  * reset both leak and mis-answer forever.
  */
 export function resetOpaqueMutationState(): void {
+	globalNonWriters = undefined;
 	getOpaqueBaselineStore().takeAllForTest();
 	gitRepoMemo.clear();
 	overCapRootMemo.clear();
@@ -813,6 +949,24 @@ export function observeGitHead(key: string, head: string): string | undefined {
 	headRecords.delete(key);
 	headRecords.set(key, head);
 	return previous !== undefined && previous !== head ? previous : undefined;
+}
+
+/**
+ * Record `root`'s HEAD for `key` only when `key` holds no record yet: the
+ * baseline a later look compares against, never a move. A `tool_call` seeds
+ * each sibling worktree a bash command names before it releases the command
+ * (#5718 review r1): its bounded look may be cut before that look reads HEAD,
+ * and a look that first reads HEAD after the command ran records the moved
+ * HEAD as a first sight, so the result's look then sees no move. A key that
+ * already holds a record keeps it, so a move made outside pi since that
+ * record is still the next look's to publish.
+ */
+export async function seedGitHeadAt(root: string, key: string): Promise<void> {
+	if (headRecords.get(key) !== undefined) return;
+	const head = await readGitHead(root);
+	// A look of the same key may have recorded while the read ran.
+	if (head !== undefined && headRecords.get(key) === undefined)
+		headRecords.set(key, head);
 }
 
 /**
@@ -966,6 +1120,71 @@ export interface GitRecoveryOutcome {
 	 * table is visible rather than inferred. Present only when it is nonzero.
 	 */
 	unknownStatusCount?: number;
+	/**
+	 * #5552: the recovered paths a named path or directory credited, whatever
+	 * their mtime or freshness. They are the command's own writes: the prescan
+	 * named where it writes, and the path was clean before it. Present only when
+	 * nonzero.
+	 */
+	namedCredited?: string[];
+	/**
+	 * #5616: the verdict on each recovered path no named write claimed, present
+	 * only when the caller asked for it ({@link GitRecoveryOptions.scriptCredit}).
+	 */
+	scriptCredit?: ScriptCreditVerdicts;
+}
+
+/**
+ * #5616: why a path a bash call changed without naming it is not credited to
+ * the call. `dirty-before`: the file was dirty when the call started.
+ * `other-writer`: pi-lens recorded another write to it in the call's window.
+ * `dirty-set-cut`: the baseline's dirty set was cut, so "clean before" is
+ * unknown. `no-dirty-set`: the root holds no dirty set (git could not answer,
+ * a linked worktree, a checkout with no git). `failed-command`: the call
+ * exited non-zero, as named writes are not credited then either (#2000).
+ */
+export type ScriptCreditCause =
+	| "dirty-before"
+	| "other-writer"
+	| "dirty-set-cut"
+	| "no-dirty-set"
+	| "failed-command";
+
+export interface ScriptCreditVerdicts {
+	/** Clean before, changed in the window, no other observed writer. */
+	credited: string[];
+	withheld: Array<{ key: string; cause: ScriptCreditCause }>;
+}
+
+/**
+ * #5616: one record per cause and root per session that a file a bash call
+ * changed without naming it was not credited to the call, so its blockers went
+ * out as the withheld line rather than a STOP.
+ */
+export function recordScriptCreditWithheld(
+	cause: ScriptCreditCause,
+	root: string,
+): void {
+	recordDegradationOnce({
+		kind: "script-write-credit-withheld",
+		subject: `${cause}:${normalizeMapKey(root)}`,
+		reason: scriptCreditWithheldReason(cause),
+	});
+}
+
+/** A function, not a table: the cap is declared further down this module. */
+function scriptCreditWithheldReason(cause: ScriptCreditCause): string {
+	return {
+		"dirty-before":
+			"a bash call changed a file that was already dirty when it started, so pi-lens cannot tell its bytes from the earlier ones; its blockers are disclosed, not stopped on",
+		"other-writer":
+			"pi-lens recorded another write to a file while a bash call ran, so the call is not credited with it; its blockers are disclosed, not stopped on",
+		"dirty-set-cut": `${SAME_HEAD_DIRTY_SET_CAP} or more working-tree paths were dirty before a bash call, so no file can be shown clean before it; a file the call changed without naming it is not credited`,
+		"no-dirty-set":
+			"a bash call changed a file in a root with no pre-call dirty set (git could not answer, a linked worktree, or no git), so the call is not credited with it",
+		"failed-command":
+			"a bash call that failed changed a file it does not name; a failed call's writes are not credited, so its blockers are disclosed, not stopped on",
+	}[cause];
 }
 
 /** Narrow failure-only policy for Git integration commands. */
@@ -976,6 +1195,30 @@ export interface GitRecoveryOptions {
 	 * worktree status and every unmerged path remain eligible.
 	 */
 	excludeIndexOnlyWhenUnmerged?: boolean;
+	/**
+	 * Destinations resolved by the bash prescan: files, and directories the
+	 * command fills (`rsync`, `tar x`). A named path, or a file under a named
+	 * directory, that git lists as changed is reported whatever its mtime,
+	 * because `mv`, `cp -p`, `rsync -a` and `tar x` keep the source's old one.
+	 * Applies only with `dirtyBefore`.
+	 */
+	namedPaths?: readonly string[];
+	/**
+	 * The baseline's pre-command dirty set (`PendingOpaqueBaseline.dirtyPaths`).
+	 * A named path in it keeps the mtime rule: a recognized `cp -n` may have
+	 * written nothing over a file the user edited. `undefined` (git could not
+	 * answer, or the root took no dirty capture) leaves every named path on the
+	 * mtime rule, and so does a set cut at {@link SAME_HEAD_DIRTY_SET_CAP}.
+	 */
+	dirtyBefore?: readonly string[] | undefined;
+	/**
+	 * #5616: judge each changed path no named write claimed for credit to a
+	 * successful bash call. Set only for such a call; `observedWriters` returns
+	 * the map keys pi-lens recorded a write to since the call's baseline. It is
+	 * read once, after the status read and the stat checks, so a write another
+	 * tool records while they await is in it (review F6).
+	 */
+	scriptCredit?: { observedWriters: () => ReadonlySet<string> };
 }
 
 interface GitStatusEntry {
@@ -1241,9 +1484,11 @@ export async function readSameHeadDiscards(
 
 /**
  * Files dirty in the working tree whose mtime falls inside
- * [startedAt - tolerance, now]. Porcelain -z parsing handles renames: the NEW
- * path is the one filtered, and the entry's source side (`renamedFrom`) is
- * ignored here.
+ * [startedAt - tolerance, now]. A destination named by the bash prescan (a
+ * file, or a directory the command fills) that was clean before the command
+ * skips the window, so a preserved mtime does not hide a write.
+ * Porcelain -z parsing handles renames: the NEW path is the one filtered, and
+ * the entry's source side (`renamedFrom`) is ignored here.
  */
 export async function recoverOpaqueChangesViaGit(
 	root: string,
@@ -1263,14 +1508,48 @@ export async function recoverOpaqueChangesViaGit(
 
 	const hasUnmerged = entries.some((entry) => isUnmergedStatus(entry.status));
 	const floorMs = startedAt - OPAQUE_MTIME_TOLERANCE_MS;
+	const namedPaths = new Set(
+		(options.namedPaths ?? []).map((file) =>
+			normalizeMapKey(realpathOrResolve(file)),
+		),
+	);
+	// A set at the cap was cut by {@link captureGitDirtyPaths}: a path absent
+	// from it may have been dirty all along, so "clean before" is unknown for
+	// every path and nothing is credited by name or scope (#5552 r2). The
+	// capture counts a set of exactly the cap as cut, which fails closed.
+	const dirtySetCut =
+		options.dirtyBefore !== undefined &&
+		options.dirtyBefore.length >= SAME_HEAD_DIRTY_SET_CAP;
+	if (dirtySetCut && namedPaths.size > 0)
+		recordDegradationOnce({
+			kind: "named-write-credit-withheld",
+			subject: normalizeMapKey(root),
+			reason: `${SAME_HEAD_DIRTY_SET_CAP} or more working-tree paths were dirty before a bash call, so no file can be shown clean before it; a write that keeps an old mtime (mv, cp -p, rsync -a, tar x) is not recovered by name for this call`,
+		});
+	const cleanBefore =
+		options.dirtyBefore === undefined || dirtySetCut
+			? undefined
+			: new Set(options.dirtyBefore);
+	// Both sides are one form (`normalizeMapKey` of a real path), so the
+	// containment test is the text one, with no second filesystem read.
+	const isNamed = (key: string): boolean =>
+		[...namedPaths].some((named) => isWithinForm(key, named));
+	// A named entry is listed by git status, so it differs from HEAD or the
+	// index: that is the write. Only a path that was clean before the command
+	// can be credited so (`cp -n` over a user edit wrote nothing).
+	const isNamedWrite = (absPath: string): boolean =>
+		cleanBefore?.has(normalizeMapKey(absPath)) === false &&
+		isNamed(normalizeMapKey(realpathOrResolve(absPath)));
 	// Kernel "stale" = modified AFTER the window floor - exactly the writes
 	// this command may have authored, so exactly the entries that would be
 	// dispatched absent any other filtering.
-	async function isInWindow(absPath: string): Promise<boolean> {
+	async function isChanged(entry: GitStatusEntry): Promise<boolean> {
+		const { absPath } = entry;
 		try {
 			const stat = await fs.promises.stat(absPath);
+			if (!stat.isFile()) return false;
+			if (isNamedWrite(absPath)) return true;
 			return (
-				stat.isFile() &&
 				freshnessFromMtime({ mtimeMs: stat.mtimeMs, referenceMs: floorMs })
 					.verdict === "stale"
 			);
@@ -1305,13 +1584,42 @@ export async function recoverOpaqueChangesViaGit(
 			// #2081: only count entries the mtime window would otherwise have
 			// dispatched. A long-staged clean-index path outside the window was
 			// never going to be reported, so dropping it here is not suppression.
-			if (await isInWindow(entry.absPath)) excludedIncomingCount += 1;
+			if (await isChanged(entry)) excludedIncomingCount += 1;
 		}
 		candidates = kept;
 	}
 	const paths: string[] = [];
-	for (const { absPath } of candidates) {
-		if (await isInWindow(absPath)) paths.push(normalizeMapKey(absPath));
+	const namedCredited: string[] = [];
+	// #5616: the paths no named write claimed. A named one was dirty before or
+	// has no dirty set, so it is never credited, and the caller drops its cause
+	// with the other named paths.
+	const unnamed: string[] = [];
+	for (const entry of candidates) {
+		if (!(await isChanged(entry))) continue;
+		const key = normalizeMapKey(entry.absPath);
+		paths.push(key);
+		if (isNamedWrite(entry.absPath)) namedCredited.push(key);
+		else unnamed.push(key);
+	}
+	let scriptCredit: ScriptCreditVerdicts | undefined;
+	if (options.scriptCredit) {
+		// After every await above, so a write recorded meanwhile counts.
+		const observed = options.scriptCredit.observedWriters();
+		scriptCredit = { credited: [], withheld: [] };
+		for (const key of unnamed) {
+			const cause: ScriptCreditCause | undefined =
+				cleanBefore === undefined
+					? dirtySetCut
+						? "dirty-set-cut"
+						: "no-dirty-set"
+					: cleanBefore.has(key)
+						? "dirty-before"
+						: observed.has(key)
+							? "other-writer"
+							: undefined;
+			if (cause === undefined) scriptCredit.credited.push(key);
+			else scriptCredit.withheld.push({ key, cause });
+		}
 	}
 	return {
 		verdict: "recovered",
@@ -1320,5 +1628,7 @@ export async function recoverOpaqueChangesViaGit(
 		// Omitted when zero so the common outcome keeps one shape.
 		...(excludedIncomingCount > 0 ? { excludedIncomingCount } : {}),
 		...(unknownStatusCount > 0 ? { unknownStatusCount } : {}),
+		...(namedCredited.length > 0 ? { namedCredited } : {}),
+		...(scriptCredit ? { scriptCredit } : {}),
 	};
 }

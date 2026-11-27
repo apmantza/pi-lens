@@ -22,6 +22,12 @@ import { readJsonCache, readJsonCacheAsync } from "./json-cache-read.js";
 import { isUnderDir, normalizeMapKey, relativeInside } from "./path-utils.js";
 import { realIsPidAlive } from "./pid-liveness.js";
 import type { AnalysisRootMode } from "./analysis-root.js";
+import { isJstsFactFile } from "./file-kinds.js";
+
+// Non-JS/TS source extensions jscpd can re-scan; the JS/TS family answers
+// through the registry seam (`isJstsFactFile`) (#5446).
+const JSCPD_RESCAN_OTHER_EXTENSIONS =
+	/\.(py|go|rs|rb|java|cs|php|cpp|c|h|hpp|swift|kt)$/;
 
 // --- Types ---
 
@@ -860,10 +866,8 @@ export class CacheManager {
 	 */
 	getFilesForJscpd(cwd: string, sessionId?: string): string[] {
 		const state = this.readTurnState(cwd, sessionId);
-		return Object.keys(state.files).filter((f) =>
-			/\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|cs|php|cpp|c|h|hpp|swift|kt)$/.test(
-				f,
-			),
+		return Object.keys(state.files).filter(
+			(f) => isJstsFactFile(f) || JSCPD_RESCAN_OTHER_EXTENSIONS.test(f),
 		);
 	}
 

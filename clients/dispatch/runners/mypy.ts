@@ -1,7 +1,9 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
+import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
-import { hasMypyConfig } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -9,16 +11,11 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import {
-	createAvailabilityChecker,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-const mypy = createAvailabilityChecker("mypy", "");
 
 // mypy exit codes: 0 = no type errors, 1 = type errors found, 2 = a blocking
 // error. 2 is NOT a rejected invocation on its own — mypy reports a source
@@ -81,24 +78,19 @@ const mypyRunner: RunnerDefinition = {
 	appliesTo: ["python"],
 	priority: PRIORITY.GENERAL_ANALYSIS,
 	skipTestFiles: false,
-	requiresConfig: (cwd) => hasMypyConfig(cwd),
+	requiresConfig: (cwd) => hasToolConfig("mypy", cwd),
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "mypy");
 
 		// Only run if mypy config exists — avoids false positives in untyped projects
 		if (!mypyRunner.requiresConfig?.(cwd)) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-configured");
 		}
 
-		let cmd: string | null = null;
-		if (await mypy.isAvailableAsync(cwd)) {
-			cmd = mypy.getCommand(cwd);
-		} else {
-			cmd = await resolveToolCommandWithInstallFallback(cwd, "mypy");
-		}
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "mypy");
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip(cwd, { id: "mypy" });
 
 		const result = await safeSpawnAsync(
 			cmd,

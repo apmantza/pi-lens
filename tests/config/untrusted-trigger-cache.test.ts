@@ -14,6 +14,7 @@
 // commented-out step is not a step, a `run:` echoing the name is not a use).
 // A local composite action or reusable workflow is followed, because
 // `uses: ./.github/actions/x` hides its steps from the caller's own file.
+import yaml from "../../clients/deps/js-yaml.js";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -414,4 +415,194 @@ describe("untrusted triggers never restore or save a cache (#4358)", () => {
 			expect(untrustedCacheFindings(workflow, "p.yml")).toHaveLength(1);
 		});
 	});
+});
+
+function jobsOf(
+	file: string,
+	source = readFileSync(resolve(ROOT, file), "utf8"),
+): Record<
+	string,
+	{ steps?: { uses?: string; with?: Record<string, unknown> }[] }
+> {
+	return (
+		yaml.load(source) as {
+			jobs: Record<
+				string,
+				{ steps?: { uses?: string; with?: Record<string, unknown> }[] }
+			>;
+		}
+	).jobs;
+}
+// #5082 / #5182 recurrence: no-install jobs won the shared Linux npm cache
+// key with an empty ~/.npm. Every writer must now declare its cache intent.
+describe("npm auto-cache writers across workflows", () => {
+	const scan = (ciSource?: string, overrideFile = "ci.yml") => {
+		// #5182: preserve deferred workflow bytes until scheduled master validation.
+		// 29 exact-step admissions preserve workflows awaiting hosted validation.
+		const deferredOptOutBaseline = new Set([
+			"compat-smoke.yml:compat-smoke-alert:0",
+			"compat-smoke.yml:compat-smoke:0",
+			"grammar-health.yml:guard:0",
+			"grammar-health.yml:swift-crash-watch:0",
+			"lifecycle-smoke.yml:availability-lifecycle:0",
+			"lifecycle-smoke.yml:gitleaks-scratch-exclusion:0",
+			"lifecycle-smoke.yml:psscriptanalyzer-classification:0",
+			"parser-smoke.yml:parser-smoke:0",
+			"release.yml:prepare:0",
+			"release.yml:publish-npm:0",
+			"shuffle-census-nightly.yml:census:0",
+			"shuffle-census-nightly.yml:confirm-report:0",
+			"shuffle-census-nightly.yml:publish-issue:0",
+			"stale-open-issues.yml:detect:0",
+			"stryker-nightly.yml:mutate:0",
+			"stryker-nightly.yml:prepare:0",
+			"stryker-nightly.yml:publish-issue:0",
+			"stryker-nightly.yml:publish:0",
+			"stryker-pertest.yml:mutate:0",
+			"tool-smoke.yml:snapshot-persist-bench:0",
+			"tool-smoke.yml:snapshot-persist-notify:0",
+			"tool-smoke.yml:test-history-notify:0",
+			"tool-smoke.yml:test-history-publish:0",
+			"tool-smoke.yml:test-history-rollup:0",
+			"tool-smoke.yml:tool-smoke-notify:0",
+			"tool-smoke.yml:tool-smoke-prs:0",
+			"tool-smoke.yml:tool-smoke:0",
+			"untriaged-issues.yml:detect:0",
+			"windows-repeat-probe.yml:repeat:0",
+		]);
+		const offenders: string[] = [];
+		let scanned = 0;
+		for (const file of readdirSync(resolve(ROOT, ".github/workflows"))) {
+			if (!/\.ya?ml$/.test(file)) continue;
+			for (const [id, job] of Object.entries(
+				jobsOf(
+					`.github/workflows/${file}`,
+					file === overrideFile ? ciSource : undefined,
+				),
+			)) {
+				let setupIndex = 0;
+				for (const setup of job.steps ?? []) {
+					if (!setup.uses?.toLowerCase().startsWith("actions/setup-node@"))
+						continue;
+					const key = `${file}:${id}:${setupIndex++}`;
+					scanned++;
+					const intent = setup.with?.["package-manager-cache"];
+					if (intent !== true && intent !== false) offenders.push(key);
+				}
+			}
+		}
+		assertNonEmptyScan("setup-node cache writers", scanned);
+		expect(offenders.filter((key) => !deferredOptOutBaseline.has(key))).toEqual(
+			[],
+		);
+		expect(
+			[...deferredOptOutBaseline].filter((key) => !offenders.includes(key)),
+		).toEqual([]);
+		return scanned;
+	};
+	it("requires every setup-node step to declare boolean cache intent", () =>
+		scan());
+
+	// F2: author intent replaces guesses about shell reachability and location.
+	it.each([
+		["missing key", ""],
+		["expression", "package-manager-cache: ${{ true }}"],
+		["string false", "package-manager-cache: 'false'"],
+		["string true", "package-manager-cache: 'true'"],
+		["null", "package-manager-cache: null"],
+		["number", "package-manager-cache: 0"],
+		["string alias", "package-manager-cache: *intent"],
+		["mixed-case missing key", ""],
+	])("rejects %s in the workflow scan", (name, input) => {
+		let source =
+			"x-intent: &intent 'false'\n" +
+			readFileSync(resolve(WORKFLOWS, "ci.yml"), "utf8")
+				.replace("package-manager-cache: false", input)
+				.replace(
+					"      - name: Classify the changed files",
+					"      - run: npm ci --dry-run\n      - name: Classify the changed files",
+				);
+		if (name === "mixed-case missing key")
+			source = source.replace("actions/setup-node@", "Actions/Setup-Node@");
+		expect(() => scan(source)).toThrow();
+	});
+
+	// F3: a job-level admission must never admit another cache writer.
+	it("rejects a second writer in a baselined job", () => {
+		const source = readFileSync(
+			resolve(WORKFLOWS, "release.yml"),
+			"utf8",
+		).replace(
+			"      - uses: actions/setup-node@",
+			"      - uses: actions/setup-node@v7\n      - uses: actions/setup-node@",
+		);
+		expect(() => scan(source, "release.yml")).toThrow();
+	});
+
+	it("rejects a stale baseline row", () => {
+		const source = readFileSync(
+			resolve(WORKFLOWS, "release.yml"),
+			"utf8",
+		).replace(
+			"        with:\n          node-version:",
+			"        with:\n          package-manager-cache: false\n          node-version:",
+		);
+		expect(() => scan(source, "release.yml")).toThrow();
+	});
+
+	it.each(["true", "false", "*intent"])(
+		"accepts boolean %s in the workflow scan",
+		(input) => {
+			const source =
+				"x-intent: &intent true\n" +
+				readFileSync(resolve(WORKFLOWS, "ci.yml"), "utf8").replace(
+					"package-manager-cache: false",
+					`package-manager-cache: ${input}`,
+				);
+			expect(() => scan(source)).not.toThrow();
+		},
+	);
+
+	// Q1: a mixed-case writer with declared intent remains in the census.
+	it("counts mixed-case setup-node with explicit intent", () => {
+		const source = readFileSync(resolve(WORKFLOWS, "ci.yml"), "utf8");
+		expect(
+			scan(source.replace("actions/setup-node@", "Actions/Setup-Node@")),
+		).toBe(scan(source));
+	});
+});
+
+// #5182: retain each writer's scopes while removing workflow-wide writes.
+it("scopes bot write permissions to their sole job", () => {
+	for (const [file, id, permissions] of [
+		[
+			"close-keyword-verification",
+			"verify",
+			{ contents: "read", issues: "read", "pull-requests": "write" },
+		],
+		["greetings", "greeting", { issues: "write", "pull-requests": "write" }],
+	] as const) {
+		const workflow = yaml.load(
+			readFileSync(resolve(ROOT, `.github/workflows/${file}.yml`), "utf8"),
+		) as {
+			permissions: unknown;
+			jobs: Record<string, { permissions?: Record<string, string> }>;
+		};
+		expect(workflow.permissions).toEqual({});
+		expect(workflow.jobs[id].permissions).toEqual(permissions);
+	}
+});
+
+// #5182: a newer PR must never cancel a scheduled dependency scan.
+it("cancels only PR runs within an event and ref concurrency group", () => {
+	for (const file of ["action-pins", "osv-scan"]) {
+		const workflow = yaml.load(
+			readFileSync(resolve(ROOT, `.github/workflows/${file}.yml`), "utf8"),
+		) as { concurrency: unknown };
+		expect(workflow.concurrency).toEqual({
+			group:
+				"${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}",
+			"cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+		});
+	}
 });

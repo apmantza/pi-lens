@@ -245,7 +245,7 @@ async function startRuntime(
 		{ cwd: runtimeCwd, agentDir, sessionManager },
 	);
 	// Bound once with an error listener, as pi's modes bind: `/reload` emits
-	// its session_start only to a session with host bindings, and a handler
+	// its session_start to an extension-bound session, and a handler
 	// error then reaches the listener instead of vanishing.
 	const bindings = { onError: (error: unknown) => extensionErrors.push(error) };
 	runtime.setRebindSession(async () => {
@@ -2319,11 +2319,14 @@ describe("#3855 only the successor the primary named is primary in its gap", () 
 	}
 
 	/**
-	 * Review F3 (probe PR7): pi's reload() emits no session_start to a session
-	 * without host bindings, so round 1's note for that subagent's successor
-	 * stayed. When the primary later resumed the subagent's file, its own
-	 * successor matched the stale note and was declined, and no session was
-	 * primary.
+	 * Review F3 (probe PR7): a reload with no session_start left round 1's
+	 * note for that subagent's successor behind. When the primary later resumed
+	 * the subagent's file, its own successor matched the stale note and was
+	 * declined, and no session was primary.
+	 *
+	 * Clear both host gate shapes: pi 1.5.2 checked the four binding fields;
+	 * pi 1.6.0 checks _extensionsBound even after those fields are cleared.
+	 * The no-start premise must hold on both supported hosts.
 	 */
 	it("keeps the primary's resume successor primary after a subagent reloaded with no start", async () => {
 		const primary = await startRuntime(SessionManager.create(cwd, sessionsDir));
@@ -2342,6 +2345,7 @@ describe("#3855 only the successor the primary named is primary in its gap", () 
 			"_extensionErrorListener",
 		])
 			unbound[binding] = undefined;
+		unbound._extensionsBound = false;
 		await subagent.session.reload();
 
 		await primary.switchSession(subagentFile);
@@ -2774,9 +2778,14 @@ describe("#3758 pending runner findings and session scope", () => {
 describe("#3763 ast_grep_replace is wired to the live session", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
+		FLAGS.set("no-autofix", true);
 	});
 
 	it("passes the session scope the call ran in to the apply", async () => {
+		// #5417: an apply under `no-autofix` is refused before the client is
+		// reached; this file's flag default is on, and pi reads a boolean flag's
+		// presence, so the apply needs the entry gone.
+		FLAGS.delete("no-autofix");
 		const seen = coordinators();
 		const runtime = await startRuntime(SessionManager.inMemory(cwd));
 		vi.spyOn(AstGrepClient.prototype, "ensureAvailable").mockResolvedValue(

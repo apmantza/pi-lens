@@ -9,6 +9,7 @@
  * Replaces CLI-based runners for faster performance (100x speedup).
  */
 
+import { hasToolConfig } from "../../tool-config-presence.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
@@ -31,7 +32,6 @@ import {
 	recordNapiFallbackCoverage,
 } from "../../lsp/pending-aux-coverage.js";
 import type { AstGrepRuleSource } from "../../sgconfig.js";
-import { hasEslintConfig } from "../../tool-policy.js";
 import { enabledAuxiliaryLspServerIds } from "../auxiliary-lsp.js";
 import { classifyDefect } from "../diagnostic-taxonomy.js";
 import { PRIORITY } from "../priorities.js";
@@ -961,7 +961,7 @@ export function evaluateAstGrepRules(
 		options.unsupportedLanguageLog ?? defaultUnsupportedLanguageLog;
 
 	const diagnostics: Diagnostic[] = [];
-	const suppressLinterOverlap = kind === "jsts" && hasEslintConfig(cwd);
+	const suppressLinterOverlap = kind === "jsts" && hasToolConfig("eslint", cwd);
 	const fileLang = ruleLanguageForFile(filePath);
 	// Embedded `<script>` coverage (#2347): on an HTML file, every script body
 	// is parsed as JavaScript and `language: JavaScript` rules run inside it —

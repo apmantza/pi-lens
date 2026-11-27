@@ -245,6 +245,23 @@ describe("analyze-pi-lens-logs.mjs D1-D16 detectors (#3870)", () => {
 		]);
 	});
 
+	it("D7 census: keeps reading durable rows written under a retired kind name (#5400)", () => {
+		// #5400 split zizmor's offline fallback out of "mode-suppression" and the
+		// PowerShell `-File` run failure out of "grammar-blocked". A kind is a
+		// free-form string in the durable row, so every latency.log written before
+		// the split still carries the old names and the census still has to tally
+		// them: this fixture's three rows are the pre-split shape (labelled
+		// synthetic in their `fixture` field), and the census keeps each kind's
+		// MAX count, so grammar-blocked reads 8, not the first row's 4.
+		const report = run("legacy-degradation-kinds");
+		expect(report.detectors.hookAwait.census).toEqual([
+			{
+				pid: "41001",
+				kinds: ["grammar-blocked=8", "mode-suppression=1"],
+			},
+		]);
+	});
+
 	it("D8 turn-end-slow: flags a pid by slow share or by one long summary", () => {
 		// {"type":"tool_result","toolName":"turn_end","durationMs":10188,"metadata":{"blockerSections":0,...}}
 		// Real pid 3205171: 14 of 43 over 3 s, max 10188. Real pid 763652: 0 of

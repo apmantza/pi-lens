@@ -17,7 +17,8 @@ import { setupTestEnvironment } from "./test-utils.js";
 // `safeSpawnAsync("where"/"which", [cmd])`, so a not-found tool is simulated by
 // making the probe exit nonzero — not by mocking the imported `which`.
 const safeSpawnAsync = vi.fn();
-vi.mock("../../clients/safe-spawn.js", () => ({
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
 	safeSpawnAsync,
 	safeSpawn: vi.fn(),
 	which: vi.fn(async () => null),
@@ -457,6 +458,48 @@ describe("runFormatPhase feeds the deferred drain (#2413)", () => {
 		expect(result.formatFailures).toEqual([
 			"biome: biome exited with status 2",
 		]);
+	});
+
+	it("does not credit a cooled skip as a formatter that ran", async () => {
+		const { runFormatPhase } = await import("../../clients/pipeline.js");
+		const filePath = path.join(process.cwd(), "cooled-fixture.ts");
+		const fakeService = {
+			recordRead: () => {},
+			formatFile: async () => ({
+				filePath,
+				formatters: [
+					{
+						name: "gofmt",
+						success: true,
+						changed: false,
+						outcome: "skipped" as const,
+						error: "gofmt: formatter child is still running",
+					},
+					{
+						name: "prettier",
+						success: true,
+						changed: false,
+						outcome: "unchanged" as const,
+					},
+				],
+				anyChanged: false,
+				allSucceeded: true,
+			}),
+		};
+
+		const result = await runFormatPhase(
+			filePath,
+			() => fakeService as never,
+			() => {},
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			path.dirname(filePath),
+		);
+
+		expect(result.formattersUsed).toEqual(["prettier"]);
+		expect(result.formatFailures).toEqual([]);
 	});
 });
 

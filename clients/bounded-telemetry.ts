@@ -92,6 +92,11 @@ export const BOUNDED_TELEMETRY_PHASES = [
 	/** #1743 review: the same skip, for a temporarily unavailable command. */
 	"lsp_client_skipped_unavailable_command",
 	/**
+	 * #5700: the open-document cap's didClose failed for a reason other than a
+	 * closed stream. Rising-edge per server, the ledger holding the count.
+	 */
+	"lsp_open_document_cap_close_failed",
+	/**
 	 * #1934: `getWarmClientForFile` found no live client for a file that has at
 	 * least one language server with a resolvable root. Its callers run per
 	 * file (the cascade quiet window, read expansion, `hasWarmLSP`), so it is
@@ -109,6 +114,14 @@ export const BOUNDED_TELEMETRY_PHASES = [
 	 * failed to load.
 	 */
 	"lsp_server_message",
+	/**
+	 * #5487: a pull was held to the readiness the server announced
+	 * (`experimental/serverStatus`): its empty answer came while it was still
+	 * loading, so it was retracted and asked again after quiescence. Rising edge
+	 * per server; the ledger counts every occurrence under
+	 * `lsp-server-loading-gated`.
+	 */
+	"lsp_server_loading_gated",
 	/**
 	 * #4764: an empty publication refused as clean-scan evidence because the
 	 * auxiliary server reported its config failed to load — dropped at receipt or

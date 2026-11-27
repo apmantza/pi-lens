@@ -21,13 +21,14 @@
  */
 
 import * as path from "node:path";
-import { findLocalToolConfig, pathsEqual } from "../../path-utils.js";
+import { pathsEqual } from "../../path-utils.js";
 import {
 	isShellcheckDialectSupported,
 	resolveShellFileDialect,
 } from "../../shell-dialect.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
+import { hasToolConfig } from "../../tool-config-presence.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -36,16 +37,14 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import {
-	createAvailabilityChecker,
 	coveringLaneAvailable,
 	lspPrimaryCoversFile,
-	resolveAvailableOrInstall,
+	resolveToolCommandWithInstallFallback,
+	toolAbsentSkip,
 } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-const shellcheck = createAvailabilityChecker("shellcheck", ".exe");
 
 // EXIT TABLE (ShellCheck v0.11.0 documents these codes, pinned at
 // https://github.com/koalaman/shellcheck/blob/b12c2a6a0834a5b8c12b1c0eb36704f698de5bac/shellcheck.1.md#return-values):
@@ -53,10 +52,6 @@ const shellcheck = createAvailabilityChecker("shellcheck", ".exe");
 // 3 = invoked with bad syntax, 4 = invoked with bad options. Only 1 is a run
 // that carries findings; 2, 3 and 4 are rejected invocations, never a scan.
 const SHELLCHECK_EXIT_CODES: ToolExitCodes = { ran: [1] };
-
-function findShellcheckConfig(cwd: string): string | undefined {
-	return findLocalToolConfig(cwd, [".shellcheckrc"]);
-}
 
 /**
  * Parse shellcheck JSON output
@@ -199,18 +194,8 @@ const shellcheckRunner: RunnerDefinition = {
 			};
 		}
 
-		let cmd: string | null = null;
-		if (await shellcheck.isAvailableAsync(cwd)) {
-			cmd = shellcheck.getCommand(cwd);
-		} else {
-			const managed = await resolveAvailableOrInstall(
-				shellcheck,
-				"shellcheck",
-				cwd,
-			);
-			if (managed) cmd = managed;
-		}
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "shellcheck");
+		if (!cmd) return toolAbsentSkip(cwd, { id: "shellcheck" });
 
 		// Build args
 		// --format json: JSON output
@@ -227,8 +212,10 @@ const shellcheckRunner: RunnerDefinition = {
 		}
 
 		// Check for config file
-		const configPath = findShellcheckConfig(ctx.cwd);
-		if (!configPath) {
+		// From the script's directory, as shellcheck itself searches: a
+		// `.shellcheckrc` beside the script sits below `ctx.cwd`.
+		const configDir = path.dirname(path.resolve(cwd, ctx.filePath));
+		if (!hasToolConfig("shellcheck", configDir)) {
 			// No config file: surface `info`-level findings (e.g. SC2086
 			// double-quote-to-prevent-globbing — a high-value, commonly-relevant
 			// check that was previously dropped, #213) while still excluding pure

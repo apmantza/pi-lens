@@ -314,9 +314,9 @@ function censusPins(
 const PINNED_PRINT = [
 	"expect(CENSUS_SITES.length).toBe(68);",
 	"expect(CENSUS_ROWS.length).toBe(72);",
-	'expect(stageJobs("A")).toBe(22);',
+	'expect(stageJobs("A")).toBe(21);',
 	'expect(stageJobs("C")).toBe(11);',
-	'expect(stageJobs("D")).toBe(39);',
+	'expect(stageJobs("D")).toBe(40);',
 	"expect(CENSUS_SITES.filter((site) => site.ref !== undefined).length).toBe(18);",
 	"expect(CENSUS_SITES.filter((site) => site.ref === EPHEMERAL_PULL_REF).length).toBe(15);",
 	'expect(stageRefs("A")).toBe(14);',
@@ -326,7 +326,7 @@ const PINNED_PRINT = [
 // Snapshot identities make a pin failure actionable. Counts alone say that a
 // row moved; these keys say which job added or removed it.
 const PINNED_ROW_KEYS =
-	"action-pins.yml::check::A|cache-prune.yml::plan::A|cache-prune.yml::prune::A|ci-infra-kill-rerun.yml::classify::D|ci-infra-kill-rerun.yml::finalize-rerun::D|ci-verdict-labels.yml::clear-stale-verdict-labels::A|ci.yml::changes::C|ci.yml::strict-install-cold-cache::A|ci.yml::changelog-fragment-fastfail::A|ci.yml::tla-shards::A|ci.yml::tla-models::A|ci.yml::lint-and-typecheck::A|ci.yml::changed-tests-shuffled::C|ci.yml::test::A|ci.yml::unit-tests::A|ci.yml::unit-tests-windows::A|ci.yml::prod-install-build::A|ci.yml::install-test::A|close-keyword-verification.yml::verify::D|codeql.yml::analyze::D|codeql.yml::upload::D|compat-smoke.yml::compat-smoke::D|compat-smoke.yml::compat-smoke-alert::D|grammar-health.yml::guard::D|grammar-health.yml::swift-crash-watch::D|greetings.yml::greeting::D|hot-path-latency.yml::latency::C|install-smoke.yml::scope::C|install-smoke.yml::smoke::A|install-smoke.yml::npm-strict::A|install-smoke.yml::pi-load::A|install-smoke.yml::lsp-handshake::C|install-smoke.yml::mise-repro::C|install-smoke.yml::host-range-smoke::A|install-smoke.yml::host-latest-smoke::D|install-smoke.yml::host-latest-notify::C|labels.yml::sync::D|lifecycle-smoke.yml::psscriptanalyzer-classification::D|lifecycle-smoke.yml::availability-lifecycle::D|lifecycle-smoke.yml::gitleaks-scratch-exclusion::D|lint.yml::actionlint-markdownlint::A|lint.yml::oxfmt::A|lint.yml::knip::A|lint.yml::oxlint-advisory::C|lint.yml::lint-advisory::C|osv-scan.yml::osv-scan::C|parser-smoke.yml::parser-smoke::D|pr-metadata.yml::pr-metadata::A|pr-metadata.yml::pr-body-lint::C|release.yml::prepare::D|release.yml::release::D|release.yml::publish-npm::D|shuffle-census-nightly.yml::census::D|shuffle-census-nightly.yml::confirm-report::D|shuffle-census-nightly.yml::publish-issue::D|stale-open-issues.yml::detect::D|stale.yml::stale::D|stryker-nightly.yml::prepare::D|stryker-nightly.yml::mutate::D|stryker-nightly.yml::publish::D|stryker-nightly.yml::publish-issue::D|stryker-pertest.yml::mutate::D|tool-smoke.yml::test-history-rollup::D|tool-smoke.yml::test-history-publish::D|tool-smoke.yml::test-history-notify::D|tool-smoke.yml::tool-smoke::D|tool-smoke.yml::tool-smoke-prs::D|tool-smoke.yml::tool-smoke-notify::D|tool-smoke.yml::snapshot-persist-bench::D|tool-smoke.yml::snapshot-persist-notify::D|untriaged-issues.yml::detect::D|windows-repeat-probe.yml::repeat::D".split(
+	"action-pins.yml::check::A|cache-prune.yml::plan::A|cache-prune.yml::prune::A|ci-infra-kill-rerun.yml::classify::D|ci-infra-kill-rerun.yml::finalize-rerun::D|ci-verdict-labels.yml::clear-stale-verdict-labels::A|ci.yml::changes::C|ci.yml::changelog-fragment-fastfail::A|ci.yml::tla-shards::A|ci.yml::tla-models::A|ci.yml::lint-and-typecheck::A|ci.yml::changed-tests-shuffled::C|ci.yml::test::A|ci.yml::unit-tests::A|ci.yml::unit-tests-windows::A|ci.yml::prod-install-build::A|ci.yml::install-test::A|close-keyword-verification.yml::verify::D|codeql.yml::analyze::D|codeql.yml::upload::D|compat-smoke.yml::compat-smoke::D|compat-smoke.yml::compat-smoke-alert::D|grammar-health.yml::guard::D|grammar-health.yml::swift-crash-watch::D|greetings.yml::greeting::D|hot-path-latency.yml::latency::C|install-smoke.yml::scope::C|install-smoke.yml::smoke::A|install-smoke.yml::npm-strict::A|install-smoke.yml::pi-load::A|install-smoke.yml::lsp-handshake::C|install-smoke.yml::mise-repro::C|install-smoke.yml::host-range-smoke::A|install-smoke.yml::host-latest-smoke::D|install-smoke.yml::host-latest-notify::C|labels.yml::sync::D|lifecycle-smoke.yml::psscriptanalyzer-classification::D|lifecycle-smoke.yml::availability-lifecycle::D|lifecycle-smoke.yml::gitleaks-scratch-exclusion::D|lint.yml::actionlint-markdownlint::A|lint.yml::oxfmt::A|lint.yml::knip::A|lint.yml::oxlint-advisory::C|lint.yml::lint-advisory::C|osv-scan.yml::osv-scan::C|parser-smoke.yml::parser-smoke::D|pr-metadata.yml::pr-metadata::A|pr-metadata.yml::pr-body-lint::C|release.yml::prepare::D|release.yml::release::D|release.yml::publish-npm::D|shuffle-census-nightly.yml::census::D|shuffle-census-nightly.yml::confirm-report::D|shuffle-census-nightly.yml::publish-issue::D|stale-open-issues.yml::detect::D|stale.yml::stale::D|strict-install.yml::strict-install-cold-cache::D|stryker-nightly.yml::prepare::D|stryker-nightly.yml::mutate::D|stryker-nightly.yml::publish::D|stryker-nightly.yml::publish-issue::D|stryker-pertest.yml::mutate::D|tool-smoke.yml::test-history-rollup::D|tool-smoke.yml::test-history-publish::D|tool-smoke.yml::test-history-notify::D|tool-smoke.yml::tool-smoke::D|tool-smoke.yml::tool-smoke-prs::D|tool-smoke.yml::tool-smoke-notify::D|tool-smoke.yml::snapshot-persist-bench::D|tool-smoke.yml::snapshot-persist-notify::D|untriaged-issues.yml::detect::D|windows-repeat-probe.yml::repeat::D".split(
 		"|",
 	);
 const PINNED_NO_CHECKOUT_KEYS = new Set([
@@ -650,7 +650,9 @@ describe("#3941 early-start advisory checkouts pin the captured commit", () => {
 		// #5275 removed ci.yml's PR-time `codeql` job, the last stage-B member:
 		// 70 -> 69 sites, B 1 -> 0, 73 -> 72 non-gate rows. Retiring `heavy-gate`
 		// removed the gate stage and its one checkout: 69 -> 68 sites, and the 72
-		// rows are all rows now.
+		// rows are all rows now. #5002 moved `strict-install-cold-cache` out of
+		// ci.yml (A) into strict-install.yml, which has no pull_request trigger
+		// (A 22 -> 21, D 39 -> 40; sites and rows unchanged).
 		assertNonEmptyScan(
 			"early-start advisory checkout census",
 			CENSUS_SITES.length,
@@ -658,9 +660,9 @@ describe("#3941 early-start advisory checkouts pin the captured commit", () => {
 		);
 		pinnedNumber("checkout sites", CENSUS_SITES.length, 68);
 		pinnedNumber("job rows", CENSUS_ROWS.length, 72);
-		pinnedNumber("stage A rows", stageJobs("A"), 22);
+		pinnedNumber("stage A rows", stageJobs("A"), 21);
 		pinnedNumber("stage C rows", stageJobs("C"), 11);
-		pinnedNumber("stage D rows", stageJobs("D"), 39);
+		pinnedNumber("stage D rows", stageJobs("D"), 40);
 		// #3941 F1: the schedule/dispatch-only advisory job is NOT early-start,
 		// even though its workflow also triggers on pull_request.
 		const hostLatest = CENSUS_SITES.find(

@@ -24,13 +24,26 @@
 //   rewrites only the rows this run measured, and a row whose run hit a failure
 //   (`install`, `setup`, a thrown arm) produces NO cell at all rather than a
 //   verdict read off the arm that failed (#4999 F8).
+// - HOLD. A settled verdict changes only after two consecutive nights agree on
+//   the new one (#3405), through the same `advancePendingClass` hysteresis the
+//   `clean-behavior` column uses; the pending night lives in the refresh-state
+//   JSON under `save-verdict`, never in the table.
 //
 // Dependency-free on purpose (only `md-matrix.mjs`, itself dependency-free, for
 // the markdown table primitives): the nightly writes this doc on a checkout where
 // `dist/` may not exist yet, and the tests drive every rule without a language
 // server.
 
-import { parseTable, replaceTable } from "./md-matrix.mjs";
+import {
+	holdSettledCell,
+	parseRefreshState,
+	parseTable,
+	replaceTable,
+	SAVE_VERDICT_KEY,
+	sanitizePendingFlips,
+	setRefreshStateKey,
+	TIER_CHANGE_AGREE_RUNS,
+} from "./md-matrix.mjs";
 
 /** The table this module owns, located by its header prefix. */
 export const SAVE_VERDICT_MARKER = "| server | save as declared |";
@@ -337,13 +350,18 @@ export function saveVerdictCells(row) {
 
 /**
  * The run-log line for a row the merge held back (#5060): the answer that
- * stands, and what the night that could not tell measured.
+ * stands, and what the night that could not tell, or the one flip night not yet
+ * confirmed (#3405), measured.
  *
- * @param {{ server: string, prior: string, measured: string, verdict: string }} held
+ * @param {{ server: string, prior: string, measured: string, verdict: string, pendingRuns?: number }} held
  * @returns {string}
  */
 export function describeHeldBack(held) {
-	return `save-verdict: held back ${held.server}: kept "${held.prior}", this night measured "${held.measured}" — ${held.verdict}`;
+	// A pending flip (#3405) names its count; an unsettled night does not.
+	const why = held.pendingRuns
+		? `flip pending, night ${held.pendingRuns} of ${TIER_CHANGE_AGREE_RUNS}: `
+		: "";
+	return `save-verdict: held back ${held.server}: kept "${held.prior}", this night measured "${held.measured}" — ${why}${held.verdict}`;
 }
 
 /**
@@ -354,7 +372,7 @@ export function describeHeldBack(held) {
  * per run, however often a row repeats. A staleness counter or an issue is new
  * state and not built here.
  *
- * @param {Array<{ server: string, prior: string, measured: string, verdict: string }>} heldBack
+ * @param {Array<{ server: string, prior: string, measured: string, verdict: string, pendingRuns?: number }>} heldBack
  * @param {{ env: Record<string, string | undefined>, log: (line: string) => void }} sink
  */
 export function reportHeldBack(heldBack, { env, log }) {
@@ -434,12 +452,22 @@ export function saveVerdictSummary(run) {
  * row is reported in `heldBack` for the run log; the table has no column for an
  * unobserved night, so the log is where it is recorded.
  *
+ * A measured settled verdict that differs from a settled prior one is held
+ * until `TIER_CHANGE_AGREE_RUNS` consecutive nights agree on it (#3405): the
+ * first night leaves the row untouched and records the pending verdict in the
+ * refresh-state JSON (`save-verdict`), the agreeing night writes the row and
+ * clears the entry, and a night that returns to the published answer clears it.
+ * A prior that holds no settled answer (`unknown`, `inconclusive`, `cannot
+ * measure`) has nothing to protect, so a first measurement publishes on night
+ * one. An `inconclusive` night advances nothing and clears nothing. The pending
+ * entry of a server with no table row is dropped.
+ *
  * @returns {{
  *   text: string,
  *   changed: boolean,
  *   measured: string[],
  *   kept: string[],
- *   heldBack: Array<{ server: string, prior: string, measured: string, verdict: string }>,
+ *   heldBack: Array<{ server: string, prior: string, measured: string, verdict: string, pendingRuns?: number }>,
  *   notInTable: string[],
  *   reason?: string,
  * }}
@@ -467,36 +495,80 @@ export function refreshSaveVerdictTable(text, measured, opts = {}) {
 	const heldBack = [];
 	const verdictIdx = table.header.indexOf(SAVE_VERDICT_COLUMN);
 	const detailIdx = table.header.indexOf("verdict");
+	// #3405: the flips pending from earlier nights, and the ones pending after
+	// this one. A server with no table row falls out of the next map.
+	const priorPending = sanitizePendingFlips(
+		parseRefreshState(text)[SAVE_VERDICT_KEY],
+		"pendingSaveVerdict",
+	);
+	const nextPending = {};
+	const carry = (server) => {
+		if (priorPending[server]) nextPending[server] = priorPending[server];
+	};
 	for (const cells of table.rows) {
-		const row = byKey.get(cells[keyIdx]);
+		const server = cells[keyIdx];
+		const row = byKey.get(server);
 		if (!row) {
 			merged.push(cells);
-			kept.push(cells[keyIdx]);
+			kept.push(server);
+			carry(server);
 			continue;
 		}
-		if (
-			SAVE_VERDICT_SETTLED.has(cells[verdictIdx]) &&
-			!SAVE_VERDICT_SETTLED.has(row[SAVE_VERDICT_COLUMN])
-		) {
+		const prior = cells[verdictIdx];
+		const observed = row[SAVE_VERDICT_COLUMN];
+		const held = {
+			server,
+			prior,
+			measured: observed,
+			verdict: row[table.header[detailIdx]],
+		};
+		// #3405: a settled answer changes only after two consecutive nights agree
+		// on the new one; a night that could not tell neither advances nor clears
+		// a pending flip (`holdSettledCell`).
+		const decision = holdSettledCell({
+			prior,
+			observed,
+			pending: priorPending[server]
+				? {
+						value: priorPending[server].pendingSaveVerdict,
+						runs: priorPending[server].runs,
+					}
+				: undefined,
+			isSettled: (value) => SAVE_VERDICT_SETTLED.has(value),
+		});
+		if (!decision.publish) {
 			merged.push(cells);
-			heldBack.push({
-				server: cells[keyIdx],
-				prior: cells[verdictIdx],
-				measured: row[SAVE_VERDICT_COLUMN],
-				verdict: row[table.header[detailIdx]],
-			});
+			heldBack.push(
+				decision.held === "pending"
+					? { ...held, pendingRuns: decision.pending.runs }
+					: held,
+			);
+			if (decision.pending)
+				nextPending[server] = {
+					pendingSaveVerdict: decision.pending.value,
+					runs: decision.pending.runs,
+				};
 			continue;
 		}
+		// A first measurement (the prior holds no settled answer), the same answer
+		// again, or the committing night: the row is written and nothing is pending.
 		merged.push(
 			cells.map((cell, i) => {
 				const column = table.header[i];
 				return row[column] !== undefined ? row[column] : cell;
 			}),
 		);
-		measuredServers.push(cells[keyIdx]);
+		measuredServers.push(server);
 	}
 	const tableKeys = new Set(table.rows.map((cells) => cells[keyIdx]));
-	const out = replaceTable(text, marker, table.header, table.sep, merged);
+	let out = replaceTable(text, marker, table.header, table.sep, merged);
+	// Rewrite the state block only when a pending flip moved: a night that holds,
+	// flips or clears nothing leaves the doc's bytes alone.
+	if (
+		JSON.stringify(priorPending) !==
+		JSON.stringify(sanitizePendingFlips(nextPending, "pendingSaveVerdict"))
+	)
+		out = setRefreshStateKey(out, SAVE_VERDICT_KEY, nextPending);
 	return {
 		text: out,
 		changed: out !== text,

@@ -14,23 +14,28 @@ Issue: #5334. The module is `DiskChangePublisher.tla`.
 ## What the model covers
 
 One abstract disk per root: `dInst`, the install stamp (lockfiles, install
-markers, venv `site-packages`, server config files: a change nobody can
-enumerate), and `dDecl`, the declaration set (a change the walk enumerates).
-An external change bumps one of them. `vInst`/`vDecl` are what the root's
-servers have been told: the baseline of the root's first-ever look, moved on by
-every publish.
+markers, venv `site-packages`: a change nobody can enumerate), `dCfg`, the
+server config files (a root config or a member manifest, #5501: forwarded as
+watched-files events, never a restart), and `dDecl`, the declaration set (a
+change the walk enumerates). An external change bumps one of them.
+`vInst`/`vDecl`/`vCfg` are what the root's servers have been told: the
+baseline of the root's first-ever look, moved on by every publish. `vCfg`
+starts at a live client's view (`SinceRoots`), and a first look that does not
+publish leaves it there, so a look that names no config epoch shows as a lost
+change.
 
 | Model action | Code |
 |---|---|
 | `LookCall` mode `call`: a tool_call look, walk by interval only | `clients/runtime-tool-call.ts:638` `resyncHeadMove` -> `clients/runtime-tool-result.ts:328` |
 | mode `result`: a bash result owes a walk | `clients/runtime-tool-result.ts:2943` `resyncHeadMove`; `oweDeclarationWalk` (`clients/out-of-band-changes.ts:181`), `demandsWalk` (`:195`) |
 | mode `client`: a live client root's look names `since`, walk `"interval"`, no runtime | `clients/runtime-tool-result.ts:2979` (`since`, `walk: "interval"` at `:2993`) |
-| mode `diag`: the `lsp_diagnostics` body, walk `"always"` | `tools/lsp-diagnostics.ts:631` |
+| mode `diag`: the `lsp_diagnostics` body, walk `"always"`, hands over `liveClients` | `tools/lsp-diagnostics.ts:642` |
+| `Closure`: the epochs a caller names. `client` names its client's epoch for installs and configs; `call`, `result`, `diag` and `head` hand over the live clients, whose epoch judges configs only (`SessionLookConfigEpoch`, `SessionLookInstallEpoch`, #5501) | `liveClients` (`clients/out-of-band-changes.ts`, `earliestOverlappingLaunch`); `clients/runtime-tool-result.ts:350`, `tools/lsp-diagnostics.ts:645` |
 | mode `head` + `HeadLook`: the HEAD look owes its walk at the call, then looks after the per-key queue | `clients/runtime-tool-result.ts:313` `resyncHeadMove` (`oweDeclarationWalk` at `:325`, the look at `:328`) |
 | `Dispatch`: join the running flight (one trailing pass, the first caller's closure) or start one | `looks = createSingleFlight({ coalesceTrailing: true })` (`clients/out-of-band-changes.ts:155`), `looks.run` (`:709`) |
 | `Begin`: take the owed walk, read the record, decide `walkDue` (sync) | `lookOnce` `owedWalks.delete` (`:783`), `records.get` (`:785`), `walkDue` (`:786`) |
 | `Read`: the install stamp and the declaration walk (the await) | `lookOnce` `Promise.all([readInstallStamp, walkDeclarations])` |
-| `Commit`: commit the record, diff, decide to publish; a first look compares the install to the epoch the caller named (`ep`, captured at the call) | `records.set` (`:814`), `installed` (`:853`), `firstLookSawInstall(install, options.since)` (`:855`), the first-look return (`:857`) |
+| `Commit`: commit the record, diff, decide to publish; a first look compares the install and the configs to the epochs the caller named (`epI`, `epC`, captured at the call) | `records.set`, `installed` (`firstLookSawInstall(install, options.since)`), `firstLookFreshConfigs` (`options.since`, else `liveClients`), the first-look return |
 | `Alloc`: the project sequence, only for an enumerable population and only with a runtime | `clients/disk-changes.ts:443` `allocateSequence` (called at `:275`) |
 | `FanOk`/`FanThrow`: each registered subscriber in order, isolated | `clients/disk-changes.ts:463` `fanOut`; `clients/disk-change-subscribers.ts:520` registers `diagnostics-cache`, then `lsp` |
 | `PubDone`/`Next`: `lookOnce` awaits the publish; the chain loop runs the trailing pass | `await publishDiskChange` (`clients/out-of-band-changes.ts:872`); `clients/single-flight.ts` `chain` |
@@ -54,7 +59,7 @@ I1 to I5 are the prose in `clients/disk-changes.ts` (the module comment,
 | I4: the publisher writes the sequence and the change log only; an incoming change never credits authorship (#4131) and moves no FileTime (#3865) | `I4NoAuthorship`: the authorship credit equals the agent's edits |
 | I5: a throwing subscriber is isolated and recorded once per consumer per root per session | `I5Isolated` (every consumer of a finished fan-out ran) and `I5RecordedOnce` |
 
-Three more invariants:
+Four more invariants:
 
 - `OneRestartPerInstall`: "two sessions' looks after one install restart
   once" (the `looks` comment, `clients/out-of-band-changes.ts:151`). It holds
@@ -65,6 +70,12 @@ Three more invariants:
   still proven never to republish an install the client already read.
 - `DemandServed`: #4532 gap 6, "a joined look gets the walk it demands"
   (the `owedWalks` comment).
+- `SessionFirstLookNoRestart`: #5501's restart cell. The session root's and
+  the MCP cwd's first looks restarted no client for an install before #5501,
+  and still do not: their epoch judges configs only. The real reason is one
+  the model has no axis for: rust-analyzer's own `cargo metadata` writes
+  `Cargo.lock` after its spawn, and an install epoch there restarted it
+  (measured through MCP: 2 spawns instead of 1).
 - `NoLostChange` is the model's own property, not a promise a comment makes.
   Once the servers have been told a view (`vInst`, `vDecl`) that differs from
   the disk, the root's record must still show the difference, or the record is
@@ -74,7 +85,12 @@ Three more invariants:
   boundaries, which the model does not have, so it is not the source of this
   property. Eviction is the cost: `MAX_ROOTS` (`clients/out-of-band-changes.ts:129-130`)
   drops the oldest root's record, and that root's next look is a first look
-  that changes nothing (`:857`). This is the invariant B2a violates.
+  that changes nothing (`:857`). This is the invariant B2a violates. Its
+  config conjunct (#5501) holds from a live client's spawn on: while the root
+  has a record, the record differs from the disk wherever the client's view
+  does. `MutSessionLookNoConfigEpoch` violates it in four steps: a config edit,
+  a session-side look, its read, and its commit recording the edit as the
+  baseline the client never read.
 
 I1 to I4 are structural: the as-built model satisfies them by the order of its
 steps, and each has a mutant config that reorders the step and goes red. They
@@ -85,7 +101,8 @@ tests named in `formal/switch-pins.json`.
 
 | Config | Verdict |
 |---|---|
-| `AsBuilt`, `AsBuiltWide`, `TwoSessions`, `ThrowingSubscriber`, `ThreeRoots` | pass, all invariants (no eviction pressure: the record cap is at least the number of roots) |
+| `AsBuilt`, `AsBuiltWide`, `TwoSessions`, `ThrowingSubscriber`, `ThreeRoots` | pass, all invariants (no eviction pressure: the record cap is at least the number of roots); `AsBuilt` also edits a config |
+| `SessionLookConfig` | pass: a config edit and an install at a root whose client spawned first, looked at by the four session-side callers only; the config is forwarded and no first look restarts (#5501) |
 | `OwedEvictionKeepsChanges` | pass: an evicted owed walk loses no change |
 | `EvictedInstallSince` | pass (`OneFreshRestartPerInstall` in place of `OneRestartPerInstall`, which `EvictedInstallTrailing` owns): an install after a record eviction is published when the first look names the live client's spawn epoch |
 | `EvictedInstallTrailing` | violated `OneRestartPerInstall` (**B2b**, a real defect, reproduced on the code: see below) |
@@ -100,6 +117,8 @@ tests named in `formal/switch-pins.json`.
 | `MutRecordEveryThrow` | violated `I5RecordedOnce` |
 | `MutTrailingFromStartRecord` | violated `OneRestartPerInstall` |
 | `MutJoinWritesNoDemand` | violated `DemandServed` (#4532 gap 6 before its fix) |
+| `MutSessionLookNoConfigEpoch` | violated `NoLostChange` (#5501 before its fix: the session-side looks name no epoch) |
+| `MutSessionLookInstallEpoch` | violated `SessionFirstLookNoRestart` (#5501's rejected rival: the session-side epoch judges installs too) |
 
 ### B2a (expected fail, accepted p3)
 
@@ -200,8 +219,12 @@ Not modelled:
 - the walk's caps (`DECLARATION_WALK_MAX_DIRS`, `_MAX_FILES`), unreadable
   directories and files (#4596, #4603), the home-root skip (#4905): all of them
   keep the previous record or skip a walk, none moves a record past a change;
-- `config` file changes and a Python venv's `site-packages` stamp: they fold
-  into `dInst` (an unenumerable population, `paths: "unknown"`);
+- a Python venv's `site-packages` stamp: it folds into `dInst` (an
+  unenumerable population, `paths: "unknown"`);
+- which config a live client reads: `dCfg` is one counter per root, so a
+  member manifest below the root and the root's own are one change, and the
+  overlap of a client's root with the look's root is `SinceRoots`
+  membership;
 - time: the walk interval is a free choice on a pass with a record and no owed
   walk, and the `walkedAt` bookkeeping is not kept;
 - the abort signal (`untilAborted` ends a caller's wait, never the flight);
@@ -240,11 +263,21 @@ an invariant checks: I2 relates each delivery to the sequence its own publish
 allocated, and the restart invariants count restarts. The epoch item is the
 one B2b leans on, which is why B2b is also reproduced on the real code.
 
-- Epoch. `ep` is the install version a `client` look finds the servers
+- Epoch. `epI` is the install version a `client` look finds the servers
   holding when it is called (`vInst[r]`); the code names the client's spawn
   time (`entry.spawnedAt`) and compares it with the install's newest mtime
   (`firstLookSawInstall`, `>=` with a one-second slack). The model reads
-  `install fresher than the epoch` as `oi > ep`. The slack is not modelled.
+  `install fresher than the epoch` as `oi > epI`. The slack is not modelled.
+  `epC` is the same for configs (`vCfg[r]`). A session-side look's code
+  reads its epoch from `liveClients` when the pass runs, so a trailing pass
+  sees the current earliest launch, not the one captured at the call; a config
+  publish restarts nothing, so that launch only moves with an install restart.
+- Installs at a session-side first look. A first look that publishes no
+  install takes the install it records as what the servers hold (`vInst`
+  moves to it), as before #5501. At a root whose client spawned before that
+  look, an install between the spawn and the look is therefore not shown as
+  lost. It is the accepted price of `SessionFirstLookNoRestart`: the code
+  records that install and restarts nothing, as it did before #5501.
 - Runtime. The model gives `diag` a runtime (`rt` is `mode /= "client"`), but
   `tools/lsp-diagnostics.ts:631` passes none, so that look allocates no
   sequence. The model gives `client` no runtime, but

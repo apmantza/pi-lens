@@ -15,18 +15,10 @@
 import { existsSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-	classifyFinderFailure,
-	createAvailabilityLatch,
-	logAvailabilityDecision,
-	startHostStallSampler,
-} from "../dispatch/runners/utils/availability-policy.js";
 import { getGlobalPiLensDir } from "../file-utils.js";
 import { getProjectTrustGeneration } from "../project-trust.js";
-import { safeSpawnAsync } from "../safe-spawn.js";
 
 const JAVA_EXE = process.platform === "win32" ? "java.exe" : "java";
-const JAVA_PROBE_TIMEOUT_MS = 5_000;
 
 /** jdtls requires a JDK ≥ 17 to run; recent builds prefer 21. */
 const MIN_JAVA_MAJOR = 17;
@@ -158,145 +150,12 @@ let _cachedEnv:
 	| { value: NodeJS.ProcessEnv | undefined; trustGeneration: number }
 	| undefined;
 
-/**
- * Availability latch for the `java` PATH probe (#1538, the #1467 latch family's
- * benign-direction sibling). A stalled probe is not evidence the tool is
- * missing — only a genuine "not found" (or a genuinely resolvable `java`) is a
- * durable fact worth caching for the session. A transient verdict (timeout,
- * abort, host stall) expires on the shared cooldown and is re-probed on the
- * next demand instead of pinning whatever `JAVA_HOME` happened to be ambient.
- */
-const javaAvailabilityLatch = createAvailabilityLatch();
-
-/**
- * Shared spawn while a probe is in flight (#1538 follow-up). Without this, two
- * concurrent `resolveJavaRuntimeEnv` calls — e.g. a multi-root Java project
- * spawning jdtls per root — each fire their own 5 s `where`/`which java`, and
- * every expired cooldown reopens that window for the process's whole
- * lifetime, not just at startup.
- */
-let inFlightJavaProbe: {
-	/** #4776: the probe answers for this trust; a later one never joins it. */
-	trustGeneration: number;
-	promise: Promise<boolean | undefined>;
-} | null = null;
+let probeModule:
+	| typeof import("../dispatch/runners/utils/runner-helpers.js")
+	| undefined;
 
 export function _resetJvmRuntimeCacheForTests(): void {
 	_cachedEnv = undefined;
-	javaAvailabilityLatch.reset();
-	inFlightJavaProbe = null;
-}
-
-/**
- * Probe `java` on PATH, distinguishing a durable verdict (found, or genuinely
- * absent) from a transient probe failure. Returns `true`/`false` for a durable
- * verdict; `undefined` when the probe was transient — including a memo served
- * from mid-cooldown — so the caller must not treat this call as proof `java`
- * is absent.
- *
- * `AvailabilityLatch.read()` returns `false` (not `null`) for BOTH a durable
- * "not found" AND a transient verdict whose cooldown hasn't expired yet — the
- * latch's own contract is "cache a safe fallback answer for this call", not
- * "this is durable". Blindly forwarding that `false` as durable is exactly
- * the #1538 bug moved one call deeper: jdtls's failed-spawn retry
- * (`BROKEN_BASE_COOLDOWN_MS`, `clients/lsp/index.ts`) re-enters
- * `resolveJavaRuntimeEnv` ~15-20 s later — inside this probe's 30 s transient
- * cooldown — so the very first retry after a stall would otherwise still
- * launder into the permanent `_cachedEnv`. Only `javaAvailabilityLatch`'s own
- * `outcome` distinguishes the two; a durable verdict is never `"transient"`.
- */
-function probeJavaOnPath(): Promise<boolean | undefined> {
-	const trustGeneration = getProjectTrustGeneration();
-	const memo = javaAvailabilityLatch.read();
-	if (memo !== null) {
-		if (javaAvailabilityLatch.getOutcome() === "transient") {
-			// Served from the memo, but the cooldown from the earlier stall
-			// hasn't expired — this is NOT a durable verdict. Log it (otherwise
-			// this state leaves zero record in latency.log) and surface
-			// `undefined` so the caller never writes the session cache.
-			logAvailabilityDecision({
-				tool: "java",
-				verdict: "unavailable",
-				outcome: "transient",
-				cause: javaAvailabilityLatch.getCause() ?? "probe-timeout",
-				elapsedMs: 0,
-				latched: false,
-				retryAfterMs: Math.max(
-					0,
-					javaAvailabilityLatch.getRetryAtMs() - Date.now(),
-				),
-				budgetMs: JAVA_PROBE_TIMEOUT_MS,
-				// No probe ran here: the latch's own remembered cause is replayed
-				// as-is, so the call site is the one asserting it (#2209).
-				classifiedBy: "caller",
-			});
-			return Promise.resolve(undefined);
-		}
-		return Promise.resolve(memo);
-	}
-
-	if (inFlightJavaProbe?.trustGeneration === trustGeneration)
-		return inFlightJavaProbe.promise;
-	const promise = runJavaProbe().finally(() => {
-		if (inFlightJavaProbe?.promise === promise) inFlightJavaProbe = null;
-	});
-	inFlightJavaProbe = { trustGeneration, promise };
-	return promise;
-}
-
-/** The actual `where`/`which java` spawn + classification. Never call this
- * directly — go through `probeJavaOnPath()`, which memoizes and dedupes it. */
-async function runJavaProbe(): Promise<boolean | undefined> {
-	const finder = process.platform === "win32" ? "where" : "which";
-	const startedAt = Date.now();
-	const sampler = startHostStallSampler();
-	let result: Awaited<ReturnType<typeof safeSpawnAsync>>;
-	let hostStallMs: number;
-	try {
-		result = await safeSpawnAsync(finder, ["java"], {
-			timeout: JAVA_PROBE_TIMEOUT_MS,
-		});
-	} finally {
-		hostStallMs = sampler.stop();
-	}
-	const elapsedMs = Date.now() - startedAt;
-
-	if (result.status === 0 && !result.error) {
-		javaAvailabilityLatch.noteAvailable();
-		logAvailabilityDecision({
-			tool: "java",
-			verdict: "available",
-			outcome: "success",
-			cause: "ok",
-			elapsedMs,
-			latched: true,
-			hostStallMs,
-			budgetMs: JAVA_PROBE_TIMEOUT_MS,
-			classifiedBy: "probe",
-		});
-		return true;
-	}
-
-	// A `where`/`which` that ran fine and found nothing is a genuine absence;
-	// anything else (timeout, abort, host stall, a finder that could not spawn)
-	// is transient and must not latch.
-	const { outcome, cause, forced } = classifyFinderFailure(result, {
-		hostStallMs,
-	});
-	const retryAfterMs = javaAvailabilityLatch.noteUnavailable(outcome, cause);
-	logAvailabilityDecision({
-		tool: "java",
-		verdict: "unavailable",
-		outcome,
-		cause,
-		elapsedMs,
-		latched: outcome !== "transient",
-		hostStallMs,
-		...(retryAfterMs > 0 && { retryAfterMs }),
-		budgetMs: JAVA_PROBE_TIMEOUT_MS,
-		classifiedBy: forced ? "caller" : "probe",
-	});
-	return outcome === "transient" ? undefined : false;
 }
 
 /**
@@ -316,10 +175,19 @@ export async function resolveJavaRuntimeEnv(): Promise<
 > {
 	if (_cachedEnv?.trustGeneration === getProjectTrustGeneration())
 		return _cachedEnv.value;
-	const trustGeneration = getProjectTrustGeneration();
 
-	// `java` already on PATH — nothing to inject; defer to the user's runtime.
-	const javaOnPath = await probeJavaOnPath();
+	// `java` already runs from PATH — nothing to inject; defer to the user's
+	// runtime. The probe is the registry's, so a `java` that is on PATH but
+	// fails its version probe (the macOS stub with no JDK behind it) falls
+	// through to discovery like an absent one (#5410). The helpers load
+	// lazily, as the static edge would close a client cycle through the LSP
+	// config; once loaded, nothing awaits before `toolOnPath` starts, so the
+	// trust generation read here is the one it asked under, and it answers
+	// `undefined` for a call a trust change crossed (#4776).
+	const { toolOnPath } = (probeModule ??=
+		await import("../dispatch/runners/utils/runner-helpers.js"));
+	const trustGeneration = getProjectTrustGeneration();
+	const javaOnPath = await toolOnPath("java");
 	if (javaOnPath === true) {
 		_cachedEnv = { value: undefined, trustGeneration };
 		return undefined;

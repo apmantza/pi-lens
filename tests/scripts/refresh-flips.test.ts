@@ -25,9 +25,10 @@ import { landRefresh } from "../../scripts/lsp-refresh-landing.mjs";
 import {
 	GENERATED_LSP_DOCS,
 	ensureMatrixColumns,
+	IDLE_EVICTION_KEY,
 	parseRefreshState,
 	refreshCapabilityMatrix,
-	setIdleEvictionState,
+	setRefreshStateKey,
 } from "../../scripts/lib/md-matrix.mjs";
 import {
 	buildRefreshPrBody,
@@ -50,8 +51,9 @@ const RECORDED = read("tests/fixtures/lsp-nightly/matrix-before-4338.md");
 // HEAD as it stands once this change has merged: the recorded doc in the
 // current column set with the current state-section prose. (A generator change
 // itself IS a flip once: see "admits the refresh-state counters" below.)
-const HEAD_MATRIX = setIdleEvictionState(
+const HEAD_MATRIX = setRefreshStateKey(
 	ensureMatrixColumns(RECORDED),
+	IDLE_EVICTION_KEY,
 	parseRefreshState(RECORDED)["idle-eviction"] ?? {},
 );
 const HEAD = {

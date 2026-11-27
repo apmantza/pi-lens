@@ -1,0 +1,2134 @@
+{
+  "clients/ast-grep-antislop-error-floor.test.ts": {
+    "reason": "starts real `ast-grep` child process(es) (spawnSync), called from the file itself (tests/clients/ast-grep-antislop-error-floor.test.ts:100), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawnSync:ast-grep via tests/clients/ast-grep-antislop-error-floor.test.ts:100",
+      "spawnSync:ast-grep via tests/clients/ast-grep-antislop-error-floor.test.ts:136"
+    ]
+  },
+  "clients/ast-grep-rule-precedence-followups.test.ts": {
+    "reason": "starts real `ast-grep` child process(es) (spawnSync, spawn), called from the file itself (tests/clients/ast-grep-rule-precedence-followups.test.ts:181), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawnSync:ast-grep via tests/clients/ast-grep-rule-precedence-followups.test.ts:181",
+      "spawn:ast-grep via tests/clients/ast-grep-rule-precedence-followups.test.ts:461",
+      "spawnSync:ast-grep via tests/clients/ast-grep-rule-precedence-followups.test.ts:207"
+    ]
+  },
+  "clients/autofix-helpers.test.ts": {
+    "reason": "starts real `node`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/autofix-helpers.test.ts:100), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:node via tests/clients/autofix-helpers.test.ts:100",
+      "exec:getconf via tests/clients/autofix-helpers.test.ts:100",
+      "execFile:getconf via tests/clients/autofix-helpers.test.ts:100",
+      "spawn:node via tests/clients/autofix-helpers.test.ts:130"
+    ]
+  },
+  "clients/autofix-timeout-cooldown-real-shape.test.ts": {
+    "reason": "starts real `getconf` child process(es) (exec, execFile), called from the file itself (tests/clients/autofix-timeout-cooldown-real-shape.test.ts:94), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "exec:getconf via tests/clients/autofix-timeout-cooldown-real-shape.test.ts:94",
+      "execFile:getconf via tests/clients/autofix-timeout-cooldown-real-shape.test.ts:94",
+      "exec:getconf via tests/clients/autofix-timeout-cooldown-real-shape.test.ts:113",
+      "execFile:getconf via tests/clients/autofix-timeout-cooldown-real-shape.test.ts:113"
+    ]
+  },
+  "clients/biome-client-cwd.test.ts": {
+    "reason": "starts real `which`, `getconf`, `npm` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/biome-client-cwd.test.ts:63), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:which via tests/clients/biome-client-cwd.test.ts:63",
+      "exec:getconf via tests/clients/biome-client-cwd.test.ts:63",
+      "execFile:getconf via tests/clients/biome-client-cwd.test.ts:63",
+      "spawn:npm via tests/clients/biome-client-cwd.test.ts:59",
+      "exec:getconf via tests/clients/biome-client-cwd.test.ts:59",
+      "execFile:getconf via tests/clients/biome-client-cwd.test.ts:59"
+    ]
+  },
+  "clients/bootstrap-lazy-liveness.test.ts": {
+    "reason": "starts real `git`, `bash` child process(es) (spawn), reached through tests/support/pi-session.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/support/pi-session.ts:1173",
+      "spawn:bash via tests/support/pi-session.ts:1173"
+    ]
+  },
+  "clients/bulk-file-yields.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/bulk-file-yields.test.ts:74), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/bulk-file-yields.test.ts:74",
+      "exec:getconf via tests/clients/bulk-file-yields.test.ts:74",
+      "execFile:getconf via tests/clients/bulk-file-yields.test.ts:74"
+    ]
+  },
+  "clients/cascade-ambiguous-reference-5055.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/cascade-ambiguous-reference-5055.test.ts:158), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/cascade-ambiguous-reference-5055.test.ts:158",
+      "exec:getconf via tests/clients/cascade-ambiguous-reference-5055.test.ts:158",
+      "execFile:getconf via tests/clients/cascade-ambiguous-reference-5055.test.ts:158"
+    ]
+  },
+  "clients/cascade-graph-occupancy.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/cascade-graph-occupancy.test.ts:171), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/cascade-graph-occupancy.test.ts:171",
+      "exec:getconf via tests/clients/cascade-graph-occupancy.test.ts:171",
+      "execFile:getconf via tests/clients/cascade-graph-occupancy.test.ts:171"
+    ]
+  },
+  "clients/cascade-java-graph.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/cascade-java-graph.test.ts:76), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/cascade-java-graph.test.ts:76",
+      "exec:getconf via tests/clients/cascade-java-graph.test.ts:76",
+      "execFile:getconf via tests/clients/cascade-java-graph.test.ts:76"
+    ]
+  },
+  "clients/codebase-model.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/codebase-model.test.ts:120), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/codebase-model.test.ts:120",
+      "exec:getconf via tests/clients/codebase-model.test.ts:120",
+      "execFile:getconf via tests/clients/codebase-model.test.ts:120"
+    ]
+  },
+  "clients/coderabbit-ast-grep-rules.test.ts": {
+    "reason": "starts real `ast-grep` child process(es) (spawnSync), called from the file itself (tests/clients/coderabbit-ast-grep-rules.test.ts:149), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawnSync:ast-grep via tests/clients/coderabbit-ast-grep-rules.test.ts:149"
+    ]
+  },
+  "clients/dead-code-client.test.ts": {
+    "reason": "probes the real dead-code toolchain with safeSpawn(\"vulture\"/\"python\", [\"--version\"]) at tests/clients/dead-code-client.test.ts:62 to decide whether the vulture-backed cases can run at all: availability of an external binary is a fact about the box, so a mocked child_process would report the toolchain available on a box that has none. The cases it gates are the client's real vulture findings.",
+    "routes": [
+      "spawnSync:vulture via tests/clients/dead-code-client.test.ts:62",
+      "spawnSync:python via tests/clients/dead-code-client.test.ts:62"
+    ]
+  },
+  "clients/dispatch/runners/ast-grep-catalog-rules.test.ts": {
+    "reason": "starts real `ast-grep` child process(es) (spawnSync), called from the file itself (tests/clients/dispatch/runners/ast-grep-catalog-rules.test.ts:293), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawnSync:ast-grep via tests/clients/dispatch/runners/ast-grep-catalog-rules.test.ts:293",
+      "spawnSync:ast-grep via tests/clients/dispatch/runners/ast-grep-catalog-rules.test.ts:448",
+      "spawnSync:ast-grep via tests/clients/dispatch/runners/ast-grep-catalog-rules.test.ts:315"
+    ]
+  },
+  "clients/dispatch/runners/ast-grep-rule-tests.test.ts": {
+    "reason": "starts real `ast-grep` child process(es) (spawnSync), called from the file itself (tests/clients/dispatch/runners/ast-grep-rule-tests.test.ts:58), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawnSync:ast-grep via tests/clients/dispatch/runners/ast-grep-rule-tests.test.ts:58",
+      "spawnSync:ast-grep via tests/clients/dispatch/runners/ast-grep-rule-tests.test.ts:207"
+    ]
+  },
+  "clients/dispatch/runners/ignore-glob-relative-argv-real.test.ts": {
+    "reason": "starts real `yamllint`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/dispatch/runners/ignore-glob-relative-argv-real.test.ts:258), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:yamllint via tests/clients/dispatch/runners/ignore-glob-relative-argv-real.test.ts:258",
+      "exec:getconf via tests/clients/dispatch/runners/ignore-glob-relative-argv-real.test.ts:258",
+      "execFile:getconf via tests/clients/dispatch/runners/ignore-glob-relative-argv-real.test.ts:258",
+      "spawn:yamllint via tests/clients/dispatch/runners/ignore-glob-relative-argv-real.test.ts:261"
+    ]
+  },
+  "clients/dispatch/runners/lsp-real-runner.test.ts": {
+    "reason": "starts real `node` child process(es) (spawn), called from the file itself (tests/clients/dispatch/runners/lsp-real-runner.test.ts:133), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:node via tests/clients/dispatch/runners/lsp-real-runner.test.ts:133",
+      "spawn:node via tests/clients/dispatch/runners/lsp-real-runner.test.ts:153",
+      "spawn:node via tests/clients/dispatch/runners/lsp-real-runner.test.ts:171",
+      "spawn:node via tests/clients/dispatch/runners/lsp-real-runner.test.ts:223"
+    ]
+  },
+  "clients/dispatch/runners/oxlint-config-cwd.test.ts": {
+    "reason": "starts real `node`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/dispatch/runners/oxlint-config-cwd.test.ts:82), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:node via tests/clients/dispatch/runners/oxlint-config-cwd.test.ts:82",
+      "exec:getconf via tests/clients/dispatch/runners/oxlint-config-cwd.test.ts:82",
+      "execFile:getconf via tests/clients/dispatch/runners/oxlint-config-cwd.test.ts:82"
+    ]
+  },
+  "clients/export-rules-5599.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/export-rules-5599.test.ts:327), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/export-rules-5599.test.ts:327",
+      "exec:getconf via tests/clients/export-rules-5599.test.ts:327",
+      "execFile:getconf via tests/clients/export-rules-5599.test.ts:327"
+    ]
+  },
+  "clients/ext-gate-before-ignore.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/ext-gate-before-ignore.test.ts:59), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/ext-gate-before-ignore.test.ts:59",
+      "exec:getconf via tests/clients/ext-gate-before-ignore.test.ts:59",
+      "execFile:getconf via tests/clients/ext-gate-before-ignore.test.ts:59",
+      "spawn:git via tests/clients/ext-gate-before-ignore.test.ts:157",
+      "exec:getconf via tests/clients/ext-gate-before-ignore.test.ts:157",
+      "execFile:getconf via tests/clients/ext-gate-before-ignore.test.ts:157"
+    ]
+  },
+  "clients/fix-run-restore.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/fix-run-restore.test.ts:115), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/fix-run-restore.test.ts:115",
+      "exec:getconf via tests/clients/fix-run-restore.test.ts:115",
+      "execFile:getconf via tests/clients/fix-run-restore.test.ts:115"
+    ]
+  },
+  "clients/formatters-ktfmt-gradle-style.test.ts": {
+    "reason": "starts real `ktfmt`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/formatters-ktfmt-gradle-style.test.ts:98), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:ktfmt via tests/clients/formatters-ktfmt-gradle-style.test.ts:98",
+      "exec:getconf via tests/clients/formatters-ktfmt-gradle-style.test.ts:98",
+      "execFile:getconf via tests/clients/formatters-ktfmt-gradle-style.test.ts:98",
+      "spawn:ktfmt via tests/clients/formatters-ktfmt-gradle-style.test.ts:121",
+      "spawn:ktfmt via tests/clients/formatters-ktfmt-gradle-style.test.ts:140",
+      "spawn:ktfmt via tests/clients/formatters-ktfmt-gradle-style.test.ts:165"
+    ]
+  },
+  "clients/formatters-link-config-4689.test.ts": {
+    "reason": "starts real `which`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/formatters-link-config-4689.test.ts:63), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:which via tests/clients/formatters-link-config-4689.test.ts:63",
+      "exec:getconf via tests/clients/formatters-link-config-4689.test.ts:63",
+      "execFile:getconf via tests/clients/formatters-link-config-4689.test.ts:63"
+    ]
+  },
+  "clients/formatters.test.ts": {
+    "reason": "starts real `ktlint`, `cmake-format`, `getconf`, `black` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/formatters.test.ts:150), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:ktlint via tests/clients/formatters.test.ts:150",
+      "spawn:cmake-format via tests/clients/formatters.test.ts:187",
+      "exec:getconf via tests/clients/formatters.test.ts:187",
+      "execFile:getconf via tests/clients/formatters.test.ts:187",
+      "spawn:black via tests/clients/formatters.test.ts:363",
+      "spawn:cmake-format via tests/clients/formatters.test.ts:363"
+    ]
+  },
+  "clients/graph-cache.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/graph-cache.test.ts:82), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/graph-cache.test.ts:82",
+      "exec:getconf via tests/clients/graph-cache.test.ts:82",
+      "execFile:getconf via tests/clients/graph-cache.test.ts:82"
+    ]
+  },
+  "clients/ignore-compile-memo.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/ignore-compile-memo.test.ts:348), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/ignore-compile-memo.test.ts:348",
+      "exec:getconf via tests/clients/ignore-compile-memo.test.ts:348",
+      "execFile:getconf via tests/clients/ignore-compile-memo.test.ts:348"
+    ]
+  },
+  "clients/inline-blocker-dispositions.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/inline-blocker-dispositions.test.ts:849), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/inline-blocker-dispositions.test.ts:849",
+      "exec:getconf via tests/clients/inline-blocker-dispositions.test.ts:849",
+      "execFile:getconf via tests/clients/inline-blocker-dispositions.test.ts:849"
+    ]
+  },
+  "clients/inline-containment-fold.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/inline-containment-fold.test.ts:179), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/inline-containment-fold.test.ts:179",
+      "exec:getconf via tests/clients/inline-containment-fold.test.ts:179",
+      "execFile:getconf via tests/clients/inline-containment-fold.test.ts:179"
+    ]
+  },
+  "clients/install-kill-switch-npx-5231.test.ts": {
+    "reason": "starts real `which`, `npx` child process(es) (spawn), called from the file itself (tests/clients/install-kill-switch-npx-5231.test.ts:85), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:which via tests/clients/install-kill-switch-npx-5231.test.ts:85",
+      "spawn:which via tests/clients/install-kill-switch-npx-5231.test.ts:158",
+      "spawn:npx via tests/clients/install-kill-switch-npx-5231.test.ts:179"
+    ]
+  },
+  "clients/installer/archive-install.integration.test.ts": {
+    "reason": "starts real `unzip`, `getconf`, `tar` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/installer/archive-install.integration.test.ts:122), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:unzip via tests/clients/installer/archive-install.integration.test.ts:122",
+      "exec:getconf via tests/clients/installer/archive-install.integration.test.ts:122",
+      "execFile:getconf via tests/clients/installer/archive-install.integration.test.ts:122",
+      "spawn:tar via tests/clients/installer/archive-install.integration.test.ts:129",
+      "spawn:unzip via tests/clients/installer/archive-install.integration.test.ts:140",
+      "spawn:unzip via tests/clients/installer/archive-install.integration.test.ts:161"
+    ]
+  },
+  "clients/installer/fallow-archive-4929.test.ts": {
+    "reason": "starts real `tar`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/installer/fallow-archive-4929.test.ts:170), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:tar via tests/clients/installer/fallow-archive-4929.test.ts:170",
+      "exec:getconf via tests/clients/installer/fallow-archive-4929.test.ts:170",
+      "execFile:getconf via tests/clients/installer/fallow-archive-4929.test.ts:170"
+    ]
+  },
+  "clients/installer/npm-package-entry-verify-2722.test.ts": {
+    "reason": "starts real `buried-marker-lsp`, `getconf`, `honestly-broken-lsp` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/installer/npm-package-entry-verify-2722.test.ts:110), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:buried-marker-lsp via tests/clients/installer/npm-package-entry-verify-2722.test.ts:110",
+      "exec:getconf via tests/clients/installer/npm-package-entry-verify-2722.test.ts:110",
+      "execFile:getconf via tests/clients/installer/npm-package-entry-verify-2722.test.ts:110",
+      "spawn:honestly-broken-lsp via tests/clients/installer/npm-package-entry-verify-2722.test.ts:159"
+    ]
+  },
+  "clients/installer/opengrep-pack-refresh-4765.test.ts": {
+    "reason": "starts real `opengrep`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/installer/opengrep-pack-refresh-4765.test.ts:262), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:opengrep via tests/clients/installer/opengrep-pack-refresh-4765.test.ts:262",
+      "exec:getconf via tests/clients/installer/opengrep-pack-refresh-4765.test.ts:262",
+      "execFile:getconf via tests/clients/installer/opengrep-pack-refresh-4765.test.ts:262",
+      "spawn:opengrep via tests/clients/installer/opengrep-pack-refresh-4765.test.ts:280",
+      "spawn:opengrep via tests/clients/installer/opengrep-pack-refresh-4765.test.ts:288",
+      "spawn:opengrep via tests/clients/installer/opengrep-pack-refresh-4765.test.ts:294"
+    ]
+  },
+  "clients/language-profile-warmup.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/language-profile-warmup.test.ts:24), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/language-profile-warmup.test.ts:24",
+      "exec:getconf via tests/clients/language-profile-warmup.test.ts:24",
+      "execFile:getconf via tests/clients/language-profile-warmup.test.ts:24",
+      "spawn:git via tests/clients/language-profile-warmup.test.ts:41",
+      "exec:getconf via tests/clients/language-profile-warmup.test.ts:41",
+      "execFile:getconf via tests/clients/language-profile-warmup.test.ts:41"
+    ]
+  },
+  "clients/latency-age-not-duration-5379.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/latency-age-not-duration-5379.test.ts:209), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/latency-age-not-duration-5379.test.ts:209",
+      "exec:getconf via tests/clients/latency-age-not-duration-5379.test.ts:209",
+      "execFile:getconf via tests/clients/latency-age-not-duration-5379.test.ts:209"
+    ]
+  },
+  "clients/lens-engine-project-scan-policy.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lens-engine-project-scan-policy.test.ts:50), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lens-engine-project-scan-policy.test.ts:50",
+      "exec:getconf via tests/clients/lens-engine-project-scan-policy.test.ts:50",
+      "execFile:getconf via tests/clients/lens-engine-project-scan-policy.test.ts:50"
+    ]
+  },
+  "clients/lens-map.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lens-map.test.ts:839), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lens-map.test.ts:839",
+      "exec:getconf via tests/clients/lens-map.test.ts:839",
+      "execFile:getconf via tests/clients/lens-map.test.ts:839"
+    ]
+  },
+  "clients/lsp/cascade-rust-references-position-5559.integration.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/cascade-rust-references-position-5559.integration.test.ts:161), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lsp/cascade-rust-references-position-5559.integration.test.ts:161",
+      "exec:getconf via tests/clients/lsp/cascade-rust-references-position-5559.integration.test.ts:161",
+      "execFile:getconf via tests/clients/lsp/cascade-rust-references-position-5559.integration.test.ts:161"
+    ]
+  },
+  "clients/lsp/diagnostics-health-unavailable-primary-4322.test.ts": {
+    "reason": "starts real `node` child process(es) (spawn), called from the file itself (tests/clients/lsp/diagnostics-health-unavailable-primary-4322.test.ts:105), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:node via tests/clients/lsp/diagnostics-health-unavailable-primary-4322.test.ts:105"
+    ]
+  },
+  "clients/lsp/groovy-launch-5123.test.ts": {
+    "reason": "starts real `java`, `getconf`, `which` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/groovy-launch-5123.test.ts:109), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:java via tests/clients/lsp/groovy-launch-5123.test.ts:109",
+      "exec:getconf via tests/clients/lsp/groovy-launch-5123.test.ts:109",
+      "execFile:getconf via tests/clients/lsp/groovy-launch-5123.test.ts:109",
+      "spawn:which via tests/clients/lsp/groovy-launch-5123.test.ts:109"
+    ]
+  },
+  "clients/lsp/launch.test.ts": {
+    "reason": "starts real `getconf` child process(es) (exec, execFile), called from the file itself (tests/clients/lsp/launch.test.ts:71), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "exec:getconf via tests/clients/lsp/launch.test.ts:71",
+      "execFile:getconf via tests/clients/lsp/launch.test.ts:71"
+    ]
+  },
+  "clients/lsp/lifecycle.test.ts": {
+    "reason": "starts real `which`, `getconf`, `npm` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/lifecycle.test.ts:29), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:which via tests/clients/lsp/lifecycle.test.ts:29",
+      "exec:getconf via tests/clients/lsp/lifecycle.test.ts:29",
+      "execFile:getconf via tests/clients/lsp/lifecycle.test.ts:29",
+      "spawn:npm via tests/clients/lsp/lifecycle.test.ts:29"
+    ]
+  },
+  "clients/lsp/lsp-repo-tier-fields-5147.test.ts": {
+    "reason": "starts real `node` child process(es) (spawn), called from the file itself (tests/clients/lsp/lsp-repo-tier-fields-5147.test.ts:201), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:node via tests/clients/lsp/lsp-repo-tier-fields-5147.test.ts:201"
+    ]
+  },
+  "clients/lsp/managed-fallback-after-trust-refusal-4515.test.ts": {
+    "reason": "starts real `intelephense`, `jedi-language-server`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/managed-fallback-after-trust-refusal-4515.test.ts:253), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:intelephense via tests/clients/lsp/managed-fallback-after-trust-refusal-4515.test.ts:253",
+      "spawn:jedi-language-server via tests/clients/lsp/managed-fallback-after-trust-refusal-4515.test.ts:318",
+      "exec:getconf via tests/clients/lsp/managed-fallback-after-trust-refusal-4515.test.ts:318",
+      "execFile:getconf via tests/clients/lsp/managed-fallback-after-trust-refusal-4515.test.ts:318"
+    ]
+  },
+  "clients/lsp/opengrep-offline-findings-4765.integration.test.ts": {
+    "reason": "real opengrep language-server child, reached through spawnClient and refreshOpengrepRulePack: the #4765 witness is that an offline rule pack still answers findings, which needs the server to actually parse. Lane: lsp-spawn-heavy (#4765 added the file after the census was cut, and it reaches spawn through the kit helper rather than a named import, so the static name list never saw it).",
+    "routes": [
+      "spawn:opengrep via spawnClient (tests/clients/lsp/opengrep-offline-findings-4765.integration.test.ts)",
+      "spawn:opengrep via tests/clients/lsp/opengrep-offline-findings-4765.integration.test.ts:346"
+    ]
+  },
+  "clients/lsp/pyright-settings-effect-4758.integration.test.ts": {
+    "reason": "real pyright-langserver child through launchLSP at tests/clients/lsp/pyright-settings-effect-4758.integration.test.ts:149: the #4758 claim is that an initializationOptions setting changes what the server reports, which only the real server can answer. Lane: lsp-spawn-heavy (#4758 added the file after the census was cut; it reaches spawn through launchLSP, not a named child_process import).",
+    "routes": [
+      "spawn:pyright-langserver via start (tests/clients/lsp/pyright-settings-effect-4758.integration.test.ts:149)"
+    ]
+  },
+  "clients/lsp/runtime-install-discovery.test.ts": {
+    "reason": "starts real `java` child process(es) (spawn), called from the file itself (tests/clients/lsp/runtime-install-discovery.test.ts:234), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:java via tests/clients/lsp/runtime-install-discovery.test.ts:234"
+    ]
+  },
+  "clients/lsp/server-policy.test.ts": {
+    "reason": "starts real `which` child process(es) (spawn), called from the file itself (tests/clients/lsp/server-policy.test.ts:1491), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:which via tests/clients/lsp/server-policy.test.ts:1491"
+    ]
+  },
+  "clients/lsp/service-notify-inflight-throttle.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/service-notify-inflight-throttle.test.ts:601), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lsp/service-notify-inflight-throttle.test.ts:601",
+      "exec:getconf via tests/clients/lsp/service-notify-inflight-throttle.test.ts:601",
+      "execFile:getconf via tests/clients/lsp/service-notify-inflight-throttle.test.ts:601"
+    ]
+  },
+  "clients/lsp/service-project-trust.test.ts": {
+    "reason": "starts real `which`, `getconf`, `npm` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/service-project-trust.test.ts:303), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:which via tests/clients/lsp/service-project-trust.test.ts:303",
+      "exec:getconf via tests/clients/lsp/service-project-trust.test.ts:303",
+      "execFile:getconf via tests/clients/lsp/service-project-trust.test.ts:303",
+      "spawn:npm via tests/clients/lsp/service-project-trust.test.ts:303"
+    ]
+  },
+  "clients/lsp/session-root-class-2657.test.ts": {
+    "reason": "starts real `git` child process(es) (spawnSync), reached through tests/support/handler-verdict.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawnSync:git via tests/support/handler-verdict.ts:144"
+    ]
+  },
+  "clients/lsp/session-root-workspace-2657.test.ts": {
+    "reason": "starts real `git` child process(es) (spawnSync), reached through tests/support/handler-verdict.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawnSync:git via tests/support/handler-verdict.ts:144"
+    ]
+  },
+  "clients/lsp/sweep-preopen-backlog.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/sweep-preopen-backlog.test.ts:104), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lsp/sweep-preopen-backlog.test.ts:104",
+      "exec:getconf via tests/clients/lsp/sweep-preopen-backlog.test.ts:104",
+      "execFile:getconf via tests/clients/lsp/sweep-preopen-backlog.test.ts:104"
+    ]
+  },
+  "clients/lsp/sweep-warmup-silent-clean.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/sweep-warmup-silent-clean.test.ts:384), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lsp/sweep-warmup-silent-clean.test.ts:384",
+      "exec:getconf via tests/clients/lsp/sweep-warmup-silent-clean.test.ts:384",
+      "execFile:getconf via tests/clients/lsp/sweep-warmup-silent-clean.test.ts:384"
+    ]
+  },
+  "clients/lsp/sweep-warmup.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/sweep-warmup.test.ts:236), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lsp/sweep-warmup.test.ts:236",
+      "exec:getconf via tests/clients/lsp/sweep-warmup.test.ts:236",
+      "execFile:getconf via tests/clients/lsp/sweep-warmup.test.ts:236",
+      "spawn:git via tests/clients/lsp/sweep-warmup.test.ts:274",
+      "spawn:git via tests/clients/lsp/sweep-warmup.test.ts:473",
+      "spawn:git via tests/clients/lsp/sweep-warmup.test.ts:1045"
+    ]
+  },
+  "clients/lsp/touch-debounce-content-gate.test.ts": {
+    "reason": "starts real `node` child process(es) (spawn), called from the file itself (tests/clients/lsp/touch-debounce-content-gate.test.ts:192), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:node via tests/clients/lsp/touch-debounce-content-gate.test.ts:192"
+    ]
+  },
+  "clients/lsp/tsserver-project-trust-wire.test.ts": {
+    "reason": "starts real `which`, `getconf`, `cli.mjs` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/tsserver-project-trust-wire.test.ts:146), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:which via tests/clients/lsp/tsserver-project-trust-wire.test.ts:146",
+      "exec:getconf via tests/clients/lsp/tsserver-project-trust-wire.test.ts:146",
+      "execFile:getconf via tests/clients/lsp/tsserver-project-trust-wire.test.ts:146",
+      "spawn:cli.mjs via tests/clients/lsp/tsserver-project-trust-wire.test.ts:146"
+    ]
+  },
+  "clients/lsp/tsserver-project-trust.test.ts": {
+    "reason": "starts real `which`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/tsserver-project-trust.test.ts:605), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:which via tests/clients/lsp/tsserver-project-trust.test.ts:605",
+      "exec:getconf via tests/clients/lsp/tsserver-project-trust.test.ts:605",
+      "execFile:getconf via tests/clients/lsp/tsserver-project-trust.test.ts:605",
+      "spawn:which via tests/clients/lsp/tsserver-project-trust.test.ts:626",
+      "spawn:which via tests/clients/lsp/tsserver-project-trust.test.ts:633",
+      "spawn:which via tests/clients/lsp/tsserver-project-trust.test.ts:664"
+    ]
+  },
+  "clients/lsp/workspace-diagnostics-cache-expiry.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/workspace-diagnostics-cache-expiry.test.ts:616), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-cache-expiry.test.ts:616",
+      "exec:getconf via tests/clients/lsp/workspace-diagnostics-cache-expiry.test.ts:616",
+      "execFile:getconf via tests/clients/lsp/workspace-diagnostics-cache-expiry.test.ts:616"
+    ]
+  },
+  "clients/lsp/workspace-diagnostics-cache.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/workspace-diagnostics-cache.test.ts:1274), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-cache.test.ts:1274",
+      "exec:getconf via tests/clients/lsp/workspace-diagnostics-cache.test.ts:1274",
+      "execFile:getconf via tests/clients/lsp/workspace-diagnostics-cache.test.ts:1274",
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-cache.test.ts:1302",
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-cache.test.ts:1356",
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-cache.test.ts:1555"
+    ]
+  },
+  "clients/lsp/workspace-diagnostics-clean-reanswer.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/workspace-diagnostics-clean-reanswer.test.ts:163), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-clean-reanswer.test.ts:163",
+      "exec:getconf via tests/clients/lsp/workspace-diagnostics-clean-reanswer.test.ts:163",
+      "execFile:getconf via tests/clients/lsp/workspace-diagnostics-clean-reanswer.test.ts:163",
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-clean-reanswer.test.ts:178",
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-clean-reanswer.test.ts:204",
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-clean-reanswer.test.ts:231"
+    ]
+  },
+  "clients/lsp/workspace-diagnostics-exclusion.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/workspace-diagnostics-exclusion.test.ts:55), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-exclusion.test.ts:55",
+      "exec:getconf via tests/clients/lsp/workspace-diagnostics-exclusion.test.ts:55",
+      "execFile:getconf via tests/clients/lsp/workspace-diagnostics-exclusion.test.ts:55",
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-exclusion.test.ts:77",
+      "exec:getconf via tests/clients/lsp/workspace-diagnostics-exclusion.test.ts:77",
+      "execFile:getconf via tests/clients/lsp/workspace-diagnostics-exclusion.test.ts:77"
+    ]
+  },
+  "clients/lsp/workspace-diagnostics-language-neutral.test.ts": {
+    "reason": "starts real `node` child process(es) (spawn), called from the file itself (tests/clients/lsp/workspace-diagnostics-language-neutral.test.ts:183), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:node via tests/clients/lsp/workspace-diagnostics-language-neutral.test.ts:183"
+    ]
+  },
+  "clients/lsp/workspace-diagnostics-occupancy.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/workspace-diagnostics-occupancy.test.ts:56), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-occupancy.test.ts:56",
+      "exec:getconf via tests/clients/lsp/workspace-diagnostics-occupancy.test.ts:56",
+      "execFile:getconf via tests/clients/lsp/workspace-diagnostics-occupancy.test.ts:56"
+    ]
+  },
+  "clients/lsp/workspace-diagnostics-opengrep-exclusion.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/workspace-diagnostics-opengrep-exclusion.test.ts:90), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-opengrep-exclusion.test.ts:90",
+      "exec:getconf via tests/clients/lsp/workspace-diagnostics-opengrep-exclusion.test.ts:90",
+      "execFile:getconf via tests/clients/lsp/workspace-diagnostics-opengrep-exclusion.test.ts:90"
+    ]
+  },
+  "clients/lsp/workspace-diagnostics-outside-root.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/workspace-diagnostics-outside-root.test.ts:126), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-outside-root.test.ts:126",
+      "exec:getconf via tests/clients/lsp/workspace-diagnostics-outside-root.test.ts:126",
+      "execFile:getconf via tests/clients/lsp/workspace-diagnostics-outside-root.test.ts:126",
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-outside-root.test.ts:140"
+    ]
+  },
+  "clients/lsp/workspace-diagnostics-per-server.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/workspace-diagnostics-per-server.test.ts:99), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-per-server.test.ts:99",
+      "exec:getconf via tests/clients/lsp/workspace-diagnostics-per-server.test.ts:99",
+      "execFile:getconf via tests/clients/lsp/workspace-diagnostics-per-server.test.ts:99",
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-per-server.test.ts:153",
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-per-server.test.ts:199"
+    ]
+  },
+  "clients/lsp/workspace-diagnostics-pull-binding.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/workspace-diagnostics-pull-binding.test.ts:107), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-pull-binding.test.ts:107",
+      "exec:getconf via tests/clients/lsp/workspace-diagnostics-pull-binding.test.ts:107",
+      "execFile:getconf via tests/clients/lsp/workspace-diagnostics-pull-binding.test.ts:107",
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-pull-binding.test.ts:155",
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-pull-binding.test.ts:228"
+    ]
+  },
+  "clients/lsp/workspace-diagnostics-service-destroyed.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/workspace-diagnostics-service-destroyed.test.ts:106), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-service-destroyed.test.ts:106",
+      "exec:getconf via tests/clients/lsp/workspace-diagnostics-service-destroyed.test.ts:106",
+      "execFile:getconf via tests/clients/lsp/workspace-diagnostics-service-destroyed.test.ts:106"
+    ]
+  },
+  "clients/lsp/workspace-diagnostics-suppression.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/workspace-diagnostics-suppression.test.ts:100), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-suppression.test.ts:100",
+      "exec:getconf via tests/clients/lsp/workspace-diagnostics-suppression.test.ts:100",
+      "execFile:getconf via tests/clients/lsp/workspace-diagnostics-suppression.test.ts:100",
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-suppression.test.ts:133",
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-suppression.test.ts:196"
+    ]
+  },
+  "clients/lsp/workspace-diagnostics-sweep-batch-open.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/workspace-diagnostics-sweep-batch-open.test.ts:155), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-sweep-batch-open.test.ts:155",
+      "exec:getconf via tests/clients/lsp/workspace-diagnostics-sweep-batch-open.test.ts:155",
+      "execFile:getconf via tests/clients/lsp/workspace-diagnostics-sweep-batch-open.test.ts:155",
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-sweep-batch-open.test.ts:290",
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-sweep-batch-open.test.ts:333"
+    ]
+  },
+  "clients/lsp/workspace-diagnostics-sweep-index-gate.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/workspace-diagnostics-sweep-index-gate.test.ts:117), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-sweep-index-gate.test.ts:117",
+      "exec:getconf via tests/clients/lsp/workspace-diagnostics-sweep-index-gate.test.ts:117",
+      "execFile:getconf via tests/clients/lsp/workspace-diagnostics-sweep-index-gate.test.ts:117",
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-sweep-index-gate.test.ts:191"
+    ]
+  },
+  "clients/lsp/workspace-diagnostics-sweep-preopen-chunk.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/workspace-diagnostics-sweep-preopen-chunk.test.ts:134), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-sweep-preopen-chunk.test.ts:134",
+      "exec:getconf via tests/clients/lsp/workspace-diagnostics-sweep-preopen-chunk.test.ts:134",
+      "execFile:getconf via tests/clients/lsp/workspace-diagnostics-sweep-preopen-chunk.test.ts:134",
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-sweep-preopen-chunk.test.ts:201"
+    ]
+  },
+  "clients/lsp/workspace-diagnostics-warm-attach.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/lsp/workspace-diagnostics-warm-attach.test.ts:468), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/lsp/workspace-diagnostics-warm-attach.test.ts:468",
+      "exec:getconf via tests/clients/lsp/workspace-diagnostics-warm-attach.test.ts:468",
+      "execFile:getconf via tests/clients/lsp/workspace-diagnostics-warm-attach.test.ts:468"
+    ]
+  },
+  "clients/mcp/review.test.ts": {
+    "reason": "starts real `node` child process(es) (spawn), called from the file itself (tests/clients/mcp/review.test.ts:98), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:node via tests/clients/mcp/review.test.ts:98",
+      "spawn:node via tests/clients/mcp/review.test.ts:108",
+      "spawn:node via tests/clients/mcp/review.test.ts:119",
+      "spawn:node via tests/clients/mcp/review.test.ts:135"
+    ]
+  },
+  "clients/module-report-call-graph-identity-missing.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/module-report-call-graph-identity-missing.test.ts:46), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/module-report-call-graph-identity-missing.test.ts:46",
+      "exec:getconf via tests/clients/module-report-call-graph-identity-missing.test.ts:46",
+      "execFile:getconf via tests/clients/module-report-call-graph-identity-missing.test.ts:46"
+    ]
+  },
+  "clients/module-report-call-graph.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/module-report-call-graph.test.ts:359), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/module-report-call-graph.test.ts:359",
+      "exec:getconf via tests/clients/module-report-call-graph.test.ts:359",
+      "execFile:getconf via tests/clients/module-report-call-graph.test.ts:359"
+    ]
+  },
+  "clients/module-report-revision-drift.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/module-report-revision-drift.test.ts:91), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/module-report-revision-drift.test.ts:91",
+      "exec:getconf via tests/clients/module-report-revision-drift.test.ts:91",
+      "execFile:getconf via tests/clients/module-report-revision-drift.test.ts:91"
+    ]
+  },
+  "clients/module-report.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/module-report.test.ts:34), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/module-report.test.ts:34",
+      "exec:getconf via tests/clients/module-report.test.ts:34",
+      "execFile:getconf via tests/clients/module-report.test.ts:34"
+    ]
+  },
+  "clients/observed-mutation-integration.test.ts": {
+    "reason": "starts real `git` child process(es) (spawn), reached through tests/support/handler-verdict.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/support/handler-verdict.ts:144"
+    ]
+  },
+  "clients/observed-mutation-real-pipeline.test.ts": {
+    "reason": "starts real `git`, `getconf`, `ruff` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/observed-mutation-real-pipeline.test.ts:45), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/observed-mutation-real-pipeline.test.ts:45",
+      "exec:getconf via tests/clients/observed-mutation-real-pipeline.test.ts:45",
+      "execFile:getconf via tests/clients/observed-mutation-real-pipeline.test.ts:45",
+      "spawn:ruff via tests/clients/observed-mutation-real-pipeline.test.ts:45"
+    ]
+  },
+  "clients/opaque-home-root-4905.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/opaque-home-root-4905.test.ts:263), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/opaque-home-root-4905.test.ts:263",
+      "exec:getconf via tests/clients/opaque-home-root-4905.test.ts:263",
+      "execFile:getconf via tests/clients/opaque-home-root-4905.test.ts:263",
+      "spawn:git via tests/support/handler-verdict.ts:144"
+    ]
+  },
+  "clients/opengrep-rule-pack-4765.test.ts": {
+    "reason": "starts real `which`, `getconf`, `npm` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/opengrep-rule-pack-4765.test.ts:126), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:which via tests/clients/opengrep-rule-pack-4765.test.ts:126",
+      "exec:getconf via tests/clients/opengrep-rule-pack-4765.test.ts:126",
+      "execFile:getconf via tests/clients/opengrep-rule-pack-4765.test.ts:126",
+      "spawn:npm via tests/clients/opengrep-rule-pack-4765.test.ts:126"
+    ]
+  },
+  "clients/persist-worker-message-fault-injection.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/persist-worker-message-fault-injection.test.ts:304), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/persist-worker-message-fault-injection.test.ts:304",
+      "exec:getconf via tests/clients/persist-worker-message-fault-injection.test.ts:304",
+      "execFile:getconf via tests/clients/persist-worker-message-fault-injection.test.ts:304"
+    ]
+  },
+  "clients/pipeline-changed-identity-4689.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/pipeline-changed-identity-4689.test.ts:86), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/pipeline-changed-identity-4689.test.ts:86",
+      "exec:getconf via tests/clients/pipeline-changed-identity-4689.test.ts:86",
+      "execFile:getconf via tests/clients/pipeline-changed-identity-4689.test.ts:86"
+    ]
+  },
+  "clients/pipeline-snapshot-occupancy.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/pipeline-snapshot-occupancy.test.ts:51), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/pipeline-snapshot-occupancy.test.ts:51",
+      "exec:getconf via tests/clients/pipeline-snapshot-occupancy.test.ts:51",
+      "execFile:getconf via tests/clients/pipeline-snapshot-occupancy.test.ts:51"
+    ]
+  },
+  "clients/pipeline.test.ts": {
+    "reason": "on Windows only, falls through to the real safeSpawnAsync at tests/clients/pipeline.test.ts:78 for every command but cargo, and the git probes there start real `cmd.exe` and `git.exe` children (read from the CI Windows job of run 43703350728; the Linux run mocks this branch). Queued by the #5100 population run, not yet judged: decide whether a mock serves, or promote it to the census.",
+    "routes": [
+      "spawnSync:cmd.exe via tests/clients/pipeline.test.ts:78",
+      "spawn:git.exe via tests/clients/pipeline.test.ts:78"
+    ]
+  },
+  "clients/profiling-coverage.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/profiling-coverage.test.ts:204), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/profiling-coverage.test.ts:204",
+      "exec:getconf via tests/clients/profiling-coverage.test.ts:204",
+      "execFile:getconf via tests/clients/profiling-coverage.test.ts:204"
+    ]
+  },
+  "clients/project-diagnostics.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/project-diagnostics.test.ts:837), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/project-diagnostics.test.ts:837",
+      "exec:getconf via tests/clients/project-diagnostics.test.ts:837",
+      "execFile:getconf via tests/clients/project-diagnostics.test.ts:837",
+      "spawn:git via tests/clients/project-diagnostics.test.ts:856",
+      "spawn:git via tests/clients/project-diagnostics.test.ts:883",
+      "spawn:git via tests/clients/project-diagnostics.test.ts:928"
+    ]
+  },
+  "clients/project-diagnostics/scanner-cache-stats-scope.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/project-diagnostics/scanner-cache-stats-scope.test.ts:63), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/project-diagnostics/scanner-cache-stats-scope.test.ts:63",
+      "exec:getconf via tests/clients/project-diagnostics/scanner-cache-stats-scope.test.ts:63",
+      "execFile:getconf via tests/clients/project-diagnostics/scanner-cache-stats-scope.test.ts:63"
+    ]
+  },
+  "clients/project-diagnostics/scanner-consumerless-skip.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/project-diagnostics/scanner-consumerless-skip.test.ts:89), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/project-diagnostics/scanner-consumerless-skip.test.ts:89",
+      "exec:getconf via tests/clients/project-diagnostics/scanner-consumerless-skip.test.ts:89",
+      "execFile:getconf via tests/clients/project-diagnostics/scanner-consumerless-skip.test.ts:89",
+      "spawn:git via tests/clients/project-diagnostics/scanner-consumerless-skip.test.ts:115"
+    ]
+  },
+  "clients/project-diagnostics/scanner-wasm-abort.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/project-diagnostics/scanner-wasm-abort.test.ts:153), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/project-diagnostics/scanner-wasm-abort.test.ts:153",
+      "exec:getconf via tests/clients/project-diagnostics/scanner-wasm-abort.test.ts:153",
+      "execFile:getconf via tests/clients/project-diagnostics/scanner-wasm-abort.test.ts:153",
+      "spawn:git via tests/clients/project-diagnostics/scanner-wasm-abort.test.ts:189"
+    ]
+  },
+  "clients/project-diagnostics/scanner.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/project-diagnostics/scanner.test.ts:153), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/project-diagnostics/scanner.test.ts:153",
+      "exec:getconf via tests/clients/project-diagnostics/scanner.test.ts:153",
+      "execFile:getconf via tests/clients/project-diagnostics/scanner.test.ts:153",
+      "spawn:git via tests/clients/project-diagnostics/scanner.test.ts:174",
+      "spawn:git via tests/clients/project-diagnostics/scanner.test.ts:193"
+    ]
+  },
+  "clients/project-lens-ignore.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/project-lens-ignore.test.ts:194), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/project-lens-ignore.test.ts:194",
+      "exec:getconf via tests/clients/project-lens-ignore.test.ts:194",
+      "execFile:getconf via tests/clients/project-lens-ignore.test.ts:194"
+    ]
+  },
+  "clients/project-report-text.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/project-report-text.test.ts:112), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/project-report-text.test.ts:112",
+      "exec:getconf via tests/clients/project-report-text.test.ts:112",
+      "execFile:getconf via tests/clients/project-report-text.test.ts:112"
+    ]
+  },
+  "clients/project-report.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/project-report.test.ts:41), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/project-report.test.ts:41",
+      "exec:getconf via tests/clients/project-report.test.ts:41",
+      "execFile:getconf via tests/clients/project-report.test.ts:41"
+    ]
+  },
+  "clients/read-guard-conversation-evidence.test.ts": {
+    "reason": "starts real `git` child process(es) (spawn), reached through tests/support/handler-verdict.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/support/handler-verdict.ts:144"
+    ]
+  },
+  "clients/reverse-deps.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/reverse-deps.test.ts:151), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/reverse-deps.test.ts:151",
+      "exec:getconf via tests/clients/reverse-deps.test.ts:151",
+      "execFile:getconf via tests/clients/reverse-deps.test.ts:151"
+    ]
+  },
+  "clients/review-graph-git-stamp.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph-git-stamp.test.ts:123), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph-git-stamp.test.ts:123",
+      "exec:getconf via tests/clients/review-graph-git-stamp.test.ts:123",
+      "execFile:getconf via tests/clients/review-graph-git-stamp.test.ts:123"
+    ]
+  },
+  "clients/review-graph-persist-worker-stagepath.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph-persist-worker-stagepath.test.ts:117), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph-persist-worker-stagepath.test.ts:117",
+      "exec:getconf via tests/clients/review-graph-persist-worker-stagepath.test.ts:117",
+      "execFile:getconf via tests/clients/review-graph-persist-worker-stagepath.test.ts:117"
+    ]
+  },
+  "clients/review-graph-persist.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph-persist.test.ts:90), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph-persist.test.ts:90",
+      "exec:getconf via tests/clients/review-graph-persist.test.ts:90",
+      "execFile:getconf via tests/clients/review-graph-persist.test.ts:90"
+    ]
+  },
+  "clients/review-graph-seq-fastpath-hash-read.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph-seq-fastpath-hash-read.test.ts:78), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph-seq-fastpath-hash-read.test.ts:78",
+      "exec:getconf via tests/clients/review-graph-seq-fastpath-hash-read.test.ts:78",
+      "execFile:getconf via tests/clients/review-graph-seq-fastpath-hash-read.test.ts:78"
+    ]
+  },
+  "clients/review-graph-seq-fastpath.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph-seq-fastpath.test.ts:74), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph-seq-fastpath.test.ts:74",
+      "exec:getconf via tests/clients/review-graph-seq-fastpath.test.ts:74",
+      "execFile:getconf via tests/clients/review-graph-seq-fastpath.test.ts:74",
+      "spawn:git via tests/clients/review-graph-seq-fastpath.test.ts:144",
+      "spawn:git via tests/clients/review-graph-seq-fastpath.test.ts:186",
+      "spawn:git via tests/clients/review-graph-seq-fastpath.test.ts:214"
+    ]
+  },
+  "clients/review-graph-superseded-persist.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph-superseded-persist.test.ts:60), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph-superseded-persist.test.ts:60",
+      "exec:getconf via tests/clients/review-graph-superseded-persist.test.ts:60",
+      "execFile:getconf via tests/clients/review-graph-superseded-persist.test.ts:60"
+    ]
+  },
+  "clients/review-graph/aliased-cwd.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/aliased-cwd.test.ts:41), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/aliased-cwd.test.ts:41",
+      "exec:getconf via tests/clients/review-graph/aliased-cwd.test.ts:41",
+      "execFile:getconf via tests/clients/review-graph/aliased-cwd.test.ts:41"
+    ]
+  },
+  "clients/review-graph/build-latch.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/build-latch.test.ts:91), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/build-latch.test.ts:91",
+      "exec:getconf via tests/clients/review-graph/build-latch.test.ts:91",
+      "execFile:getconf via tests/clients/review-graph/build-latch.test.ts:91"
+    ]
+  },
+  "clients/review-graph/checkpoint-resume.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/checkpoint-resume.test.ts:116), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/checkpoint-resume.test.ts:116",
+      "exec:getconf via tests/clients/review-graph/checkpoint-resume.test.ts:116",
+      "execFile:getconf via tests/clients/review-graph/checkpoint-resume.test.ts:116"
+    ]
+  },
+  "clients/review-graph/content-release.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/content-release.test.ts:44), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/content-release.test.ts:44",
+      "exec:getconf via tests/clients/review-graph/content-release.test.ts:44",
+      "execFile:getconf via tests/clients/review-graph/content-release.test.ts:44"
+    ]
+  },
+  "clients/review-graph/created-module-importer-edge.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/created-module-importer-edge.test.ts:137), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/created-module-importer-edge.test.ts:137",
+      "exec:getconf via tests/clients/review-graph/created-module-importer-edge.test.ts:137",
+      "execFile:getconf via tests/clients/review-graph/created-module-importer-edge.test.ts:137"
+    ]
+  },
+  "clients/review-graph/dispatch-content-overwrite.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/dispatch-content-overwrite.test.ts:175), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/dispatch-content-overwrite.test.ts:175",
+      "exec:getconf via tests/clients/review-graph/dispatch-content-overwrite.test.ts:175",
+      "execFile:getconf via tests/clients/review-graph/dispatch-content-overwrite.test.ts:175"
+    ]
+  },
+  "clients/review-graph/graph-build-info-failclosed.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/graph-build-info-failclosed.test.ts:40), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/graph-build-info-failclosed.test.ts:40",
+      "exec:getconf via tests/clients/review-graph/graph-build-info-failclosed.test.ts:40",
+      "execFile:getconf via tests/clients/review-graph/graph-build-info-failclosed.test.ts:40"
+    ]
+  },
+  "clients/review-graph/import-require-clause-graph.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/import-require-clause-graph.test.ts:34), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/import-require-clause-graph.test.ts:34",
+      "exec:getconf via tests/clients/review-graph/import-require-clause-graph.test.ts:34",
+      "execFile:getconf via tests/clients/review-graph/import-require-clause-graph.test.ts:34"
+    ]
+  },
+  "clients/review-graph/incremental-equivalence.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/incremental-equivalence.test.ts:182), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/incremental-equivalence.test.ts:182",
+      "exec:getconf via tests/clients/review-graph/incremental-equivalence.test.ts:182",
+      "execFile:getconf via tests/clients/review-graph/incremental-equivalence.test.ts:182",
+      "spawn:git via tests/clients/review-graph/incremental-equivalence.test.ts:189"
+    ]
+  },
+  "clients/review-graph/live-graph-bound.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/live-graph-bound.test.ts:422), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/live-graph-bound.test.ts:422",
+      "exec:getconf via tests/clients/review-graph/live-graph-bound.test.ts:422",
+      "execFile:getconf via tests/clients/review-graph/live-graph-bound.test.ts:422"
+    ]
+  },
+  "clients/review-graph/lsp-symbol-fallback.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/lsp-symbol-fallback.test.ts:74), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/lsp-symbol-fallback.test.ts:74",
+      "exec:getconf via tests/clients/review-graph/lsp-symbol-fallback.test.ts:74",
+      "execFile:getconf via tests/clients/review-graph/lsp-symbol-fallback.test.ts:74"
+    ]
+  },
+  "clients/review-graph/missing-node-cause.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/missing-node-cause.test.ts:57), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/missing-node-cause.test.ts:57",
+      "exec:getconf via tests/clients/review-graph/missing-node-cause.test.ts:57",
+      "execFile:getconf via tests/clients/review-graph/missing-node-cause.test.ts:57"
+    ]
+  },
+  "clients/review-graph/qualified-name-resolution.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/qualified-name-resolution.test.ts:32), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/qualified-name-resolution.test.ts:32",
+      "exec:getconf via tests/clients/review-graph/qualified-name-resolution.test.ts:32",
+      "execFile:getconf via tests/clients/review-graph/qualified-name-resolution.test.ts:32"
+    ]
+  },
+  "clients/review-graph/rebuild-cost.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/rebuild-cost.test.ts:140), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/rebuild-cost.test.ts:140",
+      "exec:getconf via tests/clients/review-graph/rebuild-cost.test.ts:140",
+      "execFile:getconf via tests/clients/review-graph/rebuild-cost.test.ts:140",
+      "spawn:git via tests/clients/review-graph/rebuild-cost.test.ts:175"
+    ]
+  },
+  "clients/review-graph/session-facts.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/session-facts.test.ts:54), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/session-facts.test.ts:54",
+      "exec:getconf via tests/clients/review-graph/session-facts.test.ts:54",
+      "execFile:getconf via tests/clients/review-graph/session-facts.test.ts:54"
+    ]
+  },
+  "clients/review-graph/shared-extraction-ir.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/shared-extraction-ir.test.ts:93), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/shared-extraction-ir.test.ts:93",
+      "exec:getconf via tests/clients/review-graph/shared-extraction-ir.test.ts:93",
+      "execFile:getconf via tests/clients/review-graph/shared-extraction-ir.test.ts:93"
+    ]
+  },
+  "clients/review-graph/stage-sweep.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/stage-sweep.test.ts:126), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/stage-sweep.test.ts:126",
+      "exec:getconf via tests/clients/review-graph/stage-sweep.test.ts:126",
+      "execFile:getconf via tests/clients/review-graph/stage-sweep.test.ts:126"
+    ]
+  },
+  "clients/review-graph/symbol-id.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/symbol-id.test.ts:85), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/symbol-id.test.ts:85",
+      "exec:getconf via tests/clients/review-graph/symbol-id.test.ts:85",
+      "execFile:getconf via tests/clients/review-graph/symbol-id.test.ts:85"
+    ]
+  },
+  "clients/review-graph/tests-free-graph.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/tests-free-graph.test.ts:60), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/tests-free-graph.test.ts:60",
+      "exec:getconf via tests/clients/review-graph/tests-free-graph.test.ts:60",
+      "execFile:getconf via tests/clients/review-graph/tests-free-graph.test.ts:60"
+    ]
+  },
+  "clients/review-graph/tier3-cache-capacity.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/tier3-cache-capacity.test.ts:90), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/tier3-cache-capacity.test.ts:90",
+      "exec:getconf via tests/clients/review-graph/tier3-cache-capacity.test.ts:90",
+      "execFile:getconf via tests/clients/review-graph/tier3-cache-capacity.test.ts:90"
+    ]
+  },
+  "clients/review-graph/wasm-trap-containment.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/wasm-trap-containment.test.ts:131), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/wasm-trap-containment.test.ts:131",
+      "exec:getconf via tests/clients/review-graph/wasm-trap-containment.test.ts:131",
+      "execFile:getconf via tests/clients/review-graph/wasm-trap-containment.test.ts:131"
+    ]
+  },
+  "clients/review-graph/wasm-trap-decay.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/wasm-trap-decay.test.ts:90), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/wasm-trap-decay.test.ts:90",
+      "exec:getconf via tests/clients/review-graph/wasm-trap-decay.test.ts:90",
+      "execFile:getconf via tests/clients/review-graph/wasm-trap-decay.test.ts:90"
+    ]
+  },
+  "clients/review-graph/wasm-trap-reextract.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/wasm-trap-reextract.test.ts:110), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/wasm-trap-reextract.test.ts:110",
+      "exec:getconf via tests/clients/review-graph/wasm-trap-reextract.test.ts:110",
+      "execFile:getconf via tests/clients/review-graph/wasm-trap-reextract.test.ts:110"
+    ]
+  },
+  "clients/review-graph/wasm-trap-retirement.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/review-graph/wasm-trap-retirement.test.ts:80), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/review-graph/wasm-trap-retirement.test.ts:80",
+      "exec:getconf via tests/clients/review-graph/wasm-trap-retirement.test.ts:80",
+      "execFile:getconf via tests/clients/review-graph/wasm-trap-retirement.test.ts:80"
+    ]
+  },
+  "clients/ruff-s-config-precedence.test.ts": {
+    "reason": "starts real `ruff` child process(es) (spawnSync), called from the file itself (tests/clients/ruff-s-config-precedence.test.ts:24), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawnSync:ruff via tests/clients/ruff-s-config-precedence.test.ts:24",
+      "spawnSync:ruff via tests/clients/ruff-s-config-precedence.test.ts:44"
+    ]
+  },
+  "clients/runtime-agent-end.test.ts": {
+    "reason": "starts real `git` child process(es) (spawnSync), reached through tests/support/handler-verdict.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawnSync:git via tests/support/handler-verdict.ts:144"
+    ]
+  },
+  "clients/runtime-session-warm-skip-notify.test.ts": {
+    "reason": "starts real `git` child process(es) (spawn), reached through tests/clients/interleaving-kit.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/interleaving-kit.ts:133"
+    ]
+  },
+  "clients/runtime-tool-call-2939-baseline-escape.test.ts": {
+    "reason": "starts real `git` child process(es) (spawnSync), reached through tests/support/handler-verdict.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawnSync:git via tests/support/handler-verdict.ts:144"
+    ]
+  },
+  "clients/runtime-tool-call.test.ts": {
+    "reason": "starts real `git` child process(es) (spawn), reached through tests/support/handler-verdict.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/support/handler-verdict.ts:144"
+    ]
+  },
+  "clients/runtime-tool-result.test.ts": {
+    "reason": "runs the real bash tool (createBashToolDefinition(...).execute) at tests/clients/runtime-tool-result.test.ts:1774, :1892, :1961 so the tool_result lane is judged against a real shell child: the claim is what the pipeline records for a real command's result, which a faked child would only replay.",
+    "routes": [
+      "spawn:bash via tests/clients/runtime-tool-result.test.ts:1774",
+      "spawn:bash via tests/clients/runtime-tool-result.test.ts:1892",
+      "spawn:bash via tests/clients/runtime-tool-result.test.ts:1961"
+    ]
+  },
+  "clients/runtime-turn-finding-freshness.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/runtime-turn-finding-freshness.test.ts:111), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/runtime-turn-finding-freshness.test.ts:111",
+      "exec:getconf via tests/clients/runtime-turn-finding-freshness.test.ts:111",
+      "execFile:getconf via tests/clients/runtime-turn-finding-freshness.test.ts:111"
+    ]
+  },
+  "clients/runtime-turn-scanner-cache-bound.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/runtime-turn-scanner-cache-bound.test.ts:223), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/runtime-turn-scanner-cache-bound.test.ts:223",
+      "exec:getconf via tests/clients/runtime-turn-scanner-cache-bound.test.ts:223",
+      "execFile:getconf via tests/clients/runtime-turn-scanner-cache-bound.test.ts:223"
+    ]
+  },
+  "clients/runtime-turn-scanner-freshness-fold.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/runtime-turn-scanner-freshness-fold.test.ts:120), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/runtime-turn-scanner-freshness-fold.test.ts:120",
+      "exec:getconf via tests/clients/runtime-turn-scanner-freshness-fold.test.ts:120",
+      "execFile:getconf via tests/clients/runtime-turn-scanner-freshness-fold.test.ts:120"
+    ]
+  },
+  "clients/runtime-turn-secrets-disposition.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/runtime-turn-secrets-disposition.test.ts:109), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/runtime-turn-secrets-disposition.test.ts:109",
+      "exec:getconf via tests/clients/runtime-turn-secrets-disposition.test.ts:109",
+      "execFile:getconf via tests/clients/runtime-turn-secrets-disposition.test.ts:109"
+    ]
+  },
+  "clients/runtime-turn-session.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/runtime-turn-session.test.ts:1726), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/runtime-turn-session.test.ts:1726",
+      "exec:getconf via tests/clients/runtime-turn-session.test.ts:1726",
+      "execFile:getconf via tests/clients/runtime-turn-session.test.ts:1726"
+    ]
+  },
+  "clients/safe-spawn-exit-idle-wait.test.ts": {
+    "reason": "starts real `getconf` child process(es) (exec, execFile), called from the file itself (tests/clients/safe-spawn-exit-idle-wait.test.ts:81), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "exec:getconf via tests/clients/safe-spawn-exit-idle-wait.test.ts:81",
+      "execFile:getconf via tests/clients/safe-spawn-exit-idle-wait.test.ts:81",
+      "exec:getconf via tests/clients/safe-spawn-exit-idle-wait.test.ts:111",
+      "execFile:getconf via tests/clients/safe-spawn-exit-idle-wait.test.ts:111"
+    ]
+  },
+  "clients/safe-spawn-find-command-crlf.test.ts": {
+    "reason": "starts real `getconf` child process(es) (exec, execFile), called from the file itself (tests/clients/safe-spawn-find-command-crlf.test.ts:59), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "exec:getconf via tests/clients/safe-spawn-find-command-crlf.test.ts:59",
+      "execFile:getconf via tests/clients/safe-spawn-find-command-crlf.test.ts:59"
+    ]
+  },
+  "clients/session-start-parallelism.test.ts": {
+    "reason": "starts real `which`, `npx`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/session-start-parallelism.test.ts:26), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:which via tests/clients/session-start-parallelism.test.ts:26",
+      "spawn:npx via tests/clients/session-start-parallelism.test.ts:63",
+      "exec:getconf via tests/clients/session-start-parallelism.test.ts:63",
+      "execFile:getconf via tests/clients/session-start-parallelism.test.ts:63"
+    ]
+  },
+  "clients/shared-checkout-guard-wiring.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), reached through tests/support/handler-verdict.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/support/handler-verdict.ts:144",
+      "exec:getconf via tests/support/handler-verdict.ts:144",
+      "execFile:getconf via tests/support/handler-verdict.ts:144"
+    ]
+  },
+  "clients/source-filter-async.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/source-filter-async.test.ts:65), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/source-filter-async.test.ts:65",
+      "exec:getconf via tests/clients/source-filter-async.test.ts:65",
+      "execFile:getconf via tests/clients/source-filter-async.test.ts:65",
+      "spawn:git via tests/clients/source-filter-async.test.ts:73",
+      "spawn:git via tests/clients/source-filter-async.test.ts:88",
+      "spawn:git via tests/clients/source-filter-async.test.ts:103"
+    ]
+  },
+  "clients/source-filter-named-files.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/source-filter-named-files.test.ts:134), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/source-filter-named-files.test.ts:134",
+      "exec:getconf via tests/clients/source-filter-named-files.test.ts:134",
+      "execFile:getconf via tests/clients/source-filter-named-files.test.ts:134",
+      "spawn:git via tests/clients/source-filter-named-files.test.ts:140",
+      "exec:getconf via tests/clients/source-filter-named-files.test.ts:140",
+      "execFile:getconf via tests/clients/source-filter-named-files.test.ts:140"
+    ]
+  },
+  "clients/source-filter-walker-delegation.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/source-filter-walker-delegation.test.ts:79), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/source-filter-walker-delegation.test.ts:79",
+      "exec:getconf via tests/clients/source-filter-walker-delegation.test.ts:79",
+      "execFile:getconf via tests/clients/source-filter-walker-delegation.test.ts:79"
+    ]
+  },
+  "clients/source-walk-occupancy.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/source-walk-occupancy.test.ts:60), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/source-walk-occupancy.test.ts:60",
+      "exec:getconf via tests/clients/source-walk-occupancy.test.ts:60",
+      "execFile:getconf via tests/clients/source-walk-occupancy.test.ts:60"
+    ]
+  },
+  "clients/source-walker-equivalence.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/source-walker-equivalence.test.ts:121), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/source-walker-equivalence.test.ts:121",
+      "exec:getconf via tests/clients/source-walker-equivalence.test.ts:121",
+      "execFile:getconf via tests/clients/source-walker-equivalence.test.ts:121",
+      "spawn:git via tests/clients/source-walker-equivalence.test.ts:142",
+      "exec:getconf via tests/clients/source-walker-equivalence.test.ts:142",
+      "execFile:getconf via tests/clients/source-walker-equivalence.test.ts:142"
+    ]
+  },
+  "clients/startup-scan-entry-budget.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/startup-scan-entry-budget.test.ts:138), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/startup-scan-entry-budget.test.ts:138",
+      "exec:getconf via tests/clients/startup-scan-entry-budget.test.ts:138",
+      "execFile:getconf via tests/clients/startup-scan-entry-budget.test.ts:138",
+      "spawn:git via tests/clients/startup-scan-entry-budget.test.ts:147",
+      "exec:getconf via tests/clients/startup-scan-entry-budget.test.ts:147",
+      "execFile:getconf via tests/clients/startup-scan-entry-budget.test.ts:147"
+    ]
+  },
+  "clients/startup-scan-home-ceiling.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/startup-scan-home-ceiling.test.ts:130), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/startup-scan-home-ceiling.test.ts:130",
+      "exec:getconf via tests/clients/startup-scan-home-ceiling.test.ts:130",
+      "execFile:getconf via tests/clients/startup-scan-home-ceiling.test.ts:130",
+      "spawn:git via tests/clients/startup-scan-home-ceiling.test.ts:147",
+      "exec:getconf via tests/clients/startup-scan-home-ceiling.test.ts:147",
+      "execFile:getconf via tests/clients/startup-scan-home-ceiling.test.ts:147"
+    ]
+  },
+  "clients/startup-scan-symlink-cycle.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/startup-scan-symlink-cycle.test.ts:113), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/startup-scan-symlink-cycle.test.ts:113",
+      "exec:getconf via tests/clients/startup-scan-symlink-cycle.test.ts:113",
+      "execFile:getconf via tests/clients/startup-scan-symlink-cycle.test.ts:113"
+    ]
+  },
+  "clients/symbol-extraction-cost-4368.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/symbol-extraction-cost-4368.test.ts:136), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/symbol-extraction-cost-4368.test.ts:136",
+      "exec:getconf via tests/clients/symbol-extraction-cost-4368.test.ts:136",
+      "execFile:getconf via tests/clients/symbol-extraction-cost-4368.test.ts:136"
+    ]
+  },
+  "clients/test-runner-client.test.ts": {
+    "reason": "starts real `node`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/test-runner-client.test.ts:1346), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:node via tests/clients/test-runner-client.test.ts:1346",
+      "exec:getconf via tests/clients/test-runner-client.test.ts:1346",
+      "execFile:getconf via tests/clients/test-runner-client.test.ts:1346",
+      "spawn:node via tests/clients/test-runner-client.test.ts:1388",
+      "spawn:node via tests/clients/test-runner-client.test.ts:1428"
+    ]
+  },
+  "clients/tree-sitter-abort-degrade.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/tree-sitter-abort-degrade.test.ts:75), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/tree-sitter-abort-degrade.test.ts:75",
+      "exec:getconf via tests/clients/tree-sitter-abort-degrade.test.ts:75",
+      "execFile:getconf via tests/clients/tree-sitter-abort-degrade.test.ts:75"
+    ]
+  },
+  "clients/tree-sitter-symbols.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/tree-sitter-symbols.test.ts:711), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/tree-sitter-symbols.test.ts:711",
+      "exec:getconf via tests/clients/tree-sitter-symbols.test.ts:711",
+      "execFile:getconf via tests/clients/tree-sitter-symbols.test.ts:711"
+    ]
+  },
+  "clients/ts-family-alias-members.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/ts-family-alias-members.test.ts:137), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/ts-family-alias-members.test.ts:137",
+      "exec:getconf via tests/clients/ts-family-alias-members.test.ts:137",
+      "execFile:getconf via tests/clients/ts-family-alias-members.test.ts:137"
+    ]
+  },
+  "clients/turn-end-disposition-seams.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/turn-end-disposition-seams.test.ts:683), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/turn-end-disposition-seams.test.ts:683",
+      "exec:getconf via tests/clients/turn-end-disposition-seams.test.ts:683",
+      "execFile:getconf via tests/clients/turn-end-disposition-seams.test.ts:683"
+    ]
+  },
+  "clients/turn-end-no-write-provenance.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), reached through tests/support/turn-harness.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/support/turn-harness.ts:385",
+      "exec:getconf via tests/support/turn-harness.ts:385",
+      "execFile:getconf via tests/support/turn-harness.ts:385"
+    ]
+  },
+  "clients/walk-identity-4689.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/walk-identity-4689.test.ts:86), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/walk-identity-4689.test.ts:86",
+      "exec:getconf via tests/clients/walk-identity-4689.test.ts:86",
+      "execFile:getconf via tests/clients/walk-identity-4689.test.ts:86"
+    ]
+  },
+  "clients/word-index-cap-bound-refresh.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/word-index-cap-bound-refresh.test.ts:70), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/word-index-cap-bound-refresh.test.ts:70",
+      "exec:getconf via tests/clients/word-index-cap-bound-refresh.test.ts:70",
+      "execFile:getconf via tests/clients/word-index-cap-bound-refresh.test.ts:70"
+    ]
+  },
+  "clients/word-index-cooperative-occupancy.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/word-index-cooperative-occupancy.test.ts:40), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/word-index-cooperative-occupancy.test.ts:40",
+      "exec:getconf via tests/clients/word-index-cooperative-occupancy.test.ts:40",
+      "execFile:getconf via tests/clients/word-index-cooperative-occupancy.test.ts:40"
+    ]
+  },
+  "clients/word-index-lifecycle.test.ts": {
+    "reason": "starts real `git` child process(es) (spawn), called from the file itself (tests/clients/word-index-lifecycle.test.ts:359), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/word-index-lifecycle.test.ts:359"
+    ]
+  },
+  "clients/word-index-mtime-preserved-freshness.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/word-index-mtime-preserved-freshness.test.ts:54), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/word-index-mtime-preserved-freshness.test.ts:54",
+      "exec:getconf via tests/clients/word-index-mtime-preserved-freshness.test.ts:54",
+      "execFile:getconf via tests/clients/word-index-mtime-preserved-freshness.test.ts:54",
+      "spawn:git via tests/clients/word-index-mtime-preserved-freshness.test.ts:97",
+      "spawn:git via tests/clients/word-index-mtime-preserved-freshness.test.ts:135",
+      "spawn:git via tests/clients/word-index-mtime-preserved-freshness.test.ts:173"
+    ]
+  },
+  "clients/word-index-named-files.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/word-index-named-files.test.ts:34), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/word-index-named-files.test.ts:34",
+      "exec:getconf via tests/clients/word-index-named-files.test.ts:34",
+      "execFile:getconf via tests/clients/word-index-named-files.test.ts:34",
+      "spawn:git via tests/clients/word-index-named-files.test.ts:58",
+      "exec:getconf via tests/clients/word-index-named-files.test.ts:58",
+      "execFile:getconf via tests/clients/word-index-named-files.test.ts:58"
+    ]
+  },
+  "clients/word-index-observability.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/word-index-observability.test.ts:86), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/word-index-observability.test.ts:86",
+      "exec:getconf via tests/clients/word-index-observability.test.ts:86",
+      "execFile:getconf via tests/clients/word-index-observability.test.ts:86"
+    ]
+  },
+  "clients/word-index-path-divergence.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/word-index-path-divergence.test.ts:177), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/word-index-path-divergence.test.ts:177",
+      "exec:getconf via tests/clients/word-index-path-divergence.test.ts:177",
+      "execFile:getconf via tests/clients/word-index-path-divergence.test.ts:177"
+    ]
+  },
+  "clients/word-index-session-refresh.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/word-index-session-refresh.test.ts:70), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/word-index-session-refresh.test.ts:70",
+      "exec:getconf via tests/clients/word-index-session-refresh.test.ts:70",
+      "execFile:getconf via tests/clients/word-index-session-refresh.test.ts:70"
+    ]
+  },
+  "clients/word-index-stat-concurrency.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/word-index-stat-concurrency.test.ts:33), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/word-index-stat-concurrency.test.ts:33",
+      "exec:getconf via tests/clients/word-index-stat-concurrency.test.ts:33",
+      "execFile:getconf via tests/clients/word-index-stat-concurrency.test.ts:33",
+      "spawn:git via tests/clients/word-index-stat-concurrency.test.ts:93",
+      "spawn:git via tests/clients/word-index-stat-concurrency.test.ts:145",
+      "spawn:git via tests/clients/word-index-stat-concurrency.test.ts:182"
+    ]
+  },
+  "clients/word-index-vanish-before-read.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/clients/word-index-vanish-before-read.test.ts:75), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/word-index-vanish-before-read.test.ts:75",
+      "exec:getconf via tests/clients/word-index-vanish-before-read.test.ts:75",
+      "execFile:getconf via tests/clients/word-index-vanish-before-read.test.ts:75"
+    ]
+  },
+  "clients/word-index.test.ts": {
+    "reason": "starts real `git` child process(es) (spawn), called from the file itself (tests/clients/word-index.test.ts:1194), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/clients/word-index.test.ts:1194"
+    ]
+  },
+  "clients/write-autofix-attachment-message.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), reached through tests/support/handler-verdict.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/support/handler-verdict.ts:144",
+      "exec:getconf via tests/support/handler-verdict.ts:144",
+      "execFile:getconf via tests/support/handler-verdict.ts:144"
+    ]
+  },
+  "config/parameter-schema-structure.test.ts": {
+    "reason": "constructs McpHarness (tests/mcp/harness.ts, direct or through tests/support/diagnostics-route-matrix-kit.ts) so the tool calls answer from the in-place-compiled MCP server: the parity under test is between the pi tool registry and the server's real responses, and a mocked child_process would compare the registry with itself.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "config/result-contract-governance.test.ts": {
+    "reason": "constructs McpHarness (tests/mcp/harness.ts, direct or through tests/support/diagnostics-route-matrix-kit.ts) so the tool calls answer from the in-place-compiled MCP server: the parity under test is between the pi tool registry and the server's real responses, and a mocked child_process would compare the registry with itself.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "config/strictness-ratchet.test.ts": {
+    "reason": "the ratchet pins what the real tsc says about the tree: runCheck (scripts/strictness-report.mjs) spawns the compiler for each scratch strictness configuration at tests/config/strictness-ratchet.test.ts:84 and :85, and a mocked child_process would replay a recorded diagnostic count instead of re-measuring, which is the drift the ratchet exists to catch.",
+    "routes": [
+      "spawnSync:node via tests/config/strictness-ratchet.test.ts:84",
+      "spawnSync:node via tests/config/strictness-ratchet.test.ts:85"
+    ]
+  },
+  "config/tool-roster-budget.test.ts": {
+    "reason": "constructs McpHarness (tests/mcp/harness.ts, direct or through tests/support/diagnostics-route-matrix-kit.ts) so the tool calls answer from the in-place-compiled MCP server: the parity under test is between the pi tool registry and the server's real responses, and a mocked child_process would compare the registry with itself.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "fixtures/tmp-teardown/child-entry-leak.fixture.ts": {
+    "reason": "runs inside the child Vitest run that tests/support/tmp-root-teardown.test.ts drives; its subject is a real child process that outlives the file, which is the leaked tmp root the sweep must still report.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "index-3521-fork-tree-witness.test.ts": {
+    "reason": "starts real `git` child process(es) (spawnSync), called from the file itself (tests/index-3521-fork-tree-witness.test.ts:287), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawnSync:git via tests/index-3521-fork-tree-witness.test.ts:287"
+    ]
+  },
+  "index-3814-deferred-blocker-gate.test.ts": {
+    "reason": "starts real `git` child process(es) (spawn), reached through tests/support/handler-verdict.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/support/handler-verdict.ts:144"
+    ]
+  },
+  "index-4632-s4-tool-call-verdict.test.ts": {
+    "reason": "starts real `git`, `bash` child process(es) (spawn), reached through tests/support/pi-session.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/support/pi-session.ts:1173",
+      "spawn:bash via tests/support/pi-session.ts:1173"
+    ]
+  },
+  "index-4687-lazy-tools-per-model.test.ts": {
+    "reason": "starts real `ast-grep` child process(es) (spawn), reached through tests/support/pi-session.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:ast-grep via tests/support/pi-session.ts:1173"
+    ]
+  },
+  "index-4689-path-identity-witness.test.ts": {
+    "reason": "starts real `bash`, `git` child process(es) (spawn), reached through tests/support/pi-session.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:bash via tests/support/pi-session.ts:1173",
+      "spawn:git via tests/support/pi-session.ts:1173"
+    ]
+  },
+  "index-4698-mark-only-turn-gate.test.ts": {
+    "reason": "starts real `git`, `bash` child process(es) (spawn), reached through tests/support/pi-session.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/support/pi-session.ts:1173",
+      "spawn:bash via tests/support/pi-session.ts:1173"
+    ]
+  },
+  "index-4723-two-session-lazy-memory.test.ts": {
+    "reason": "starts real `ast-grep` child process(es) (spawn), reached through tests/support/pi-session.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:ast-grep via tests/support/pi-session.ts:1173"
+    ]
+  },
+  "index-4725-stale-gate-record.test.ts": {
+    "reason": "starts real `git`, `bash` child process(es) (spawn), reached through tests/support/pi-session.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/support/pi-session.ts:1173",
+      "spawn:bash via tests/support/pi-session.ts:1173"
+    ]
+  },
+  "index-4941-commit-gate-by-repo.test.ts": {
+    "reason": "starts real `git`, `bash` child process(es) (spawn), reached through tests/support/pi-session.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/support/pi-session.ts:1173",
+      "spawn:bash via tests/support/pi-session.ts:1173"
+    ]
+  },
+  "index-4942-read-guard-per-session.test.ts": {
+    "reason": "starts real `bash` child process(es) (spawn), reached through tests/support/pi-session.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:bash via tests/support/pi-session.ts:1173"
+    ]
+  },
+  "index-4943-deferred-drain-owner.test.ts": {
+    "reason": "starts real `git` child process(es) (spawn), reached through tests/support/pi-session.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/support/pi-session.ts:1173"
+    ]
+  },
+  "index-4952-4953-two-session-model.test.ts": {
+    "reason": "starts real `git`, `bash` child process(es) (spawn), reached through tests/support/pi-session.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/support/pi-session.ts:1173",
+      "spawn:bash via tests/support/pi-session.ts:1173"
+    ]
+  },
+  "index-5120-partial-apply-composition.test.ts": {
+    "reason": "starts real `bash` child process(es) (spawn), reached through tests/support/pi-session.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:bash via tests/support/pi-session.ts:1173"
+    ]
+  },
+  "index-5239-ast-grep-replace-dispatch.test.ts": {
+    "reason": "starts real `ast-grep` child process(es) (spawn), reached through tests/support/pi-session.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:ast-grep via tests/support/pi-session.ts:1173"
+    ]
+  },
+  "index-5240-blocker-repeat.test.ts": {
+    "reason": "starts real `bash` child process(es) (spawn), reached through tests/support/pi-session.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:bash via tests/support/pi-session.ts:1173"
+    ]
+  },
+  "index-5261-global-bin-prime.test.ts": {
+    "reason": "starts real `which`, `npm` child process(es) (spawn), called from the file itself (tests/index-5261-global-bin-prime.test.ts:39), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:which via tests/index-5261-global-bin-prime.test.ts:39",
+      "spawn:npm via tests/index-5261-global-bin-prime.test.ts:39"
+    ]
+  },
+  "index-vanished-instance-wiring.test.ts": {
+    "reason": "starts real `ps` child process(es) (spawn), called from the file itself (tests/index-vanished-instance-wiring.test.ts:121), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:ps via tests/index-vanished-instance-wiring.test.ts:121"
+    ]
+  },
+  "mcp/analyze-coverage-repeat.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "mcp/analyze-graph.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "mcp/auto-session.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "mcp/build-staleness.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "mcp/harness-socket-teardown.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "mcp/jscpd-report-root.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "mcp/lsp-host-exit-5699.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): which processes outlive that host when it ends by stdin end, SIGTERM or SIGKILL, and whether the next host's start reaps them, is the subject, so a mocked child_process would test nothing. The `ps` read is the kill guard adopting the host's language server for cleanup (tests/support/kill-guard.ts).",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/lsp-resident-budget-5700.smoke.test.ts": {
+    "reason": "#5700: drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts), and that child starts a real fake language server; the claim is what that server receives (didOpen/didClose) and when the MCP host releases it, which a mocked child_process cannot show. The ps route is the harness's teardown process-tree walk.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98",
+      "spawnSync:ps via tests/support/process-tree.ts:87"
+    ]
+  },
+  "mcp/module-report.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "mcp/paths-glob-5371.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "mcp/project-report-text-parity.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "mcp/read-enclosing-maxlines.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "mcp/root-eviction.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "mcp/schema-projection.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "mcp/server.readiness-5487.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "mcp/server.smoke-fallback-5014.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "mcp/server.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "mcp/session-end.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "mcp/stale-json-advisory.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "mcp/symbol-search.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "mcp/turn-end-route.smoke.test.ts": {
+    "reason": "drives the in-place-compiled MCP stdio server as a real child through McpHarness (tests/mcp/harness.ts): the server process, its stdio framing and its teardown are the subject, so a mocked child_process would test nothing.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "monorepo/cross-package-graph.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/monorepo/cross-package-graph.test.ts:73), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/monorepo/cross-package-graph.test.ts:73",
+      "exec:getconf via tests/monorepo/cross-package-graph.test.ts:73",
+      "execFile:getconf via tests/monorepo/cross-package-graph.test.ts:73"
+    ]
+  },
+  "monorepo/diagnostics-generated-skips.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/monorepo/diagnostics-generated-skips.test.ts:45), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/monorepo/diagnostics-generated-skips.test.ts:45",
+      "exec:getconf via tests/monorepo/diagnostics-generated-skips.test.ts:45",
+      "execFile:getconf via tests/monorepo/diagnostics-generated-skips.test.ts:45",
+      "spawn:git via tests/monorepo/diagnostics-generated-skips.test.ts:85",
+      "spawn:git via tests/monorepo/diagnostics-generated-skips.test.ts:116",
+      "spawn:git via tests/monorepo/diagnostics-generated-skips.test.ts:140"
+    ]
+  },
+  "monorepo/diagnostics-truncation.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/monorepo/diagnostics-truncation.test.ts:45), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/monorepo/diagnostics-truncation.test.ts:45",
+      "exec:getconf via tests/monorepo/diagnostics-truncation.test.ts:45",
+      "execFile:getconf via tests/monorepo/diagnostics-truncation.test.ts:45",
+      "spawn:git via tests/monorepo/diagnostics-truncation.test.ts:69",
+      "spawn:git via tests/monorepo/diagnostics-truncation.test.ts:96",
+      "spawn:git via tests/monorepo/diagnostics-truncation.test.ts:114"
+    ]
+  },
+  "monorepo/impact-cascade-cwd.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/monorepo/impact-cascade-cwd.test.ts:62), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/monorepo/impact-cascade-cwd.test.ts:62",
+      "exec:getconf via tests/monorepo/impact-cascade-cwd.test.ts:62",
+      "execFile:getconf via tests/monorepo/impact-cascade-cwd.test.ts:62"
+    ]
+  },
+  "monorepo/pnpm-symlink.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/monorepo/pnpm-symlink.test.ts:122), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/monorepo/pnpm-symlink.test.ts:122",
+      "exec:getconf via tests/monorepo/pnpm-symlink.test.ts:122",
+      "execFile:getconf via tests/monorepo/pnpm-symlink.test.ts:122"
+    ]
+  },
+  "monorepo/scale-knob.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/monorepo/scale-knob.test.ts:138), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/monorepo/scale-knob.test.ts:138",
+      "exec:getconf via tests/monorepo/scale-knob.test.ts:138",
+      "execFile:getconf via tests/monorepo/scale-knob.test.ts:138"
+    ]
+  },
+  "monorepo/size-cliff.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/monorepo/size-cliff.test.ts:102), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/monorepo/size-cliff.test.ts:102",
+      "exec:getconf via tests/monorepo/size-cliff.test.ts:102",
+      "execFile:getconf via tests/monorepo/size-cliff.test.ts:102",
+      "spawn:git via tests/monorepo/size-cliff.test.ts:108",
+      "spawn:git via tests/monorepo/size-cliff.test.ts:139"
+    ]
+  },
+  "scripts/assert-evaluated.test.ts": {
+    "reason": "starts real `git` child process(es) (execFileSync), called from the file itself (tests/scripts/assert-evaluated.test.ts:463), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "execFileSync:git via tests/scripts/assert-evaluated.test.ts:463",
+      "execFileSync:git via tests/scripts/assert-evaluated.test.ts:464",
+      "execFileSync:git via tests/scripts/assert-evaluated.test.ts:465",
+      "execFileSync:git via tests/scripts/assert-evaluated.test.ts:513"
+    ]
+  },
+  "scripts/check-pr-body-bot-block.test.ts": {
+    "reason": "starts real `git` child process(es) (execFileSync), called from the file itself (tests/scripts/check-pr-body-bot-block.test.ts:121), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "execFileSync:git via tests/scripts/check-pr-body-bot-block.test.ts:121"
+    ]
+  },
+  "scripts/check-pr-body-compliance.test.ts": {
+    "reason": "starts real `git` child process(es) (execFileSync), called from the file itself (tests/scripts/check-pr-body-compliance.test.ts:15), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "execFileSync:git via tests/scripts/check-pr-body-compliance.test.ts:15"
+    ]
+  },
+  "scripts/check-pr-body-observability-tested.test.ts": {
+    "reason": "starts real `git` child process(es) (execFileSync), called from the file itself (tests/scripts/check-pr-body-observability-tested.test.ts:658), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "execFileSync:git via tests/scripts/check-pr-body-observability-tested.test.ts:658",
+      "execFileSync:git via tests/scripts/check-pr-body-observability-tested.test.ts:670"
+    ]
+  },
+  "scripts/ci-shuffle-census.test.ts": {
+    "reason": "its population is git's tracked list: the census helpers listTestFiles and listTrackedFiles (scripts/ci-shuffle-census.mjs) run a real `git ls-files` at tests/scripts/ci-shuffle-census.test.ts:469, :471 and :1441, so a mocked child_process would compare the shuffle plan against a file list the test itself wrote.",
+    "routes": [
+      "execFileSync:git via tests/scripts/ci-shuffle-census.test.ts:469",
+      "execFileSync:git via tests/scripts/ci-shuffle-census.test.ts:471",
+      "execFileSync:git via tests/scripts/ci-shuffle-census.test.ts:1441"
+    ]
+  },
+  "scripts/ci-verdict-rest-transport.test.ts": {
+    "reason": "starts real `gh` child process(es) (execFileSync), called from the file itself (tests/scripts/ci-verdict-rest-transport.test.ts:798), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "execFileSync:gh via tests/scripts/ci-verdict-rest-transport.test.ts:798",
+      "execFileSync:gh via tests/scripts/ci-verdict-rest-transport.test.ts:843",
+      "execFileSync:gh via tests/scripts/ci-verdict-rest-transport.test.ts:867",
+      "execFileSync:gh via tests/scripts/ci-verdict-rest-transport.test.ts:913",
+      "execFileSync:gh via tests/scripts/ci-verdict-rest-transport.test.ts:947"
+    ]
+  },
+  "scripts/ci-verdict-trigger-scope.test.ts": {
+    "reason": "starts real `gh` child process(es) (execFileSync), called from the file itself (tests/scripts/ci-verdict-trigger-scope.test.ts:654), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "execFileSync:gh via tests/scripts/ci-verdict-trigger-scope.test.ts:654"
+    ]
+  },
+  "scripts/lsp-cascade-smoke.test.ts": {
+    "reason": "starts real `npm` child process(es) (execFileSync), called from the file itself (tests/scripts/lsp-cascade-smoke.test.ts:645), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "execFileSync:npm via tests/scripts/lsp-cascade-smoke.test.ts:645"
+    ]
+  },
+  "scripts/lsp-fixture-workspace.test.ts": {
+    "reason": "starts real `git` child process(es) (execFileSync), called from the file itself (tests/scripts/lsp-fixture-workspace.test.ts:170), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "execFileSync:git via tests/scripts/lsp-fixture-workspace.test.ts:170"
+    ]
+  },
+  "scripts/playground-verify-rule-bounded-wait.test.ts": {
+    "reason": "starts real `node`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/scripts/playground-verify-rule-bounded-wait.test.ts:38), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:node via tests/scripts/playground-verify-rule-bounded-wait.test.ts:38",
+      "exec:getconf via tests/scripts/playground-verify-rule-bounded-wait.test.ts:38",
+      "execFile:getconf via tests/scripts/playground-verify-rule-bounded-wait.test.ts:38",
+      "spawn:node via tests/scripts/playground-verify-rule-bounded-wait.test.ts:55"
+    ]
+  },
+  "scripts/process-scan.test.ts": {
+    "reason": "starts real `ps` child process(es) (spawn), called from the file itself (tests/scripts/process-scan.test.ts:643), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:ps via tests/scripts/process-scan.test.ts:643",
+      "spawn:ps via tests/scripts/process-scan.test.ts:658",
+      "spawn:ps via tests/scripts/process-scan.test.ts:669"
+    ]
+  },
+  "scripts/server-provenance.test.ts": {
+    "reason": "starts real `node`, `binary-4512`, `which`, `getconf` child process(es) (spawnSync, spawn, exec, execFile), called from the file itself (tests/scripts/server-provenance.test.ts:147), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawnSync:node via tests/scripts/server-provenance.test.ts:147",
+      "spawnSync:node via tests/scripts/server-provenance.test.ts:154",
+      "spawnSync:binary-4512 via tests/scripts/server-provenance.test.ts:156",
+      "spawn:which via tests/scripts/server-provenance.test.ts:168",
+      "exec:getconf via tests/scripts/server-provenance.test.ts:168",
+      "execFile:getconf via tests/scripts/server-provenance.test.ts:168"
+    ]
+  },
+  "scripts/smoke-tools-born-after-start.test.ts": {
+    "reason": "starts real `node` child process(es) (spawn), called from the file itself (tests/scripts/smoke-tools-born-after-start.test.ts:276), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:node via tests/scripts/smoke-tools-born-after-start.test.ts:276",
+      "spawn:node via tests/scripts/smoke-tools-born-after-start.test.ts:291",
+      "spawn:node via tests/scripts/smoke-tools-born-after-start.test.ts:310",
+      "spawn:node via tests/scripts/smoke-tools-born-after-start.test.ts:364",
+      "spawn:node via tests/scripts/smoke-tools-born-after-start.test.ts:397"
+    ]
+  },
+  "scripts/smoke-tools-cwd.test.ts": {
+    "reason": "starts real `which`, `getconf`, `npm` child process(es) (spawn, exec, execFile), called from the file itself (tests/scripts/smoke-tools-cwd.test.ts:130), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:which via tests/scripts/smoke-tools-cwd.test.ts:130",
+      "exec:getconf via tests/scripts/smoke-tools-cwd.test.ts:130",
+      "execFile:getconf via tests/scripts/smoke-tools-cwd.test.ts:130",
+      "spawn:npm via tests/scripts/smoke-tools-cwd.test.ts:130"
+    ]
+  },
+  "scripts/smoke-tools-genuine-install-failure.test.ts": {
+    "reason": "starts real `python3`, `pip3` child process(es) (execFileSync), called from the file itself (tests/scripts/smoke-tools-genuine-install-failure.test.ts:326), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "execFileSync:python3 via tests/scripts/smoke-tools-genuine-install-failure.test.ts:326",
+      "execFileSync:python3 via tests/scripts/smoke-tools-genuine-install-failure.test.ts:341",
+      "execFileSync:pip3 via tests/scripts/smoke-tools-genuine-install-failure.test.ts:347"
+    ]
+  },
+  "scripts/smoke-tools-resolution.test.ts": {
+    "reason": "starts real `sqlfluff`, `getconf`, `php-cs-fixer`, `oxfmt` child process(es) (spawn, exec, execFile), called from the file itself (tests/scripts/smoke-tools-resolution.test.ts:63), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:sqlfluff via tests/scripts/smoke-tools-resolution.test.ts:63",
+      "exec:getconf via tests/scripts/smoke-tools-resolution.test.ts:63",
+      "execFile:getconf via tests/scripts/smoke-tools-resolution.test.ts:63",
+      "spawn:sqlfluff via tests/scripts/smoke-tools-resolution.test.ts:80",
+      "spawn:php-cs-fixer via tests/scripts/smoke-tools-resolution.test.ts:80",
+      "spawn:oxfmt via tests/scripts/smoke-tools-resolution.test.ts:80"
+    ]
+  },
+  "scripts/touch-result.test.ts": {
+    "reason": "starts real `docker-official`, `node` child process(es) (spawn), called from the file itself (tests/scripts/touch-result.test.ts:146), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:docker-official via tests/scripts/touch-result.test.ts:146",
+      "spawn:node via tests/scripts/touch-result.test.ts:161",
+      "spawn:docker-official via tests/scripts/touch-result.test.ts:200"
+    ]
+  },
+  "source-filter-entry-budget.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/source-filter-entry-budget.test.ts:98), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/source-filter-entry-budget.test.ts:98",
+      "exec:getconf via tests/source-filter-entry-budget.test.ts:98",
+      "execFile:getconf via tests/source-filter-entry-budget.test.ts:98",
+      "spawn:git via tests/source-filter-entry-budget.test.ts:124",
+      "spawn:git via tests/source-filter-entry-budget.test.ts:143"
+    ]
+  },
+  "source-filter-skip-observability.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/source-filter-skip-observability.test.ts:110), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/source-filter-skip-observability.test.ts:110",
+      "exec:getconf via tests/source-filter-skip-observability.test.ts:110",
+      "execFile:getconf via tests/source-filter-skip-observability.test.ts:110",
+      "spawn:git via tests/source-filter-skip-observability.test.ts:152",
+      "exec:getconf via tests/source-filter-skip-observability.test.ts:152",
+      "execFile:getconf via tests/source-filter-skip-observability.test.ts:152"
+    ]
+  },
+  "source-filter.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/source-filter.test.ts:792), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/source-filter.test.ts:792",
+      "exec:getconf via tests/source-filter.test.ts:792",
+      "execFile:getconf via tests/source-filter.test.ts:792",
+      "spawn:git via tests/source-filter.test.ts:943",
+      "spawn:git via tests/source-filter.test.ts:994",
+      "spawn:git via tests/source-filter.test.ts:1020"
+    ]
+  },
+  "support/dead-owner-census.test.ts": {
+    "reason": "starts real `ps` child process(es) (spawn), reached through tests/support/dead-owner-census.ts, which the file builds on. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:ps via tests/support/dead-owner-census.ts:137"
+    ]
+  },
+  "tools/diagnostics-route-switch-matrix-cols-1.test.ts": {
+    "reason": "constructs McpHarness (tests/mcp/harness.ts, direct or through tests/support/diagnostics-route-matrix-kit.ts) so the tool calls answer from the in-place-compiled MCP server: the parity under test is between the pi tool registry and the server's real responses, and a mocked child_process would compare the registry with itself.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "tools/diagnostics-route-switch-matrix-cols-2.test.ts": {
+    "reason": "constructs McpHarness (tests/mcp/harness.ts, direct or through tests/support/diagnostics-route-matrix-kit.ts) so the tool calls answer from the in-place-compiled MCP server: the parity under test is between the pi tool registry and the server's real responses, and a mocked child_process would compare the registry with itself.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "tools/diagnostics-route-switch-matrix-cols-3.test.ts": {
+    "reason": "constructs McpHarness (tests/mcp/harness.ts, direct or through tests/support/diagnostics-route-matrix-kit.ts) so the tool calls answer from the in-place-compiled MCP server: the parity under test is between the pi tool registry and the server's real responses, and a mocked child_process would compare the registry with itself.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "tools/diagnostics-route-switch-matrix-cols-4.test.ts": {
+    "reason": "constructs McpHarness (tests/mcp/harness.ts, direct or through tests/support/diagnostics-route-matrix-kit.ts) so the tool calls answer from the in-place-compiled MCP server: the parity under test is between the pi tool registry and the server's real responses, and a mocked child_process would compare the registry with itself.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "tools/diagnostics-route-switch-matrix-cols-5.test.ts": {
+    "reason": "constructs McpHarness (tests/mcp/harness.ts, direct or through tests/support/diagnostics-route-matrix-kit.ts) so the tool calls answer from the in-place-compiled MCP server: the parity under test is between the pi tool registry and the server's real responses, and a mocked child_process would compare the registry with itself.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  },
+  "tools/diagnostics-route-switch-matrix.test.ts": {
+    "reason": "starts real `which`, `getconf`, `npm` child process(es) (spawn, exec, execFile), called from the file itself (tests/tools/diagnostics-route-switch-matrix.test.ts:786), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:which via tests/tools/diagnostics-route-switch-matrix.test.ts:786",
+      "exec:getconf via tests/tools/diagnostics-route-switch-matrix.test.ts:786",
+      "spawn:npm via tests/tools/diagnostics-route-switch-matrix.test.ts:786",
+      "execFile:getconf via tests/tools/diagnostics-route-switch-matrix.test.ts:786"
+    ]
+  },
+  "tools/lens-diagnostics-abort-5097.test.ts": {
+    "reason": "starts real `git`, `getconf`, `madge` child process(es) (spawn, exec, execFile), called from the file itself (tests/tools/lens-diagnostics-abort-5097.test.ts:131), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/tools/lens-diagnostics-abort-5097.test.ts:131",
+      "exec:getconf via tests/tools/lens-diagnostics-abort-5097.test.ts:131",
+      "execFile:getconf via tests/tools/lens-diagnostics-abort-5097.test.ts:131",
+      "spawn:madge via tests/tools/lens-diagnostics-abort-5097.test.ts:131"
+    ]
+  },
+  "tools/lsp-diagnostics-2776.test.ts": {
+    "reason": "starts real `node` child process(es) (spawn), called from the file itself (tests/tools/lsp-diagnostics-2776.test.ts:101), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:node via tests/tools/lsp-diagnostics-2776.test.ts:101"
+    ]
+  },
+  "tools/lsp-diagnostics-classify-5258.test.ts": {
+    "reason": "the production lsp_diagnostics handler asks its empty-result classification only after a real server answered a pull with a finding the severity filter drops; the case needs that answer over a real stdio wire, and a mock of the service would hide the cached-clean replay it must avoid. The child is the shared fake server behind a one-line shim; lsp-spawn-heavy serializes the file.",
+    "routes": [
+      "spawn:node via tests/tools/lsp-diagnostics-classify-5258.test.ts:57"
+    ]
+  },
+  "tools/lsp-diagnostics-created-module-4320.test.ts": {
+    "reason": "starts real `git`, `getconf`, `node` child process(es) (spawn, exec, execFile), called from the file itself (tests/tools/lsp-diagnostics-created-module-4320.test.ts:193), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/tools/lsp-diagnostics-created-module-4320.test.ts:193",
+      "exec:getconf via tests/tools/lsp-diagnostics-created-module-4320.test.ts:193",
+      "execFile:getconf via tests/tools/lsp-diagnostics-created-module-4320.test.ts:193",
+      "spawn:node via tests/tools/lsp-diagnostics-created-module-4320.test.ts:49"
+    ]
+  },
+  "tools/lsp-diagnostics-created-outside-4346.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/tools/lsp-diagnostics-created-outside-4346.test.ts:242), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/tools/lsp-diagnostics-created-outside-4346.test.ts:242",
+      "exec:getconf via tests/tools/lsp-diagnostics-created-outside-4346.test.ts:242",
+      "execFile:getconf via tests/tools/lsp-diagnostics-created-outside-4346.test.ts:242"
+    ]
+  },
+  "tools/lsp-diagnostics-drift-sweep-4532.test.ts": {
+    "reason": "starts real `node` child process(es) (spawn), called from the file itself (tests/tools/lsp-diagnostics-drift-sweep-4532.test.ts:78), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:node via tests/tools/lsp-diagnostics-drift-sweep-4532.test.ts:78"
+    ]
+  },
+  "tools/lsp-diagnostics-drift-sweep-caps-4532.test.ts": {
+    "reason": "starts real `node` child process(es) (spawn), called from the file itself (tests/tools/lsp-diagnostics-drift-sweep-caps-4532.test.ts:85), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:node via tests/tools/lsp-diagnostics-drift-sweep-caps-4532.test.ts:85"
+    ]
+  },
+  "tools/lsp-diagnostics-empty-first-publish-3310.test.ts": {
+    "reason": "starts real `intelephense` child process(es) (spawn), called from the file itself (tests/tools/lsp-diagnostics-empty-first-publish-3310.test.ts:108), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:intelephense via tests/tools/lsp-diagnostics-empty-first-publish-3310.test.ts:108"
+    ]
+  },
+  "tools/lsp-diagnostics-forced-walk-4532.test.ts": {
+    "reason": "starts real `node` child process(es) (spawn), called from the file itself (tests/tools/lsp-diagnostics-forced-walk-4532.test.ts:70), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:node via tests/tools/lsp-diagnostics-forced-walk-4532.test.ts:70"
+    ]
+  },
+  "tools/lsp-diagnostics-missing-primary-4322.test.ts": {
+    "reason": "starts real `json-language-server`, `node` child process(es) (spawn), called from the file itself (tests/tools/lsp-diagnostics-missing-primary-4322.test.ts:110), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:json-language-server via tests/tools/lsp-diagnostics-missing-primary-4322.test.ts:110",
+      "spawn:node via tests/tools/lsp-diagnostics-missing-primary-4322.test.ts:110"
+    ]
+  },
+  "tools/lsp-diagnostics-no-client-4322.test.ts": {
+    "reason": "starts real `json-language-server` child process(es) (spawn), called from the file itself (tests/tools/lsp-diagnostics-no-client-4322.test.ts:97), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:json-language-server via tests/tools/lsp-diagnostics-no-client-4322.test.ts:97"
+    ]
+  },
+  "tools/lsp-diagnostics-opengrep-disabled-4323.test.ts": {
+    "reason": "starts real `node`, `yaml-language-server` child process(es) (spawn), called from the file itself (tests/tools/lsp-diagnostics-opengrep-disabled-4323.test.ts:78), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:node via tests/tools/lsp-diagnostics-opengrep-disabled-4323.test.ts:78",
+      "spawn:yaml-language-server via tests/tools/lsp-diagnostics-opengrep-disabled-4323.test.ts:78",
+      "spawn:node via tests/tools/lsp-diagnostics-opengrep-disabled-4323.test.ts:112"
+    ]
+  },
+  "tools/lsp-diagnostics-opengrep-pre-rules-4763.test.ts": {
+    "reason": "starts real `node` child process(es) (spawn), called from the file itself (tests/tools/lsp-diagnostics-opengrep-pre-rules-4763.test.ts:112), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:node via tests/tools/lsp-diagnostics-opengrep-pre-rules-4763.test.ts:112"
+    ]
+  },
+  "tools/lsp-diagnostics-root-fallback-3750.test.ts": {
+    "reason": "starts real `which`, `npm`, `getconf`, `rust-analyzer` child process(es) (spawn, exec), called from the file itself (tests/tools/lsp-diagnostics-root-fallback-3750.test.ts:104), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:which via tests/tools/lsp-diagnostics-root-fallback-3750.test.ts:104",
+      "spawn:npm via tests/tools/lsp-diagnostics-root-fallback-3750.test.ts:104",
+      "exec:getconf via tests/tools/lsp-diagnostics-root-fallback-3750.test.ts:104",
+      "spawn:rust-analyzer via tests/tools/lsp-diagnostics-root-fallback-3750.test.ts:104"
+    ]
+  },
+  "tools/lsp-diagnostics-unheld-import-4532.test.ts": {
+    "reason": "starts real `node` child process(es) (spawn), called from the file itself (tests/tools/lsp-diagnostics-unheld-import-4532.test.ts:55), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:node via tests/tools/lsp-diagnostics-unheld-import-4532.test.ts:55"
+    ]
+  },
+  "tools/module-report-presets.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/tools/module-report-presets.test.ts:61), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/tools/module-report-presets.test.ts:61",
+      "exec:getconf via tests/tools/module-report-presets.test.ts:61",
+      "execFile:getconf via tests/tools/module-report-presets.test.ts:61"
+    ]
+  },
+  "tools/path-glob-5371-reader.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/tools/path-glob-5371-reader.test.ts:62), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/tools/path-glob-5371-reader.test.ts:62",
+      "exec:getconf via tests/tools/path-glob-5371-reader.test.ts:62",
+      "execFile:getconf via tests/tools/path-glob-5371-reader.test.ts:62"
+    ]
+  },
+  "tools/path-glob-5371.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/tools/path-glob-5371.test.ts:56), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/tools/path-glob-5371.test.ts:56",
+      "exec:getconf via tests/tools/path-glob-5371.test.ts:56",
+      "execFile:getconf via tests/tools/path-glob-5371.test.ts:56"
+    ]
+  },
+  "tools/path-parameter-5041.test.ts": {
+    "reason": "starts real `git`, `getconf`, `which`, `npm` child process(es) (spawn, exec, execFile), called from the file itself (tests/tools/path-parameter-5041.test.ts:113), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/tools/path-parameter-5041.test.ts:113",
+      "exec:getconf via tests/tools/path-parameter-5041.test.ts:113",
+      "execFile:getconf via tests/tools/path-parameter-5041.test.ts:113",
+      "spawn:which via tests/tools/path-parameter-5041.test.ts:113",
+      "spawn:npm via tests/tools/path-parameter-5041.test.ts:113"
+    ]
+  },
+  "tools/project-report.test.ts": {
+    "reason": "starts real `git`, `getconf` child process(es) (spawn, exec, execFile), called from the file itself (tests/tools/project-report.test.ts:28), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/tools/project-report.test.ts:28",
+      "exec:getconf via tests/tools/project-report.test.ts:28",
+      "execFile:getconf via tests/tools/project-report.test.ts:28"
+    ]
+  },
+  "tools/symbol-search.test.ts": {
+    "reason": "starts real `git` child process(es) (spawn), called from the file itself (tests/tools/symbol-search.test.ts:259), directly or through the code it drives. Queued by the #5100 population run over the five CI shards, not yet judged: decide per file whether a mock serves, or promote it to the census (flake-shape header, baseline row, lane).",
+    "routes": [
+      "spawn:git via tests/tools/symbol-search.test.ts:259",
+      "spawn:git via tests/tools/symbol-search.test.ts:551",
+      "spawn:git via tests/tools/symbol-search.test.ts:593",
+      "spawn:git via tests/tools/symbol-search.test.ts:909"
+    ]
+  },
+  "tools/tool-contract-pins.test.ts": {
+    "reason": "constructs McpHarness (tests/mcp/harness.ts, direct or through tests/support/diagnostics-route-matrix-kit.ts) so the tool calls answer from the in-place-compiled MCP server: the parity under test is between the pi tool registry and the server's real responses, and a mocked child_process would compare the registry with itself.",
+    "routes": [
+      "spawn:node via tests/mcp/harness.ts:98"
+    ]
+  }
+}

@@ -139,7 +139,8 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 	return { ...mocked, default: mocked };
 });
 
-vi.mock("../../../clients/safe-spawn.js", () => ({
+vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../clients/safe-spawn.js")>()),
 	safeSpawn: vi.fn(() => ({ stdout: "", stderr: "", status: 0 })),
 	safeSpawnAsync: spawnMock,
 	resetSafeSpawnWindowsCommandCache: vi.fn(),
@@ -421,15 +422,14 @@ function githubRateLimitCount(): number {
 
 function zizmorSuppressionCount(): number {
 	return (
-		getDegradationSummary().find((g) => g.kind === "mode-suppression")?.count ??
-		0
+		getDegradationSummary().find((g) => g.kind === "zizmor-offline")?.count ?? 0
 	);
 }
 
 function zizmorSuppressionSubjects(): string[] {
 	return (
 		getDegradationSummary()
-			.find((g) => g.kind === "mode-suppression")
+			.find((g) => g.kind === "zizmor-offline")
 			?.latestReasons.map((reason) => reason.subject) ?? []
 	);
 }
@@ -1388,6 +1388,11 @@ describe("archive and maven strategies compare the registry pin", () => {
 
 		expect(degradationCount()).toBe(1);
 		expect(degradationSubjects()).toContain("spotbugs");
+		expect(
+			getDegradationSummary().some(
+				(group) => group.kind === "managed-tool-download",
+			),
+		).toBe(true);
 		const stamp = readState().spotbugs;
 		expect(stamp.failed).toBe(true);
 		expect(stamp.resolutionId).toBe(`${SPOTBUGS_PIN}-old`);

@@ -278,55 +278,50 @@ describe("host-range-smoke's classify step names the master conclusion exactly (
 	});
 });
 
-// Round-2 review F5: PI_HOST_SUPPORTED_RANGE is the ONLY thing keeping the
-// wildcard peerDependencies range from making the newest-in-range lane
-// silently unbounded (review S1). A future edit setting it to "*" (or any
-// range with no upper comparator, e.g. a bare "x") would restore exactly
-// that bug while every OTHER test here (which all supply their own
-// PI_HOST_SUPPORTED_RANGE fixture) stays green.
-describe("PI_HOST_SUPPORTED_RANGE is a genuinely bounded range, never a wildcard (#2613 review F5)", () => {
+// Recurrence prevented (#5749): the newest-in-range lane was capped by a
+// hand-kept `PI_HOST_SUPPORTED_RANGE` ceiling (">=0.86.1 <1.6.0") and resolved
+// pi 1.5.2 while pi 1.6.0 was latest (maintainer decision 2026-11-22: the upper
+// end is always the latest pi). A ceiling re-added anywhere the lane can read
+// it, under that name or another, would restore the cap with every resolver
+// case still green, because those pass their own env. The workflow and the
+// lane's own steps must declare no range-shaped variable at all; the floor is
+// `PI_HOST_FLOOR_VERSION` and nothing else.
+describe("the newest-in-range lane has no hand-kept ceiling (#5749)", () => {
 	const workflow = loadWorkflow();
-	const env = (workflow as { env?: Record<string, unknown> }).env;
-	const range = env?.PI_HOST_SUPPORTED_RANGE;
+	const rangeShaped = /RANGE|CEIL|MAX_VERSION|UPPER/i;
 
-	it("is declared as a non-empty string", () => {
-		expect(typeof range).toBe("string");
-		expect((range as string).trim().length).toBeGreaterThan(0);
-	});
-
-	it('is not the bare wildcard "*" or "x"', () => {
-		expect((range as string).trim()).not.toBe("*");
-		expect((range as string).trim()).not.toBe("x");
-	});
-
-	it("carries an upper-bound comparator (< or <=), so it is not open-ended above", () => {
-		expect(range as string).toMatch(/<=?\s*\d/);
-	});
-
-	// Mutation-proof: apply the SAME assertions this describe-block runs
-	// against the real value to the exact regression F5 named ("*" and a
-	// bare "x"), proving they would have failed had the workflow actually
-	// regressed to either.
-	function isBoundedNonWildcard(value: string): boolean {
-		const trimmed = value.trim();
-		return (
-			trimmed.length > 0 &&
-			trimmed !== "*" &&
-			trimmed !== "x" &&
-			/<=?\s*\d/.test(value)
+	function stepEnvKeys(jobName: string): string[] {
+		const steps = workflow.jobs?.[jobName]?.steps;
+		return (Array.isArray(steps) ? (steps as { env?: object }[]) : []).flatMap(
+			(step) => Object.keys(step.env ?? {}),
 		);
 	}
 
-	it("the real configured value passes this file's own bounded-range check", () => {
-		expect(isBoundedNonWildcard(range as string)).toBe(true);
+	it("declares no range-shaped workflow env variable", () => {
+		const keys = Object.keys((workflow.env as object | undefined) ?? {});
+		expect(keys).toContain("PI_HOST_FLOOR_VERSION");
+		expect(keys.filter((key) => rangeShaped.test(key))).toEqual([]);
 	});
 
-	it.each(["*", "x", ">=0.80.10"])(
-		"mutation-proof: %s fails this file's own bounded-range check (the exact F5 regression)",
-		(regressed) => {
-			expect(isBoundedNonWildcard(regressed)).toBe(false);
-		},
-	);
+	it("declares no range-shaped env variable on a host-range-smoke step or its job", () => {
+		const job = workflow.jobs?.["host-range-smoke"] as { env?: object };
+		const keys = [
+			...Object.keys(job.env ?? {}),
+			...stepEnvKeys("host-range-smoke"),
+		];
+		expect(keys.filter((key) => rangeShaped.test(key))).toEqual([]);
+	});
+
+	it("resolves the non-floor cell through the resolver script alone", () => {
+		const run = readStepRun(
+			workflow,
+			"host-range-smoke",
+			"Resolve target host",
+		);
+		expect(run).toContain(
+			'VERSION="$(node scripts/resolve-newest-in-range-host.mjs "@earendil-works/pi-coding-agent")"',
+		);
+	});
 });
 
 // #3043: the lane that shipped the break, and the two lanes the 2026-09-15

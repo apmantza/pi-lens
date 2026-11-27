@@ -22,6 +22,7 @@ import {
 	RunnerRegistry,
 } from "../../../clients/dispatch/dispatcher.js";
 import { FactStore } from "../../../clients/dispatch/fact-store.js";
+import { findingClassOf } from "../../../clients/dispatch/rule-id-normalize.js";
 import { parsePyrightOutput } from "../../../clients/dispatch/runners/pyright.js";
 import pyrightRunner from "../../../clients/dispatch/runners/pyright.js";
 import lspRunner from "../../../clients/dispatch/runners/lsp.js";
@@ -189,14 +190,21 @@ describe.each(FLAVOURS)(
 		});
 
 		it("counts each error once in the STOP header the agent reads", async () => {
-			const errors = (
+			// The CLI's own findings that block: its errors, and (#5416) a warning
+			// in a cross-tool class, an unused import being one. Each is one entry
+			// of the header though both lanes published it.
+			const blocking = (
 				JSON.parse(capture.cli.stdout) as {
-					generalDiagnostics: { severity: string }[];
+					generalDiagnostics: { severity: string; rule: string }[];
 				}
-			).generalDiagnostics.filter((d) => d.severity === "error").length;
+			).generalDiagnostics.filter(
+				(d) =>
+					d.severity === "error" ||
+					findingClassOf({ tool: "pyright", rule: d.rule }) !== undefined,
+			).length;
 			const result = await dispatchCopies(capture);
 			expect(result.output).toContain(
-				`STOP — ${errors} issue(s) must be fixed`,
+				`STOP — ${blocking} issue(s) must be fixed`,
 			);
 		});
 

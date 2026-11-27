@@ -17,6 +17,7 @@ import type { SgNode } from "../../clients/deps/ast-grep-napi.js";
 import { scaledTestTimeout } from "../support/test-timeout-scale.js";
 import {
 	isViMockCall,
+	MOCK_REGISTRATION_NAMES,
 	mockSpecifier,
 	unwrapExpression,
 } from "../support/vi-mock-export-gate.js";
@@ -352,7 +353,8 @@ function scanViMockSites(
 		}
 	}
 	for (const call of root.findAll({ rule: { kind: "call_expression" } })) {
-		if (!isViMockCall(call.field("function"), ["mock", "doMock"])) continue;
+		if (!isViMockCall(call.field("function"), MOCK_REGISTRATION_NAMES))
+			continue;
 		const first = call.field("arguments")?.namedChildren()[0];
 		if (mockSpecifier(first) === undefined) report(call);
 	}

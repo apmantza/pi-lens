@@ -7,15 +7,18 @@
  * Requires: oxlint (npm install -g oxlint)
  */
 
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
+import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
 import { findLocalBinUpwards, localBinPath } from "../../package-manager.js";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
-import { resolveRunnerCwd } from "../../tool-cwd.js";
+import { resolveRunnerCwdWithReason } from "../../tool-cwd.js";
 import { truncatedByOutputCap } from "../../spawn-output-cap.js";
 import {
 	getJstsLintPolicyForCwd,
-	hasVitePlusConfig,
+	optionSafeTargetArg,
 } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -25,10 +28,7 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import { faultResult } from "../types.js";
-import {
-	resolveToolCommand,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import { spawnTimedOut } from "./utils/spawn-outcome.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
@@ -93,14 +93,16 @@ function resolveLocalVp(cwd: string): string | null {
 	return localBinPath(findLocalBinUpwards("vp", cwd)) ?? null;
 }
 
-async function resolveVitePlusCommand(cwd: string): Promise<string | null> {
-	const local = resolveLocalVp(cwd);
+// `packageDir` is where the project's own `vp` is looked up, walking up to the
+// HOME ceiling; past that the shared registry ladder answers (project shim at
+// exactly `cwd`, then PATH with a version check, held in the shared latch).
+async function resolveVitePlusCommand(
+	packageDir: string,
+	cwd: string,
+): Promise<string | null> {
+	const local = resolveLocalVp(packageDir);
 	if (local) return local;
-	const version = await safeSpawnAsync("vp", ["--version"], {
-		timeout: 5000,
-		cwd,
-	});
-	return !version.error && version.status === 0 ? "vp" : null;
+	return resolveToolCommandWithInstallFallback(cwd, "vp");
 }
 
 const oxlintRunner: RunnerDefinition = {
@@ -110,31 +112,35 @@ const oxlintRunner: RunnerDefinition = {
 	skipTestFiles: false,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = resolveRunnerCwd(ctx, "oxlint");
-		const policy = getJstsLintPolicyForCwd(cwd);
+		// `cwd` is where the child starts (the config's directory, #5541); the
+		// package the file lives in still answers every package-scoped question
+		// below, so a root config moves the spawn and nothing else.
+		const resolution = resolveRunnerCwdWithReason(ctx, "oxlint");
+		const cwd = resolution.cwd;
+		const packageDir = resolution.packageDir ?? cwd;
+		const policy = getJstsLintPolicyForCwd(packageDir);
 		if (!policy.preferredRunners.includes("oxlint")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 
 		let cmd: string | null = null;
 		let args: string[];
-		if (hasVitePlusConfig(cwd)) {
-			cmd = await resolveVitePlusCommand(cwd);
+		if (hasToolConfig("vitePlus", packageDir)) {
+			cmd = await resolveVitePlusCommand(packageDir, cwd);
 		}
+		// One spelling for lint and autofix (#5556): project-relative so the ignore
+		// globs see the project's own path, `./`-prefixed so a `-D.ts` is a path.
+		const target = optionSafeTargetArg(cwd, ctx.filePath);
 		if (cmd) {
-			args = ["lint", "--format", "json", ctx.filePath];
+			args = ["lint", "--format", "json", target];
 		} else {
-			// Use ctx.hasTool for async availability check — avoids the synchronous
-			// spawnSync probe that blocks the event loop on first call per cwd.
-			// FactStore caches the result for the session so subsequent writes are free.
-			const oxlintCmd = resolveToolCommand(cwd, "oxlint") ?? "oxlint";
-			cmd = (await ctx.hasTool(oxlintCmd))
-				? oxlintCmd
-				: await resolveToolCommandWithInstallFallback(cwd, "oxlint");
-			args = ["--format", "json", ctx.filePath];
+			// One resolver (#5410): project shim at the package, managed, then PATH,
+			// held in the shared latch, so a second PATH-only probe is not needed.
+			cmd = await resolveToolCommandWithInstallFallback(packageDir, "oxlint");
+			args = ["--format", "json", target];
 		}
 		if (!cmd) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip(packageDir, { id: "oxlint" });
 		}
 
 		// Run oxlint (or Vite+'s vp lint wrapper) on the file.
@@ -444,7 +450,7 @@ function extractOxlintRule(code: string | undefined): string {
 	return code.slice(open + 1, close);
 }
 
-function parseOxlintJson(
+export function parseOxlintJson(
 	raw: string,
 	filePath: string,
 	cwd: string,

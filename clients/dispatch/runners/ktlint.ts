@@ -1,3 +1,5 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -13,13 +15,8 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import {
-	createAvailabilityChecker,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
-
-const ktlint = createAvailabilityChecker("ktlint", ".exe");
 
 // KtLint's exit contract, declared HERE rather than in the shared classifier:
 // an admission is a property of this tool, and #3291 round 2 shipped it through
@@ -141,17 +138,12 @@ const ktlintRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "ktlint");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("ktlint")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 
-		let cmd: string | null = null;
-		if (await ktlint.isAvailableAsync(cwd)) {
-			cmd = ktlint.getCommand(cwd);
-		} else {
-			cmd = await resolveToolCommandWithInstallFallback(cwd, "ktlint");
-		}
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "ktlint");
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip(cwd, { id: "ktlint" });
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const result = await safeSpawnAsync(cmd, ["--reporter=json", absPath], {

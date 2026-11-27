@@ -138,4 +138,47 @@ describe("lens_diagnostics mode=full lists a Pyright finding once (#4629)", () =
 			expect(rows(full), full).toHaveLength(1);
 		},
 	);
+	it("keeps two findings with the same rule and line at different columns (#5412)", async () => {
+		file = path.join(tmp, "app.ts");
+		fs.writeFileSync(file, "const a = 1; const b = 2; export {};\n");
+		const service = makeLspServiceDouble({
+			runWorkspaceDiagnostics: vi.fn(async () => [
+				{
+					filePath: file,
+					count: 2,
+					diagnostics: [
+						{ name: "a", character: 6 },
+						{ name: "b", character: 19 },
+					].map(({ name, character }) => ({
+						severity: 1,
+						message: `'${name}' is declared but its value is never read.`,
+						source: "typescript",
+						code: 6133,
+						range: {
+							start: { line: 0, character },
+							end: { line: 0, character: character + 1 },
+						},
+					})),
+				},
+			]),
+		});
+		const tool = createLensDiagnosticsTool(
+			{ readCache: vi.fn(() => undefined) } as never,
+			() => tmp,
+			() => service as never,
+		);
+		const result = await tool.execute(
+			"1",
+			{ mode: "full", paths: [file] },
+			new AbortController().signal,
+			null as never,
+			{ cwd: tmp } as never,
+		);
+		const text = result.content
+			.map((part) => ("text" in part ? part.text : ""))
+			.join("\n");
+		expect(text).toContain("'a' is declared but its value is never read.");
+		expect(text).toContain("'b' is declared but its value is never read.");
+		expect(result.details).toMatchObject({ totalBlocking: 2, totalErrors: 2 });
+	});
 });

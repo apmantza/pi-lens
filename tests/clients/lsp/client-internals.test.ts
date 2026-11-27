@@ -74,6 +74,14 @@ const TEST_FILE = "/project/app.ts";
 const TEST_KEY = normalizeMapKey(TEST_FILE);
 
 describe("CLIENT_CAPABILITIES (#278 regression)", () => {
+	it("explicitly advertises hierarchical document symbols (#5476)", () => {
+		// ElixirLS 0.31.1 treats an omitted boolean as nil and crashes.
+		expect(CLIENT_CAPABILITIES.textDocument.documentSymbol).toHaveProperty(
+			"hierarchicalDocumentSymbolSupport",
+			true,
+		);
+	});
+
 	// PowerShell Editor Services (OmniSharp.Extensions.LanguageServer) NPEs during
 	// `initialize` when textDocument sub-capabilities it dereferences are absent —
 	// a partial object hangs the handshake. Keep the set COMPLETE so PSES (and any
@@ -2440,7 +2448,7 @@ describe("clientWaitForDiagnostics — pull mode (#240)", () => {
 		// replies (stream stays alive). safeSendRequest only settles on a reply or
 		// a destroyed stream, so pre-fix this await never resolves and hangs the
 		// whole diagnostics wait (→ pipeline → flush → lens_diagnostics). The
-		// per-request withTimeout must bound it: time out → unavailable → fall
+		// per-request withDeadline must bound it: time out → unavailable → fall
 		// through to the push backstop and resolve within the caller's budget.
 		state.connection.sendRequest = vi.fn(() => new Promise<never>(() => {}));
 
@@ -2969,7 +2977,7 @@ describe("shutdown protocol race fixture (#1292)", () => {
 
 describe("navRequest — per-request timeout ceiling (#365)", () => {
 	// workspaceSymbol and codeAction now route through navRequest, so its
-	// withTimeout ceiling is what stops a hung server (a request the server
+	// sender ceiling is what stops a hung server (a request the server
 	// accepts but never replies to — safeSendRequest only settles on a reply or
 	// a destroyed stream) from hanging those tools forever.
 	const TEST_FILE = "/proj/file.ts";
@@ -3049,15 +3057,21 @@ describe("navRequest — $/cancelRequest on abort (#238 Item 1)", () => {
 		expect(state.connection.sendRequest).not.toHaveBeenCalled();
 	});
 
-	it("passes a CancellationToken when a signal is provided, none otherwise", async () => {
+	it("passes a live CancellationToken with or without a signal (#5097: the timeout cancels too)", async () => {
 		const state = createMockState();
 		state.connection.sendRequest = vi.fn().mockResolvedValue([]);
 
 		await navRequest(state, "workspace/symbol", {}, undefined, 120);
-		// No ambient signal in tests → third arg (token) is undefined.
-		expect(
-			vi.mocked(state.connection.sendRequest).mock.calls[0]?.[2],
-		).toBeUndefined();
+		// No ambient signal in tests, but the sender's timeout cancels the
+		// request, so the token is always threaded and an answered request
+		// leaves it uncancelled.
+		const noSignalToken = vi.mocked(state.connection.sendRequest).mock
+			.calls[0]?.[2] as {
+			onCancellationRequested?: unknown;
+			isCancellationRequested?: boolean;
+		};
+		expect(noSignalToken?.onCancellationRequested).toBeTypeOf("function");
+		expect(noSignalToken?.isCancellationRequested).toBe(false);
 
 		await navRequest(
 			state,

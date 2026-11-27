@@ -46,6 +46,10 @@ import {
 } from "../support/test-env-restore-gate.js";
 import { TEST_ENV_RESTORE_ADMISSIONS } from "../support/test-env-restore-admissions.js";
 import { TEST_ENV_RESTORE_BASELINE } from "../support/test-env-restore-baseline.js";
+import {
+	expectPlantedStaleRow,
+	rowsWithoutLiveMember,
+} from "../support/baseline-staleness.js";
 import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -104,15 +108,6 @@ function sweepOnce(): EnvRestoreFinding[] {
 	assertNonEmptyScan("#4589 test-env-restore sweep", files.length, 1400);
 	sweepPromise = detectAcrossFiles(files);
 	return sweepPromise;
-}
-
-/** Baseline rows the live tree no longer reports, so the list only shrinks. */
-function staleBaselineRows(
-	findings: readonly EnvRestoreFinding[],
-	baseline: ReadonlySet<string>,
-): string[] {
-	const live = new Set(findings.map(envRestoreKey));
-	return [...baseline].filter((entry) => !live.has(entry)).sort();
 }
 
 function formatFinding(finding: EnvRestoreFinding): string {
@@ -974,20 +969,25 @@ describe("#4589 test-env-restore detector — the shapes that must red and green
 			].join("\n"),
 		);
 		expect(
-			staleBaselineRows(
-				live,
+			rowsWithoutLiveMember(
 				new Set(["tests/config/case.test.ts:PI_LENS_HOME"]),
+				new Set(live.map(envRestoreKey)),
 			),
 		).toEqual([]);
-		expect(
-			staleBaselineRows(
-				live,
-				new Set([
-					"tests/config/case.test.ts:PI_LENS_HOME",
-					"tests/config/gone.test.ts:PI_LENS_HOME",
-				]),
-			),
-		).toEqual(["tests/config/gone.test.ts:PI_LENS_HOME"]);
+		const plantedRow = "tests/config/gone.test.ts:PI_LENS_HOME";
+		const stale = rowsWithoutLiveMember(
+			new Set(["tests/config/case.test.ts:PI_LENS_HOME", plantedRow]),
+			new Set(live.map(envRestoreKey)),
+		);
+		expect(stale).toEqual([plantedRow]);
+		// The registration for this ratchet's ledger (#5072): the plant is a row
+		// no live tree produces, and the verdict above names it.
+		expectPlantedStaleRow({
+			baseline:
+				"tests/support/test-env-restore-baseline.ts#TEST_ENV_RESTORE_BASELINE",
+			rowKey: plantedRow,
+			verdict: stale,
+		});
 	});
 });
 
@@ -1014,7 +1014,12 @@ describe("#4589 test-env-restore ratchet", () => {
 		() => {
 			// The shrink-only direction: a restore added anywhere makes its row
 			// stale, and a stale row reds until it is deleted.
-			expect(staleBaselineRows(sweepOnce(), BASELINE)).toEqual([]);
+			expect(
+				rowsWithoutLiveMember(
+					BASELINE,
+					new Set(sweepOnce().map(envRestoreKey)),
+				),
+			).toEqual([]);
 		},
 		TREE_WALK_TIMEOUT_MS,
 	);

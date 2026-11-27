@@ -1090,12 +1090,12 @@ export function getProjectSnapshotPersistWorkerHeapStatistics(): PersistWorkerHe
 	return _snapshotPersistWorkerHeapStatistics;
 }
 
-function snapshotWorkerEnabled(): boolean {
+export function snapshotWorkerEnabled(): boolean {
 	// The synchronous fallback writer is a legitimate degraded mode (hosts that
 	// can't spawn a worker); tests also force it so a save→load is fully
 	// synchronous. Production defaults to the worker.
-	const raw = process.env.PI_LENS_SNAPSHOT_PERSIST_SYNC;
-	return !(raw === "1" || raw === "true");
+	// Only the literal `"1"` selects the synchronous writer (#5419).
+	return process.env.PI_LENS_SNAPSHOT_PERSIST_SYNC !== "1";
 }
 
 function pendingSnapshotIsCurrent(pending: PendingSnapshotBody): boolean {
@@ -2275,15 +2275,24 @@ export function saveProjectSnapshot(
 
 // --- Test hooks for the worker persist path ---------------------------------
 
+/** How long {@link waitForProjectSnapshotPersistsForTests} waits, in ms. */
+const SNAPSHOT_PERSIST_WAIT_MS = 2_000;
+
 /** Test-only: wait until worker requests have either landed or degraded. */
 export async function waitForProjectSnapshotPersistsForTests(): Promise<void> {
-	for (
-		let attempts = 0;
-		attempts < 200 &&
+	// Shape 86 (#4865): the bound was `attempts < 200` of 10 ms sleeps, so it
+	// counted turns and not time. The poll interval is unchanged; the ceiling is
+	// now `Date.now()`, so a loaded runner stops the wait at the same wall-clock
+	// budget instead of the extra turns a descheduled sleep added. It still
+	// returns silently with work outstanding -- a real-clock throw would red the
+	// caller files that kill a worker and drain in teardown, so the signal is the
+	// separate p3 on #4865.
+	const deadlineAt = Date.now() + SNAPSHOT_PERSIST_WAIT_MS;
+	while (
+		Date.now() < deadlineAt &&
 		(_snapshotWorkerRequests.size > 0 ||
 			_activeSnapshotPersists.size > 0 ||
-			_queuedSnapshotPersists.size > 0);
-		attempts++
+			_queuedSnapshotPersists.size > 0)
 	) {
 		await new Promise((resolve) => setTimeout(resolve, 10));
 	}
@@ -2291,27 +2300,37 @@ export async function waitForProjectSnapshotPersistsForTests(): Promise<void> {
 
 /**
  * Test-only strict form of {@link waitForProjectSnapshotPersistsForTests}: that
- * wait is a bounded poll (200 x 10 ms) and resolves with work outstanding, so a
- * persist slower than the bound would land after a fixture root was removed.
+ * wait is a bounded poll (`SNAPSHOT_PERSIST_WAIT_MS`) and resolves with work
+ * outstanding, so a persist slower than the bound would land after a fixture
+ * root was removed.
  * This one reports what remains (any request, active persist or queued persist).
  */
 async function settleProjectSnapshotPersistsForTests(): Promise<
 	string | undefined
 > {
 	await waitForProjectSnapshotPersistsForTests();
-	const pending =
-		_snapshotWorkerRequests.size +
-		_activeSnapshotPersists.size +
-		_queuedSnapshotPersists.size;
-	return pending > 0
+	return projectSnapshotPersistsPending()
 		? "project-snapshot persists still pending after the bounded wait"
 		: undefined;
+}
+
+/** Any worker request, active persist or queued persist in this copy. */
+function projectSnapshotPersistsPending(): boolean {
+	return (
+		_snapshotWorkerRequests.size +
+			_activeSnapshotPersists.size +
+			_queuedSnapshotPersists.size >
+		0
+	);
 }
 
 // #4937: the loaded extension copy's in-flight worker write is invisible to a
 // test's own import of this module; the tier-2 harness joins it through the
 // registry (`clients/background-write-drains.ts`).
-registerBackgroundWriteDrain(settleProjectSnapshotPersistsForTests);
+registerBackgroundWriteDrain(
+	settleProjectSnapshotPersistsForTests,
+	projectSnapshotPersistsPending,
+);
 
 /** Test-only: force any in-flight worker body write to the sync main-thread path. */
 export function flushProjectSnapshotPersistsForTests(): void {

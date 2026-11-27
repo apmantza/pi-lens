@@ -65,17 +65,19 @@ import {
 import {
 	normalizeEphemeralMapKey,
 	normalizeMapKey,
+	realpathOrResolve,
 	relativeInside,
 	walkUpDirs,
 } from "./path-utils.js";
+import { parseReportJson } from "./report-scan.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { SecurityScanClient } from "./security-scan-client.js";
 import {
 	getSecretsLaneAllowlistPaths,
 	isUnderSecretsLaneScratchTree,
 	nestedWorktreeOffsets,
+	rootPathRegexSource,
 } from "./scratch-tree-policy.js";
-import { escapeRegExp } from "./string-utils.js";
 
 // --- Types ---
 
@@ -195,8 +197,7 @@ export const PLACEHOLDER_SECRET_REGEXES = [
  * ends; either separator is accepted for the same reason as the name entries.
  */
 function worktreeAllowlistPath(worktree: string): string {
-	const segments = worktree.split(/[/\\]/).map(escapeRegExp);
-	return `^${segments.join("[/\\\\]")}(?:[/\\\\].*)?$`;
+	return `^${rootPathRegexSource(worktree)}(?:[/\\\\].*)?$`;
 }
 
 /**
@@ -228,7 +229,7 @@ export function writeScopedGitleaksConfig(outDir: string, cwd: string): string {
 		? `path = ${JSON.stringify(localConfig)}`
 		: "useDefault = true";
 	const pathPatterns = [
-		...getSecretsLaneAllowlistPaths(),
+		...getSecretsLaneAllowlistPaths(cwd),
 		...nestedWorktreeOffsets(cwd).map((offset) =>
 			worktreeAllowlistPath(path.join(cwd, offset)),
 		),
@@ -375,7 +376,7 @@ export class GitleaksClient extends SecurityScanClient<GitleaksResult> {
 		cwd: string,
 		options?: { requireSignal?: boolean },
 	): Promise<GitleaksResult> {
-		const targetDir = path.resolve(cwd);
+		const targetDir = realpathOrResolve(cwd);
 		const scannedAt = new Date().toISOString();
 		const requireSignal = options?.requireSignal ?? true;
 
@@ -438,7 +439,15 @@ export class GitleaksClient extends SecurityScanClient<GitleaksResult> {
 					scannedAt,
 				};
 			},
-			fail: (failure) => ({ ...EMPTY_RESULT, ...failure }),
+			// Only master's three fields: the failure's raw parts (stderr, status,
+			// outcome) stay in the ledger lane, never in a result that is cached
+			// on success (round-1 review of #5440, F1).
+			fail: ({ success, scannedAt, summary }) => ({
+				...EMPTY_RESULT,
+				success: success === true,
+				scannedAt,
+				summary,
+			}),
 		});
 	}
 }
@@ -475,14 +484,21 @@ export class GitleaksClient extends SecurityScanClient<GitleaksResult> {
  * matching `git-tracked-ignore.ts`'s own contract). Exported for unit tests.
  */
 function isInsideNestedGitRepository(file: string, cwd: string): boolean {
-	const root = path.resolve(cwd);
-	const absoluteFile = path.isAbsolute(file)
+	let root = path.resolve(cwd);
+	let absoluteFile = path.isAbsolute(file)
 		? path.resolve(file)
 		: path.resolve(root, file);
-	if (relativeInside(root, absoluteFile) === undefined) return false;
+	if (relativeInside(root, absoluteFile) === undefined) {
+		// gitleaks reports the real spelling of a root the caller spelled through
+		// a symlink; judge such a finding on the real chain (#5500, as
+		// `isUnderSecretsLaneScratchTree` does).
+		root = realpathOrResolve(root);
+		absoluteFile = realpathOrResolve(absoluteFile);
+		if (relativeInside(root, absoluteFile) === undefined) return false;
+	}
 
-	// The ceiling is the caller's spelling of `cwd`, so the climb stays on the
-	// spelling too: a nested checkout is judged on the chain the finding names.
+	// The ceiling is the spelling the finding is judged in, so the climb stays
+	// on it too: a nested checkout is judged on the chain the finding names.
 	for (const directory of walkUpDirs(path.dirname(absoluteFile), {
 		spelling: true,
 	})) {
@@ -509,7 +525,7 @@ export async function classifyAndFilterFindings(
 
 	const classified: GitleaksFinding[] = [];
 	for (const finding of findings) {
-		if (isUnderSecretsLaneScratchTree(finding.file)) {
+		if (isUnderSecretsLaneScratchTree(finding.file, cwd)) {
 			classified.push({ ...finding, pathStatus: "scratch" });
 			continue;
 		}
@@ -544,18 +560,13 @@ export async function classifyAndFilterFindings(
  * Map gitleaks's JSON report (a flat array of finding objects) to our
  * structured `GitleaksFinding[]` shape. Exported for unit tests.
  *
- * Gitleaks emits `null` (or `[]`) when no findings are present. Malformed
- * input returns `[]` rather than throwing — gitleaks itself is occasionally
- * truncated by upstream pipe failures.
+ * Gitleaks emits `null` (or `[]`) when no findings are present. Input that is
+ * not JSON throws (`parseReportJson`): a truncated report is not a clean scan,
+ * and `runReportScan` records the throw as a failed scan (#5447).
  */
 export function parseGitleaksReport(raw: string): GitleaksFinding[] {
 	if (!raw.trim()) return [];
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(raw);
-	} catch {
-		return [];
-	}
+	const parsed = parseReportJson("gitleaks", raw);
 	if (!Array.isArray(parsed)) return [];
 	const findings: GitleaksFinding[] = [];
 	for (const entry of parsed) {

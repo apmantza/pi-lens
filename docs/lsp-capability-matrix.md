@@ -69,15 +69,21 @@ TypeScript 7+ decides first: with `@effect/tsgo` installed beside it (the same
 `node_modules` level, with a readable manifest version and an existing
 `.bin/effect-tsgo` path) the launch is `effect-tsgo tsc --lsp --stdio`
 (`launchVariant: "effect-tsgo"`, #4914); otherwise the native `tsc --lsp --stdio`
-(`"native-ts7"`); with TypeScript 6 or older, or none, the classic
-`typescript-language-server` (`"classic"`). Installing `@effect/tsgo` is the
+(`"native-ts7"`). With TypeScript 6 or older and a TypeScript 7+
+`@typescript/native` alias at the same level, the alias's own `bin/tsc` runs
+with Node (`"native-ts7"`, #5504); an alias that exits at launch or fails
+`initialize` falls back once to the classic launch below and records one
+`lsp-registry-decision` row (`typescript-native-alias`) per root per generation.
+Otherwise, with TypeScript 6 or older, or
+none, the launch is the classic `typescript-language-server` (`"classic"`). Installing `@effect/tsgo` is the
 only opt-in. pi-lens never installs it, adds no setting for it, and runs the
 binary only when pi trusts the project, like the project's compiler. A
 malformed `@effect/tsgo` install keeps the native launch and never takes an
 ancestor's. So does an install the finder admits but the launcher cannot start
 (no exec bit, a directory at the bin path): the failure records one
 `lsp-registry-decision` row per root per generation and the native launch
-follows. A process that starts and then fails `initialize` is not covered.
+follows. A process that starts and then exits or fails `initialize` falls back
+to the native launch once, with the same `lsp-registry-decision` row (#5504).
 `effect-tsgo` wraps the same typescript-go server, so it uses the
 native variant's wait strategy and cascade tier (`isTsgoLaunchVariant`,
 `clients/lsp/server-traits.ts`) and is excluded from classic's marker the same
@@ -269,7 +275,7 @@ carries the named admission until then.
 | json | vscode-json-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | pi-lens-auto | — |
 | css | vscode-css-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | pi-lens-auto | — |
 | html | vscode-html-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | pi-lens-auto | — |
-| rust | rust-analyzer | pull | — | n/a (pull) | 1 | dev+ci | 0.3.3105-standalone | global-path | — |
+| rust | rust-analyzer | pull | — | n/a (pull) | 1 | dev+ci | 0.3.3130-standalone | global-path | — |
 | svelte | svelte-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | pi-lens-auto | — |
 | deno | deno (alt of typescript) | pull | — | n/a (pull) | 1 | dev+ci | 2.9.8 | global-path | — |
 | ruby | ruby-lsp | pull | — | n/a (pull) | 1 | ci | — | — | — |
@@ -295,7 +301,7 @@ carries the named admission until then.
 | clojure | clojure-lsp | push-only | publishes-unversioned | direct | 2* | ci | 2026.10.15-11.42.38 | global-path | — |
 | opengrep | opengrep (aux) | push-only | publishes-unversioned | direct | 2* | dev+ci | — | global-path | — |
 | ast-grep | ast-grep (aux) | push-only | publishes-versioned | direct | 2 | dev+ci | — | — | — |
-| cue | CUE Language Server (cue lsp serve) | push-only | publishes-versioned | direct | 2 | dev+ci | 0.17.1 | global-path | — |
+| cue | CUE Language Server (cue lsp serve) | push-only | publishes-versioned | direct | 2 | dev+ci | 0.18.0 | global-path | — |
 | powershell | PowerShell Editor Services (pwsh Start-EditorServices.ps1 -Stdio) | push-only | publishes-unversioned | direct | 2* | ci | — | archive-dist | — |
 | go | gopls | push-only | publishes-versioned | direct | 2 | ci | — | — | — |
 | kotlin | kotlin-language-server | push-only | publishes-unversioned | direct | 2* | ci | — | global-path | — |
@@ -303,7 +309,7 @@ carries the named admission until then.
 | expert | Expert (alternate of ElixirLS) | push-only | publishes-unversioned | unknown | 2* | ci | 17.0.1 | global-path | — |
 | typst | tinymist | push-only | publishes-unversioned | direct | 2* | ci | 51.256320801 | global-path | — |
 | fish | fish-lsp | push-only | publishes-unversioned | direct | 2* | ci | 1.1.5 | pi-lens-auto | — |
-| zizmor | zizmor (auxiliary) | push-only | publishes-versioned | direct | 2 | ci | 1.32.0 | global-path | — |
+| zizmor | zizmor (auxiliary) | push-only | publishes-versioned | direct | 2 | ci | 1.33.1 | global-path | — |
 | typos | typos (auxiliary) | push-only | publishes-versioned | direct | 2 | ci | — | global-path | — |
 
 **Servers without a row.** A server gets a row the first night characterize-lsp
@@ -455,6 +461,17 @@ night goes to the run log (`save-verdict: held back <server>`), to one
 `--summary` JSON (`heldBack`). No counter or issue tracks consecutive held
 nights.
 
+A settled answer also changes only when two nights agree (#3405), as
+`clean-behavior` does. The first night that measures a different settled answer
+leaves the row as published and records the night under `save-verdict` in the
+refresh-state JSON below (`pendingSaveVerdict`, `runs`); the run log line reads
+`flip pending, night 1 of 2`. The next night that measures the same answer
+writes the row and clears the entry, and a night that measures the published
+answer again clears it without a change. A night that measures a third answer
+restarts the count at one, and an `inconclusive` night changes nothing. A row
+that holds no settled answer (`unknown`, `inconclusive`, `cannot measure`) has
+nothing to protect, so its first measurement publishes on the first night.
+
 A pull-mode server answers a `textDocument/diagnostic` request rather than
 publishing, so no arm of its run has the save as its only new input: it reads
 `no (pull)` when the request answered without a save and `inconclusive`
@@ -477,21 +494,21 @@ dispatched nightly replaces it on the first night that reaches the server.
 | lua | `save` | no | Measured: answers without a save (2 publish events on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture lua) |
 | python-jedi | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture jedi) |
 | opengrep | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 2 publish events. Auxiliary, not gated. | `node scripts/probe-save-verdict.mjs` (fixture opengrep) |
-| gleam | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture gleam) |
-| go | `save` | no | Measured: answers without a save (2 publish events on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture go) |
+| gleam | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 1 publish event. Gated. | `node scripts/probe-save-verdict.mjs` (fixture gleam) |
+| go | `save` | no | Measured: answers without a save (2 publish events on didOpen); a later save alone: 1 publish event. Gated. | `node scripts/probe-save-verdict.mjs` (fixture go) |
 | zig | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 1 publish event. Gated. | `node scripts/probe-save-verdict.mjs` (fixture zig) |
 | rust | `save` | inconclusive | Measured: inconclusive — pull mode: every arm is a textDocument/diagnostic request, so no arm has the save as its only new input (arms: no-save silent (6000 ms), save alone 1 diagnostic, saved write silent (6000 ms)). Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture rust) |
 | terraform | `save` | no | Measured: answers without a save (2 publish events on didOpen); a later save alone: 1 publish event. Gated. | `node scripts/probe-save-verdict.mjs` (fixture terraform) |
 | fsharp | `save+text` | no | Source: a save holds the source and refreshes code lenses; diagnostics come from open and change checks. Exempt: 0 findings in every run. | ionide/FsAutoComplete `8f011f1395a4`, `src/FsAutoComplete/LspServers/AdaptiveFSharpLspServer.fs` (`TextDocumentDidSave`); nightly run 39845687189 |
 | zizmor | · (registered dynamically) | no | Source: `didSave` is registered dynamically and pi-lens does not map that registration, so no save is sent. Auxiliary, not gated. | zizmor `crates/zizmor/src/lsp.rs` (`initialized`); `clients/lsp/wait-policy/strategies.ts:400-410` (#3548) |
 | clojure | `save+text` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 2 publish events. Gated. | `node scripts/probe-save-verdict.mjs` (fixture clojure) |
-| fish | `save+text` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture fish) |
+| fish | `save+text` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 1 publish event. Gated. | `node scripts/probe-save-verdict.mjs` (fixture fish) |
 | tinymist | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 1 publish event. Gated. | `node scripts/probe-save-verdict.mjs` (fixture typst) |
 | cue | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 1 publish event. Gated. | `node scripts/probe-save-verdict.mjs` (fixture cue) |
 | csharp | `save+text` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 1 diagnostic. Gated. | `node scripts/probe-save-verdict.mjs` (fixture csharp) |
 | deno | `save` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 1 diagnostic. Gated. | `node scripts/probe-save-verdict.mjs` (fixture deno) |
 | svelte | `save` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 2 diagnostics. Gated. | `node scripts/probe-save-verdict.mjs` (fixture svelte) |
-| powershell | `save+text` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture powershell) |
+| powershell | `save+text` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 1 publish event. Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture powershell) |
 | cmake | `save` | inconclusive | Measured: inconclusive — no arm published, so this fixture does not distinguish a save-triggered server from one that never diagnoses it (arms: no-save silent (6000 ms), save alone silent (6000 ms), saved write silent (6000 ms)). Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture cmake) |
 
 Notes.
@@ -563,9 +580,11 @@ _None observed as of the last probe run._
 
 Bookkeeping for the two-run `first-publish`/`clean-behavior` hysteresis, the
 first-miss stamps (#3401, #4615), the consecutive-night `missed-probe`
-streaks behind the `stale` column (#4512) and consecutive-night
-`idle-eviction` counts (#3989). Regenerated every run; never a measurement.
+streaks behind the `stale` column (#4512), consecutive-night
+`idle-eviction` counts (#3989), the pending `save-verdict` flips (#3405) and
+the pending `idle-eviction-doc` flips (#5667).
+Regenerated every run; never a measurement.
 
 ```json
-{"clean-behavior":{"fallow":{"pendingBehavior":"silent","pendingTier":"3","runs":1}},"first-publish":{"fallow":{"pendingFirstPublish":"direct","runs":1}},"idle-eviction":{"dart":{"nights":[{"day":"2026-11-06","rssMb":75,"coldMs":511},{"day":"2026-11-07","rssMb":75,"coldMs":538}]},"go":{"nights":[{"day":"2026-11-06","rssMb":89,"coldMs":567},{"day":"2026-11-07","rssMb":90,"coldMs":595}]},"kotlin":{"nights":[{"day":"2026-11-05","rssMb":283,"coldMs":2269},{"day":"2026-11-06","rssMb":264,"coldMs":2100}]},"powershell":{"nights":[{"day":"2026-11-06","rssMb":166,"coldMs":2749},{"day":"2026-11-07","rssMb":170,"coldMs":2220}]},"rust":{"nights":[{"day":"2026-11-05","rssMb":678,"coldMs":2486},{"day":"2026-11-06","rssMb":614,"coldMs":2471}]},"svelte":{"nights":[{"day":"2026-11-03","rssMb":233,"coldMs":2987},{"day":"2026-11-04","rssMb":233,"coldMs":2944}]}}}
+{"clean-behavior":{"fallow":{"pendingBehavior":"silent","pendingTier":"3","runs":1}},"first-publish":{"fallow":{"pendingFirstPublish":"direct","runs":1}},"idle-eviction":{"csharp":{"nights":[{"day":"2026-11-19","rssMb":236,"coldMs":2942},{"day":"2026-11-20","rssMb":237,"coldMs":2951}]},"dart":{"nights":[{"day":"2026-11-06","rssMb":75,"coldMs":511},{"day":"2026-11-07","rssMb":75,"coldMs":538}]},"go":{"nights":[{"day":"2026-11-06","rssMb":89,"coldMs":567},{"day":"2026-11-07","rssMb":90,"coldMs":595}]}},"save-verdict":{"powershell":{"pendingSaveVerdict":"yes","runs":1}}}
 ```

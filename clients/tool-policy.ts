@@ -1,15 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { normalizeToml } from "./cargo-manifest.js";
+import { TOOLS } from "./installer/index.js";
 import { isJstsFactFile, TERRAGRUNT_FILENAMES } from "./file-kinds.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { logLatency } from "./latency-logger.js";
 import { resolvePackagePath } from "./package-root.js";
-import {
-	findNearestContaining,
-	normalizeMapKey,
-	walkUpDirs,
-} from "./path-utils.js";
-import { hasToolConfig } from "./tool-config-presence.js";
+import { relativeInside, walkUpDirs } from "./path-utils.js";
+import { hasToolConfig, toolConfigDirs } from "./tool-config-presence.js";
 import type { ProjectConventions } from "./project-conventions.js";
 import { loadProjectSnapshotWithoutWordIndex } from "./project-snapshot.js";
 
@@ -22,12 +20,12 @@ export interface FormatterPolicy {
 	gate: ToolGate;
 }
 
-// Extension → formatter policy. This map, `FORMATTER_POLICY_BY_FILENAME`, and
-// `AUTO_INSTALLABLE_DEFAULT_FORMATTERS` are the inverse of the formatter
-// definitions in `clients/formatters.ts` (formatter → extensions). The two are
+// Extension → formatter policy. This map and `FORMATTER_POLICY_BY_FILENAME`
+// are the inverse of the formatter definitions in `clients/formatters.ts`
+// (formatter → extensions). The two are
 // bound by `tests/clients/formatter-policy-consistency.test.ts` (#1135, the
-// #883/#209 single-source-of-truth class) so they cannot drift silently. All
-// three are re-exported (read-only intent) via a single `export {}` below —
+// #883/#209 single-source-of-truth class) so they cannot drift silently. Both
+// are re-exported (read-only intent) via a single `export {}` below —
 // deliberately NOT inline on these declarations, to keep the pre-existing,
 // structural lookup-table duplication out of the PR's "new code" (SonarCloud).
 //
@@ -42,6 +40,15 @@ export interface FormatterPolicy {
 //     (getLinterPolicyForFile), not a FormatterInfo — a formatter policy naming
 //     it was a dead, unsatisfiable entry; fish reformatting runs via the
 //     linter/autofix path. Removed to keep extension→formatter consistent.
+//
+// #1595 sweep — 7 of the 8 formatters #1572 left unreachable (038cd1df flipped
+// defaultWhenUnconfigured to false for these without adding an explicit-config
+// check; see EXPLICIT_FORMATTER_CONFIG_CHECKS in formatters.ts). nixfmt is the
+// 8th and stays unreachable: it is deliberately unconfigurable (no rc file,
+// no CLI flag surface) and has no project-level manifest marker analogous to
+// `terraform init`'s lock file, so there is no honest "explicit opt-in" signal
+// to gate on — see the KNOWN_UNREACHABLE_FORMATTERS comment in
+// formatter-policy-consistency.test.ts.
 const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".js",
@@ -270,8 +277,10 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	],
 	[
 		// ktfmt is offered alongside ktlint but only wins when the project opts in
-		// (hasExplicitFormatterConfig("ktfmt")); otherwise ktlint stays the
-		// smart-default. #129
+		// (hasExplicitFormatterConfig("ktfmt")). ktlint is the default formatter
+		// name, yet as a FORMATTER it also waits for its own Spotless config
+		// (`defaultWhenUnconfigured: false`): only ktlint's LINT policy is a
+		// smart default. #129, #5408
 		".kt",
 		{
 			formatterNames: ["ktfmt", "ktlint"],
@@ -773,16 +782,6 @@ for (const [ext, policy] of FORMATTER_POLICY_BY_EXTENSION) {
 	}
 }
 
-const AUTO_INSTALLABLE_DEFAULT_FORMATTERS = new Map<string, string>([
-	["biome", "biome"],
-	["ruff", "ruff"],
-	["prettier", "prettier"],
-	["shfmt", "shfmt"],
-	["taplo", "taplo"],
-	["ktlint", "ktlint"],
-	["typstyle", "typstyle"],
-]);
-
 // `gate: "smart-default"` so a matched file is formatted only when nothing else
 // claims it. Misdetection edge: `root.hcl` is filename-detected as terragrunt, so
 // a non-terragrunt `root.hcl` gets smart-default formatted with `terragrunt hcl
@@ -799,14 +798,16 @@ const FORMATTER_POLICY_BY_FILENAME = new Map<string, FormatterPolicy>(
 	TERRAGRUNT_FILENAMES.map((name) => [name, TERRAGRUNT_FORMATTER_POLICY]),
 );
 
-// Re-exported (read-only intent) for the #1135 drift guard. Kept as a single
-// separate statement — NOT inline on the declarations above — so the touched
-// lines don't fall at the head of the pre-existing lookup-table duplication and
-// get counted as new duplicated code. Bindings are live, so position is safe.
+// Re-exported (read-only intent) for the #1135 drift guard and the #5418
+// registry-parity guard. Kept as a single separate statement — NOT inline on
+// the declarations above — so the touched lines don't fall at the head of the
+// pre-existing lookup-table duplication and get counted as new duplicated
+// code. Bindings are live, so position is safe.
 export {
-	AUTO_INSTALLABLE_DEFAULT_FORMATTERS,
 	FORMATTER_POLICY_BY_EXTENSION,
 	FORMATTER_POLICY_BY_FILENAME,
+	TOOL_COMMAND_SPECS,
+	TOOL_EXECUTION_POLICY,
 };
 
 function getFormatterPolicyForExtension(
@@ -833,20 +834,20 @@ export function getSmartDefaultFormatterName(
 	return policy.defaultFormatter;
 }
 
-export function getAutoInstallToolIdForFormatter(
-	formatterName: string,
-): string | undefined {
-	return AUTO_INSTALLABLE_DEFAULT_FORMATTERS.get(formatterName);
-}
-
 export function getToolExecutionPolicy(
 	toolId: string,
 ): ToolExecutionPolicy | undefined {
 	return TOOL_EXECUTION_POLICY.get(toolId);
 }
 
+/**
+ * May pi-lens install this tool without asking? The runners and the formatters
+ * (a formatter's name is its tool id) ask here, and the installer's `TOOLS`
+ * entry is the only place the answer is declared (#5410 D9): no entry, or an
+ * entry with no `autoInstall`, answers no.
+ */
 export function shouldAutoInstallTool(toolId: string): boolean {
-	return getToolExecutionPolicy(toolId)?.autoInstall ?? false;
+	return TOOLS.some((tool) => tool.id === toolId && tool.autoInstall === true);
 }
 
 export function getAutofixCapability(
@@ -951,8 +952,18 @@ export interface AutofixCapability {
 }
 
 export interface ToolExecutionPolicy {
-	gate: ToolGate;
-	autoInstall: boolean;
+	/**
+	 * How this tool's invocation is decided on a project with NO config:
+	 * `smart-default` runs on pi-lens's built-in defaults, `config-first` waits
+	 * for the project's own config, `mixed` runs by default and widens with
+	 * config. This is a per-TOOL statement and is deliberately not the per-file
+	 * policy gate (`LinterPolicy.gate`, `FormatterPolicy.gate` and
+	 * `AutofixPolicy.gate` answer that for one file, and they can differ: mypy's
+	 * row is `config-first` while the Python linter policy for a
+	 * mypy-config-free project is `smart-default`). #5418 renamed the field away
+	 * from `gate` so one word does not carry both meanings.
+	 */
+	configEligibility: ToolGate;
 }
 
 export interface ToolCommandSpec {
@@ -960,6 +971,8 @@ export interface ToolCommandSpec {
 	windowsExt?: string;
 	versionArgs?: string[];
 	managedToolId?: string;
+	/** Version-probe budget, ms, for a tool slower to start than the 5000 default. */
+	probeTimeoutMs?: number;
 }
 
 const AUTOFIX_CAPABILITIES = new Map<string, AutofixCapability>([
@@ -1022,62 +1035,74 @@ const AUTOFIX_CAPABILITIES = new Map<string, AutofixCapability>([
 ]);
 
 const TOOL_EXECUTION_POLICY = new Map<string, ToolExecutionPolicy>([
-	// Dispatch/LSP runners use the shared availability/install seam. These
-	// managed tools are missing-command repair candidates; probe failures still
-	// fail closed before this policy is consulted.
-	["pyright", { gate: "smart-default", autoInstall: true }],
-	["shellcheck", { gate: "smart-default", autoInstall: true }],
-	["shfmt", { gate: "smart-default", autoInstall: true }],
-	["tflint", { gate: "smart-default", autoInstall: true }],
-	["terragrunt", { gate: "smart-default", autoInstall: true }],
-	["trivy", { gate: "config-first", autoInstall: true }],
-	["biome", { gate: "smart-default", autoInstall: true }],
-	["ruff", { gate: "smart-default", autoInstall: true }],
-	["jscpd", { gate: "smart-default", autoInstall: true }],
-	["madge", { gate: "smart-default", autoInstall: true }],
-	["knip", { gate: "smart-default", autoInstall: true }],
-	["ast-grep", { gate: "smart-default", autoInstall: true }],
-	["oxlint", { gate: "smart-default", autoInstall: true }],
-	["stylelint", { gate: "smart-default", autoInstall: true }],
-	["sqlfluff", { gate: "smart-default", autoInstall: true }],
-	["rubocop", { gate: "smart-default", autoInstall: true }],
-	["yamllint", { gate: "smart-default", autoInstall: true }],
-	["actionlint", { gate: "smart-default", autoInstall: true }],
-	["markdownlint", { gate: "smart-default", autoInstall: true }],
-	["mypy", { gate: "config-first", autoInstall: true }],
-	["taplo", { gate: "smart-default", autoInstall: true }],
-	["hadolint", { gate: "smart-default", autoInstall: true }],
-	["helm", { gate: "smart-default", autoInstall: true }],
-	["htmlhint", { gate: "smart-default", autoInstall: true }],
-	["ktlint", { gate: "smart-default", autoInstall: true }],
+	// Whether a tool may install without asking is NOT recorded here: it is the
+	// `autoInstall` field of the installer's `TOOLS` entry (`shouldAutoInstallTool`).
+	["pyright", { configEligibility: "smart-default" }],
+	["shellcheck", { configEligibility: "smart-default" }],
+	["shfmt", { configEligibility: "smart-default" }],
+	["tflint", { configEligibility: "smart-default" }],
+	["terragrunt", { configEligibility: "smart-default" }],
+	["trivy", { configEligibility: "config-first" }],
+	["biome", { configEligibility: "smart-default" }],
+	["ruff", { configEligibility: "smart-default" }],
+	["jscpd", { configEligibility: "smart-default" }],
+	["madge", { configEligibility: "smart-default" }],
+	["knip", { configEligibility: "smart-default" }],
+	["ast-grep", { configEligibility: "smart-default" }],
+	["oxlint", { configEligibility: "smart-default" }],
+	["stylelint", { configEligibility: "smart-default" }],
+	["sqlfluff", { configEligibility: "smart-default" }],
+	["rubocop", { configEligibility: "smart-default" }],
+	["yamllint", { configEligibility: "smart-default" }],
+	["actionlint", { configEligibility: "smart-default" }],
+	["markdownlint", { configEligibility: "smart-default" }],
+	["mypy", { configEligibility: "config-first" }],
+	["taplo", { configEligibility: "smart-default" }],
+	["hadolint", { configEligibility: "smart-default" }],
+	["helm", { configEligibility: "smart-default" }],
+	["htmlhint", { configEligibility: "smart-default" }],
+	["ktlint", { configEligibility: "smart-default" }],
 	// ktfmt is opt-in (a project's explicit formatting choice), so it only runs
-	// when its config marker is present — config-first, but auto-installable via
-	// the maven-JAR strategy once elected (#129).
-	["ktfmt", { gate: "config-first", autoInstall: true }],
-	["golangci-lint", { gate: "config-first", autoInstall: true }],
+	// when its config marker is present — config-first.
+	["ktfmt", { configEligibility: "config-first" }],
+	["golangci-lint", { configEligibility: "config-first" }],
 	// SpotBugs is opt-in (lens-spotbugs flag) + config-first (needs a Java build
-	// descriptor + compiled .class files), auto-installed via the archive
-	// strategy when elected (#133).
-	["spotbugs", { gate: "config-first", autoInstall: true }],
+	// descriptor + compiled .class files).
+	["spotbugs", { configEligibility: "config-first" }],
 	// Opengrep is opt-in (lens-opengrep flag or a discovered rule file) and
-	// config-first, but auto-installable via the GitHub single-binary strategy
-	// once elected — no login/token required, unlike Semgrep (#111).
-	["opengrep", { gate: "config-first", autoInstall: true }],
-	["phpstan", { gate: "config-first", autoInstall: false }],
-	["eslint", { gate: "config-first", autoInstall: false }],
-	["prettier", { gate: "smart-default", autoInstall: true }],
-	["vale", { gate: "config-first", autoInstall: false }],
-	["swiftlint", { gate: "smart-default", autoInstall: true }],
+	// config-first.
+	["opengrep", { configEligibility: "config-first" }],
+	["phpstan", { configEligibility: "config-first" }],
+	["eslint", { configEligibility: "config-first" }],
+	["prettier", { configEligibility: "smart-default" }],
+	["vale", { configEligibility: "config-first" }],
+	["swiftlint", { configEligibility: "smart-default" }],
+	["typstyle", { configEligibility: "smart-default" }],
 ]);
 
 const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 	[
+		// No managedToolId: the installer registry has no `eslint` entry (the
+		// runner resolves the project's own `node_modules/.bin/eslint` first), so
+		// a pointer here named an install path that does not exist (#5418).
 		"eslint",
 		{
 			command: "eslint",
 			windowsExt: ".cmd",
 			versionArgs: ["--version"],
-			managedToolId: "eslint",
+		},
+	],
+	[
+		// The installer's pyright is an npm package (`.cmd` on Windows). A pip
+		// venv's `Scripts/pyright.exe` is matched through the bin dir's own
+		// extension (`PROJECT_BIN_DIR_WINDOWS_EXT`), not this row. Unprobed on
+		// Windows (#5410 S1).
+		"pyright",
+		{
+			command: "pyright",
+			windowsExt: ".cmd",
+			versionArgs: ["--version"],
+			managedToolId: "pyright",
 		},
 	],
 	[
@@ -1131,6 +1156,8 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 			command: "rubocop",
 			versionArgs: ["--version"],
 			managedToolId: "rubocop",
+			// A Ruby start is slow; the bundler form's probe had this budget (#5410).
+			probeTimeoutMs: 10000,
 		},
 	],
 	[
@@ -1173,6 +1200,7 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 		"swiftlint",
 		{
 			command: "swiftlint",
+			windowsExt: ".exe",
 			versionArgs: ["--version"],
 			managedToolId: "swiftlint",
 		},
@@ -1186,12 +1214,13 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 		},
 	],
 	[
+		// No managedToolId: no installer entry for `phpstan` exists, so the
+		// pointer resolved to nothing (#5418; auto-install stays an open decision).
 		"phpstan",
 		{
 			command: "phpstan",
 			windowsExt: ".bat",
 			versionArgs: ["--version"],
-			managedToolId: "phpstan",
 		},
 	],
 	[
@@ -1213,9 +1242,157 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 		},
 	],
 	[
+		// helm 4 has no --version flag ("Error: unknown flag: --version", exit 1);
+		// the version lives under a subcommand (#4453).
+		"helm",
+		{
+			command: "helm",
+			windowsExt: ".exe",
+			versionArgs: ["version", "--short"],
+			managedToolId: "helm",
+		},
+	],
+	[
+		"trivy",
+		{
+			command: "trivy",
+			windowsExt: ".exe",
+			versionArgs: ["--version"],
+			managedToolId: "trivy",
+		},
+	],
+	[
+		"golangci-lint",
+		{
+			command: "golangci-lint",
+			windowsExt: ".exe",
+			versionArgs: ["--version"],
+			managedToolId: "golangci-lint",
+		},
+	],
+	// The six install-capable runner tools (#5410 S2). Each `windowsExt` is the
+	// one the runner's own checker carried, and each is the installer entry's
+	// release launcher (`.exe`); unprobed on Windows. A project's
+	// `node_modules/.bin` is matched through that dir's own extension
+	// (`PROJECT_BIN_DIR_WINDOWS_EXT`), not these rows. `shfmt`'s row sits with
+	// the formatter binaries below.
+	[
+		"shellcheck",
+		{
+			command: "shellcheck",
+			windowsExt: ".exe",
+			versionArgs: ["--version"],
+			managedToolId: "shellcheck",
+		},
+	],
+	[
+		"tflint",
+		{
+			command: "tflint",
+			windowsExt: ".exe",
+			versionArgs: ["--version"],
+			managedToolId: "tflint",
+		},
+	],
+	[
+		"terragrunt",
+		{
+			command: "terragrunt",
+			windowsExt: ".exe",
+			versionArgs: ["--version"],
+			managedToolId: "terragrunt",
+		},
+	],
+	[
+		// `cue version`: the installer entry's own probe (v0.17.1 exits 0); the CLI
+		// has no `--version`. cue has no execution-policy row, so the shared
+		// ladder never installs it, as cue-vet never did.
+		"cue",
+		{
+			command: "cue",
+			windowsExt: ".exe",
+			versionArgs: ["version"],
+			managedToolId: "cue",
+		},
+	],
+	[
+		// The spellcheck runner's `typos` CLI. No managedToolId: the installer has
+		// `typos-lsp`, a different binary, and no `typos` entry (#5418).
+		"typos",
+		{
+			command: "typos",
+			windowsExt: ".exe",
+			versionArgs: ["--version"],
+		},
+	],
+	[
+		// No managedToolId: no installer entry for `detekt` exists, and it has no
+		// execution-policy row, so nothing installs it (#5410).
+		"detekt",
+		{
+			command: "detekt",
+			windowsExt: ".bat",
+			versionArgs: ["--version"],
+		},
+	],
+	[
+		// The runtime SpotBugs needs, not a lint tool. The JVM prints its version
+		// under `-version`; it has no `--version` flag. No managedToolId: pi-lens
+		// never installs a JRE.
+		"java",
+		{
+			command: "java",
+			windowsExt: ".exe",
+			versionArgs: ["-version"],
+		},
+	],
+	[
+		// Rubocop's bundler form (`bundle exec rubocop`) is available when
+		// bundler is. No managedToolId: pi-lens never installs bundler.
+		"bundle",
+		{
+			command: "bundle",
+			windowsExt: ".bat",
+			versionArgs: ["--version"],
+			probeTimeoutMs: 10000,
+		},
+	],
+	[
+		// The archive launcher is `bin/spotbugs`, which prints its version under
+		// `-version` and rejects `--version` (installer entry, #133).
+		"spotbugs",
+		{
+			command: "spotbugs",
+			windowsExt: ".bat",
+			versionArgs: ["-version"],
+			managedToolId: "spotbugs",
+		},
+	],
+	[
+		// The prisma-validate runner's CLI. No managedToolId: the installer has no
+		// `prisma` entry and pi-lens never installs it (#5410 D8).
+		"prisma",
+		{
+			command: "prisma",
+			windowsExt: ".cmd",
+			versionArgs: ["--version"],
+		},
+	],
+	[
+		// Vite+'s `vp`, which the oxlint runner prefers when the project uses it.
+		// No managedToolId: the installer has no `vp` entry (#5410 F4).
+		"vp",
+		{
+			command: "vp",
+			windowsExt: ".cmd",
+			versionArgs: ["--version"],
+		},
+	],
+	[
 		"htmlhint",
 		{
 			command: "htmlhint",
+			windowsExt: ".cmd",
 			versionArgs: ["--version"],
 			managedToolId: "htmlhint",
 		},
@@ -1238,77 +1415,66 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 			managedToolId: "prettier",
 		},
 	],
+	// The Node-CLI analyzers the clients (not a runner) own: madge, jscpd and
+	// knip ask the same ladder for "is it usable" (#5410, #5666 item 1). Each
+	// is its installer entry and its binary name; `.cmd` is the npm launcher,
+	// unprobed on Windows. jscpd's `--version` is a cold-start Node load, so its
+	// budget is the 1.5 s its private checker carried.
+	[
+		"madge",
+		{
+			command: "madge",
+			windowsExt: ".cmd",
+			versionArgs: ["--version"],
+			managedToolId: "madge",
+		},
+	],
+	[
+		"jscpd",
+		{
+			command: "jscpd",
+			windowsExt: ".cmd",
+			versionArgs: ["--version"],
+			managedToolId: "jscpd",
+			probeTimeoutMs: 1500,
+		},
+	],
+	[
+		"knip",
+		{
+			command: "knip",
+			windowsExt: ".cmd",
+			versionArgs: ["--version"],
+			managedToolId: "knip",
+		},
+	],
+	// The formatter binaries (#5410): the formatters resolve these through the
+	// runners' ladder machinery (version-checked, one latch per cwd), in their
+	// own order, PATH before managed (#5492 r2). Each id is also its installer
+	// entry and its binary name.
+	...(
+		[
+			["shfmt", ".exe"],
+			["typstyle", ".exe"],
+			["ktfmt"],
+			["black", ".exe"],
+			["google-java-format"],
+			["cljfmt", ".exe"],
+			["cmake-format", ".exe"],
+			["stylua", ".cmd"],
+			["oxfmt", ".cmd"],
+			["php-cs-fixer", ".bat"],
+		] as ReadonlyArray<readonly [string, string?]>
+	).map(([id, windowsExt]): [string, ToolCommandSpec] => [
+		id,
+		{
+			command: id,
+			...(windowsExt !== undefined && { windowsExt }),
+			versionArgs: ["--version"],
+			managedToolId: id,
+		},
+	]),
 ]);
-
-const STYLELINT_CONFIGS = [
-	".stylelintrc",
-	".stylelintrc.json",
-	".stylelintrc.jsonc",
-	".stylelintrc.yaml",
-	".stylelintrc.yml",
-	".stylelintrc.js",
-	".stylelintrc.cjs",
-	"stylelint.config.js",
-	"stylelint.config.cjs",
-	"stylelint.config.mjs",
-];
-
-const RUBOCOP_CONFIGS = [".rubocop.yml", ".rubocop.yaml"];
-
-const MARKDOWNLINT_CONFIGS = [
-	// markdownlint-cli2's built-in config names (keep this list in sync with
-	// the installed CLI's supported configuration file names).
-	".markdownlint-cli2.jsonc",
-	".markdownlint-cli2.yaml",
-	".markdownlint-cli2.yml",
-	".markdownlint-cli2.cjs",
-	".markdownlint-cli2.mjs",
-	".markdownlint.jsonc",
-	".markdownlint.json",
-	".markdownlint.yaml",
-	".markdownlint.yml",
-	".markdownlint.cjs",
-	".markdownlint.mjs",
-	// Retain the legacy detector name for compatibility with existing policy
-	// behavior, even though current markdownlint-cli2 versions do not prefer it.
-	".markdownlintrc",
-];
-
-const PRETTIER_CONFIGS = [
-	".prettierrc",
-	".prettierrc.json",
-	".prettierrc.yml",
-	".prettierrc.yaml",
-	".prettierrc.js",
-	".prettierrc.cjs",
-	".prettierrc.mjs",
-	"prettier.config.js",
-	"prettier.config.cjs",
-	"prettier.config.mjs",
-	"prettier.config.ts",
-];
-
-const GOLANGCI_CONFIGS = [
-	".golangci.yml",
-	".golangci.yaml",
-	".golangci.toml",
-	".golangci.json",
-];
-
-const PHPSTAN_CONFIGS = [
-	"phpstan.neon",
-	"phpstan.neon.dist",
-	"phpstan.dist.neon",
-];
-
-const VITE_CONFIGS = [
-	"vite.config.ts",
-	"vite.config.mts",
-	"vite.config.cts",
-	"vite.config.js",
-	"vite.config.mjs",
-	"vite.config.cjs",
-];
 
 export type JstsLintRunnerName = "eslint" | "oxlint" | "biome-check-json";
 
@@ -1563,6 +1729,8 @@ export function getLinterPolicyForFile(
 	}
 
 	if ([".ex", ".exs", ".eex", ".heex", ".leex"].includes(ext)) {
+		// The policy selects credo without config; the runner (`credo.ts`) still
+		// skips a directory with no `mix.exs` (a Mix project is the gate there).
 		return {
 			runnerNames: ["credo"],
 			preferredRunners: ["credo"],
@@ -1646,22 +1814,25 @@ export function getLinterPolicyForCwd(
 	cwd: string,
 ): LinterPolicy | undefined {
 	const context: LinterPolicyContext = {
-		hasEslintConfig: hasEslintConfig(cwd),
-		hasOxlintConfig: hasOxlintConfig(cwd),
-		hasBiomeConfig: hasBiomeConfig(cwd),
-		hasStylelintConfig: hasStylelintConfig(cwd),
-		hasSqlfluffConfig: hasSqlfluffConfig(cwd),
-		hasRubocopConfig: hasRubocopConfig(cwd),
-		hasYamllintConfig: hasYamllintConfig(cwd),
-		hasMarkdownlintConfig: hasMarkdownlintConfig(cwd),
-		hasGolangciConfig: hasGolangciConfig(cwd),
-		hasPhpstanConfig: hasPhpstanConfig(cwd),
-		hasMypyConfig: hasMypyConfig(cwd),
-		hasDetektConfig: hasDetektConfig(cwd),
+		hasEslintConfig: hasToolConfig("eslint", cwd),
+		hasOxlintConfig: hasToolConfig("oxlint", cwd),
+		hasBiomeConfig: hasToolConfig("biome", cwd),
+		hasStylelintConfig: hasToolConfig("stylelint", cwd),
+		hasSqlfluffConfig: hasToolConfig("sqlfluff", cwd),
+		hasRubocopConfig: hasToolConfig("rubocop", cwd),
+		hasYamllintConfig: hasToolConfig("yamllint", cwd),
+		hasMarkdownlintConfig: hasToolConfig("markdownlint", cwd),
+		hasGolangciConfig: hasToolConfig("golangci-lint", cwd),
+		hasPhpstanConfig: hasToolConfig("phpstan", cwd),
+		hasMypyConfig: hasToolConfig("mypy", cwd),
+		hasDetektConfig: hasToolConfig("detekt", cwd),
 		hasKtfmtConfig: hasKtfmtConfig(cwd),
 		// From the file's directory, not cwd: a `.tflint.hcl` in a terraform
 		// subdirectory is invisible to an upward walk that starts at the repo root.
-		hasTflintConfig: hasTflintConfig(path.dirname(path.resolve(cwd, filePath))),
+		hasTflintConfig: hasToolConfig(
+			"tflint",
+			path.dirname(path.resolve(cwd, filePath)),
+		),
 	};
 	const policy = getLinterPolicyForFile(filePath, context);
 	if (policy) {
@@ -1891,35 +2062,6 @@ export function getPreferredAutofixTools(
 	return getAutofixPolicyForFile(filePath, context)?.preferredTools ?? [];
 }
 
-// Flat-config filenames resolve like ESLint itself: upward from cwd without
-// stopping at an intermediate package.json (#3017, shape 39). Legacy
-// `.eslintrc.*` names and the `package.json#eslintConfig` field keep the
-// historic per-package boundary below.
-const ESLINT_FLAT_CONFIGS = [
-	"eslint.config.js",
-	"eslint.config.mjs",
-	"eslint.config.cjs",
-	"eslint.config.ts",
-	"eslint.config.mts",
-	"eslint.config.cts",
-];
-
-const ESLINT_LEGACY_CONFIGS = [
-	".eslintrc",
-	".eslintrc.js",
-	".eslintrc.cjs",
-	".eslintrc.json",
-	".eslintrc.yaml",
-	".eslintrc.yml",
-];
-
-function* walkUpDirsUntilPackageJson(cwd: string): Generator<string> {
-	for (const dir of walkUpDirs(cwd)) {
-		yield dir;
-		if (fs.existsSync(path.join(dir, "package.json"))) return;
-	}
-}
-
 function findNearestPackageJsonPath(cwd: string): string | undefined {
 	for (const dir of walkUpDirs(cwd)) {
 		const pkgPath = path.join(dir, "package.json");
@@ -1947,86 +2089,6 @@ export function hasNearestPackageJsonDependency(
 	return false;
 }
 
-export function hasNearestPackageJsonField(
-	cwd: string,
-	fieldName: string,
-): boolean {
-	const pkgPath = findNearestPackageJsonPath(cwd);
-	if (!pkgPath) return false;
-	try {
-		const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as Record<
-			string,
-			unknown
-		>;
-		return pkg[fieldName] !== undefined;
-	} catch {}
-	return false;
-}
-
-export function hasEslintConfig(cwd: string): boolean {
-	// Flat configs mirror ESLint's own discovery: every ancestor dir up to
-	// the filesystem root, ignoring intermediate package.json boundaries, so
-	// a monorepo root config stays visible from inside a nested package.
-	for (const dir of walkUpDirs(cwd)) {
-		for (const cfg of ESLINT_FLAT_CONFIGS) {
-			if (fs.existsSync(path.join(dir, cfg))) return true;
-		}
-	}
-	// Legacy `.eslintrc.*` and `package.json#eslintConfig` keep per-package
-	// semantics: the walk stops at the nearest package.json.
-	for (const dir of walkUpDirsUntilPackageJson(cwd)) {
-		for (const cfg of ESLINT_LEGACY_CONFIGS) {
-			if (fs.existsSync(path.join(dir, cfg))) return true;
-		}
-		const pkgPath = path.join(dir, "package.json");
-		if (fs.existsSync(pkgPath)) {
-			try {
-				if (JSON.parse(fs.readFileSync(pkgPath, "utf-8")).eslintConfig)
-					return true;
-			} catch {}
-		}
-	}
-	return false;
-}
-
-export function hasBiomeConfig(cwd: string): boolean {
-	return getBiomeConfigPath(cwd) !== undefined;
-}
-
-export function getBiomeConfigPath(cwd: string): string | undefined {
-	for (const dir of walkUpDirs(cwd)) {
-		const jsoncPath = path.join(dir, "biome.jsonc");
-		if (fs.existsSync(jsoncPath)) return jsoncPath;
-		const jsonPath = path.join(dir, "biome.json");
-		if (fs.existsSync(jsonPath)) return jsonPath;
-	}
-	return undefined;
-}
-
-export function hasOxfmtConfig(cwd: string): boolean {
-	for (const dir of walkUpDirs(cwd)) {
-		if (fs.existsSync(path.join(dir, "oxfmt.toml"))) return true;
-		if (fs.existsSync(path.join(dir, ".oxfmtrc.json"))) return true;
-		if (hasVitePlusConfig(dir)) return true;
-		const pkgPath = path.join(dir, "package.json");
-		if (fs.existsSync(pkgPath)) {
-			try {
-				const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as Record<
-					string,
-					unknown
-				>;
-				const deps = {
-					...(pkg.dependencies as Record<string, unknown> | undefined),
-					...(pkg.devDependencies as Record<string, unknown> | undefined),
-				};
-				// Published package is `oxfmt`; the scoped name does not exist on npm.
-				if (deps["oxfmt"] || deps["@oxc-project/oxfmt"]) return true;
-			} catch {}
-		}
-	}
-	return false;
-}
-
 // Empirically verified against the real `oxfmt` npm package (0.62.0), a
 // scratch fixture, and a plain `Component.svelte` — see PR body for the full
 // four-cell matrix. Both conditions are required; either alone always fails:
@@ -2040,22 +2102,26 @@ export function hasOxfmtConfig(cwd: string): boolean {
 // `which`, which favors the npm-installed binary, so that requirement is not
 // separately re-checked here.
 //
-// Known limits of this line-match heuristic (#1134 P3 tail 1): it tolerates a
-// trailing `#`-comment after the value (`svelte = true  # enable`), but it is
-// NOT a real TOML parser — a `svelte = true` occurrence nested under a
-// `[table]` section, or one embedded inside a multi-line/triple-quoted string
-// value, would still match and false-positive. Both are considered acceptable
-// risk: an oxfmt.toml sectioning `svelte` under a table is not a realistic
-// config shape for this single top-level boolean key, and a false positive
-// here only causes oxfmt to be OFFERED (still gated by oxfmt actually running
-// and the `svelte` package check above), never a silent formatter failure.
-const OXFMT_SVELTE_TOML_TRUE =
-	/(^|\n)\s*svelte\s*=\s*true\s*(\s*#.*)?(\r?\n|$)/;
+// The flag is a top-level TOML key: read from comment-stripped text before the
+// first table heading, so `svelte = true` under a `[table]`, in a comment or
+// after a `#` is not the flag (#5408; #1134 P3 tail 1 had accepted the first
+// as a false positive). A `svelte = true` line inside a multi-line string
+// value still matches; that can only OFFER oxfmt, which then runs or fails
+// visibly, never a silent formatter failure.
+const OXFMT_SVELTE_TOML_TRUE = /^[ \t]*svelte[ \t]*=[ \t]*true[ \t]*$/m;
+const TOML_TABLE_HEADING_LINE = /^[ \t]*\[{1,2}[^\]\n]+\]{1,2}[ \t]*$/m;
+
+/** The text of a TOML document before its first table heading, comments stripped. */
+function tomlTopLevel(content: string): string {
+	const normalized = normalizeToml(content);
+	const heading = TOML_TABLE_HEADING_LINE.exec(normalized);
+	return heading ? normalized.slice(0, heading.index) : normalized;
+}
 
 export function hasOxfmtSvelteConfig(cwd: string): boolean {
 	// Monorepo asymmetry (#1134 P3 tail 2): this dependency check stops at the
 	// NEAREST package.json (`hasNearestPackageJsonDependency`), while the
-	// config walk below (`walkUpDirs`) continues all the way to the repo root.
+	// config walk below (`toolConfigDirs`) continues up to the seam's stop rule.
 	// A root-level `svelte` dependency combined with an oxfmt config at the
 	// root, but invoked with a sub-package `cwd` that has its own
 	// (svelte-less) package.json, under-offers oxfmt for that sub-package —
@@ -2064,7 +2130,7 @@ export function hasOxfmtSvelteConfig(cwd: string): boolean {
 	// failing to offer a valid formatter is safe (never mis-offers one that
 	// then fails at runtime), unlike the inverse.
 	if (!hasNearestPackageJsonDependency(cwd, "svelte")) return false;
-	for (const dir of walkUpDirs(cwd)) {
+	for (const dir of toolConfigDirs(cwd)) {
 		const rcPath = path.join(dir, ".oxfmtrc.json");
 		if (fs.existsSync(rcPath)) {
 			try {
@@ -2076,90 +2142,18 @@ export function hasOxfmtSvelteConfig(cwd: string): boolean {
 			} catch {}
 		}
 		// oxfmt.toml is TOML; pi-lens has no TOML parser dependency, so this is
-		// a targeted line match for the single boolean key rather than a full
-		// parse (same pragmatic style as hasVitePlusConfig's content.includes
-		// check above) — presence of the file alone is NOT sufficient, since a
-		// TOML config can omit `svelte` or set it false.
+		// a top-level line match for the single boolean key rather than a full
+		// parse — presence of the file alone is NOT sufficient, since a TOML
+		// config can omit `svelte` or set it false.
 		const tomlPath = path.join(dir, "oxfmt.toml");
 		if (fs.existsSync(tomlPath)) {
 			try {
 				const content = fs.readFileSync(tomlPath, "utf-8");
-				if (OXFMT_SVELTE_TOML_TRUE.test(content)) return true;
+				if (OXFMT_SVELTE_TOML_TRUE.test(tomlTopLevel(content))) return true;
 			} catch {}
 		}
 	}
 	return false;
-}
-
-export function hasStylelintConfig(cwd: string): boolean {
-	for (const dir of walkUpDirs(cwd)) {
-		if (STYLELINT_CONFIGS.some((cfg) => fs.existsSync(path.join(dir, cfg)))) {
-			return true;
-		}
-		const pkgPath = path.join(dir, "package.json");
-		if (fs.existsSync(pkgPath)) {
-			try {
-				const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
-				if (pkg.stylelint) return true;
-			} catch {}
-		}
-	}
-	return false;
-}
-
-export function hasSqlfluffConfig(cwd: string): boolean {
-	return hasToolConfig("sqlfluff", cwd);
-}
-
-export function hasRubocopConfig(cwd: string): boolean {
-	for (const dir of walkUpDirs(cwd)) {
-		for (const cfg of RUBOCOP_CONFIGS) {
-			if (fs.existsSync(path.join(dir, cfg))) return true;
-		}
-		const gemfile = path.join(dir, "Gemfile");
-		if (fs.existsSync(gemfile)) {
-			try {
-				const content = fs.readFileSync(gemfile, "utf-8");
-				if (content.includes("rubocop")) return true;
-			} catch {}
-		}
-	}
-	return false;
-}
-
-export function hasMypyConfig(cwd: string): boolean {
-	return hasToolConfig("mypy", cwd);
-}
-
-export function hasYamllintConfig(cwd: string): boolean {
-	return hasToolConfig("yamllint", cwd);
-}
-
-export function hasMarkdownlintConfig(cwd: string): boolean {
-	return findNearestContaining(cwd, MARKDOWNLINT_CONFIGS) !== undefined;
-}
-
-export function hasPrettierConfig(cwd: string): boolean {
-	for (const dir of walkUpDirs(cwd)) {
-		if (PRETTIER_CONFIGS.some((cfg) => fs.existsSync(path.join(dir, cfg))))
-			return true;
-		const pkgPath = path.join(dir, "package.json");
-		if (fs.existsSync(pkgPath)) {
-			try {
-				const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
-				if (Object.hasOwn(pkg, "prettier")) return true;
-			} catch {}
-		}
-	}
-	return false;
-}
-
-export function hasBlackConfig(cwd: string): boolean {
-	return hasToolConfig("black", cwd);
-}
-
-export function hasRuffConfig(cwd: string): boolean {
-	return hasToolConfig("ruff", cwd);
 }
 
 /**
@@ -2188,10 +2182,40 @@ function configArgsWithFallback(
 
 export function markdownlintConfigArgs(cwd: string): string[] {
 	return configArgsWithFallback(
-		hasMarkdownlintConfig(cwd),
+		hasToolConfig("markdownlint", cwd),
 		["--config"],
 		"config/markdownlint/core.json",
 	);
+}
+
+/**
+ * Shared file-argument seam for every per-file tool whose ignore globs or
+ * option parser read the argument string: the markdownlint and oxlint lint AND
+ * autofix surfaces (#5544, #5556). The tool matches its ignore globs against the
+ * string it is handed, so each surface names the file relative to the dispatch
+ * cwd (an absolute path in a lane under `.claude/` matched a glob naming its own
+ * ancestor: cli2 answered a clean file for lint and `Linting: 0 files / 0 fixes`
+ * for `--fix`; oxlint linted nothing and fixed nothing). A file the project does
+ * not hold keeps the absolute path, because a `../` climb would move config
+ * discovery too, and that path is never prefixed: `.//x/a.md` names `x/a.md`
+ * under the cwd, a different file.
+ * The relative name is then read as SYNTAX by the tool, not as a path. cli2
+ * reads the FIRST character of each argument: `#` ignore, `!` negation, `:`
+ * literal file (`:a.md` opened a sibling `a.md`), `\` escape, `-` stdin or
+ * option; oxlint reads a leading `-` as an option (`-D.ts` is `-D .ts`: the whole
+ * tree linted, and `--fix` rewrote a file nobody dispatched). So the relative
+ * target stays bare only when it starts with a known-safe character (letter,
+ * digit, `_`, `.`), and every other first character gets a `./` prefix, which
+ * selects the same file through the same ignores (#5544 round 3: the enumerated
+ * `#`/`!` list missed `:`). yamllint keeps its `--` terminator instead
+ * (`clients/dispatch/runners/yamllint.ts`): a probe showed `./-a.yml` is
+ * equally safe there, but the `--` form is shipped and pinned by the real
+ * harness, and `./` would change the path its parsable output echoes.
+ */
+export function optionSafeTargetArg(cwd: string, filePath: string): string {
+	const relative = relativeInside(cwd, filePath);
+	if (relative === undefined) return filePath;
+	return /^[A-Za-z0-9_.]/.test(relative) ? relative : `./${relative}`;
 }
 
 /**
@@ -2201,7 +2225,7 @@ export function markdownlintConfigArgs(cwd: string): string[] {
  */
 export function ruffConfigArgs(cwd: string): string[] {
 	return configArgsWithFallback(
-		hasRuffConfig(cwd),
+		hasToolConfig("ruff", cwd),
 		["--config"],
 		"config/ruff/core.toml",
 	);
@@ -2221,202 +2245,16 @@ export function biomeConfigArgs(cwd: string): string[] {
 	// the root config the way biome's own nested-config resolution allows. No
 	// flag at all lets biome discover it unaided, exactly like the ruff/
 	// markdownlint fallbacks above skip `--config` under the same condition.
-	if (getBiomeConfigPath(cwd)) return [];
+	if (hasToolConfig("biome", cwd)) return [];
 	return [
 		"--config-path=" +
 			resolvePackagePath(import.meta.url, "config/biome/core.jsonc"),
 	];
 }
 
-export function hasGolangciConfig(cwd: string): boolean {
-	return findNearestContaining(cwd, GOLANGCI_CONFIGS) !== undefined;
-}
-
-// tflint ships built-in rules and runs without config, so `.tflint.hcl` is not
-// a prerequisite — it is the project electing tflint as its terraform linter,
-// which promotes the policy from smart-default to config-first. Takes a start
-// directory rather than the project cwd because tflint resolves config
-// per-directory: callers pass the EDITED FILE's directory so this agrees with
-// what the runner will actually hand tflint via `--config`.
-export function hasTflintConfig(startDir: string): boolean {
-	return hasToolConfig("tflint", startDir);
-}
-
-export function hasClangFormatConfig(cwd: string): boolean {
-	return (
-		findNearestContaining(cwd, [".clang-format", "_clang-format"]) !== undefined
-	);
-}
-
-export function hasPhpCsFixerConfig(cwd: string): boolean {
-	return (
-		findNearestContaining(cwd, [
-			".php-cs-fixer.php",
-			".php-cs-fixer.dist.php",
-		]) !== undefined
-	);
-}
-
-export function hasStyluaConfig(cwd: string): boolean {
-	return (
-		findNearestContaining(cwd, ["stylua.toml", ".stylua.toml"]) !== undefined
-	);
-}
-
-export function hasOcamlformatConfig(cwd: string): boolean {
-	return findNearestContaining(cwd, [".ocamlformat"]) !== undefined;
-}
-
-export function hasGoogleJavaFormatConfig(cwd: string): boolean {
-	// google-java-format has no standard config file — gate on .editorconfig
-	// with indent_size defined (common Java project signal) or explicit opt-in marker.
-	return (
-		findNearestContaining(cwd, [".google-java-format", ".editorconfig"]) !==
-		undefined
-	);
-}
-
-export function hasCljfmtConfig(cwd: string): boolean {
-	return (
-		findNearestContaining(cwd, [".cljfmt.edn", "cljfmt.edn", ".cljfmt"]) !==
-		undefined
-	);
-}
-
-export function hasCmakeFormatConfig(cwd: string): boolean {
-	return (
-		findNearestContaining(cwd, [
-			".cmake-format",
-			".cmake-format.yaml",
-			".cmake-format.yml",
-			".cmake-format.json",
-			".cmake-format.py",
-			"cmake-format.yaml",
-			"cmake-format.yml",
-		]) !== undefined
-	);
-}
-
-// PSScriptAnalyzerSettings.psd1 is the conventional settings file PowerShell
-// projects use to configure `Invoke-Formatter`/`Invoke-ScriptAnalyzer` (passed
-// via `-Settings`); `ScriptAnalyzerSettings.psd1` is the same convention minus
-// the "PS" prefix and shows up in some repos too. Either one opting a project
-// into explicit PSScriptAnalyzer config is enough to select the formatter
-// (#1572 — `psscriptanalyzer-format` had no case here at all, so it could
-// never be selected regardless of project config).
-const PSSCRIPTANALYZER_SETTINGS_FILES = [
-	"PSScriptAnalyzerSettings.psd1",
-	"ScriptAnalyzerSettings.psd1",
-];
-
-/**
- * The nearest PSScriptAnalyzer settings file's full path, or `undefined`.
- * `formatters.ts`'s `resolveCommand` passes this straight to
- * `Invoke-Formatter -Settings` (#1572 review F2) — gating on the file's
- * PRESENCE without ever reading its RULES would run the project's file
- * through the stock `CodeFormatting` ruleset regardless of what it declared,
- * the same stock-style imposition #1144 banned for the other formatters.
- */
-export function findPSScriptAnalyzerConfigPath(
-	cwd: string,
-): string | undefined {
-	for (const dir of walkUpDirs(cwd)) {
-		for (const name of PSSCRIPTANALYZER_SETTINGS_FILES) {
-			const candidate = path.join(dir, name);
-			if (fs.existsSync(candidate)) return candidate;
-		}
-	}
-	return undefined;
-}
-
-export function hasPSScriptAnalyzerConfig(cwd: string): boolean {
-	return findPSScriptAnalyzerConfigPath(cwd) !== undefined;
-}
-
-// #1595 sweep — 7 of the 8 formatters #1572 left unreachable (038cd1df flipped
-// defaultWhenUnconfigured to false for these without adding an explicit-config
-// check; see EXPLICIT_FORMATTER_CONFIG_CHECKS in formatters.ts). nixfmt is the
-// 8th and stays unreachable: it is deliberately unconfigurable (no rc file,
-// no CLI flag surface) and has no project-level manifest marker analogous to
-// `terraform init`'s lock file, so there is no honest "explicit opt-in" signal
-// to gate on — see the KNOWN_UNREACHABLE_FORMATTERS comment in
-// formatter-policy-consistency.test.ts.
-
-export function hasCsharpierConfig(cwd: string): boolean {
-	return (
-		findNearestContaining(cwd, [
-			".csharpierrc",
-			".csharpierrc.json",
-			".csharpierrc.yaml",
-			".csharpierrc.yml",
-		]) !== undefined
-	);
-}
-
-// Ormolu has no general settings file, but it does read a project `.ormolu`
-// file for custom operator fixity declarations (the only file-based config
-// surface Ormolu supports) — real, if narrow, per its own docs.
-export function hasOrmoluConfig(cwd: string): boolean {
-	return findNearestContaining(cwd, [".ormolu"]) !== undefined;
-}
-
-export function hasTaploConfig(cwd: string): boolean {
-	return (
-		findNearestContaining(cwd, ["taplo.toml", ".taplo.toml"]) !== undefined
-	);
-}
-
-// `terraform fmt` itself is deliberately unconfigurable (no rc file, no
-// per-project options — HashiCorp's own docs call this out). The nearest
-// thing to an explicit per-project opt-in is `.terraform.lock.hcl`, written
-// only by `terraform init`: it marks a directory the user has deliberately
-// set up as a Terraform root, as opposed to a stray `.tf`/`.tfvars` file
-// dropped into an unrelated repo. A manifest marker, per #1595's own guidance
-// for formatters with no dedicated config-file convention.
-export function hasTerraformConfig(cwd: string): boolean {
-	return findNearestContaining(cwd, [".terraform.lock.hcl"]) !== undefined;
-}
-
-export function hasSwiftformatConfig(cwd: string): boolean {
-	return findNearestContaining(cwd, [".swiftformat"]) !== undefined;
-}
-
-// Fantomas has no dedicated rc file; its documented config surface is
-// `.editorconfig` (fsharp_*-prefixed keys) or a `.fantomasignore` file (the
-// one Fantomas-specific marker it does ship). Mirrors hasGoogleJavaFormatConfig's
-// precedent for formatters whose only config surface is .editorconfig.
-export function hasFantomasConfig(cwd: string): boolean {
-	return (
-		findNearestContaining(cwd, [".fantomasignore", ".editorconfig"]) !==
-		undefined
-	);
-}
-
-// `.formatter.exs` is THE convention `mix format` reads project config from
-// (inputs, line_length, plugins) — universal in Elixir projects that use it.
-export function hasMixFormatConfig(cwd: string): boolean {
-	return findNearestContaining(cwd, [".formatter.exs"]) !== undefined;
-}
-
-export function hasPhpstanConfig(cwd: string): boolean {
-	return findNearestContaining(cwd, PHPSTAN_CONFIGS) !== undefined;
-}
-
-export function hasDetektConfig(cwd: string): boolean {
-	return hasToolConfig("detekt", cwd);
-}
-
-// ktfmt has no native config file format; these are pi-lens opt-in markers plus
-// the gradle-plugin signal, so a project that uses ktfmt elects it as its Kotlin
-// formatter instead of the ktlint smart-default (#129).
-const KTFMT_CONFIG_FILES = [".ktfmt", ".ktfmt.kts"];
-const KTFMT_GRADLE_FILES = [
-	"build.gradle.kts",
-	"build.gradle",
-	"settings.gradle.kts",
-	"settings.gradle",
-];
-
+// A project that uses ktfmt elects it as its Kotlin formatter instead of the
+// ktlint smart-default (#129): the pi-lens opt-in markers (`hasToolConfig
+// ("ktfmt")`), a Spotless block, or a mention in these Gradle files.
 const KOTLIN_GRADLE_FILES = [
 	"build.gradle.kts",
 	"build.gradle",
@@ -2442,6 +2280,8 @@ export type GradleKtlintOwnership =
 
 interface SpotlessKotlinConfigCacheEntry {
 	mtime: number;
+	/** Byte length from the same stat: mtime alone misses a same-tick rewrite (#1105). */
+	size: number;
 	ktlintConfig: boolean;
 	ktfmtConfig: boolean;
 }
@@ -2459,7 +2299,8 @@ export function _getSpotlessGradleReadCountForTests(): number {
 
 /**
  * Blank comments and quoted strings while preserving braces and newlines in
- * executable Gradle source. This is deliberately a small lexical pre-pass,
+ * executable Gradle source (`keep: "strings"` blanks only the comments, for a
+ * reader that counts a mention in a string such as a plugin id). This is deliberately a small lexical pre-pass,
  * not a Groovy/Kotlin parser. In particular, statically disabled constructs
  * such as `if (false) { ktlint() }` remain a documented false-positive.
  *
@@ -2469,7 +2310,11 @@ export function _getSpotlessGradleReadCountForTests(): number {
  * single-source-of-truth reuse `clients/cargo-manifest.ts` did for TOML
  * parsing (#2466).
  */
-export function stripGradleCommentsAndStrings(source: string): string {
+export function stripGradleCommentsAndStrings(
+	source: string,
+	/** `"strings"` keeps string contents and blanks only comments. */
+	keep?: "strings",
+): string {
 	let result = "";
 	let state: "code" | "line-comment" | "block-comment" | "string" = "code";
 	let quote = "";
@@ -2486,7 +2331,7 @@ export function stripGradleCommentsAndStrings(source: string): string {
 				index += 1;
 				state = "block-comment";
 			} else if (char === '"' || char === "'") {
-				result += " ";
+				result += keep === "strings" ? char : " ";
 				quote = char;
 				state = "string";
 			} else {
@@ -2516,17 +2361,20 @@ export function stripGradleCommentsAndStrings(source: string): string {
 			continue;
 		}
 
+		const blank = (kept: string | undefined) =>
+			keep === "strings" ? (kept ?? "") : " ";
 		if (char === "\\") {
-			result += " ";
+			result += blank(char);
 			if (index + 1 < source.length) {
-				result += source[index + 1] === "\n" ? "\n" : " ";
+				const escaped = source[index + 1];
+				result += escaped === "\n" ? "\n" : blank(escaped);
 				index += 1;
 			}
 		} else if (char === quote) {
-			result += " ";
+			result += blank(char);
 			state = "code";
 		} else {
-			result += char === "\n" || char === "\r" ? char : " ";
+			result += char === "\n" || char === "\r" ? char : blank(char);
 		}
 	}
 	return result;
@@ -2639,14 +2487,14 @@ export type SpotlessKotlinFormatter = "ktlint" | "ktfmt";
 export function getSpotlessKotlinFormatter(
 	cwd: string,
 ): SpotlessKotlinFormatter | undefined {
-	for (const dir of walkUpDirs(cwd)) {
+	for (const dir of toolConfigDirs(cwd)) {
 		for (const gradle of KOTLIN_GRADLE_FILES) {
 			const filePath = path.join(dir, gradle);
 			if (!fs.existsSync(filePath)) continue;
 			try {
-				const mtime = fs.statSync(filePath).mtimeMs;
+				const { mtimeMs: mtime, size } = fs.statSync(filePath);
 				let config = spotlessKotlinConfigCache.get(filePath);
-				if (!config || config.mtime !== mtime) {
+				if (!config || config.mtime !== mtime || config.size !== size) {
 					const source = stripGradleCommentsAndStrings(
 						fs.readFileSync(filePath, "utf-8"),
 					);
@@ -2657,6 +2505,7 @@ export function getSpotlessKotlinFormatter(
 					).flatMap((spotless) => namedGradleBlockBodies(spotless, "kotlin"));
 					config = {
 						mtime,
+						size,
 						ktlintConfig: kotlinBodies.some((body) =>
 							/\bktlint\s*\(/.test(body),
 						),
@@ -2684,7 +2533,7 @@ export function hasKtlintConfig(cwd: string): boolean {
 export function hasGradleKtlintPlugin(cwd: string): GradleKtlintOwnership {
 	const files = new Set<string>();
 	const scan = { entries: 0, exceeded: false, indeterminate: false };
-	for (const dir of walkUpDirs(cwd)) {
+	for (const dir of toolConfigDirs(cwd)) {
 		for (const gradle of KOTLIN_GRADLE_FILES) {
 			const filePath = path.join(dir, gradle);
 			if (fs.existsSync(filePath)) files.add(filePath);
@@ -2794,15 +2643,22 @@ function addGradleBuildLogicFiles(
 export function hasKtfmtConfig(cwd: string): boolean {
 	const spotlessFormatter = getSpotlessKotlinFormatter(cwd);
 	if (spotlessFormatter) return spotlessFormatter === "ktfmt";
-	for (const dir of walkUpDirs(cwd)) {
-		if (KTFMT_CONFIG_FILES.some((cfg) => fs.existsSync(path.join(dir, cfg))))
-			return true;
-		for (const gradle of KTFMT_GRADLE_FILES) {
+	if (hasToolConfig("ktfmt", cwd)) return true;
+	for (const dir of toolConfigDirs(cwd)) {
+		for (const gradle of KOTLIN_GRADLE_FILES) {
 			const p = path.join(dir, gradle);
 			if (fs.existsSync(p)) {
 				try {
-					// Match the gradle plugin id / artifact, not a stray substring.
-					if (/ktfmt|com\.facebook\.ktfmt/i.test(fs.readFileSync(p, "utf-8")))
+					// A mention in code or in a string (the plugin id, the artifact, a
+					// version-catalog alias) counts; one in a comment does not.
+					if (
+						/ktfmt/i.test(
+							stripGradleCommentsAndStrings(
+								fs.readFileSync(p, "utf-8"),
+								"strings",
+							),
+						)
+					)
 						return true;
 				} catch {}
 			}
@@ -2812,16 +2668,8 @@ export function hasKtfmtConfig(cwd: string): boolean {
 }
 
 // SpotBugs (#133) analyzes compiled bytecode, so it needs BOTH a Java build
-// descriptor AND a compiled-classes dir. These two helpers gate the runner.
-const JAVA_BUILD_DESCRIPTORS = [
-	"pom.xml",
-	"build.gradle",
-	"build.gradle.kts",
-	"settings.gradle",
-	"settings.gradle.kts",
-];
-
-// Common compiled-output dirs: Maven (target/classes), Gradle (build/classes),
+// descriptor (`javaBuild` in `tool-config-presence.ts`) AND a compiled-classes
+// dir (this helper). Common compiled-output dirs: Maven (target/classes), Gradle (build/classes),
 // IntelliJ (out/production), Eclipse (bin/main).
 const COMPILED_CLASSES_DIRS = [
 	path.join("target", "classes"),
@@ -2829,22 +2677,6 @@ const COMPILED_CLASSES_DIRS = [
 	path.join("out", "production"),
 	path.join("bin", "main"),
 ];
-
-export function hasJavaBuildDescriptor(cwd: string, ceiling?: string): boolean {
-	const normalizedCeiling = ceiling
-		? normalizeMapKey(path.resolve(ceiling))
-		: undefined;
-	for (const dir of walkUpDirs(cwd)) {
-		if (JAVA_BUILD_DESCRIPTORS.some((d) => fs.existsSync(path.join(dir, d))))
-			return true;
-		if (
-			normalizedCeiling &&
-			normalizeMapKey(path.resolve(dir)) === normalizedCeiling
-		)
-			break;
-	}
-	return false;
-}
 
 /** First existing compiled-classes dir at/above cwd, or undefined. */
 export function findCompiledClassesDir(cwd: string): string | undefined {
@@ -2855,18 +2687,6 @@ export function findCompiledClassesDir(cwd: string): string | undefined {
 		}
 	}
 	return undefined;
-}
-
-export function hasStandardrbConfig(cwd: string): boolean {
-	for (const dir of walkUpDirs(cwd)) {
-		const gemfile = path.join(dir, "Gemfile");
-		if (fs.existsSync(gemfile)) {
-			try {
-				if (fs.readFileSync(gemfile, "utf-8").includes("standard")) return true;
-			} catch {}
-		}
-	}
-	return false;
 }
 
 export function getRubocopCommand(cwd: string): {
@@ -2883,57 +2703,6 @@ export function getRubocopCommand(cwd: string): {
 		} catch {}
 	}
 	return { cmd: "rubocop", args: [] };
-}
-
-export function hasVitePlusConfig(cwd: string): boolean {
-	for (const dir of walkUpDirs(cwd)) {
-		if (fs.existsSync(path.join(dir, "vite-plus.json"))) return true;
-		const pkgPath = path.join(dir, "package.json");
-		if (fs.existsSync(pkgPath)) {
-			try {
-				const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as {
-					dependencies?: Record<string, string>;
-					devDependencies?: Record<string, string>;
-				};
-				const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-				if (deps["vite-plus"] || deps["@voidzero-dev/vite-plus-core"]) {
-					return true;
-				}
-			} catch {}
-		}
-		for (const cfg of VITE_CONFIGS) {
-			const cfgPath = path.join(dir, cfg);
-			if (!fs.existsSync(cfgPath)) continue;
-			try {
-				const content = fs.readFileSync(cfgPath, "utf-8");
-				if (content.includes("vite-plus")) return true;
-			} catch {}
-		}
-	}
-	return false;
-}
-
-// Per https://oxc.rs/docs/guide/usage/linter/config.html, oxlint auto-discovers
-// `.oxlintrc.json`, `.oxlintrc.jsonc`, `oxlint.config.ts`, and `oxlint.config.mts`
-// (in addition to the legacy `oxlint.json` name pi-lens already recognized).
-const OXLINT_CONFIGS = [
-	".oxlintrc.json",
-	".oxlintrc.jsonc",
-	"oxlint.json",
-	"oxlint.config.ts",
-	"oxlint.config.mts",
-];
-
-export function hasOxlintConfig(cwd: string): boolean {
-	// Oxlint auto-discovers the nearest config by file location, so the walk
-	// ignores intermediate package.json boundaries just like the flat
-	// ESLint branch above (#3017).
-	for (const dir of walkUpDirs(cwd)) {
-		for (const cfg of OXLINT_CONFIGS) {
-			if (fs.existsSync(path.join(dir, cfg))) return true;
-		}
-	}
-	return hasVitePlusConfig(cwd);
 }
 
 export function getPreferredJstsLintRunners(
@@ -2966,8 +2735,8 @@ export function getJstsLintPolicy(
 
 export function getJstsLintPolicyForCwd(cwd: string): JstsLintPolicy {
 	return getJstsLintPolicy({
-		hasEslintConfig: hasEslintConfig(cwd),
-		hasOxlintConfig: hasOxlintConfig(cwd),
-		hasBiomeConfig: hasBiomeConfig(cwd),
+		hasEslintConfig: hasToolConfig("eslint", cwd),
+		hasOxlintConfig: hasToolConfig("oxlint", cwd),
+		hasBiomeConfig: hasToolConfig("biome", cwd),
 	});
 }

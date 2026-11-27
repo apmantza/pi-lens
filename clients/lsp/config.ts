@@ -1309,7 +1309,7 @@ export const OVERRIDE_COPY_TRAITS: {
 	},
 	idleEviction: {
 		keep: false,
-		why: "Reset to unmeasured (never evicted): 'transparent' needs per-server evidence.",
+		why: "Reset to unmeasured: 'transparent' needs per-server evidence, and a 'resident' opt-out names the catalog binary, not the override.",
 	},
 	replyOrdering: {
 		keep: false,

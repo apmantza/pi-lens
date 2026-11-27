@@ -19,7 +19,10 @@ const { safeSpawnAsync, logLatencySpy } = vi.hoisted(() => ({
 	safeSpawnAsync: vi.fn(),
 	logLatencySpy: vi.fn(),
 }));
-vi.mock("../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
+	safeSpawnAsync,
+}));
 vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
 	...(await importOriginal()),
 	logLatency: logLatencySpy,

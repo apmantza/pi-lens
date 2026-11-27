@@ -29,6 +29,13 @@ on:
     - cron: '0 6 * * *' # daily 06:00 UTC
   workflow_dispatch:
 
+# #5420: one transient registry 5xx must not red npm ci or npx; npm's default
+# is 2 retries. The gate (workflow-level, literal, floored) is
+# tests/config/release-download-helper-workflow.test.ts.
+env:
+  npm_config_fetch_retries: 5
+  npm_config_fetch_retry_maxtimeout: 120000
+
 jobs:
   test-history-rollup:
     name: Roll up durable unit-test history
@@ -234,7 +241,7 @@ jobs:
   # publishes. `pull-requests: read` is the promotion step's `gh pr list`.
   tool-smoke:
     name: Live tool + LSP smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # refs #3123: bounds a hang against GitHub's 360-min default.
     # Measured max over last 10 successful master runs: 855s (14m15s); sized at
     # ~2x + margin.
@@ -312,16 +319,16 @@ jobs:
       # nightly (the harness already treats an unavailable tool as ⚠, not a
       # failure), so each is continue-on-error.
       # yamllint disable-line rule:line-length
-      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         continue-on-error: true
         with:
           distribution: temurin
           java-version: '21'
-      - uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1
+      - uses: ruby/setup-ruby@be3c7df29b3349ec6bcfc6b4792f1cf9f5237d18 # v1
         continue-on-error: true
         with:
           ruby-version: '3.3'
-      - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
+      - uses: dart-lang/setup-dart@2286a0c042b44434fe26d292bbce8d34f7ec662b # v1.8.2
         continue-on-error: true
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         continue-on-error: true
@@ -474,7 +481,10 @@ jobs:
       # bot PR unmerged does NOT reset the bookkeeping (the branch is kept,
       # `delete-branch: false`, and keeps seeding); only deleting
       # `bot/lsp-docs-refresh` does. `timeout-minutes` bounds a hung fetch,
-      # which `continue-on-error` does not.
+      # which `continue-on-error` does not. #5667: when the matrix is seeded the
+      # script restores docs/lsp-idle-eviction.md too (its own staleness check),
+      # because the matrix's pending `idle-eviction-doc` flips are held against
+      # that doc's published rows.
       - name: Seed the capability matrix from the last unmerged refresh
         id: seed_matrix
         if: github.event_name == 'schedule' || github.ref == 'refs/heads/master'
@@ -736,7 +746,7 @@ jobs:
       # yamllint disable-line rule:line-length
       - name: Install JDK 25 for the cascade layer's jdtls
         id: java25
-        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         continue-on-error: true
         with:
           distribution: temurin
@@ -957,14 +967,16 @@ jobs:
       # App installation token has no such limit: the docs-refresh PR below is
       # opened with it when the repository has the App configured, and falls
       # back to GITHUB_TOKEN when it does not; the dispatch step below then
-      # starts the required checks (#5062). The names `LSP_REFRESH_APP_ID` (variable) and
+      # runs the required workflows on the branch head, but its rows never
+      # reach the PR's rollup, so that PR still needs a close and reopen
+      # (#5062, #5629). The names `LSP_REFRESH_APP_ID` (variable) and
       # `LSP_REFRESH_APP_PRIVATE_KEY` (secret) are the maintainer's to confirm.
       # The token is scoped to this PR's two writes and lives for the job.
       - name: Mint the refresh App token (starts CI on the refresh PR)
         id: app_token
         if: vars.LSP_REFRESH_APP_ID != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           app-id: ${{ vars.LSP_REFRESH_APP_ID }}
           private-key: ${{ secrets.LSP_REFRESH_APP_PRIVATE_KEY }}
@@ -998,7 +1010,7 @@ jobs:
         id: refresh_pr
         if: needs.tool-smoke.outputs.docs_changed == 'true' && needs.tool-smoke.outputs.census == 'success'
         continue-on-error: true
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        uses: peter-evans/create-pull-request@3ffccacd46053766916f087ce41d627c0b8cf2d1 # v8.1.3
         with:
           token: ${{ steps.app_token.outputs.token || secrets.GITHUB_TOKEN }}
           branch: bot/lsp-docs-refresh
@@ -1056,7 +1068,7 @@ jobs:
         id: promote_pr
         if: needs.tool-smoke.outputs.promoted == 'true'
         continue-on-error: true
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        uses: peter-evans/create-pull-request@3ffccacd46053766916f087ce41d627c0b8cf2d1 # v8.1.3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: bot/lsp-idle-evict-promote
@@ -1078,8 +1090,11 @@ jobs:
       # a GITHUB_TOKEN can start, so the same job dispatches every workflow that
       # produces a required check (those with a `merge_group` trigger, #3754) on
       # the branch it just pushed. The dispatched jobs report under the
-      # required names, on the PR head. Skipped when the App token opened the
-      # PR (#4512): CI already started, and a second run would only duplicate it.
+      # required names on the head commit only: they are not in the PR's
+      # statusCheckRollup, which branch protection reads, so they do not
+      # satisfy it (#5623, #5629) and close/reopen is the re-arm. Skipped when
+      # the App token opened the PR (#4512): CI already started, and a second
+      # run would only duplicate it.
       # Not `continue-on-error`: a PR that opened without checks reds the job.
       # Both dispatch steps close the job, so a failed `gh workflow run` never
       # skips the auto-merge disarm above or the promotion PR. This one keeps
@@ -1166,9 +1181,10 @@ jobs:
       # #3645: make a server the registry evicts but the measurement vetoes
       # ACTIONABLE (the #594 shape: a finding only in a step log or a doc diff
       # has nobody reading it). One persistent tracking issue, refreshed while
-      # the drift lasts and closed only when EVERY transparent server measured
-      # eligible (state `clean`); a transparent server that was unavailable,
-      # timed out or had no baseline is `unknown`, and a missing state file (the
+      # the drift lasts and closed only when EVERY evicted server (any policy but
+      # resident, #5737) measured eligible (state `clean`); an evicted server that
+      # was unavailable, inconclusive, timed out, had no baseline or no row is
+      # `unknown`, and a missing state file (the
       # measurement crashed or never ran) is not "clean" either, so both leave
       # the issue as it is. Scoped like the other
       # tracking-issue writers: a branch dispatch must not touch issues.
@@ -1262,12 +1278,15 @@ jobs:
 
       # #4277: a census mismatch belongs in its own persistent issue, not in a
       # refresh PR that can be closed while its red logs go unread. This is an
-      # explicit always-path and inspects every best-effort LSP step as well as
-      # the job result, so failures before the census are reported too.
+      # explicit always-path. Its clean verdict reads only the census outputs
+      # (#5676): a job failure in a step outside the census (#5675) files
+      # nothing, and a failure before the census leaves its outputs unset,
+      # which reads as not clean, so it is still reported.
       - name: Notify on LSP capability census (file/update/close tracking issue)
         if: always()
         continue-on-error: true
         env:
+          # Context for the drift body's Outcomes line only, not a clean input.
           JOB_STATUS: ${{ needs.tool-smoke.result }}
           CENSUS_OUTCOME: ${{ needs.tool-smoke.outputs.census }}
           SEED_OUTCOME: ${{ needs.tool-smoke.outputs.seed_matrix }}
@@ -1284,7 +1303,7 @@ jobs:
           set -euo pipefail
           TITLE='nightly: LSP capability census drift'
           clean=true
-          for outcome in "$JOB_STATUS" "$CENSUS_OUTCOME" "$SEED_OUTCOME" "$MATRIX_OUTCOME" "$CLEAN_OUTCOME" "$CAPABILITIES_OUTCOME" "$IDLE_OUTCOME" "$PROMOTE_OUTCOME" "$DIFF_OUTCOME"; do
+          for outcome in "$CENSUS_OUTCOME" "$SEED_OUTCOME" "$MATRIX_OUTCOME" "$CLEAN_OUTCOME" "$CAPABILITIES_OUTCOME" "$IDLE_OUTCOME" "$PROMOTE_OUTCOME" "$DIFF_OUTCOME"; do
             [ "$outcome" = success ] || clean=false
           done
           if [ "$clean" = true ]; then

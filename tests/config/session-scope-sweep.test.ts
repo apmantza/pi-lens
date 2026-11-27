@@ -47,6 +47,7 @@ import {
 	matchingCloseIndex,
 	stripSource,
 } from "../support/sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 /**
  * §3.8 item 2.1: module-level containers and `let`s in the
@@ -86,6 +87,11 @@ const CONVERSATION_MODULE_STATE: Readonly<Record<string, readonly string[]>> = {
 	"clients/tool-set-policy.ts": [],
 	"clients/turn-summary.ts": [],
 	"clients/widget-state.ts": [
+		// widget.hideWhenClean: the hide-delay timer handle and the time the widget
+		// first read clean. Not a store: they hold no conversation facts, only
+		// render timing, and `clearWidgetState` resets both.
+		"clearHideTimer",
+		"clearSinceMs",
 		"diagnosticsWriteGuard",
 		"files",
 		"lspServers",
@@ -95,6 +101,10 @@ const CONVERSATION_MODULE_STATE: Readonly<Record<string, readonly string[]>> = {
 		"runnerWriteGuard",
 		"sessionLanguages",
 		"staleReconcileTimer",
+		// #5588: the activation-scoped store-change listener. Not a store: it
+		// holds one callback and no conversation facts, and `clearWidgetState`
+		// deliberately keeps it so a reset still reaches the projection.
+		"widgetChangeFn",
 	],
 	"index.ts": [
 		"_bridgeGetFlag",
@@ -128,6 +138,10 @@ const ACTIVATION_STATE: Readonly<Record<string, string>> = {
 		"the /lens-context-toggle choice; D6 was not approved, so it resets per activation (N6 accepted)",
 	enabledLazyTools:
 		"the lazy tools the config enables, derived once per activation (design B6)",
+	issuesStatusPublished:
+		"whether this activation has published the issues status, so a session reset republishes even identical text while a disabled flag stays silent (#5588)",
+	lastIssuesStatus:
+		"the last text this activation published to the issues status; the dedupe key for a host call that repaints the footer (#5588)",
 	lensEnabled:
 		"the /lens-toggle choice; D6 was not approved, so it resets per activation (N6 accepted)",
 	lensWidgetVisible:
@@ -154,6 +168,7 @@ const ACTIVATION_STATE: Readonly<Record<string, string>> = {
 const COORDINATOR_FIELDS: Readonly<Record<string, "reset" | string>> = {
 	_autofixDemotedThisTurn: "reset",
 	_cachedExports: "reset",
+	_callWrites: "reset",
 	_cascadeRuns: "reset",
 	_cascadeSessionStats: "reset",
 	_complexityBaselines: "reset",
@@ -330,31 +345,39 @@ describe("session-scope ratchet (#3609 S8)", () => {
 		assertSortedRegistry("COORDINATOR_FIELDS", Object.keys(COORDINATOR_FIELDS));
 	});
 
-	it("admits no new module-level state in a conversation-scoped file (item 2.1)", () => {
-		const problems: string[] = [];
-		let scanned = 0;
-		for (const [file, pinned] of Object.entries(CONVERSATION_MODULE_STATE)) {
-			const live = liveModuleState(file);
-			scanned += live.length;
-			problems.push(...diffNames(file, live, [...pinned].sort()));
-		}
-		assertNonEmptyScan("conversation module state", scanned, 35);
-		expect(problems).toEqual([]);
-	});
+	it(
+		"admits no new module-level state in a conversation-scoped file (item 2.1)",
+		() => {
+			const problems: string[] = [];
+			let scanned = 0;
+			for (const [file, pinned] of Object.entries(CONVERSATION_MODULE_STATE)) {
+				const live = liveModuleState(file);
+				scanned += live.length;
+				problems.push(...diffNames(file, live, [...pinned].sort()));
+			}
+			assertNonEmptyScan("conversation module state", scanned, 35);
+			expect(problems).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("admits no new activation-closure let or container without a reason (item 2.2)", () => {
-		const live = liveActivationState();
-		assertNonEmptyScan("activation-closure state", live.length, 12);
-		expect(
-			diffNames(
-				"activateExtension state",
-				live,
-				Object.keys(ACTIVATION_STATE).sort(),
-			),
-		).toEqual([]);
-		for (const [name, reason] of Object.entries(ACTIVATION_STATE))
-			expect(reason.length, `${name} needs a reason`).toBeGreaterThan(20);
-	});
+	it(
+		"admits no new activation-closure let or container without a reason (item 2.2)",
+		() => {
+			const live = liveActivationState();
+			assertNonEmptyScan("activation-closure state", live.length, 12);
+			expect(
+				diffNames(
+					"activateExtension state",
+					live,
+					Object.keys(ACTIVATION_STATE).sort(),
+				),
+			).toEqual([]);
+			for (const [name, reason] of Object.entries(ACTIVATION_STATE))
+				expect(reason.length, `${name} needs a reason`).toBeGreaterThan(20);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("classifies every RuntimeCoordinator field by whether resetForSession resets it (item 2.3)", () => {
 		const live = liveCoordinatorFields();
@@ -406,35 +429,39 @@ describe("session stores (#3609 §3.8, #3612)", () => {
 	 * `defineSessionStore` call with no registry row, or a row whose store was
 	 * deleted, reds by name.
 	 */
-	it("registers every declared session store, and declares every registered one (item 1)", async () => {
-		const declaring = new Map<string, number>();
-		for (const file of clientSourceFiles()) {
-			const calls = [
-				...stripSource(fs.readFileSync(file, "utf8")).matchAll(
-					STORE_DECLARATION,
-				),
-			].length;
-			if (calls > 0) declaring.set(clientsRelative(file), calls);
-		}
-		for (const file of declaring.keys())
-			await import(`../../clients/${file.replace(/\.ts$/, ".js")}`);
-		const declared = listSessionStores().map((spec) => spec.name);
-		assertNonEmptyScan("declared session stores", declared.length, 4);
+	it(
+		"registers every declared session store, and declares every registered one (item 1)",
+		async () => {
+			const declaring = new Map<string, number>();
+			for (const file of clientSourceFiles()) {
+				const calls = [
+					...stripSource(fs.readFileSync(file, "utf8")).matchAll(
+						STORE_DECLARATION,
+					),
+				].length;
+				if (calls > 0) declaring.set(clientsRelative(file), calls);
+			}
+			for (const file of declaring.keys())
+				await import(`../../clients/${file.replace(/\.ts$/, ".js")}`);
+			const declared = listSessionStores().map((spec) => spec.name);
+			assertNonEmptyScan("declared session stores", declared.length, 4);
 
-		expect(
-			diffNames(
-				"session store",
-				[...declared].sort(),
-				Object.keys(SESSION_STORE_REGISTRY).sort(),
-			),
-		).toEqual([]);
-		// Every call site registered one store: none hides in a loop or branch.
-		expect([...declaring.values()].reduce((a, b) => a + b, 0)).toBe(
-			declared.length,
-		);
-		for (const [name, row] of Object.entries(SESSION_STORE_REGISTRY))
-			expect(declaring.has(row.module), `${name}: ${row.module}`).toBe(true);
-	});
+			expect(
+				diffNames(
+					"session store",
+					[...declared].sort(),
+					Object.keys(SESSION_STORE_REGISTRY).sort(),
+				),
+			).toEqual([]);
+			// Every call site registered one store: none hides in a loop or branch.
+			expect([...declaring.values()].reduce((a, b) => a + b, 0)).toBe(
+				declared.length,
+			);
+			for (const [name, row] of Object.entries(SESSION_STORE_REGISTRY))
+				expect(declaring.has(row.module), `${name}: ${row.module}`).toBe(true);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	/**
 	 * The recurrence: an async snapshot. The hand-off snapshots every store in

@@ -26,7 +26,10 @@ import { setupTestEnvironment } from "./test-utils.js";
 const fileTimeState = vi.hoisted(() => ({ hasChanged: false }));
 
 // Suppress log writes — tests care about verdicts, not log output
-vi.mock("../../clients/read-guard-logger.js", () => ({
+vi.mock("../../clients/read-guard-logger.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../clients/read-guard-logger.js")
+	>()),
 	logReadGuardEvent: vi.fn(),
 	getReadGuardLogPath: vi.fn(() => "/dev/null"),
 }));
@@ -201,6 +204,28 @@ describe("ReadGuard", () => {
 				}),
 			);
 		}
+
+		it("allows a range-only adapter edit a newer covering read supersedes (#5762)", () => {
+			// The IO bridge reports an adapter's edit as `editRanges` with no
+			// `touchedLines`. That single range must survive the producer collapse
+			// and be the range the supersede check judges, or a stale binding
+			// blocks every later edit once a re-read delivers bytes but no binding.
+			const env = setupTestEnvironment("read-guard-supersede-range-only-");
+			try {
+				const filePath = path.join(env.tmpDir, "range-only.ts");
+				fs.writeFileSync(filePath, before);
+				const guard = createReadGuard("supersede-range-only-session");
+				recordBridgeBinding(guard, filePath, 1);
+				fs.writeFileSync(filePath, after);
+				recordNativeRead(guard, filePath, 1, 3);
+
+				expect(guard.checkEdit(filePath, undefined, [[1, 1]])).toEqual({
+					action: "allow",
+				});
+			} finally {
+				env.cleanup();
+			}
+		});
 
 		it("allows an edit a newer covering native re-read supersedes", () => {
 			const env = setupTestEnvironment("read-guard-supersede-");
@@ -1142,6 +1167,30 @@ describe("ReadGuard", () => {
 			}
 		});
 
+		it("allows a range-only adapter edit when only lines outside its range changed (#5762)", () => {
+			const env = setupTestEnvironment("read-guard-snapshot-range-only-");
+			try {
+				const filePath = path.join(env.tmpDir, "api.ts");
+				fs.writeFileSync(filePath, "one\ntwo\nthree\n");
+				const guard = createReadGuard("test-session");
+				guard.recordRead(
+					createReadRecord(filePath, {
+						effectiveOffset: 1,
+						effectiveLimit: 3,
+					}),
+				);
+
+				fs.writeFileSync(filePath, "ONE\ntwo\nthree\n");
+				fileTimeState.hasChanged = true;
+
+				// Only line 2 is judged; the hash check must not reach line 1.
+				const verdict = guard.checkEdit(filePath, undefined, [[2, 2]]);
+				expect(verdict.action).toBe("allow");
+			} finally {
+				env.cleanup();
+			}
+		});
+
 		it("blocks a multi-range edit when one target range is stale", () => {
 			const env = setupTestEnvironment("read-guard-snapshot-multirange-");
 			try {
@@ -2040,6 +2089,23 @@ describe("ReadGuard", () => {
 			expect(verdict.details?.editRange).toEqual([50, 55]);
 		});
 
+		it("blocks a range-only adapter edit outside the read range (#5762)", () => {
+			// The IO-bridge adapter reports only `editRanges`. The range it reports
+			// is the range the coverage gate judges, so an uncovered one still blocks.
+			const guard = createReadGuard("test-session");
+			guard.recordRead(
+				createReadRecord("/src/api.ts", {
+					effectiveOffset: 10,
+					effectiveLimit: 5, // lines 10-15
+				}),
+			);
+
+			const verdict = guard.checkEdit("/src/api.ts", undefined, [[50, 55]]);
+
+			expect(verdict.action).toBe("block");
+			expect(verdict.reason).toContain("outside read range");
+		});
+
 		it("warns (not blocks) out-of-range edit when oldText was resolved", () => {
 			const guard = createReadGuard("test-session");
 			guard.recordRead(
@@ -2415,6 +2481,35 @@ describe("ReadGuard Tier-2 idle decay and bounds (#1389)", () => {
 				authoredRanges: [[1, 1]],
 			});
 			expect(wholeGuard.checkEdit(wholePath, [4, 4]).action).toBe("block");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// Recurrence: #5762 routed every range gate through requestedEditRanges but
+	// no case reached the authorship gate with an adapter that reports only
+	// `editRanges`: reverting that one call site to the bounding box left the
+	// whole read-guard suite green while a range-only edit of the agent's own
+	// bytes was blocked as "authorship-range".
+	it("judges a range-only adapter edit against the authored ranges (#5762)", () => {
+		const env = setupTestEnvironment("read-guard-authorship-range-only-");
+		try {
+			const filePath = path.join(env.tmpDir, "range-only.ts");
+			fs.writeFileSync(filePath, "one\ntwo\nthree\nfour\n");
+			const guard = createReadGuard("authorship-range-only");
+			fs.writeFileSync(filePath, "one\ntwo\nbridge\nfour\n");
+			guard.recordWritten(filePath, {
+				stampFileTime: false,
+				authoredRanges: [[3, 3]],
+				allowFirstAuthorship: true,
+			});
+
+			expect(guard.checkEdit(filePath, undefined, [[3, 3]]).action).toBe(
+				"allow",
+			);
+			expect(guard.checkEdit(filePath, undefined, [[2, 2]]).action).toBe(
+				"block",
+			);
 		} finally {
 			env.cleanup();
 		}

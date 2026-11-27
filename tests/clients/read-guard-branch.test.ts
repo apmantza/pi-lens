@@ -329,6 +329,31 @@ describe("ReadGuard authorship export/import (#3612)", () => {
 		expect(verdict(after, c, 2)).toBe("allow");
 	});
 
+	// #5405: every producer hands `recordWritten` the host's raw call id (the
+	// LSP mutation writer, `lens_diagnostic_mark` and `ast_grep_replace` through
+	// the mutation bridge). Recurrence: an OpenAI Responses id (`call_a|fc_b`)
+	// stored raw matched no sanitized branch id, so the import dropped the write
+	// and the model re-read a file it had just changed.
+	it("stores a raw host call id in branch form, so a pipe id survives import (#5405)", () => {
+		const c = path.join(env.tmpDir, "c.ts");
+		fs.writeFileSync(c, "c1\nc2\nc3\n");
+		fs.utimesSync(c, LONG_AGO, LONG_AGO);
+		const before = createReadGuard("authorship-raw-id");
+		before.recordWritten(c, { toolCallId: "call_a|fc_b" });
+		expect(before.exportAuthorship().entries?.[0]?.toolCallId).toBe(
+			"call_a_fc_b",
+		);
+		const after = createReadGuard("authorship-raw-id-after");
+
+		expect(
+			after.importAuthorship(
+				JSON.parse(JSON.stringify(before.exportAuthorship())),
+				new Set([sanitizeCorrelationId("call_a|fc_b") as string]),
+			),
+		).toEqual({ imported: 1, dropped: 0 });
+		expect(verdict(after, c, 2)).toBe("allow");
+	});
+
 	// #4131: the hash decides, not the size. Recurrence: an identity of
 	// stat fields alone misses an equal-size rewrite inside one mtime tick,
 	// and round 1 of #4187 ended authorship on a touch.

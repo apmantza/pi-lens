@@ -164,10 +164,16 @@ import {
 } from "../clients/degradation-ledger.js";
 import { _resetSessionLifecycleForTests } from "../clients/session-lifecycle.js";
 import { _settleRegistryMutationsForTests } from "../clients/instance-registry.js";
+import { trustScopedSearchPath } from "../clients/safe-spawn.js";
+import {
+	getProjectTrustState,
+	setProjectTrustState,
+} from "../clients/project-trust.js";
 import {
 	makeContextWithSystemEvent,
 	makeSessionStartEvent,
 } from "./support/host-event-factory.js";
+import { drainRegisteredBackgroundWritesForTests } from "./support/background-write-drains.js";
 import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx, makeStaleCtx } from "./support/pi-mock.js";
 import { useGlobalConfig } from "./support/global-config.js";
@@ -296,6 +302,18 @@ const setGlobalConfig = useGlobalConfig();
 // fixture roots inside the case, so one root hook ends whatever is still open.
 afterEach(async () => {
 	await endMockSessions();
+	// #5794: every session_start primes the global-bin-dir lookup without
+	// waiting for it (#5261): a `setImmediate` that imports the package manager
+	// and spawns `which` and `npm config get prefix`. A case that only awaits
+	// microtasks never reaches the check phase, so the prime started in a LATER
+	// case's window, and its owned-child row landed in the degradation ledger
+	// as `instance-registry-registration-missing`: the #2515 S3 `/lens-perf`
+	// case's exact-list assertion read it (seeds 202 and 8888). Take one
+	// macrotask turn so the scheduled prime starts, then join it through the
+	// registered drains, here where the case that scheduled it ends. The drain
+	// alone is not enough: with no prime running yet it returns settled.
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	await drainRegisteredBackgroundWritesForTests();
 });
 
 describe("index.ts extension wiring", () => {
@@ -1037,6 +1055,24 @@ describe("index.ts extension wiring", () => {
 			// Join the tail first so this test's exact-list assertion only sees
 			// what it records itself.
 			await _settleRegistryMutationsForTests();
+			// #5509: the reset below also clears the ledger's once-keys, so the
+			// exact-list assertion is only exact while NOTHING ELSE records in
+			// the window between that reset and the `/lens-perf` handler's own
+			// `getDegradationSummary()`. What landed in that window on master CI
+			// is a `trust-refusal` row from the project-trust arm of the spawn
+			// seam: under the default `unknown` trust, `trustScopedSearchPath`
+			// (`clients/safe-spawn.ts`) records one for a spawn whose PATH
+			// carries the repository's own `node_modules/.bin`. Locally it takes
+			// two conditions together, that PATH and a spawn inside this window;
+			// which spawn did it on CI is not identified, and the pin does not
+			// depend on it. Pin the trust state this test assumes for the whole
+			// window rather than loosen the assertion: `trusted` short-circuits
+			// `trustScopedSearchPath` and `isUntrustedProjectPath`, the gate in
+			// every production caller of `recordProjectCommandRefusal`. The
+			// config-core `toSpawnArgs` gate still records under `trusted`, but
+			// nothing in production calls it.
+			const trustBefore = getProjectTrustState();
+			setProjectTrustState("trusted");
 			resetDegradationLedger();
 			try {
 				// `log-sink-rotated` is an INFORMATIONAL kind (see
@@ -1052,6 +1088,17 @@ describe("index.ts extension wiring", () => {
 					subject: "test.log",
 					reason: "rotated",
 				});
+				// The witness that the pin above is what holds. Scope a search path
+				// that names the repository's own `node_modules/.bin`, the entry
+				// `npm test` hands every child, through the arm that wrote the CI
+				// row. Unpinned, that call records the `trust-refusal` for the
+				// entry, so this cell reds with the CI diff instead of waiting for
+				// a stray spawn. Its value is asserted after the ledger checks, so
+				// the list keeps failing first.
+				const projectBin = path.join(process.cwd(), "node_modules", ".bin");
+				const scopedWitnessPath = trustScopedSearchPath(
+					[projectBin, path.sep].join(path.delimiter),
+				);
 
 				const pi = createPiMock();
 				extension(pi.asExtensionAPI());
@@ -1069,8 +1116,16 @@ describe("index.ts extension wiring", () => {
 					expect(out).toContain(line);
 				}
 				expect(out).not.toContain("log-sink-rotated: 1 (test.log: rotated)");
+				// The isolation itself: the window's rendering carries no row from
+				// the spawn, whatever its search-path scoping decided.
+				expect(out).not.toContain("trust-refusal");
+				// The witness reached the scoping arm with trust pinned: under
+				// `unknown` or `untrusted` the project entry is dropped from the
+				// scoped path, so this cannot pass with the pin removed.
+				expect(scopedWitnessPath).toContain(projectBin);
 			} finally {
 				resetDegradationLedger();
+				setProjectTrustState(trustBefore);
 			}
 		});
 	});
@@ -1637,6 +1692,46 @@ describe("ui.compactWidget mount seam (#3959)", () => {
 			const lines = component.render(120);
 			expect(lines.length).toBeGreaterThan(1);
 			expect(lines.join("\n")).toContain(path.basename(filePath));
+		} finally {
+			clearWidgetState();
+		}
+	});
+
+	it("ends with a blank separator line when widget.position is aboveEditor", async () => {
+		try {
+			const component = await mountWidget({
+				widget: { position: "aboveEditor" },
+			});
+			seedSummaryFixture();
+			const lines = component.render(120);
+			expect(lines.length).toBeGreaterThan(1);
+			expect(lines.at(-1)).toBe("");
+			expect(lines.at(-2)).not.toBe("");
+		} finally {
+			clearWidgetState();
+		}
+	});
+
+	it("adds no blank separator line below the editor", async () => {
+		try {
+			const component = await mountWidget({
+				widget: { position: "belowEditor" },
+			});
+			seedSummaryFixture();
+			const lines = component.render(120);
+			expect(lines.at(-1)).not.toBe("");
+		} finally {
+			clearWidgetState();
+		}
+	});
+
+	it("adds no blank line above the editor when the widget renders nothing", async () => {
+		try {
+			const component = await mountWidget({
+				widget: { position: "aboveEditor", hideWhenClean: true },
+			});
+			clearWidgetState();
+			expect(component.render(120)).toEqual([]);
 		} finally {
 			clearWidgetState();
 		}

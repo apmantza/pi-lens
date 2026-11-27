@@ -12,19 +12,20 @@
  * under test, and restores it.
  *
  *   node scripts/measure-lsp-idle-eviction.mjs [serverId ...] [--install]
- *       [--doc <path>] [--summary <path>] [--drift-body <path>]
+ *       [--doc <path>] [--matrix <path>] [--summary <path>] [--drift-body <path>]
  *       [--budget-seconds <n>] [--window-ms <n>]
  *
  * Requires `npm run build:dist`. Writes docs/lsp-idle-eviction.md (stable
- * columns only, regenerated from scratch each run so an absent server reads `unavailable`,
- * never a stale or zero row), appends the timing and memory figures to the job summary when
+ * columns only; a settled `result`, `reason`, `respawn` and `coverage` changes only after two agreeing nights
+ * and a server this host cannot spawn keeps its prior row (#5667); the pending flips live in
+ * the capability matrix's refresh-state block, `--matrix`), appends the timing and memory figures to the job summary when
  * `GITHUB_STEP_SUMMARY` is set, and optionally writes them as JSON.
  *
  * `--drift-body` writes the tracking-issue body when a server is in hard drift
  * and removes the file otherwise; `--drift-state` writes `drift`, `clean` or
  * `unknown`. The nightly's notify step files or refreshes the single tracking
- * issue on `drift`, closes it only on `clean` (every transparent server
- * eligible), and leaves it alone on `unknown`
+ * issue on `drift`, closes it only on `clean` (every evicted server, any
+ * policy but resident, eligible this run, #5737), and leaves it alone on `unknown`
  * (scripts/upsert-tracking-issue.mjs).
  *
  * Exit code: 1 only for drift (a server the registry declares `transparent`
@@ -40,8 +41,9 @@ import {
 	buildIdleEvictionDriftBody,
 	driftIssueState,
 	idleEvictionDrift,
-	renderIdleEvictionDoc,
+	publishIdleEvictionDoc,
 	renderRawTable,
+	reportIdleEvictionHeld,
 	summarizeRows,
 } from "./lib/lsp-idle-eviction-doc.mjs";
 import {
@@ -69,6 +71,7 @@ const flagValue = (name, fallback) => {
 };
 const flagNames = new Set([
 	"--doc",
+	"--matrix",
 	"--summary",
 	"--drift-body",
 	"--drift-state",
@@ -80,6 +83,13 @@ const serverFilter = argv.filter(
 );
 const docPath = path.resolve(
 	flagValue("--doc", path.join(repoRoot, "docs", "lsp-idle-eviction.md")),
+);
+// The capability matrix whose refresh-state block keeps the pending flips (#5667).
+const matrixPath = path.resolve(
+	flagValue(
+		"--matrix",
+		path.join(repoRoot, "docs", "lsp-capability-matrix.md"),
+	),
 );
 const summaryPath = flagValue("--summary", undefined);
 // The job cap is 35 minutes; earlier steps have measured ~14. Stopping here
@@ -208,13 +218,38 @@ const drift = idleEvictionDrift(rows, declared);
 // A filtered run measured a slice; overwriting the document with it would
 // drop every other server's row, so only a full run writes the artifact.
 if (serverFilter.length === 0) {
-	const doc = renderIdleEvictionDoc({
+	// #5667: the document is the published answer, not one night's reading: a
+	// settled cell changes only after two agreeing nights, through the pending
+	// flips kept in the capability matrix's refresh-state block, and a server
+	// this host could not spawn keeps its prior row. The raw summary, the drift
+	// issue and the evaluated floor below keep reading the MEASURED rows.
+	const readIfPresent = (file) => {
+		try {
+			return fs.readFileSync(file, "utf8");
+		} catch {
+			return undefined;
+		}
+	};
+	const published = publishIdleEvictionDoc({
 		rows,
 		declared,
 		date: new Date().toISOString().slice(0, 10),
 		platform: process.platform,
+		priorDoc: readIfPresent(docPath),
+		matrixText: readIfPresent(matrixPath),
 	});
+	const doc = published.doc;
 	fs.writeFileSync(docPath, doc);
+	if (published.matrixText === undefined)
+		console.error(
+			`idle-eviction doc: no capability matrix at ${matrixPath}; the document is written unheld`,
+		);
+	else if (published.matrixText !== readIfPresent(matrixPath))
+		fs.writeFileSync(matrixPath, published.matrixText);
+	reportIdleEvictionHeld(published.held, {
+		env: process.env,
+		log: (line) => console.error(line),
+	});
 	console.error(
 		`\nWrote ${path.relative(repoRoot, docPath)}. Its stable rows:`,
 	);
@@ -261,7 +296,7 @@ if (driftBodyPath) {
 	else fs.rmSync(driftBodyPath, { force: true });
 }
 // drift | clean | unknown: the tracking issue closes only on `clean` (every
-// transparent server eligible), never on the mere absence of drift.
+// evicted server eligible, #5737), never on the mere absence of drift.
 if (driftStatePath)
 	fs.writeFileSync(driftStatePath, driftIssueState(rows, declared));
 if (process.env.GITHUB_STEP_SUMMARY) {

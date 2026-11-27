@@ -108,8 +108,8 @@ import { safeSpawnAsync } from "../../safe-spawn.js";
 import { pathsEqual } from "../../path-utils.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
 import {
-	createAvailabilityChecker,
-	resolveAvailableOrInstall,
+	resolveToolCommandWithInstallFallback,
+	toolAbsentSkip,
 } from "./utils/runner-helpers.js";
 import { spawnFailedWithNoOutput } from "./utils/spawn-outcome.js";
 import type {
@@ -121,8 +121,6 @@ import type {
 import { faultResult, faultSkip, findingsResult } from "../types.js";
 import { faultIfCutShort } from "./utils/tool-failure.js";
 import { PRIORITY } from "../priorities.js";
-
-const cue = createAvailabilityChecker("cue", ".exe", ["version"]);
 
 interface CueVetLocation {
 	/** Raw path text as `cue vet` printed it, e.g. `.\bad.cue` or `./bad.cue`. */
@@ -364,19 +362,14 @@ const cueVetRunner: RunnerDefinition = {
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "cue-vet");
 
-		let cmd: string | null = null;
-		if (await cue.isAvailableAsync(cwd)) {
-			cmd = cue.getCommand(cwd);
-		} else {
-			cmd = await resolveAvailableOrInstall(cue, "cue", cwd);
-		}
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "cue");
 		// An unspawnable `cue` is never a durable "clean" verdict — skip, so the
 		// dispatcher's own absence handling reports the gap rather than this
 		// runner manufacturing a false "0 findings" (recurring defect shape 10).
-		// `createAvailabilityChecker`/`resolveAvailableOrInstall` already route
-		// through the shared classify/latch policy, so a probe timeout or host
-		// stall re-arms on its own cooldown instead of latching here.
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		// The registry resolver routes through the shared classify/latch policy,
+		// so a probe timeout or host stall re-arms on its own cooldown instead of
+		// latching here.
+		if (!cmd) return toolAbsentSkip(cwd, { id: "cue" });
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const fileDir = path.dirname(absPath);

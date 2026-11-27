@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { Readable } from "node:stream";
 import {
 	afterAll,
 	afterEach,
@@ -10,6 +11,7 @@ import {
 	it,
 	vi,
 } from "vitest";
+import { drainRegisteredBackgroundWritesForTests } from "../../support/background-write-drains.js";
 import { createArchivePinScope } from "../../support/archive-pin.js";
 import { removeTempDirSync } from "../test-utils.js";
 
@@ -47,6 +49,16 @@ const archives = vi.hoisted(() => ({
 	),
 }));
 
+// #5701: which TLS-peer fault the next archive request replays. `none` serves
+// the fixture archive; `reset` drops the socket mid-body; `oversize` sends one
+// chunk past the downloader's 512 MiB cap.
+const peer = vi.hoisted(() => ({
+	fault: "none" as "none" | "reset" | "oversize",
+	pulls: 0,
+}));
+const OVERSIZE_CHUNK_BYTES = 64 * 1024 * 1024;
+const OVERSIZE_CHUNKS = 9;
+
 vi.mock("node:https", () => ({
 	default: {
 		get: (
@@ -60,6 +72,26 @@ vi.mock("node:https", () => ({
 			};
 			response.statusCode = 200;
 			response.headers = {};
+			if (peer.fault !== "none") {
+				const chunk = Buffer.alloc(
+					peer.fault === "oversize" ? OVERSIZE_CHUNK_BYTES : 4096,
+				);
+				const stream = new Readable({
+					read() {
+						peer.pulls += 1;
+						if (peer.fault === "oversize") {
+							this.push(peer.pulls > OVERSIZE_CHUNKS ? null : chunk);
+							return;
+						}
+						if (peer.pulls > 1) return;
+						this.push(chunk);
+						setImmediate(() => this.destroy(new Error("read ECONNRESET")));
+					},
+				});
+				Object.assign(stream, { statusCode: 200, headers: {} });
+				queueMicrotask(() => callback(stream as never));
+				return new EventEmitter();
+			}
 			const body = url.includes("clangd")
 				? archives.clangd
 				: url.includes("lua-language-server")
@@ -86,7 +118,12 @@ vi.mock("../../../clients/sessionstart-logger.js", () => ({
 	SESSIONSTART_LOG_FILE: "",
 }));
 import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../../clients/degradation-ledger.js";
+import {
 	ensureTool,
+	flushProbeCache,
 	resolveArchiveUrl,
 	TOOLS,
 } from "../../../clients/installer/index.js";
@@ -101,14 +138,25 @@ function pinFixture(toolId: string, body: Buffer): void {
 }
 afterEach(() => {
 	pins.restoreAll();
+	peer.fault = "none";
 });
 
-afterAll(() => {
-	// #2912: this module-scoped HOME is a real /tmp fixture, including the
-	// installer's data and log trees. Remove the whole root so archive coverage
-	// cannot leave a top-level pi-lens-3020-* entry for hygiene to report.
-	removeTempDirSync(HOME);
-	delete process.env.PI_LENS_TEST_PLATFORM;
+afterAll(async () => {
+	try {
+		// #5657: a successful `ensureTool` leaves a dirty probe-cache entry. Its
+		// 300 ms debounced flush writes `probe-cache.json` and its `.locks` under
+		// this root, and a flush after removal re-creates the root. Settle the
+		// writer through the registry, then prove the flush landed: it reads idle
+		// only when nothing is pending.
+		await drainRegisteredBackgroundWritesForTests();
+		expect(await flushProbeCache()).toBe("idle");
+	} finally {
+		// #2912: this module-scoped HOME is a real /tmp fixture, including the
+		// installer's data and log trees. Remove the whole root so archive coverage
+		// cannot leave a top-level pi-lens-3020-* entry for hygiene to report.
+		removeTempDirSync(HOME);
+		delete process.env.PI_LENS_TEST_PLATFORM;
+	}
 });
 
 beforeEach(() => {
@@ -178,6 +226,55 @@ describe("archive installer fixture path (#3020)", () => {
 			archives.clangd = goodClangd;
 		}
 	});
+	// #5706 F1 recurrence: the first regression test imported the new downloader
+	// module, so on the merge base it failed on the missing import, not on
+	// behaviour. These two drive the production archive caller, which master
+	// buffered with `httpsGet`, so restoring master's source reds on the
+	// assertions below.
+	describe("archive payload streaming (#5701)", () => {
+		function downloadRows(): Array<{ subject: string; reason: string }> {
+			return (
+				getDegradationSummary().find((g) => g.kind === "managed-tool-download")
+					?.latestReasons ?? []
+			);
+		}
+		function partialDownloads(): string[] {
+			const tools = path.join(HOME, "tools");
+			return fs.existsSync(tools)
+				? fs
+						.readdirSync(tools)
+						.filter((name) => name.includes(".clangd.archive-"))
+				: [];
+		}
+		beforeEach(() => {
+			resetDegradationLedger();
+			peer.pulls = 0;
+		});
+
+		it("records a typed download failure and leaves no partial file on a mid-body peer reset", async () => {
+			peer.fault = "reset";
+			await expect(
+				ensureTool("clangd", { forceReinstall: true }),
+			).resolves.toBeUndefined();
+			const rows = downloadRows();
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.subject).toBe("clangd");
+			expect(rows[0]?.reason).toMatch(/download stream failed.*ECONNRESET/);
+			expect(partialDownloads()).toEqual([]);
+		});
+
+		it("rejects a body past the byte cap, records it, and leaves no partial file", async () => {
+			peer.fault = "oversize";
+			await expect(
+				ensureTool("clangd", { forceReinstall: true }),
+			).resolves.toBeUndefined();
+			const rows = downloadRows();
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.reason).toMatch(/exceeds 536870912 bytes/);
+			expect(partialDownloads()).toEqual([]);
+		});
+	});
+
 	// #3400 through the production entry point with the REAL extractor: a zip
 	// shaped like fwcd's server.zip installs, and the same zip with one byte
 	// flipped never reaches the extractor.

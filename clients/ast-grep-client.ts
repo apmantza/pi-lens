@@ -25,7 +25,9 @@ import type {
 import { reportBundledResourceDirHealth } from "./bundled-resource-health.js";
 import { getDegradationLedgerGeneration } from "./degradation-ledger.js";
 import { logLatency } from "./latency-logger.js";
+import { hashFileBytes } from "./content-stamp.js";
 import { getMutationBridge } from "./mutation-bridge.js";
+import { refuseOutOfRootWrites, writeSourceFile } from "./write-source-file.js";
 import type { LineageHandle } from "./session-scope.js";
 import { normalizeFilePath } from "./path-utils.js";
 import { resolvePackagePath } from "./package-root.js";
@@ -75,6 +77,15 @@ function reportAstGrepRulesHealth(bundledRuleDir: string): void {
 }
 
 /**
+ * The identity of a file ast-grep reported. It echoes the spelling passed to
+ * its CLI, so the tool-relative spelling resolves at the producer boundary and
+ * then through the existing canonical path seam (#4140).
+ */
+function matchedFilePath(file: string): string {
+	return normalizeFilePath(path.resolve(process.cwd(), file));
+}
+
+/**
  * Record an applied `ast_grep_replace` rewrite through the mutation bridge
  * (#2423, acceptance criterion 3).
  *
@@ -83,9 +94,9 @@ function reportAstGrepRulesHealth(bundledRuleDir: string): void {
  * range that file's matches covered, because the bridge's contract is
  * per-file — the same shape a multi-hunk edit produces.
  *
- * Returns the files the bridge ACCEPTED (#5239): the tool reports them in its
- * result details so the `tool_result` handler dispatches exactly those, never a
- * path the bridge refused (out of scope, ignored, or no bridge mounted).
+ * The bridge notes each file it records under `toolCallId` (#5551), so the
+ * call's `tool_result` dispatches exactly those, never a path it refused (out
+ * of scope, ignored, or no bridge mounted).
  *
  * Exported for tests: they drive it against a registered bridge instead of
  * spawning ast-grep.
@@ -93,9 +104,9 @@ function reportAstGrepRulesHealth(bundledRuleDir: string): void {
 function recordAstGrepApply(
 	matches: AstGrepMatch[],
 	{ lineage, toolCallId, sessionId }: AstGrepApplyProvenance = {},
-): string[] {
+): void {
 	const bridge = getMutationBridge();
-	if (!bridge || matches.length === 0) return [];
+	if (!bridge || matches.length === 0) return;
 	const rangesByFile = new Map<string, Array<[number, number]>>();
 	for (const match of matches) {
 		const start = (match.range?.start?.line ?? 0) + 1;
@@ -104,13 +115,12 @@ function recordAstGrepApply(
 		if (existing) existing.push([start, end]);
 		else rangesByFile.set(match.file, [[start, end]]);
 	}
-	const accepted: string[] = [];
 	for (const [filePath, editRanges] of rangesByFile) {
 		// ast-grep echoes the spelling passed to its CLI. Resolve that
 		// tool-relative spelling at the producer boundary, then use the
 		// existing canonical path seam before recordability is checked (#4140).
-		const resolved = normalizeFilePath(path.resolve(process.cwd(), filePath));
-		const recorded = bridge.recordMutation({
+		const resolved = matchedFilePath(filePath);
+		bridge.recordMutation({
 			filePath: resolved,
 			kind: "edit",
 			editRanges,
@@ -127,18 +137,103 @@ function recordAstGrepApply(
 			// #4943: the calling session owns the deferred pass of what it rewrote.
 			...(sessionId !== undefined && { sessionId }),
 		});
-		if (recorded) accepted.push(resolved);
 	}
-	return accepted;
 }
 
 /** Who an apply ran for: the call's session scope, its id, and its session. */
 interface AstGrepApplyProvenance {
+	/**
+	 * #5417: the workspace root every file the apply may write is judged
+	 * against (`canWriteAnalysisRoot`). An apply with none is refused: the write
+	 * guard fails closed.
+	 */
+	sessionRoot?: string | undefined;
 	lineage?: LineageHandle | undefined;
 	/** #4187 R4-1: the call whose `tool_call` licensed the paths it named. */
 	toolCallId?: string | undefined;
 	/** #4943: pi's stable id of the session that called the tool. */
 	sessionId?: string | undefined;
+}
+
+/**
+ * #5417: an apply names the workspace root its write is judged against, or it
+ * is refused (the guard fails closed). The files it would write are judged
+ * once the dry run has named them: `applyRewrite`.
+ */
+function missingRootRefusal(
+	options: AstGrepApplyProvenance | undefined,
+): string | undefined {
+	return options?.sessionRoot === undefined
+		? "ast_grep_replace refused: no session root to check the write against"
+		: undefined;
+}
+
+function outsideRootsText(refused: readonly string[]): string {
+	return `ast_grep_replace refused: ${refused.join(", ")} ${refused.length === 1 ? "is" : "are"} outside the session's writable roots (a preview with apply: false is still allowed)`;
+}
+
+/**
+ * #5417: one `--update-all`, whatever ends it. The files the dry run matched
+ * run under the root guard and pi's mutation queue; their bytes are hashed
+ * inside the queue before the write. A write that failed (a nonzero exit, a
+ * kill) still rewrote some of them (a read-only file among writable ones: the
+ * rest are rewritten), so on that exit the bridge hears of exactly the files
+ * whose bytes differ now. A clean write records every matched file.
+ */
+async function applyRewrite<R extends { error?: string | undefined }>(
+	matches: AstGrepMatch[],
+	options: AstGrepApplyProvenance | undefined,
+	write: () => Promise<R>,
+): Promise<{ refused: string[] } | { result: R }> {
+	const files = [
+		...new Set(matches.map((match) => matchedFilePath(match.file))),
+	];
+	const hashOf = (file: string): string | undefined => {
+		try {
+			return hashFileBytes(file);
+		} catch {
+			// none: an unreadable or removed file hashes as undefined, which
+			// compares as changed against a file that had bytes.
+			return undefined;
+		}
+	};
+	// The matched files are what `--update-all` writes (a dry run whose output
+	// was cut off is an error, never a partial list), so they are judged
+	// against the session's writable roots before this call writes. The
+	// structural apply makes one call per scan path, so with paths [in-root,
+	// sibling] the in-root file is already rewritten when the sibling path is
+	// refused; the pattern apply judges the whole list at once (#5432 review
+	// F1, accepted residual). The root is set here: `missingRootRefusal` ran
+	// first.
+	const refused = refuseOutOfRootWrites(
+		files,
+		options?.sessionRoot ?? "",
+		"ast_grep_replace",
+	);
+	if (refused.length > 0) return { refused };
+	const before = new Map<string, string | undefined>();
+	const result = await writeSourceFile(
+		{
+			filePaths: files,
+			record: (exit) => {
+				const clean = exit.ok && exit.value.error === undefined;
+				const changed = clean
+					? files
+					: files.filter((file) => hashOf(file) !== before.get(file));
+				recordAstGrepApply(
+					matches.filter((match) =>
+						changed.includes(matchedFilePath(match.file)),
+					),
+					options,
+				);
+			},
+		},
+		async () => {
+			for (const file of files) before.set(file, hashOf(file));
+			return write();
+		},
+	);
+	return { result };
 }
 
 // --- Client ---
@@ -375,25 +470,34 @@ export class AstGrepClient {
 		aborted?: boolean;
 		/** #5097: the error came from a `--update-all` that may have written files. */
 		writeStarted?: boolean;
-		/** #5239: the files an apply rewrote and the bridge accepted. */
-		appliedFiles?: string[];
 	}> {
 		const allMatches: AstGrepMatch[] = [];
 		const sg: SgExecutionOptions = options?.signal
 			? { signal: options.signal }
 			: {};
+		if (apply) {
+			const refusal = missingRootRefusal(options);
+			if (refusal !== undefined) {
+				return {
+					matches: [],
+					totalMatches: 0,
+					applied: false,
+					error: refusal,
+				};
+			}
+		}
 		// #5244 r4: each path is written as its own scan finishes, so a later
-		// path that is stale or fails still leaves the earlier ones on disk. Every
-		// exit records what was rewritten so far, never only the loop's last one.
-		const recordWritten = (): string[] =>
-			apply ? recordAstGrepApply(allMatches, options) : [];
+		// path that is stale or fails still leaves the earlier ones on disk; the
+		// bridge noted each under the call's id as it was written (#5551).
 		for (const scanPath of paths) {
+			let previewed: AstGrepMatch[] = [];
 			if (apply) {
 				// Stale-preview check: dry-run first. Preserve CLI failures instead of
 				// treating an invalid rule as a stale, no-match preview.
-				// No explicit signal: the tool call's scope already kills it, and
-				// the count scan right after carries `sg` and refuses (#5097 F5).
-				const preCheck = await this.tempScanDetailed(scanPath, ruleYaml);
+				// The preview child carries the call signal like the count scan below,
+				// so Esc stops it in a host with no tool scope too (#5097). Only the
+				// `--update-all` write runs on to completion.
+				const preCheck = await this.tempScanDetailed(scanPath, ruleYaml, sg);
 				if (preCheck.failure || preCheck.error) {
 					return {
 						matches: allMatches,
@@ -401,7 +505,6 @@ export class AstGrepClient {
 						applied: false,
 						error: preCheck.error ?? "ast-grep preview failed",
 						...(preCheck.failure === "aborted" ? { aborted: true } : {}),
-						appliedFiles: recordWritten(),
 					};
 				}
 				if (preCheck.matches.length === 0) {
@@ -410,20 +513,37 @@ export class AstGrepClient {
 						totalMatches: 0,
 						applied: false,
 						stalePreview: true,
-						appliedFiles: recordWritten(),
 					};
 				}
+				previewed = preCheck.matches;
 			}
 			// #5097: the runner re-checks `signal` before its `--update-all` and
 			// runs that write to completion.
-			const result = await this.runner.tempScanWithFixAsync(
-				scanPath,
-				"agent-rule",
-				ruleYaml,
-				apply,
-				undefined,
-				sg,
-			);
+			const scan = () =>
+				this.runner.tempScanWithFixAsync(
+					scanPath,
+					"agent-rule",
+					ruleYaml,
+					apply,
+					undefined,
+					sg,
+				);
+			// #4140 (F9): the structural apply rewrites files with `--update-all`
+			// exactly as the pattern apply does, and no tool_result describes it, so
+			// `applyRewrite` reaches the same bridge with the matches captured
+			// before the write, on every exit (#5417).
+			const applied = apply
+				? await applyRewrite(previewed, options, scan)
+				: null;
+			if (applied !== null && "refused" in applied) {
+				return {
+					matches: allMatches,
+					totalMatches: allMatches.length,
+					applied: false,
+					error: outsideRootsText(applied.refused),
+				};
+			}
+			const result = applied === null ? await scan() : applied.result;
 			if (result.error) {
 				return {
 					matches: allMatches,
@@ -432,19 +552,14 @@ export class AstGrepClient {
 					error: result.error,
 					...(result.aborted ? { aborted: true } : {}),
 					...(result.writeStarted ? { writeStarted: true } : {}),
-					appliedFiles: recordWritten(),
 				};
 			}
 			allMatches.push(...result.matches);
 		}
-		// #4140 (F9): the structural apply rewrites files with `--update-all`
-		// exactly as the pattern apply does, and no tool_result describes it, so
-		// it reaches the same bridge with the matches captured before the write.
 		return {
 			matches: allMatches,
 			totalMatches: allMatches.length,
 			applied: apply,
-			appliedFiles: recordWritten(),
 		};
 	}
 
@@ -795,8 +910,6 @@ export class AstGrepClient {
 		aborted?: boolean;
 		/** #5097: the error came from a `--update-all` that may have written files. */
 		writeStarted?: boolean;
-		/** #5239: the files an apply rewrote and the bridge accepted. */
-		appliedFiles?: string[];
 	}> {
 		const baseArgs = ["run", "-p", pattern, "-r", rewrite, "--lang", lang];
 		if (options?.strictness) {
@@ -818,6 +931,17 @@ export class AstGrepClient {
 				applied: false,
 				error: result.error,
 				...(result.failure === "aborted" ? { aborted: true } : {}),
+			};
+		}
+
+		const refusal = missingRootRefusal(options);
+		if (refusal !== undefined) {
+			return {
+				matches: [],
+				totalMatches: 0,
+				truncated: false,
+				applied: false,
+				error: refusal,
 			};
 		}
 
@@ -866,34 +990,43 @@ export class AstGrepClient {
 				aborted: true,
 			};
 		}
-		const applyResult = await this.runner.exec(
-			[...baseArgs, "--update-all", ...paths],
-			{ ignoreAmbientSignal: true },
+		// #2423: `--update-all` rewrites these files, and no `tool_result`
+		// describes it — pi-lens's own tool was as invisible to the mutation
+		// bookkeeping as any third-party one. `applyRewrite` records each
+		// rewritten file through the same seam an extension would use, on EVERY
+		// exit: a failed `--update-all` still rewrote the files it reached
+		// (#5417). Fire-and-forget: the bridge never throws, and a missing bridge
+		// (pi-lens not activated, guard disabled) is a silent no-op.
+		const applied = await applyRewrite(preCheck.matches, options, () =>
+			this.runner.exec([...baseArgs, "--update-all", ...paths], {
+				ignoreAmbientSignal: true,
+			}),
 		);
-		if (applyResult.error) {
+		if ("refused" in applied) {
 			return {
 				matches: [],
 				totalMatches: 0,
 				truncated: false,
 				applied: false,
-				error: applyResult.error,
+				error: outsideRootsText(applied.refused),
+			};
+		}
+		if (applied.result.error) {
+			return {
+				matches: [],
+				totalMatches: 0,
+				truncated: false,
+				applied: false,
+				error: applied.result.error,
 				writeStarted: true,
 			};
 		}
-		// #2423: `--update-all` just rewrote these files, and no `tool_result`
-		// describes it — pi-lens's own tool was as invisible to the mutation
-		// bookkeeping as any third-party one. Record each rewritten file through
-		// the same seam an extension would use. Fire-and-forget: the bridge never
-		// throws, and a missing bridge (pi-lens not activated, guard disabled) is
-		// a silent no-op.
-		const appliedFiles = recordAstGrepApply(preCheck.matches, options);
 		return {
 			matches: preCheck.matches,
 			totalMatches: preCheck.totalMatches,
 			truncated: preCheck.truncated,
 			applied: true,
 			error: undefined,
-			appliedFiles,
 		};
 	}
 

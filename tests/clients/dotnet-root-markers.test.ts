@@ -19,7 +19,10 @@ vi.mock("../../clients/installer/index.js", () => ({
 
 vi.mock("../../clients/lsp/launch.js", () => ({
 	launchLSP: vi.fn(),
+	launchViaNode: vi.fn(),
 	admitProjectSuppliedTsserver: (tsserverPath: string) => tsserverPath,
+	// The launcher double admits project code, as its tsserver admission does.
+	isLspProjectCodeAdmitted: () => true,
 }));
 
 const dirs: string[] = [];

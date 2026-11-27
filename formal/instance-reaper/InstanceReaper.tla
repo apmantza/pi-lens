@@ -53,12 +53,24 @@ CONSTANTS
     ScanFail,       \* the identity query may fail (empty map)
     StalePrune,     \* heartbeat staleness removes the entry (pid alive)
     Guards,         \* existing guards, subset of {"parentDead","identity","ppid","tracked","lock"}
-    FixParts        \* candidate fix, subset of {"birth","recheck","tag","retain"}
+    FixParts,       \* candidate fix, subset of {"birth","recheck","tag","retain","ledger","confirm"}
+    Stubborn,       \* #5699: LSP children ignore EOF and SIGTERM and name no
+                    \* managed binary, so only SIGKILL or a registry kill ends them
+    Descendant      \* #5733: an LSP child's leader may exit while a descendant
+                    \* in its process group, which ignored SIGTERM, lives on
 
 Birth   == "birth"   \in FixParts
 Recheck == "recheck" \in FixParts
 Tag     == "tag"     \in FixParts
 Retain  == "retain"  \in FixParts
+\* #5699 exit ledger: a quitting host keeps its entry while it holds
+\* children, SIGKILLs them in its exit handler, and only then drops it.
+Ledger  == "ledger"  \in FixParts
+\* #5733 F1: the hold is released only once the group is confirmed ended:
+\* a group that outlived its leader is SIGKILLed at the end of the shutdown
+\* ladder (`releaseOwnChildPid`), and stays held, so the exit kill reaches
+\* it, until then. Without it the hold went with the leader.
+Confirm == "confirm" \in FixParts
 
 Kinds == {"free", "host", "lsp", "other"}
 Toks  == {"node", "ts"}
@@ -148,7 +160,7 @@ RetainPrune(S) ==
 -----------------------------------------------------------------------------
 TypeOK ==
     /\ \A p \in Pids : procs[p].k \in Kinds
-    /\ st \in [Insts -> {"unborn", "live", "dead"}]
+    /\ st \in [Insts -> {"unborn", "live", "quitting", "dead"}]
     /\ wrong \in BOOLEAN
 
 Init ==
@@ -198,7 +210,8 @@ Spawn(i) ==
     /\ st[i] = "live" /\ i \notin NoKids /\ kidsN[i] < 1 /\ nb <= MaxBirth
     /\ \E p \in Pids \ {0} :
         /\ Allocatable(p)
-        /\ Alloc(p, [k |-> "lsp", i |-> i, b |-> nb, pp |-> hp[i], t |-> {"node", "ts"}, old |-> FALSE])
+        /\ Alloc(p, [k |-> "lsp", i |-> i, b |-> nb, pp |-> hp[i],
+                     t |-> IF Stubborn THEN {"node"} ELSE {"node", "ts"}, old |-> FALSE])
         /\ pend' = [pend EXCEPT ![i] = @ \cup {Kid(p, nb)}]
     /\ kidsN' = [kidsN EXCEPT ![i] = @ + 1]
     /\ UNCHANGED <<st, hp, hb, reg, rpc, rkill, rprune, bpc, bkill, wrong>>
@@ -222,15 +235,40 @@ LspExit(p) ==
     /\ procs[p].k = "lsp"
     /\ procs' = [procs EXCEPT ![p] = Free]
     /\ LET i == procs[p].i IN
-       /\ IF st[i] = "live"
+       /\ IF st[i] \in {"live", "quitting"}
           THEN reg' = {IF Mine(e, i) THEN [e EXCEPT !.kids = {x \in e.kids : x.p # p}] ELSE e : e \in reg}
           ELSE UNCHANGED reg
        /\ pend' = [pend EXCEPT ![i] = {x \in @ : x.p # p}]
     /\ UNCHANGED <<nb, used, st, hp, hb, kidsN, rpc, rkill, rprune, bpc, bkill, wrong>>
 
-\* Crash: the host dies without shutdown; its LSP children live on.
+\* #5733: the leader exits (it honoured SIGTERM) and a descendant in its
+\* group lives on. The group is what pid p names now: its leader's identity
+\* is gone (t = {}), so neither a registry record nor the backstop can match
+\* it, and the reaper signals only a live leader pid. The record leaves on
+\* the leader's observed exit, as in the code.
+LeaderExit(p) ==
+    /\ Descendant
+    /\ procs[p].k = "lsp" /\ procs[p].t # {}
+    /\ LET i == procs[p].i IN
+       /\ st[i] \in {"live", "quitting"}
+       /\ procs' = [procs EXCEPT ![p].t = {}]
+       /\ reg' = {IF Mine(e, i) THEN [e EXCEPT !.kids = {x \in e.kids : x.p # p}] ELSE e : e \in reg}
+       /\ pend' = [pend EXCEPT ![i] = {x \in @ : x.p # p}]
+    /\ UNCHANGED <<nb, used, st, hp, hb, kidsN, rpc, rkill, rprune, bpc, bkill, wrong>>
+
+\* #5733 F1 fix: the ladder's end SIGKILLs a group that outlived its leader,
+\* while host code still runs.
+GroupEnd(p) ==
+    /\ Confirm
+    /\ procs[p].k = "lsp" /\ procs[p].t = {}
+    /\ st[procs[p].i] \in {"live", "quitting"}
+    /\ procs' = [procs EXCEPT ![p] = Free]
+    /\ UNCHANGED <<nb, used, st, hp, hb, kidsN, pend, reg, rpc, rkill, rprune, bpc, bkill, wrong>>
+
+\* Crash: the host dies without shutdown, or (#5699) is SIGKILLed during
+\* one; its LSP children live on.
 Crash(i) ==
-    /\ st[i] = "live" /\ i \in Crashable
+    /\ st[i] \in {"live", "quitting"} /\ i \in Crashable
     /\ (~LateRecord => pend[i] = {})
     /\ st' = [st EXCEPT ![i] = "dead"]
     /\ procs' = [p \in Pids |->
@@ -244,12 +282,40 @@ Crash(i) ==
 \* Clean shutdown: the LSP shutdown kills its own children through their
 \* handles, and deregisterInstance removes the entry (by pid in the code).
 Exit(i) ==
+    /\ ~Stubborn
     /\ st[i] = "live" /\ pend[i] = {}
     /\ st' = [st EXCEPT ![i] = "dead"]
     /\ procs' = [p \in Pids |->
                    IF p = hp[i] \/ (procs[p].k = "lsp" /\ procs[p].i = i) THEN Free
                    ELSE procs[p]]
     /\ reg' = {e \in reg : ~Mine(e, i)}
+    /\ UNCHANGED <<nb, used, hp, hb, kidsN, pend, rpc, rkill, rprune, bpc, bkill, wrong>>
+
+\* #5699: a quit with stubborn children is two steps, and the host may be
+\* killed between them (Crash). session_shutdown runs deregisterInstance and
+\* the LSP teardown, whose SIGTERM the children ignore and whose SIGKILL sits
+\* on an unref'd timer. Before the ledger the entry goes here.
+QuitBegin(i) ==
+    /\ Stubborn
+    /\ st[i] = "live" /\ pend[i] = {}
+    /\ st' = [st EXCEPT ![i] = "quitting"]
+    /\ reg' = IF Ledger THEN reg ELSE {e \in reg : ~Mine(e, i)}
+    /\ UNCHANGED <<procs, nb, used, hp, hb, kidsN, pend, rpc, rkill, rprune, bpc, bkill, wrong>>
+
+\* The host process exits. With the ledger its exit handler SIGKILLs every
+\* held child, then drops the entry; before it the children outlive it.
+\* #5733: a group whose leader exited is still held only with `confirm`.
+QuitEnd(i) ==
+    /\ st[i] = "quitting"
+    /\ st' = [st EXCEPT ![i] = "dead"]
+    /\ procs' = [p \in Pids |->
+                   IF p = hp[i] \/ (Ledger /\ procs[p].k = "lsp" /\ procs[p].i = i
+                                       /\ (Confirm \/ procs[p].t # {}))
+                   THEN Free
+                   ELSE IF procs[p].k = "lsp" /\ procs[p].i = i /\ Posix
+                        THEN [procs[p] EXCEPT !.pp = 0]
+                        ELSE procs[p]]
+    /\ reg' = IF Ledger THEN {e \in reg : ~Mine(e, i)} ELSE reg
     /\ UNCHANGED <<nb, used, hp, hb, kidsN, pend, rpc, rkill, rprune, bpc, bkill, wrong>>
 
 \* ---- the environment ------------------------------------------------------
@@ -346,7 +412,9 @@ BDone(b) ==
 
 Next ==
     \/ \E i \in Insts : Start(i) \/ Register(i) \/ Spawn(i) \/ Record(i) \/ Crash(i) \/ Exit(i)
+                        \/ QuitBegin(i) \/ QuitEnd(i)
     \/ \E p \in Pids \ {0} : LspExit(p) \/ OtherExit(p) \/ Age(p)
+                             \/ LeaderExit(p) \/ GroupEnd(p)
     \/ OtherStart \/ GoStale \/ Footprint
     \/ \E r \in Reapers : RDecide(r) \/ RKill(r) \/ RPrune(r)
     \/ \E b \in Backstops : BDecide(b) \/ BKill(b) \/ BDone(b)
@@ -366,7 +434,10 @@ NoWrongKill == ~wrong
 Listed(p) ==
     \E e \in reg : \E k \in e.kids :
         k.p = p /\ k.c \in procs[p].t /\ (Birth => k.b = procs[p].b)
+\* The backstop accepts only a managed binary (BackstopCandidate); #5699
+\* found 8 managed names for 51 servers.
 BackstopReaches(p) ==
+    /\ "ts" \in procs[p].t
     /\ ("tracked" \in Guards => ~Tracked(p))
     /\ PPDead(p)
 OrphanReachable ==

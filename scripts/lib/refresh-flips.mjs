@@ -181,7 +181,7 @@ export function buildRefreshPrBody({ flips, landing, issuesUrl, checkFailed }) {
 		"",
 		`- ${verdict}`,
 		`- ${landed}`,
-		"- The two matrix docs are **merged**, never blind-overwritten: a server this ubuntu host couldn't spawn keeps its prior (dev-box) classification, so the nightly can't regress a richer run (#390). `docs/lsp-idle-eviction.md` is the exception: it is regenerated in full, so a server this host cannot spawn reads `unavailable`.",
+		"- The two matrix docs are **merged**, never blind-overwritten: a server this ubuntu host couldn't spawn keeps its prior (dev-box) classification, so the nightly can't regress a richer run (#390). `docs/lsp-idle-eviction.md` holds the same way (#5667): a row changes after two agreeing nights, and a server this host cannot spawn keeps its prior row.",
 	];
 	if (!checkFailed && flips.length > 0 && issuesUrl)
 		lines.push(`- Open nightly drift issues: ${issuesUrl}`);

@@ -74,7 +74,9 @@ const ARK_SCHEMA_VECTOR = {
 } as const;
 
 /** The plain JSON-Schema document a callable fixture was built from. */
-const PLAIN = Symbol("pi-lens.test.plainSchema");
+function plainSchemaKey(): symbol {
+	return Symbol.for("pi-lens.test.plainSchema");
+}
 
 /**
  * An ArkType-style callable schema over a plain JSON-Schema document, shaped
@@ -87,15 +89,15 @@ function callableSchema(plain: Record<string, unknown>): unknown {
 	proto.assert = (data: unknown) => data;
 	const schema = (data: unknown) => data;
 	Object.setPrototypeOf(schema, proto);
-	Object.defineProperty(schema, PLAIN, { value: plain });
+	Object.defineProperty(schema, plainSchemaKey(), { value: plain });
 	return schema;
 }
 
 /** Recover the plain document a callable fixture wraps, at any depth. */
 function toPlain(value: unknown): unknown {
 	if (typeof value === "function") {
-		return PLAIN in value
-			? (value as Record<symbol, unknown>)[PLAIN]
+		return plainSchemaKey() in value
+			? (value as unknown as Record<symbol, unknown>)[plainSchemaKey()]
 			: (value as unknown);
 	}
 	if (Array.isArray(value)) return value.map(toPlain);

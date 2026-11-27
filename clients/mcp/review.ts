@@ -7,8 +7,6 @@
  * `pilens_analyze mode=fresh` measures the just-built code first-hand.
  */
 
-import { type ChildProcessByStdio, spawn } from "node:child_process";
-import type { Readable } from "node:stream";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -17,12 +15,8 @@ import {
 	resolveNodePackageManager,
 	runScriptArgs,
 } from "../package-manager.js";
-import { incrementDegradationCount } from "../degradation-ledger.js";
 import { safeSpawnAsync } from "../safe-spawn.js";
-import {
-	createBoundedOutputSink,
-	DEFAULT_MAX_OUTPUT_BYTES,
-} from "../spawn-output-cap.js";
+import { DEFAULT_MAX_OUTPUT_BYTES } from "../spawn-output-cap.js";
 import type { AnalyzeFileOptions, McpAnalyzeResult } from "./analyze.js";
 import { toPosix } from "../path-utils.js";
 
@@ -45,113 +39,61 @@ export interface FreshAnalyzeOutcome {
 }
 
 /**
- * Fork `node <workerPath>` to analyze a file in a fresh process. We spawn node
- * directly (no shell) so an interpreter path containing spaces is safe on
- * Windows — `safeSpawnAsync`'s shell mode does not escape the command itself.
+ * Fork `node <workerPath>` to analyze a file in a fresh process, through the
+ * one spawn seam. `process.execPath` goes in as the command and the worker
+ * path as an argument, so an interpreter path containing spaces is safe on
+ * Windows: `safeSpawnAsync` spawns an `.exe` directly, with no shell.
  *
- * #3383: both pipes accumulate through {@link createBoundedOutputSink} rather
- * than `+=`. The worker writes one JSON document to stdout, so an unbounded
- * accumulation here could reach the same ending #3375 fixed at the shared spawn
- * seam — V8 refusing the next concatenation with `RangeError: Invalid string
- * length` inside a `data` handler, uncatchable by this promise. The only thing
- * bounding it before was the `timeoutMs` kill, and a worker can emit hundreds
- * of MiB long before 120 s elapse.
+ * The seam owns what this function used to hand-roll: the timeout and its
+ * process-tree teardown (the whole group on POSIX, `taskkill /T` on Windows,
+ * a SIGKILL escalation), the bounded output (#3383), the lifetime cleanup of
+ * the child with the host, and the typed spawn failure. A timed-out worker
+ * used to be sent one SIGTERM, and neither a worker that ignored it nor a
+ * process the worker had started was reached.
+ *
+ * `ignoreAmbientSignal`: this call has never been cancellable by the agent
+ * turn's Esc, and the seam's default would make it so.
  */
-export function analyzeFileFresh(
+export async function analyzeFileFresh(
 	workerPath: string,
 	file: string,
 	cwd: string,
 	options: AnalyzeFileOptions = {},
 	timeoutMs = 120_000,
 ): Promise<FreshAnalyzeOutcome> {
-	return new Promise((resolve) => {
-		const args = [workerPath, `--file=${file}`, `--cwd=${cwd}`];
-		if (options.flags) args.push(`--flags=${JSON.stringify(options.flags)}`);
+	const args = [workerPath, `--file=${file}`, `--cwd=${cwd}`];
+	if (options.flags) args.push(`--flags=${JSON.stringify(options.flags)}`);
 
-		let child: ChildProcessByStdio<null, Readable, Readable>;
-		try {
-			child = spawn(process.execPath, args, {
-				stdio: ["ignore", "pipe", "pipe"],
-			});
-		} catch (err) {
-			// SYNCHRONOUS spawn throw (Windows `spawn UNKNOWN`/EINVAL, the pidusage
-			// bug class, #533) — resolve the failure rather than reject/crash the
-			// host; every caller inspects the outcome's `error` field.
-			resolve({
-				error: `failed to fork worker: ${err instanceof Error ? err.message : String(err)}`,
-			});
-			return;
-		}
-
-		const stdout = createBoundedOutputSink();
-		const stderr = createBoundedOutputSink();
-		let settled = false;
-		const finish = (outcome: FreshAnalyzeOutcome) => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timer);
-			resolve(outcome);
-		};
-		const timer = setTimeout(() => {
-			child.kill();
-			finish({ error: `fresh analyze timed out after ${timeoutMs}ms` });
-		}, timeoutMs);
-
-		child.stdout.setEncoding("utf8");
-		child.stdout.on("data", (chunk: string) => {
-			// Settled already means timed out or failed: keep accumulating and the
-			// retained output outlives the promise nobody is awaiting any more.
-			if (settled) return;
-			stdout.append(chunk);
-			// Truncated stdout is never parseable JSON, so the run is over. Report
-			// the cap as the ending instead of letting `JSON.parse` blame the
-			// worker's output shape, and terminate the producer.
-			if (!stdout.truncated) return;
-			incrementDegradationCount({
-				kind: "spawn-output-cap-truncated",
-				subject: "mcp-fresh-analyze",
-				reason: `worker stdout reached the ${DEFAULT_MAX_OUTPUT_BYTES}-byte default cap after ${stdout.observedBytes} bytes; worker terminated`,
-				metadata: {
-					capBytes: DEFAULT_MAX_OUTPUT_BYTES,
-					capSource: "default",
-					observedBytes: stdout.observedBytes,
-					killed: true,
-				},
-			});
-			try {
-				child.kill();
-			} catch {
-				// Best-effort: the worker may already be gone, and this runs inside a
-				// `data` handler where a throw would be uncatchable.
-			}
-			finish({
-				error: `worker output exceeded ${DEFAULT_MAX_OUTPUT_BYTES} bytes`,
-			});
-		});
-		child.stderr.setEncoding("utf8");
-		child.stderr.on("data", (chunk: string) => {
-			if (settled) return;
-			stderr.append(chunk);
-		});
-		child.on("error", (err) =>
-			finish({ error: `failed to fork worker: ${err.message}` }),
-		);
-		child.on("close", (code) => {
-			if (code !== 0) {
-				finish({
-					error: `worker exited ${code}: ${stderr.text.trim() || "(no stderr)"}`,
-				});
-				return;
-			}
-			try {
-				finish({ result: JSON.parse(stdout.text) as McpAnalyzeResult });
-			} catch {
-				finish({
-					error: `worker produced invalid JSON (${stderr.text.trim() || stdout.text.slice(0, 200)})`,
-				});
-			}
-		});
+	const run = await safeSpawnAsync(process.execPath, args, {
+		timeout: timeoutMs,
+		resourceLabel: "mcp-fresh-analyze",
+		ignoreAmbientSignal: true,
 	});
+	// Truncated output is never parseable JSON, so the run is over whatever
+	// else the seam saw. Report the cap as the ending instead of letting
+	// `JSON.parse` blame the worker's output shape.
+	if (run.outputTruncated)
+		return {
+			error: `worker output exceeded ${DEFAULT_MAX_OUTPUT_BYTES} bytes`,
+		};
+	if (run.failure === "timeout")
+		return { error: `fresh analyze timed out after ${timeoutMs}ms` };
+	if (run.failure === "spawn")
+		return {
+			error: `failed to fork worker: ${run.error?.message ?? "unknown error"}`,
+		};
+	if (run.status !== 0) {
+		return {
+			error: `worker exited ${run.status}: ${run.stderr.trim() || "(no stderr)"}`,
+		};
+	}
+	try {
+		return { result: JSON.parse(run.stdout) as McpAnalyzeResult };
+	} catch {
+		return {
+			error: `worker produced invalid JSON (${run.stderr.trim() || run.stdout.slice(0, 200)})`,
+		};
+	}
 }
 
 export interface RebuildOutcome {

@@ -14,7 +14,7 @@ import { access, lstat, readFile, stat } from "node:fs/promises";
 import * as os from "node:os";
 import { pathToFileURL } from "node:url";
 import { emitBounded } from "../bounded-telemetry.js";
-import { withTimeout } from "../deadline-utils.js";
+import { untilAborted, withDeadline } from "../deadline-utils.js";
 import { minimatch } from "../deps/minimatch.js";
 import { mapWithConcurrency } from "../map-with-concurrency.js";
 import {
@@ -49,6 +49,7 @@ import {
 	isOwnLiveChild,
 	releaseOwnChildPid,
 } from "../safe-spawn.js";
+import { spawnAbortScope } from "../spawn-abort-scope.js";
 import { raceToCompletion } from "./aggregation.js";
 import {
 	hashDiagnosticContent,
@@ -99,6 +100,7 @@ import {
 } from "./workspace-diagnostics-cache.js";
 import { toPosix } from "../path-utils.js";
 import { LspRequestTimeoutError } from "./request-timeout-error.js";
+import { writeLspCrashStack } from "./crash-output.js";
 
 // Opt-in publishDiagnostics trace (PILENS_PUB_DEBUG=1) — read once, negligible
 // hot-path cost. Surfaces each server's publish behavior (version + count) to
@@ -297,6 +299,13 @@ export interface LSPCallHierarchyOutgoingCall {
 	fromRanges: LSPLocation["range"][];
 }
 
+/** #5487: what a server's own readiness announcement says blocks a verdict. */
+export interface ServerReadinessBlock {
+	reason: "server-loading" | "server-load-failed";
+	/** The server's status message for a failed load, when it sent one. */
+	detail?: string;
+}
+
 export interface LSPClientInfo {
 	serverId: string;
 	root: string;
@@ -342,8 +351,21 @@ export interface LSPClientInfo {
 	 * it don't need updating; callers treat a missing implementation as alive
 	 * (`pingLiveness?.() ?? true`), matching the codebase's existing optional-
 	 * capability-accessor pattern (`getRawCapabilityKeys`, `getLaunchVariant`).
+	 *
+	 * #5097: `signal` cancels the round trip and releases it; an aborted ping
+	 * answers `false`, never "alive". Only a caller that owns the ping passes
+	 * one: a ping several callers share (`paceAuxNotify`'s drain) takes none.
 	 */
-	pingLiveness?: (timeoutMs?: number) => Promise<boolean>;
+	pingLiveness?: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
+	/**
+	 * #5487: why the server has announced it cannot give a verdict right now
+	 * (`experimental/serverStatus`): still loading (`quiescent: false`) or its
+	 * workspace failed to load (`health: "error"`, with the server's message).
+	 * `undefined` when it announced nothing or is ready. Optional for the same
+	 * reason as {@link pingLiveness}: a double that omits it reads as "ready",
+	 * which is today's behaviour.
+	 */
+	readinessBlock?: () => ServerReadinessBlock | undefined;
 	/**
 	 * #2358: the OS pid of the server's live process tree (the direct child;
 	 * on Windows a `cmd`/`.cmd` shim's pid, whose real descendant does the
@@ -495,7 +517,14 @@ export interface LSPClientInfo {
 	 *  version-bearing publish set it). */
 	getAllDiagnostics(): Map<
 		string,
-		{ diags: LSPDiagnostic[]; ts: number; binding?: StoredDiagnosticBinding }
+		{
+			diags: LSPDiagnostic[];
+			ts: number;
+			binding?: StoredDiagnosticBinding;
+			/** #5700: the open-document cap closed the document; these are its
+			 *  last findings, which its server no longer re-checks. */
+			closed?: true;
+		}
 	>;
 	pruneDiagnostics(
 		predicate: (
@@ -664,14 +693,20 @@ export interface LSPClientInfo {
 	closeDocument(filePath: string): Promise<void>;
 	/** Workspace-wide symbol search */
 	workspaceSymbol(query: string): Promise<LSPSymbol[]>;
-	/** Available code actions at a range */
+	/**
+	 * Available code actions at a range. An array (empty included) is the
+	 * server's answer; `undefined` is no answer (dead client, cancelled or
+	 * stale request, lost stream, ContentModified, a reply that is not a list),
+	 * which a caller that retires a finding must not read as "no actions"
+	 * (#5258).
+	 */
 	codeAction(
 		filePath: string,
 		line: number,
 		character: number,
 		endLine: number,
 		endCharacter: number,
-	): Promise<LSPCodeAction[]>;
+	): Promise<LSPCodeAction[] | undefined>;
 	/** Rename symbol at position */
 	rename(
 		filePath: string,
@@ -827,6 +862,14 @@ export const CLIENT_CAPABILITIES = {
 	// implement" — the `window/workDoneProgress/create` handler below stays as
 	// a defensive no-op in case a server ignores capabilities and asks anyway.
 	window: {},
+	// #5487: rust-analyzer announces `experimental/serverStatus` (health plus
+	// `quiescent`) only to a client that asks for it here, and answers a pull
+	// with an empty authoritative report while it is still loading. This is the
+	// readiness signal `$/progress` would also carry, without the
+	// `window.workDoneProgress` advertisement #974 withdrew. A server that does
+	// not know the key ignores it (LSP `experimental` is opaque); the gate only
+	// acts on a server that then sends the notification.
+	experimental: { serverStatusNotification: true },
 	workspace: {
 		workspaceFolders: true,
 		configuration: true,
@@ -855,7 +898,10 @@ export const CLIENT_CAPABILITIES = {
 		typeDefinition: { dynamicRegistration: false },
 		implementation: { dynamicRegistration: false },
 		references: { dynamicRegistration: false },
-		documentSymbol: { dynamicRegistration: false },
+		documentSymbol: {
+			dynamicRegistration: false,
+			hierarchicalDocumentSymbolSupport: true,
+		},
 		codeAction: {
 			dynamicRegistration: false,
 			dataSupport: true,
@@ -995,38 +1041,73 @@ const LSP_CRASH_CODES = new Set([
 	"ECONNRESET",
 ]);
 
-let crashGuardInstalled = false;
+interface CrashGuardState {
+	installed: boolean;
+}
+
+const crashGuardState = getProcessSingleton<CrashGuardState>(
+	"lsp-crash-guard",
+	1,
+	() => ({ installed: false }),
+);
 
 function isIgnorableLspRuntimeCrash(err: unknown): boolean {
 	if (!(err instanceof Error)) return false;
-	const code = (err as { code?: string }).code;
-	if (code && LSP_CRASH_CODES.has(code)) return true;
-	const msg = err.message.toLowerCase();
-	const stack = (err.stack ?? "").toLowerCase();
-	return (
-		msg.includes("stream") ||
-		msg.includes("write after end") ||
-		stack.includes("vscode-jsonrpc/lib/node/ril.js")
-	);
+	try {
+		const code = (err as { code?: string }).code;
+		if (code && LSP_CRASH_CODES.has(code)) return true;
+		const msg = err.message.toLowerCase();
+		const stack = (err.stack ?? "").toLowerCase();
+		return (
+			msg.includes("stream") ||
+			msg.includes("write after end") ||
+			stack.includes("vscode-jsonrpc/lib/node/ril.js")
+		);
+	} catch {
+		// none: an error whose fields throw is no LSP stream failure, and a
+		// throw here would end the host with code 7 and no exit listener (#5746 r4)
+		return false;
+	}
 }
 
 function installCrashGuard(): void {
-	if (crashGuardInstalled) return;
-	crashGuardInstalled = true;
+	if (crashGuardState.installed) return;
+	crashGuardState.installed = true;
 
-	process.on("uncaughtException", (err) => {
+	const onUncaughtException = (err: unknown): void => {
 		if (isIgnorableLspRuntimeCrash(err)) {
 			return;
 		}
-		throw err;
-	});
+		if (
+			process
+				.listeners("uncaughtException")
+				.some((listener) => listener !== onUncaughtException)
+		) {
+			return;
+		}
+		writeLspCrashStack(err);
+		process.exit(1);
+	};
+	process.prependListener("uncaughtException", onUncaughtException);
 
-	process.on("unhandledRejection", (reason) => {
+	// A non-LSP rejection goes on as an uncaught exception, as it would with
+	// no guard installed: a host crash handler (pi interactive) then runs its
+	// crash record and detached-child cleanup, which no exit listener repeats,
+	// and with none the guard above reports and exits (#5746 r5).
+	const onUnhandledRejection = (reason: unknown): void => {
 		if (isIgnorableLspRuntimeCrash(reason)) {
 			return;
 		}
-		throw reason instanceof Error ? reason : new Error(String(reason));
-	});
+		if (
+			process
+				.listeners("unhandledRejection")
+				.some((listener) => listener !== onUnhandledRejection)
+		) {
+			return;
+		}
+		throw reason;
+	};
+	process.prependListener("unhandledRejection", onUnhandledRejection);
 }
 
 // --- Client State + Module-level helpers ---
@@ -1311,6 +1392,24 @@ export interface LSPClientState {
 	 */
 	serverMessages?: Map<string, number>;
 	/**
+	 * #5487: the readiness the server last announced through
+	 * `experimental/serverStatus` (rust-analyzer), or `undefined` when it has
+	 * announced none: every other server, and rust-analyzer before its first
+	 * notice. `quiescent: false` is "still loading the workspace": its pull
+	 * replies are empty authoritative reports, not verdicts. `revision` counts the
+	 * changes (the first notice is revision 1), so a pull that was in flight across
+	 * a change is told apart from one that was not. Per client session: a
+	 * respawned server announces its own.
+	 */
+	serverStatus?: {
+		quiescent: boolean;
+		/** `health: "error"`: the workspace failed to load (`warning` is ready). */
+		failed: boolean;
+		/** The server's message for a failed load, bounded. */
+		message?: string;
+		revision: number;
+	};
+	/**
 	 * #3310: whether this client's ONE-SHOT empty-first-publish hold has been
 	 * spent. Only ever set for a server the matrix measures as
 	 * `emptyFirstPublish: "indexing"`. The cold whole-workspace index builds once
@@ -1371,6 +1470,15 @@ export interface LSPClientState {
 	fenceSkipRecorded?: boolean;
 	/** Paths explicitly closed during this client lifetime; late publishes are dropped. */
 	readonly closedDocuments?: Set<string>;
+	/**
+	 * #5700: the registry's open-document cap for this client
+	 * (`getLspOpenDocumentCap`). Absent: no cap (a client built outside the
+	 * registry). `openDocuments` keeps send order, least recent first.
+	 */
+	readonly openDocumentCap?: number;
+	/** #5700: cap closes queued and not yet run, so a second open landing
+	 *  before they drain does not close more than the excess. */
+	budgetClosesQueued?: number;
 	/** Original URI spelling for each open document; path keys are normalized. */
 	readonly openDocumentUris?: Map<string, string>;
 	readonly pendingOpens: Set<string>;
@@ -1600,6 +1708,9 @@ function disposeClientConnection(state: LSPClientState): void {
 	} catch {
 		// ignore
 	}
+	// #5487: a pull gated on quiescence must not wait out its budget on a dead
+	// server; it re-reads `isClientAlive` on this event.
+	state.diagnosticEmitter.emit(SERVER_STATUS_CHANGED);
 }
 
 export async function killProcessTree(
@@ -1636,22 +1747,19 @@ export async function killProcessTree(
 		// (src\win\async.c). Kill the direct child via the handle we already hold
 		// (TerminateProcess; synchronous, no async handle).
 		//
-		// #472 CORRECTION of a prior false claim here ("orphaned grandchildren are
-		// reaped by the OS as the host exits"): Windows does NOT kill children when
-		// a parent dies. For shell/.cmd-wrapped servers the direct child is
-		// cmd.exe, so this path only ever kills the wrapper — the actual server
-		// (its grandchild) survives by design whenever it doesn't independently
-		// exit. It relies entirely on best-effort backstops instead: (1) the
-		// server observing stdin EOF once the wrapper's pipes close, (2) LSP
-		// `initialize.processId: process.pid` (some servers self-watchdog on that
-		// pid dying — typescript-language-server does, ast-grep's native binary
-		// does not, an upstream spec violation), and (3) the #449/#472
-		// cross-process instance registry's orphan reaper, which is the only
-		// mechanism that works regardless of why a pipe write-end stayed open
-		// (e.g. Windows handle-inheritance capture by a long-lived process). This
-		// is why registering every LSP child at spawn matters uniformly — do NOT
-		// weaken this direct-child-only kill to try to chase grandchildren here;
-		// spawning taskkill in this branch is exactly the libuv hazard above.
+		// Windows does not kill a process's children when it dies (#472). What
+		// ends them is libuv's job object: every child spawned without
+		// `detached` is in it, and the kernel ends them when this process dies,
+		// crash included, but NOT their own children (silent breakaway). So the
+		// kill below, and the job after it, reach the server only when the
+		// server IS the direct child. `launchLSP` makes it so for every `.exe`
+		// and every admitted npm shim (`planServerLaunch`, #5694). A server
+		// behind a `.cmd`/`.bat` that `cmd.exe` still runs is a grandchild: it
+		// survives unless it exits on stdin EOF or on `initialize.processId`,
+		// and only the #449/#472 orphan reaper at a later session start finds it
+		// (by the wrapper pid it recorded, so mostly it does not). Do NOT chase
+		// grandchildren here: spawning taskkill in this branch is exactly the
+		// libuv hazard above.
 		if (options.processExiting) {
 			try {
 				proc.kill();
@@ -2222,6 +2330,15 @@ export function diagnosticsPublishedAtForPath(
  * that read it as a store would settle on an empty cache.
  */
 const PENDING_RECEIPT_DROPPED = "pending-receipt-dropped";
+
+/**
+ * #5487: emitted on `diagnosticEmitter` when the readiness the server announced
+ * (`experimental/serverStatus`) changes, and when the connection is disposed, so
+ * a pull gated on quiescence ({@link pullDiagnosticsWhenReady}) decides again.
+ */
+const SERVER_STATUS_CHANGED = "server-status-changed";
+/** Bound on a server's failed-load message kept on the client and echoed. */
+const SERVER_STATUS_MESSAGE_MAX_CHARS = 200;
 
 /** #5131: see {@link LSPClientState.ownNoticeEchoes}. */
 export interface OwnNoticeEcho {
@@ -3031,6 +3148,68 @@ function retractUnscannedEmptyPublications(state: LSPClientState): number {
 	return retracted;
 }
 
+/**
+ * #3310: the one-shot hold on an asynchronously-indexing server's EMPTY first
+ * publish (`emptyFirstPublish: "indexing"`). Spends the hold and records it
+ * when the publish has that shape, and returns whether it did: the stored
+ * path drops the publish, and the fence-drop path (#3484) has dropped it
+ * already and only needs the spend, since holding the next publish as well
+ * would swallow the server's real answer.
+ *
+ * Three conditions, all required: the server is in the measured class, the
+ * hold is not spent yet, and the publish is the document's FIRST — empty,
+ * with no cached push and no pending debounce timer (an empty publish that
+ * clears an earlier finding is never held). A dropped non-empty publish
+ * leaves the hold armed (a timeout, never a false clean).
+ *
+ * Bounded by construction: one `lsp_empty_first_publish_held` row per client
+ * session, because the hold itself is one-shot. `via` names the fence-drop
+ * producer; the stored path carries none.
+ */
+function spendEmptyFirstPublishHold(
+	state: LSPClientState,
+	normalizedPath: string,
+	emptyFirstPublish: string | undefined,
+	diagnosticCount: number,
+	publishReceivedAt: number,
+	docVersion: number | undefined,
+	via?: "fence-drop",
+): boolean {
+	if (
+		emptyFirstPublish !== "indexing" ||
+		state.emptyFirstPublishHoldSpent ||
+		diagnosticCount !== 0 ||
+		state.pushDiagnostics.has(normalizedPath) ||
+		state.pendingDiagnostics.has(normalizedPath)
+	) {
+		return false;
+	}
+	state.emptyFirstPublishHoldSpent = true;
+	logLatency({
+		type: "phase",
+		phase: "lsp_empty_first_publish_held",
+		filePath: normalizedPath,
+		// Time from didOpen to the server's first publish: an age, not work
+		// this row did (#5379).
+		ageMs: Math.max(
+			0,
+			publishReceivedAt -
+				(state.documentOpenedAt.get(normalizedPath) ?? publishReceivedAt),
+		),
+		metadata: {
+			serverId: state.serverId,
+			emptyFirstPublish,
+			...(via ? { via } : {}),
+			// `pubVersion`, the `[lsp-pub]` trace's own field name for the
+			// publish's LSP document version — not a lifecycle identity, and
+			// not the retired glossary spelling (docs/defect-shapes.md "session, turn or
+			// generation lifecycle").
+			pubVersion: docVersion ?? "push-unversioned",
+		},
+	});
+	return true;
+}
+
 export function setupIncomingHandlers(
 	state: LSPClientState,
 	initialization: Record<string, unknown> | undefined,
@@ -3093,6 +3272,15 @@ export function setupIncomingHandlers(
 			) {
 				return;
 			}
+			// #5487: nor is an empty publication from a server that announced it is
+			// still loading (rust-analyzer publishes `n=0` for a document it has not
+			// analyzed yet). Refused before storage like the case above, so the wait
+			// and the touch's evidence check never see a clean answer; the findings
+			// it publishes once quiescent are stored as usual.
+			if (newDiags.length === 0 && serverNotReady(state)) {
+				noteReadinessGate(state);
+				return;
+			}
 			onDiagnosticsPublished?.(state.serverId);
 			// #3484: a version-less publish received before the fence's reply may
 			// be for the content before the latest send; it cannot say which.
@@ -3106,37 +3294,15 @@ export function setupIncomingHandlers(
 				// next one as well would swallow the server's real answer. Only the
 				// hold's own shape spends it: a dropped non-empty publish leaves the
 				// hold armed (a timeout, never a false clean).
-				if (
-					getStrategy(state.serverId, state.launchVariant).emptyFirstPublish ===
-						"indexing" &&
-					!state.emptyFirstPublishHoldSpent &&
-					newDiags.length === 0 &&
-					!state.pushDiagnostics.has(normalizedPath) &&
-					!state.pendingDiagnostics.has(normalizedPath)
-				) {
-					state.emptyFirstPublishHoldSpent = true;
-					// One record per client session, as for the held path: without it
-					// a hold spent here reads as a hold that never engaged.
-					logLatency({
-						type: "phase",
-						phase: "lsp_empty_first_publish_held",
-						filePath: normalizedPath,
-						// Time from didOpen to the server's first publish: an age, not
-						// work this row did (#5379).
-						ageMs: Math.max(
-							0,
-							publishReceivedAt -
-								(state.documentOpenedAt.get(normalizedPath) ??
-									publishReceivedAt),
-						),
-						metadata: {
-							serverId: state.serverId,
-							emptyFirstPublish: "indexing",
-							via: "fence-drop",
-							pubVersion: "push-unversioned",
-						},
-					});
-				}
+				spendEmptyFirstPublishHold(
+					state,
+					normalizedPath,
+					getStrategy(state.serverId, state.launchVariant).emptyFirstPublish,
+					newDiags.length,
+					publishReceivedAt,
+					docVersion,
+					"fence-drop",
+				);
 				return;
 			}
 			if (
@@ -3354,36 +3520,15 @@ export function setupIncomingHandlers(
 			//    debounce timer. An empty publish that CLEARS an earlier non-empty
 			//    one (a fix landing) is never held, in either arrival order.
 			if (
-				strategy.emptyFirstPublish === "indexing" &&
-				!state.emptyFirstPublishHoldSpent &&
-				newDiags.length === 0 &&
-				!state.pushDiagnostics.has(normalizedPath) &&
-				!state.pendingDiagnostics.has(normalizedPath)
+				spendEmptyFirstPublishHold(
+					state,
+					normalizedPath,
+					strategy.emptyFirstPublish,
+					newDiags.length,
+					publishReceivedAt,
+					docVersion,
+				)
 			) {
-				state.emptyFirstPublishHoldSpent = true;
-				// Bounded by construction: one record per client session, because
-				// the hold itself is one-shot.
-				logLatency({
-					type: "phase",
-					phase: "lsp_empty_first_publish_held",
-					filePath: normalizedPath,
-					// Time from didOpen to the server's first publish: an age, not work
-					// this row did (#5379).
-					ageMs: Math.max(
-						0,
-						publishReceivedAt -
-							(state.documentOpenedAt.get(normalizedPath) ?? publishReceivedAt),
-					),
-					metadata: {
-						serverId: state.serverId,
-						emptyFirstPublish: strategy.emptyFirstPublish,
-						// `pubVersion`, the `[lsp-pub]` trace's own field name for the
-						// publish's LSP document version — not a lifecycle identity, and
-						// not the retired glossary spelling (docs/defect-shapes.md "session, turn or
-						// generation lifecycle").
-						pubVersion: docVersion ?? "push-unversioned",
-					},
-				});
 				return;
 			}
 
@@ -3647,6 +3792,40 @@ export function setupIncomingHandlers(
 		delete state.configLoadFailure;
 		rebaselineForRulesRefresh(state);
 	});
+	// #5487: the readiness announcement (see CLIENT_CAPABILITIES.experimental).
+	// Only a boolean `quiescent` is a status; anything else is ignored, so a
+	// malformed notice never reads as ready or as loading. `health: "error"` is
+	// a workspace that failed to load (a broken manifest): its pull answers are
+	// as empty as a loading server's, so it is not ready either. `warning` and
+	// `ok` are ready.
+	state.connection.onNotification(
+		"experimental/serverStatus",
+		(
+			params:
+				| { quiescent?: unknown; health?: unknown; message?: unknown }
+				| undefined,
+		) => {
+			const quiescent = params?.quiescent;
+			if (typeof quiescent !== "boolean") return;
+			const failed = params?.health === "error";
+			const message =
+				failed && typeof params?.message === "string"
+					? params.message.slice(0, SERVER_STATUS_MESSAGE_MAX_CHARS)
+					: undefined;
+			const previous = state.serverStatus;
+			if (previous?.quiescent === quiescent && previous.failed === failed) {
+				if (message !== undefined) previous.message = message;
+				return;
+			}
+			state.serverStatus = {
+				quiescent,
+				failed,
+				...(message !== undefined && { message }),
+				revision: (previous?.revision ?? 0) + 1,
+			};
+			state.diagnosticEmitter.emit(SERVER_STATUS_CHANGED);
+		},
+	);
 	// #1669: a server can send `workspace/diagnostic/refresh` (typically after a
 	// project-wide config change) to say every pull result it has already
 	// reported may be stale. Left unhandled, vscode-jsonrpc replies
@@ -3769,8 +3948,20 @@ export function setupIncomingHandlers(
 				// (URI lookups, map bookkeeping) to the next tick, so it can
 				// never compete with this reply for the current one regardless
 				// of how many documents are open.
+				//
+				// #5097: and under an abort nobody can fire. This runs in the context
+				// the server's streams were created in, so a server first started by
+				// a tool call would otherwise carry that call's scope, and an Esc in
+				// that turn would silence every later refresh re-pull, which reads
+				// the ambient abort (`pullDiagnosticSource`). Clearing the scope
+				// would fall back to the hook-level turn signal, which can be
+				// aborted too (#5654 review F3), so the pool runs inside a scope
+				// whose signal never aborts: the re-pull serves the document, not
+				// the call or the turn that happened to be running.
 				setImmediate(() => {
-					void runRefreshRepullPool();
+					void spawnAbortScope.run(REFRESH_REPULL_SIGNAL, () =>
+						runRefreshRepullPool(),
+					);
 				});
 			}
 		}
@@ -3953,7 +4144,7 @@ async function clientRequestPullDiagnostics(
 			results.some((r) => r.status === "found" && r.primaryCount > 0),
 		{
 			// No graceMs: finalize the instant a source answers for this file.
-			// The per-request `withTimeout` inside each attempt is the real bound;
+			// The per-request `withDeadline` inside each attempt is the real bound;
 			// this deadline is only a backstop, so it sits just past it.
 			timeoutMs:
 				Math.max(1, Math.min(PULL_REQUEST_TIMEOUT_MS, budgetMs)) +
@@ -4003,6 +4194,9 @@ function aggregatePullOutcomes(
 		: { status: "unavailable" };
 }
 
+/** {@link pullDiagnosticSource}: the call's abort ended the wait for the reply. */
+const PULL_ABORTED = Symbol("pull-aborted");
+
 async function pullDiagnosticSource(
 	state: LSPClientState,
 	filePath: string,
@@ -4010,6 +4204,12 @@ async function pullDiagnosticSource(
 	identifier: string | undefined,
 ): Promise<PullSourceOutcome> {
 	if (!isClientAlive(state)) return { status: "unavailable" };
+	// #5097: the abort of the call or bound this pull runs under. Read here, in
+	// the caller's own async context, and never captured by a long-lived handler
+	// (the server-initiated re-pull runs under a scope that never aborts, see
+	// `workspace/diagnostic/refresh`). An abort before the send claims and sends nothing.
+	const abortSignal = getAmbientAbortSignal();
+	if (abortSignal?.aborted) return { status: "unavailable" };
 	const normalizedPath = normalizeMapKey(filePath);
 	// #1773: a budget at or below the usable floor cannot complete a real
 	// round trip. Skip the dispatch entirely — no `safeSendRequest` call, no
@@ -4062,10 +4262,12 @@ async function pullDiagnosticSource(
 	// alone would let a slow answer from the earlier round land on top of a newer
 	// one. Re-checked at write time below.
 	const requestSequence = claimPullRequestSequence(state, sourceKey);
-	// #1889: give the request a cancellation token. `withTimeout` only abandons
+	// #1889: give the request a cancellation token. `withDeadline` only abandons
 	// its await; aborting in the timeout branch below also sends `$/cancelRequest`
 	// so repeated touches cannot leave an aging backlog inside the server.
 	const requestStartedAt = Date.now();
+	// #5487: the readiness the server had announced when this request left.
+	const statusAtSend = state.serverStatus;
 	const effectiveTimeoutMs = Math.max(
 		1,
 		Math.min(PULL_REQUEST_TIMEOUT_MS, budgetMs),
@@ -4094,13 +4296,27 @@ async function pullDiagnosticSource(
 		pullSettlement,
 	);
 	try {
-		// withTimeout is the backstop against a hung pull-mode server: without it
+		// withDeadline is the backstop against a hung pull-mode server: without it
 		// this await never settles unless the stream is destroyed. Bounded by the
 		// smaller of the absolute ceiling and the caller's remaining wait budget.
 		// On timeout the caught error yields `unavailable` below (never a false
 		// `clean`), so it falls through to the push-wait/timeout backstop.
-		const report = await withTimeout(requestPromise, effectiveTimeoutMs);
+		const report = await withDeadline(
+			untilAborted(requestPromise, abortSignal, PULL_ABORTED),
+			{ ms: effectiveTimeoutMs },
+		);
 
+		if (report === PULL_ABORTED) {
+			// #5097: the abort is the timeout's transition without its record. The
+			// request is cancelled on the wire and tracked as abandoned, so a repeat
+			// touch of a server that ignores the cancel does not stack a second pull
+			// behind it (#1889); an Esc is no degradation, so no timeout telemetry,
+			// no late-answer watch and no failure-history row. `unavailable`, never
+			// `clean`: nothing was stored (#240).
+			trackAbandonedPullRequest(state, sourceKey, requestPromise);
+			pullAbort.abort();
+			return { status: "unavailable" };
+		}
 		if (!report) {
 			recordPullFailure(
 				state,
@@ -4130,6 +4346,20 @@ async function pullDiagnosticSource(
 			pullGenerationFor(state, normalizedPath) !== generation ||
 			!isNewestPullRequest(state, sourceKey, requestSequence)
 		) {
+			return { status: "unavailable" };
+		}
+		// #5487: an EMPTY report from a server that was still loading (or whose
+		// readiness changed while this request was in flight) describes a workspace
+		// it had not finished reading, so it is no answer: nothing is stored, and
+		// every pull consumer (the touch wait, the `workspace/diagnostic/refresh`
+		// re-pull, the sweeps) sees `unavailable`, never a clean file. Findings in
+		// the report are findings whatever the status. See
+		// {@link pullDiagnosticsWhenReady} for the wait that asks again.
+		if (
+			reportCarriesNothing(report) &&
+			!pullAnswerIsSettled(state, statusAtSend)
+		) {
+			noteReadinessGate(state);
 			return { status: "unavailable" };
 		}
 		let primaryCount: number;
@@ -4268,7 +4498,7 @@ function trackAbandonedPullRequest(
 }
 
 /**
- * #1713: `withTimeout` rejects with this EXACT message (`clients/deadline-utils.ts`)
+ * #1713: `withDeadline` rejects with this EXACT message (`clients/deadline-utils.ts`)
  * only when its own timer wins the race — every other rejection is the request
  * itself failing (bad params, dead connection, thrown by the server). Only the
  * timer-won case is a "the answer might still be coming" situation worth a
@@ -4281,7 +4511,7 @@ function isPullTimeoutError(err: unknown, timeoutMs: number): boolean {
 
 /**
  * #1713: every pull timeout emits exactly one bounded latency.log record — the
- * observability gap the issue names (`withTimeout`'s throw previously skipped
+ * observability gap the issue names (the timeout's throw previously skipped
  * ALL telemetry for this site). Never throws: telemetry must not perturb the
  * timeout path, which has already decided to return `unavailable` regardless.
  *
@@ -4331,7 +4561,7 @@ function recordPullTimeoutTelemetry(args: {
 
 /**
  * #1713: a telemetry-only continuation on the ALREADY-abandoned request
- * promise. `withTimeout` only raced it against a timer — the request is still
+ * promise. `withDeadline` only raced it against a timer — the request is still
  * live server-side — so if it eventually resolves, this is the only place that
  * ever finds out. Purely observational: it runs after the caller has already
  * moved on with `unavailable`, and it never writes into `state`.
@@ -4489,6 +4719,11 @@ export async function clientRequestWorkspaceDiagnostics(
 > {
 	if (!isClientAlive(state)) return undefined;
 	if (!state.workspaceDiagnosticsSupport.workspaceDiagnostics) return undefined;
+	// #5097: the abort of the call this pull runs under, read in the caller's own
+	// async context like `pullDiagnosticSource`. An abort before the send claims
+	// and sends nothing.
+	const abortSignal = getAmbientAbortSignal();
+	if (abortSignal?.aborted) return undefined;
 	if (state.abandonedPullRequests?.has(WORKSPACE_PULL_SCOPE)) return undefined;
 	// #1104: echo every resultId we hold from a PRIOR pull so the server can
 	// answer `kind: "unchanged"` for files it hasn't recomputed, instead of
@@ -4524,7 +4759,7 @@ export async function clientRequestWorkspaceDiagnostics(
 		return undefined;
 	}
 	// #1713: declared OUTSIDE the try so the catch below can still reach them —
-	// same shape as `pullDiagnosticSource` above. Captured outside `withTimeout`
+	// same shape as `pullDiagnosticSource` above. Captured outside `withDeadline`
 	// so a timeout still holds a live handle on the request for the late-answer
 	// watch.
 	const workspacePullStartedAt = Date.now();
@@ -4548,10 +4783,25 @@ export async function clientRequestWorkspaceDiagnostics(
 		workspacePullSettlement,
 	);
 	try {
-		const report = await withTimeout(
-			workspaceRequestPromise,
-			workspacePullTimeoutMs,
+		const report = await withDeadline(
+			untilAborted(workspaceRequestPromise, abortSignal, PULL_ABORTED),
+			{ ms: workspacePullTimeoutMs },
 		);
+		if (report === PULL_ABORTED) {
+			// #5097: the abort is the timeout's transition without its records:
+			// cancelled on the wire and tracked as abandoned, so a repeat pull of a
+			// server that ignores the cancel does not stack a second one behind it
+			// (#1889). An Esc is no degradation, so no timeout telemetry, no
+			// late-answer watch and no failure-history row; nothing was stored, and
+			// `undefined` is the unavailable answer, never a clean report (#240).
+			trackAbandonedPullRequest(
+				state,
+				WORKSPACE_PULL_SCOPE,
+				workspaceRequestPromise,
+			);
+			workspacePullAbort.abort();
+			return undefined;
+		}
 		if (!report || !Array.isArray(report.items)) return undefined;
 		const out: Array<{
 			filePath: string;
@@ -4712,6 +4962,212 @@ export async function clientRequestWorkspaceDiagnostics(
 	}
 }
 
+/**
+ * #5487: resolves true once the server is not (or no longer) loading, false when
+ * `budgetMs` lapses first or the client dies. A server that announced nothing is
+ * not loading. Listener and timer are removed on every exit.
+ */
+function waitForQuiescence(
+	state: LSPClientState,
+	budgetMs: number,
+): Promise<boolean> {
+	if (state.serverStatus?.quiescent !== false) return Promise.resolve(true);
+	if (budgetMs <= 0 || !isClientAlive(state)) return Promise.resolve(false);
+	return new Promise<boolean>((resolve) => {
+		const finish = (ready: boolean): void => {
+			clearTimeout(timer);
+			state.diagnosticEmitter.off(SERVER_STATUS_CHANGED, onChange);
+			resolve(ready);
+		};
+		const onChange = (): void => {
+			if (!isClientAlive(state)) finish(false);
+			else if (state.serverStatus?.quiescent !== false) finish(true);
+		};
+		const timer = setTimeout(() => finish(false), budgetMs);
+		state.diagnosticEmitter.on(SERVER_STATUS_CHANGED, onChange);
+	});
+}
+
+/** {@link pullDiagnosticsWhenReady}: no settled answer before the deadline. */
+const PULL_UNSETTLED = Symbol("pull-unsettled");
+
+/**
+ * The abort scope of the server-initiated refresh re-pull
+ * (`workspace/diagnostic/refresh`): a signal nothing holds the controller of,
+ * so the ambient abort reads "not aborted" whatever turn or tool call is
+ * running when the server asks.
+ */
+const REFRESH_REPULL_SIGNAL = new AbortController().signal;
+
+/**
+ * #5487: was the server ready for the whole of a request that left when it had
+ * announced `sentAt`? A server that announced nothing is, as today. One that
+ * announced loading, or whose readiness changed in flight (its first notice
+ * included), is not.
+ */
+function pullAnswerIsSettled(
+	state: LSPClientState,
+	sentAt: LSPClientState["serverStatus"],
+): boolean {
+	const now = state.serverStatus;
+	return (
+		sentAt?.revision === now?.revision &&
+		now?.quiescent !== false &&
+		now?.failed !== true
+	);
+}
+
+/** #5487: loading or failed to load: no pull answer is a verdict yet. */
+function serverNotReady(state: LSPClientState): boolean {
+	return (
+		state.serverStatus?.quiescent === false || !!state.serverStatus?.failed
+	);
+}
+
+/** #5487: the {@link LSPClientInfo.readinessBlock} answer for one client. */
+function readinessBlockOf(
+	state: LSPClientState,
+): ServerReadinessBlock | undefined {
+	// A dead server's last notice says nothing now: its lapse is a plain one,
+	// never "still loading, retry shortly".
+	if (!isClientAlive(state)) return undefined;
+	const announced = state.serverStatus;
+	if (announced?.quiescent === false) return { reason: "server-loading" };
+	if (announced?.failed) {
+		return {
+			reason: "server-load-failed",
+			...(announced.message !== undefined && { detail: announced.message }),
+		};
+	}
+	return undefined;
+}
+
+/**
+ * #5487: a pull report with no finding for the requested document. Decided on
+ * that document's `items` alone: a loading server's `relatedDocuments` entry
+ * says nothing about the file asked about, and an `unchanged` report (no
+ * `items`) from an unsettled server is no answer either, so both are refused
+ * with the empty ones and asked again once the server is ready.
+ */
+function reportCarriesNothing(report: { items?: unknown[] }): boolean {
+	return (report.items?.length ?? 0) === 0;
+}
+
+/**
+ * #5487: one pull that waits for the readiness the server announced. A server
+ * that announced `experimental/serverStatus` answers an empty report while it
+ * is still loading, which {@link pullDiagnosticSource} refuses to store: the
+ * pull comes back `unavailable`. This asks again after quiescence, so the
+ * answer the caller finally gets was given by a ready server. A server that
+ * announced nothing passes straight through: one pull, two property reads.
+ *
+ * Returns {@link PULL_UNSETTLED} when `deadlineAt` passes first (or the client
+ * dies): the caller reports a lapsed wait, never a clean one.
+ */
+async function pullDiagnosticsWhenReady(
+	state: LSPClientState,
+	filePath: string,
+	budgetMs: number,
+	deadlineAt: number,
+): Promise<PullDiagnosticsOutcome | typeof PULL_UNSETTLED> {
+	let requestBudgetMs = budgetMs;
+	let waitedForReadiness = false;
+	// #5097: the readiness wait ends on an abort as a lapse, never a verdict.
+	const abortSignal = getAmbientAbortSignal();
+	for (;;) {
+		if (state.serverStatus?.quiescent === false) {
+			waitedForReadiness = true;
+			noteReadinessGate(state);
+			// The abort ends this caller's wait; the listener and timer under it
+			// go with the server's next status or the budget, as they always did.
+			const ready = await untilAborted(
+				waitForQuiescence(state, deadlineAt - Date.now()),
+				abortSignal,
+				false,
+			);
+			if (!ready) return PULL_UNSETTLED;
+			requestBudgetMs = deadlineAt - Date.now();
+		}
+		const sentAt = state.serverStatus;
+		const outcome = await clientRequestPullDiagnostics(
+			state,
+			filePath,
+			requestBudgetMs,
+		);
+		if (outcome.status === "found") return outcome;
+		const settled = pullAnswerIsSettled(state, sentAt);
+		if (!settled) waitedForReadiness = true;
+		// A server that has just finished loading cancels the pulls it queued
+		// (-32802, measured on rust-analyzer 1.99.1) and answers the next one, so
+		// "unavailable" after a readiness wait is asked again, not read as a
+		// silent server. Any other unavailable pull keeps today's handling.
+		const retryAfterBeat =
+			settled &&
+			waitedForReadiness &&
+			outcome.status === "unavailable" &&
+			isClientAlive(state);
+		if (settled && !retryAfterBeat) return outcome;
+		// A workspace that failed to load stays failed until the user fixes it:
+		// waiting out the budget for it would charge every touch the whole wait
+		// for nothing. The caller reports it at once (`readinessBlock`).
+		if (state.serverStatus?.failed && state.serverStatus.quiescent !== false) {
+			noteReadinessGate(state);
+			return PULL_UNSETTLED;
+		}
+		const remainingMs = deadlineAt - Date.now();
+		if (remainingMs <= 0) return PULL_UNSETTLED;
+		if (retryAfterBeat) {
+			await new Promise((resolve) =>
+				setTimeout(
+					resolve,
+					Math.min(PULL_DIAGNOSTICS_RETRY_INTERVAL_MS, remainingMs),
+				),
+			);
+		}
+		requestBudgetMs = deadlineAt - Date.now();
+	}
+}
+
+/**
+ * #5487: one `latency.log` record per server per session when a pull is held
+ * to the server's announced readiness; the ledger counts every occurrence under
+ * `lsp-server-loading-gated`, so a server that keeps reloading is visible
+ * without a record per touch.
+ */
+function noteReadinessGate(state: LSPClientState): void {
+	const announced = state.serverStatus;
+	const loadFailed =
+		announced?.failed === true && announced.quiescent !== false;
+	emitBounded(
+		"lsp_server_loading_gated",
+		// A failed load is its own rising edge: a server that failed after it
+		// finished loading still gets its record.
+		loadFailed ? `${state.serverId}:load-failed` : state.serverId,
+		{
+			filePath: state.root,
+			durationMs: 0,
+			metadata: {
+				serverId: state.serverId,
+				quiescent: announced?.quiescent,
+				revision: announced?.revision,
+				...(loadFailed && {
+					loadFailed: true,
+					...(announced?.message !== undefined && {
+						message: announced.message,
+					}),
+				}),
+			},
+		},
+		{
+			ledgerKind: "lsp-server-loading-gated",
+			reason: loadFailed
+				? `${state.serverId}: workspace failed to load${announced?.message ? ` (${announced.message})` : ""}`
+				: `${state.serverId}: pull held to the server's announced readiness`,
+			risingEdgePer: "identity",
+		},
+	);
+}
+
 export async function clientWaitForDiagnostics(
 	state: LSPClientState,
 	filePath: string,
@@ -4764,11 +5220,18 @@ export async function clientWaitForDiagnostics(
 		// log record measures from here, never from didOpen (that stays in
 		// metadata.elapsedSinceDidOpenMs, computed separately below).
 		const pullSettleStartedAt = Date.now();
-		let outcome = await clientRequestPullDiagnostics(
+		// #5487: the whole call's budget, for the readiness gate below.
+		const pullDeadlineAt = pullSettleStartedAt + timeoutMs;
+		const firstPull = await pullDiagnosticsWhenReady(
 			state,
 			filePath,
 			timeoutMs,
+			pullDeadlineAt,
 		);
+		// Still loading (or unsettled) when the budget lapsed: a lapsed wait, so
+		// the touch reads inconclusive, never clean.
+		if (firstPull === PULL_UNSETTLED) return "deadline-expired";
+		let outcome = firstPull;
 		if (outcome.status === "found") {
 			logTypeScriptPullSettle(
 				state,
@@ -4779,6 +5242,7 @@ export async function clientWaitForDiagnostics(
 			return "answered";
 		}
 		let sawClean = outcome.status === "clean";
+		const abortSignal = getAmbientAbortSignal();
 
 		const strategy = getStrategy(state.serverId, state.launchVariant);
 		const retryBudgetMs =
@@ -4803,6 +5267,13 @@ export async function clientWaitForDiagnostics(
 				Math.max(0, retryBudgetMs - (Date.now() - startedAt)),
 			);
 			if (outcome.status === "clean") sawClean = true;
+		}
+		// #5097: an abort that cut the pull leaves nothing to wait for: the retry
+		// loop above ends within its own budget, and the push wait below would
+		// run out the whole one. The wait lapses; the caller reads that as no
+		// answer, and the abort (not a budget) is why, so it records no timeout.
+		if (!sawClean && outcome.status !== "found" && abortSignal?.aborted) {
+			return "deadline-expired";
 		}
 		if (options.pullOnly) {
 			const answered = outcome.status === "found" || sawClean;
@@ -5205,6 +5676,7 @@ async function handleNotifyOpenOnce(
 	) {
 		const version = (state.documentVersions.get(normalizedPath) ?? 0) + 1;
 		state.documentVersions.set(normalizedPath, version);
+		noteDocumentSent(state, normalizedPath);
 		// preserveDiagnostics: skip cache clear for format-only resyncs so
 		// waitForDiagnostics fast-paths instead of waiting up to 5s for TypeScript
 		// to re-publish what it already knows (formatting doesn't change semantics).
@@ -5367,6 +5839,7 @@ async function handleNotifyOpenOnce(
 	state.openDocuments.add(normalizedPath);
 	state.closedDocuments?.delete(normalizedPath);
 	state.openDocumentUris?.set(normalizedPath, uri);
+	enforceOpenDocumentCap(state);
 	if (saved && openSent) await sendDidSave(state, normalizedPath, uri, content);
 	// Telemetry is deliberately detached after didOpen succeeds.
 	// #1412 H1: routed through runReadOnlyServerCommand, NOT runServerCommand —
@@ -5696,6 +6169,7 @@ async function handleNotifyChangeOnce(
 		// handler dropped every later answer for the path.
 		state.closedDocuments?.delete(normalizedPath);
 		state.openDocumentUris?.set(normalizedPath, uri);
+		enforceOpenDocumentCap(state);
 		if (saved && fallbackOpenSent)
 			await sendDidSave(state, normalizedPath, uri, content);
 		return fallbackOpenSent;
@@ -5703,6 +6177,7 @@ async function handleNotifyChangeOnce(
 
 	const version = (state.documentVersions.get(normalizedPath) ?? 0) + 1;
 	state.documentVersions.set(normalizedPath, version);
+	noteDocumentSent(state, normalizedPath);
 	// Clear stale diagnostics before sending new content so waitForDiagnostics
 	// doesn't return immediately with the previous edit's results.
 	clearDiagnosticsForPath(state, normalizedPath);
@@ -5785,6 +6260,87 @@ async function closedAndGone(
 }
 
 /**
+ * #5700: a document just went on the wire again; it becomes the most recent.
+ * `openDocuments` keeps send order, so its head is the least recent document.
+ */
+function noteDocumentSent(state: LSPClientState, normalizedPath: string): void {
+	if (state.openDocuments.delete(normalizedPath))
+		state.openDocuments.add(normalizedPath);
+}
+
+/**
+ * #5700: the cap's didClose failed for a reason other than a closed stream
+ * (`safeSendNotification` rethrows only those). The document stays open, so
+ * the next open past the cap retries it. The first failure per server is
+ * logged; the ledger counts the rest under `<server id>:close-failed`.
+ */
+function recordCapCloseFailure(
+	state: LSPClientState,
+	victim: string,
+	err: unknown,
+): void {
+	emitBounded(
+		"lsp_open_document_cap_close_failed",
+		`${state.serverId}:close-failed`,
+		{
+			filePath: victim,
+			durationMs: 0,
+			metadata: { serverId: state.serverId, reason: String(err) },
+		},
+		{
+			ledgerKind: "lsp-open-document-cap-close-failed",
+			risingEdgePer: "identity",
+			reason: "a didClose past the cap failed; the document stays open",
+		},
+	);
+}
+
+/**
+ * #5700: keep at most `openDocumentCap` documents open on the server. Runs
+ * after an open lands and closes the least recently sent documents first.
+ *
+ * A document with a live notify queue (the one just opened, a queued touch,
+ * a close already queued) or a publish still settling is skipped: a queued
+ * close supersedes an unsent touch, and a settling publish is a wait in
+ * progress. The close is an ordinary entry on the document's own queue, not
+ * the rename close (which refuses later touches), so a touch that arrives
+ * after it opens the document again. The closed document's last findings stay
+ * in the cache, marked `closed` by `getAllDiagnostics`; publishes for it are
+ * dropped until it is open again.
+ */
+function enforceOpenDocumentCap(state: LSPClientState): void {
+	const cap = state.openDocumentCap;
+	if (cap === undefined) return;
+	let excess = state.openDocuments.size - (state.budgetClosesQueued ?? 0) - cap;
+	if (excess <= 0) return;
+	for (const victim of state.openDocuments) {
+		if (excess <= 0) break;
+		if (
+			state.notifyChangeQueues.has(victim) ||
+			state.pendingDiagnostics.has(victim)
+		)
+			continue;
+		excess -= 1;
+		state.budgetClosesQueued = (state.budgetClosesQueued ?? 0) + 1;
+		void enqueueDocumentNotify(state, victim, () =>
+			closeDocumentOnce(state, victim, victim, true),
+		)
+			.catch((err: unknown) => recordCapCloseFailure(state, victim, err))
+			.finally(() => {
+				state.budgetClosesQueued = Math.max(
+					0,
+					(state.budgetClosesQueued ?? 1) - 1,
+				);
+			});
+		recordDegradationOnce({
+			kind: "lsp-open-document-cap",
+			subject: state.serverId,
+			reason: `closed the least recently sent documents past the cap of ${cap}; their last findings stay readable, marked closed, until the next touch opens them again`,
+		});
+	}
+}
+
+/**
  * Close a document through the same lifecycle path exposed by the client.
  *
  * #3477: an entry on the path's notify queue, so it waits for a send in flight
@@ -5811,6 +6367,12 @@ async function closeDocumentOnce(
 	state: LSPClientState,
 	filePath: string,
 	normalizedPath: string,
+	/**
+	 * #5700: the open-document cap's close. The server forgets the document,
+	 * but its last findings stay in the cache (marked `closed`); a rename's
+	 * close clears them, because the file is gone.
+	 */
+	retainFindings = false,
 ): Promise<void> {
 	if (!isClientAlive(state)) return;
 	if (!state.openDocuments.has(normalizedPath)) {
@@ -5868,7 +6430,19 @@ async function closeDocumentOnce(
 	// Keep the hash/version binding only while the document is open; the full
 	// text is needed for the next edit, never after didClose (#2065).
 	state.documentContentHashes.delete(normalizedPath);
-	clearDiagnosticsForPath(state, normalizedPath);
+	if (!retainFindings) clearDiagnosticsForPath(state, normalizedPath);
+	// #5737 round 2: a retained close keeps its findings but still advances the
+	// pull generation, so a pull in flight for this document cannot write over them.
+	else {
+		const pending = state.pendingDiagnostics?.get(normalizedPath);
+		if (pending) {
+			clearTimeout(pending);
+			// The receipt is dropped with the close, but still counts as answered.
+			countPublication(state, normalizedPath);
+		}
+		state.pendingDiagnostics?.delete(normalizedPath);
+		bumpPullGeneration(state, normalizedPath);
+	}
 	// #2065 fix round 2 (reverts fix round 1 F4): `pullGenerations` is the
 	// eighth per-path map in this family, but it is deliberately NOT cleared
 	// here — the same reasoning `clearDiagnosticsForPath` already documents
@@ -5985,6 +6559,10 @@ async function clientShutdownOnce(
 	// #271: drop any pending watched-files batch + its timer (a dying client's
 	// queued FS changes are moot, and the timer must not outlive the connection).
 	state.watchQueue?.cancel();
+	// #5487: wake a wait held on this server's readiness before the listeners
+	// go (it re-reads `isClientAlive`, now false), or a touch outlives the
+	// shutdown by its whole budget.
+	state.diagnosticEmitter.emit(SERVER_STATUS_CHANGED);
 	state.diagnosticEmitter.removeAllListeners();
 	let shutdownRequestTimedOut = false;
 	let exitNotifyTimedOut = false;
@@ -6014,9 +6592,9 @@ async function clientShutdownOnce(
 	try {
 		if (!options.fast) {
 			try {
-				const shutdownAck = await withTimeout(
+				const shutdownAck = await withDeadline(
 					safeSendRequest(state.connection, "shutdown", {}),
-					SHUTDOWN_REQUEST_TIMEOUT_MS,
+					{ ms: SHUTDOWN_REQUEST_TIMEOUT_MS },
 				);
 				if (shutdownAck === undefined) shutdownRequestUndelivered = true;
 			} catch (err) {
@@ -6028,9 +6606,9 @@ async function clientShutdownOnce(
 				}
 			}
 			try {
-				const exitSent = await withTimeout(
+				const exitSent = await withDeadline(
 					safeSendNotification(state.connection, "exit", {}),
-					EXIT_NOTIFY_TIMEOUT_MS,
+					{ ms: EXIT_NOTIFY_TIMEOUT_MS },
 				);
 				if (exitSent === false) exitNotifyUndelivered = true;
 			} catch (err) {
@@ -6083,26 +6661,10 @@ async function clientShutdownOnce(
 						: "graceful",
 			},
 		});
-		// #449/#472: deregister this LSP child from the instance registry. Fire-
-		// and-forget (async fs, no spawn) — must not add latency/risk to shutdown,
-		// including the `processExiting` path where the event loop is closing
-		// (#234 forbids spawning here, but a plain fs write/rename is fine; even
-		// so, we don't await it to keep this teardown path as fast as before).
-		// #1724: pass this spawn's marker so removeLspChild can guard against a
-		// pid-recycling window (a NEW child claiming this exact pid before this
-		// fire-and-forget write lands) rather than removing whichever child
-		// currently sits at this pid.
-		void removeLspChild(pid, extractSpawnMarker(state.lspProcess.args)).catch(
-			(err) => {
-				logLatency({
-					type: "phase",
-					phase: "lsp_registry_write_failed",
-					filePath: "",
-					durationMs: 0,
-					metadata: { op: "remove", pid, error: String(err) },
-				});
-			},
-		);
+		// #5699: the child's registry entry is not removed here. It leaves when
+		// the leader is observed dead (createLSPClient's exit listener), so a
+		// host killed before the kill below lands keeps the record its reaper
+		// reads.
 		// On Windows, killing the direct child first can orphan grandchildren before
 		// taskkill can traverse the tree. Kill the full tree first and wait briefly.
 		// Safe and idempotent on an already-exited child: killProcessTree returns
@@ -6173,50 +6735,48 @@ export async function navRequest<T>(
 		normalizedPath !== undefined
 			? state.documentVersions.get(normalizedPath)
 			: undefined;
-	// #1716: captured OUTSIDE withTimeout, mirroring #1713's pull-diagnostic
-	// fix (`pullDiagnosticSource`), so a timeout's catch below still holds a
-	// live handle on the request for the late-answer watch. `withTimeout`
-	// only races it against a timer — the request keeps running server-side
-	// either way, and without this handle an abandoned answer would settle
-	// into the void with no way to observe it.
+	// #5097: the sender owns the deadline and the abort. Either one cancels the
+	// request on the wire and releases the busy count before this call resumes
+	// (Esc returns within the abort's own latency, not the ceiling). #1716: the
+	// late answer of a request abandoned by TIMEOUT is observed through the
+	// sender's hook, not through a handle on the request, so the watch survives
+	// the release.
 	const requestStartedAt = Date.now();
-	const requestPromise = safeSendRequest<T>(
+	const result = (await safeSendRequest<T>(
 		state.connection,
 		method,
 		params,
 		signal,
-	);
-	const result = (await withTimeout(requestPromise, timeoutMs).catch(
-		(err: unknown) => {
-			if (isNavTimeoutError(err, timeoutMs)) {
-				recordNavTimeoutTelemetry({
-					method,
-					scope: normalizedPath,
-					budgetMs: timeoutMs,
-					elapsedMs: Date.now() - requestStartedAt,
-				});
-				armNavLateAnswerTelemetry({
-					requestPromise,
-					method,
-					scope: normalizedPath,
-					requestStartedAt,
-				});
-				throw new LspRequestTimeoutError(
-					method,
-					timeoutMs,
-					Date.now() - requestStartedAt,
-				);
-			}
-			if (err instanceof Error && err.message.startsWith("Timeout after")) {
-				throw new LspRequestTimeoutError(
-					method,
-					timeoutMs,
-					Date.now() - requestStartedAt,
-				);
-			}
-			throw err;
+		undefined,
+		{
+			timeoutMs,
+			cancel: true,
+			onLateSettle: (answered) => {
+				if (answered) {
+					recordNavLateAnswerTelemetry({
+						method,
+						scope: normalizedPath,
+						requestStartedAt,
+					});
+				}
+			},
 		},
-	)) as T | undefined;
+	).catch((err: unknown) => {
+		if (isNavTimeoutError(err, timeoutMs)) {
+			recordNavTimeoutTelemetry({
+				method,
+				scope: normalizedPath,
+				budgetMs: timeoutMs,
+				elapsedMs: Date.now() - requestStartedAt,
+			});
+			throw new LspRequestTimeoutError(
+				method,
+				timeoutMs,
+				Date.now() - requestStartedAt,
+			);
+		}
+		throw err;
+	})) as T | undefined;
 	// requestVersion === undefined (never opened, or version-less) → unaffected,
 	// matching the diagnostics path; the request timeout remains the backstop.
 	if (
@@ -6233,21 +6793,17 @@ export async function navRequest<T>(
 }
 
 /**
- * #1716: `withTimeout` rejects with this EXACT message (`clients/deadline-
- * utils.ts`) only when its own timer wins the race — mirrors #1713's
- * `isPullTimeoutError`. Only the timer-won case is a "the answer might still
- * be coming" situation worth a late-answer watch; a request that already
- * failed fast (or a stale-message coincidence) has nothing further to
- * observe. `navRequest`'s own behavior still falls back to the looser
- * `startsWith` check afterward, unchanged, so this stricter check only gates
- * telemetry — never the existing timeout-handling behavior.
+ * #1716: the sender (`safeSendRequest`) rejects with this EXACT message only
+ * when its own timer wins the race — mirrors #1713's `isPullTimeoutError`. A
+ * request that already failed fast (or a stale-message coincidence) is not a
+ * timeout and is not recorded as one.
  */
 function isNavTimeoutError(err: unknown, timeoutMs: number): boolean {
 	return err instanceof Error && err.message === `Timeout after ${timeoutMs}ms`;
 }
 
 /**
- * #1620 residual 1: `withTimeout` rejects with this EXACT message only when
+ * #1620 residual 1: `withDeadline` rejects with this EXACT message only when
  * its own timer wins the race — mirrors #1713's `isPullTimeoutError` and
  * #1716's `isNavTimeoutError`. `clientShutdown`'s two catches previously
  * treated ANY rejection (a real timeout OR an immediate protocol error) as
@@ -6307,11 +6863,10 @@ function recordNavTimeoutTelemetry(args: {
 }
 
 /**
- * #1716: nav-request sibling of #1713's `armLateAnswerTelemetry`. A
- * telemetry-only continuation on the ALREADY-abandoned request promise —
- * purely observational, never touches `state`, and attaching `.then` here
- * creates no new timer, socket, or other handle, so it cannot keep the
- * process alive a moment longer than the pending request already does.
+ * #1716: nav-request sibling of #1713's `armLateAnswerTelemetry`. Runs from
+ * the sender's `onLateSettle` hook when a request abandoned by timeout
+ * answers after all. Purely observational, never touches `state`, and creates
+ * no timer, socket, or other handle.
  *
  * Bounded the same way as the timeout record above: every late answer is
  * counted exactly via the ledger, but only the rising edge per (method,
@@ -6320,46 +6875,37 @@ function recordNavTimeoutTelemetry(args: {
  * Nav answers are read-once — unlike diagnostics' persistent pull cache,
  * there is no stale value this could poison — so this exists purely for
  * observability: telling a dogfood session "truly hung" apart from
- * "answered late", the same distinction #1713 made possible for pulls.
+ * "answered late", the same distinction #1713 made possible for pulls. An
+ * abandoned request that eventually failed rather than answering is not an
+ * "answer discarded" event, and the sender hands this hook only answers.
  */
-function armNavLateAnswerTelemetry(args: {
-	requestPromise: Promise<unknown>;
+function recordNavLateAnswerTelemetry(args: {
 	method: string;
 	scope: string | undefined;
 	requestStartedAt: number;
 }): void {
-	args.requestPromise.then(
-		() => {
-			try {
-				const elapsedMs = Date.now() - args.requestStartedAt;
-				// #1743: same rising-edge gate as the timeout record above, now
-				// carried by the helper instead of hand-rolled here.
-				emitBounded(
-					"lsp_nav_late_answer_discarded",
-					`${args.method}:${args.scope ?? NAV_REQUEST_NO_PATH_SCOPE}`,
-					{
-						type: "phase",
-						filePath: args.scope ?? NAV_REQUEST_NO_PATH_SCOPE,
-						durationMs: elapsedMs,
-						metadata: { method: args.method },
-					},
-					{
-						ledgerKind: "lsp-nav-late-answer",
-						risingEdgePer: "identity",
-						reason: `late nav answer discarded after ${elapsedMs}ms`,
-					},
-				);
-			} catch {
-				// Telemetry must never break the observed path.
-			}
-		},
-		() => {
-			// The abandoned request eventually failed rather than answering —
-			// not an "answer discarded" event. Nothing more to record here; this
-			// handler exists so the request's eventual rejection never surfaces
-			// as an unhandled rejection.
-		},
-	);
+	try {
+		const elapsedMs = Date.now() - args.requestStartedAt;
+		// #1743: same rising-edge gate as the timeout record above, now
+		// carried by the helper instead of hand-rolled here.
+		emitBounded(
+			"lsp_nav_late_answer_discarded",
+			`${args.method}:${args.scope ?? NAV_REQUEST_NO_PATH_SCOPE}`,
+			{
+				type: "phase",
+				filePath: args.scope ?? NAV_REQUEST_NO_PATH_SCOPE,
+				durationMs: elapsedMs,
+				metadata: { method: args.method },
+			},
+			{
+				ledgerKind: "lsp-nav-late-answer",
+				risingEdgePer: "identity",
+				reason: `late nav answer discarded after ${elapsedMs}ms`,
+			},
+		);
+	} catch {
+		// Telemetry must never break the observed path.
+	}
 }
 
 /**
@@ -6452,6 +6998,7 @@ function firstOpenDocumentUri(state: LSPClientState): string | undefined {
 async function clientPingLiveness(
 	state: LSPClientState,
 	timeoutMs: number = LIVENESS_PING_TIMEOUT_MS,
+	signal?: AbortSignal,
 ): Promise<boolean> {
 	if (!isClientAlive(state)) return false;
 	const probe = chooseLivenessProbe(state);
@@ -6477,10 +7024,24 @@ async function clientPingLiveness(
 		return isClientAlive(state);
 	}
 	try {
-		await withTimeout(
-			safeSendRequest(state.connection, probe.method, probe.params),
-			timeoutMs,
+		// #5097: a timed-out probe is cancelled and released, so a wedged server
+		// holds one pending request at a time, not one per touch. The signal is the
+		// caller's own, never the ambient one: the ping is also a shared barrier
+		// (`paceAuxNotify`'s `record.drain`), and one waiter's Esc must not cancel
+		// the barrier the others wait on. An abort cancels and releases it the
+		// same way.
+		await safeSendRequest(
+			state.connection,
+			probe.method,
+			probe.params,
+			signal,
+			undefined,
+			{ timeoutMs, cancel: true },
 		);
+		// The sender settles an aborted call with `undefined`, as it does an
+		// answered probe that returned nothing: an abort proves nothing about the
+		// server, so it must not fall through to the alive re-check below.
+		if (signal?.aborted) return false;
 	} catch (err) {
 		if (err instanceof Error && err.message.startsWith("Timeout after")) {
 			return false;
@@ -6563,12 +7124,15 @@ export async function runServerCommand(
 	try {
 		let result: unknown;
 		try {
-			result = await withTimeout(
-				safeSendRequest<unknown>(state.connection, "workspace/executeCommand", {
-					command,
-					arguments: args ?? [],
-				}),
-				timeoutMs,
+			// #5097: no cancel, the command may be applying server-side; the busy
+			// count is released locally when the backstop fires.
+			result = await safeSendRequest<unknown>(
+				state.connection,
+				"workspace/executeCommand",
+				{ command, arguments: args ?? [] },
+				undefined,
+				undefined,
+				{ timeoutMs, cancel: false },
 			);
 		} catch (err) {
 			// Generous backstop only: a timeout means the server is hung (or the
@@ -6627,35 +7191,29 @@ export async function runReadOnlyServerCommand(
 			reason: `command "${command}" is not advertised by the ${state.serverId} server`,
 		};
 	}
-	// #4801: a timed-out probe is abandoned for good, so it is cancelled on the
-	// wire and released locally. Without the signal the request stayed pending
-	// for as long as the server stayed silent, kept the connection busy, and
-	// kept `ClientRegistry` from ever evicting the client.
-	const abandon = new AbortController();
-	const request = safeSendRequest<unknown>(
-		state.connection,
-		"workspace/executeCommand",
-		{ command, arguments: args ?? [] },
-		abandon.signal,
-		undefined,
-		true,
-	);
+	// #4801, #5097: a timed-out probe is abandoned for good, so the sender
+	// cancels it on the wire and releases it locally, and the client is idle
+	// when this call resumes. Without it the request stayed pending for as long
+	// as the server stayed silent, kept the connection busy, and kept
+	// `ClientRegistry` from ever evicting the client.
+	// #5097: the call's abort (Esc, a firing bound) releases the probe the way
+	// its timeout does, minus the timeout's record: an abort is no degradation.
+	const abortSignal = getAmbientAbortSignal();
 	try {
-		const result = await withTimeout(request, timeoutMs);
+		const result = await safeSendRequest<unknown>(
+			state.connection,
+			"workspace/executeCommand",
+			{ command, arguments: args ?? [] },
+			abortSignal,
+			undefined,
+			{ timeoutMs, cancel: true },
+		);
+		if (result === undefined && abortSignal?.aborted) {
+			return { executed: false, reason: "aborted" };
+		}
 		return { executed: true, result };
 	} catch (err) {
 		if (err instanceof Error && err.message.startsWith("Timeout after")) {
-			abandon.abort();
-			// The abort only SCHEDULES the release: it cancels the token (the wire
-			// `$/cancelRequest`) and resolves the sentinel that wins the race, and
-			// the count itself drops in `safeSendRequest`'s `finally`. Awaiting the
-			// raced request here is what makes "the client is idle when the caller
-			// resumes" a guarantee instead of a property of the current `async`
-			// hop count: without it one behaviour-preserving hop removal leaves
-			// `isBusy()` true for a tick after the caller sees the timeout. It is
-			// bounded — the abort is exactly what settles the race, so this cannot
-			// wait on the server.
-			await request;
 			// #4801: a regression of the release is otherwise invisible in
 			// production. The request ceiling is not the caller-deadline abandon
 			// `warm-attach-membership-probe-abandoned` records, and the caller only
@@ -6777,13 +7335,13 @@ async function resolveCodeActionBestEffort(
 	}
 	let resolved: LSPCodeAction | null | undefined;
 	try {
-		resolved = await withTimeout(
-			safeSendRequest<LSPCodeAction>(
-				state.connection,
-				"codeAction/resolve",
-				action,
-			),
-			NAV_REQUEST_TIMEOUT_MS,
+		resolved = await safeSendRequest<LSPCodeAction>(
+			state.connection,
+			"codeAction/resolve",
+			action,
+			getAmbientAbortSignal(),
+			undefined,
+			{ timeoutMs: NAV_REQUEST_TIMEOUT_MS, cancel: true },
 		);
 	} catch {
 		// codeAction/resolve is optional. Keep the original lightweight action when
@@ -6890,6 +7448,8 @@ export async function createLSPClient(options: {
 	 *  notice can be its own echo, as a config-declared server's can. */
 	echoesOwnNotice?: boolean;
 	onDiagnosticsPublished?: (serverId: string) => void;
+	/** #5700: `LSPClientState.openDocumentCap`, from the registry. */
+	openDocumentCap?: number;
 }): Promise<LSPClientInfo> {
 	installCrashGuard();
 
@@ -6911,8 +7471,8 @@ export async function createLSPClient(options: {
 	// #449/#472: register this LSP child in the cross-process instance registry
 	// as soon as we have a live pid — BEFORE `initialize` completes, not after.
 	// Registering early means a child that dies/hangs during initialize (the
-	// catch block below kills it) is still deregistered by that same path via
-	// removeLspChild, and a process that crashes mid-initialize is still
+	// catch block below kills it) is still deregistered, on its observed exit,
+	// and a process that crashes mid-initialize is still
 	// visible to the orphan reaper rather than silently untracked. Fire-and-
 	// forget: registry I/O must never block or fail LSP startup.
 	void recordLspChild({
@@ -6937,6 +7497,30 @@ export async function createLSPClient(options: {
 			metadata: { op: "record", pid: lspProcess.pid, error: String(err) },
 		});
 	});
+	// #5699: the entry leaves when the leader is observed dead, never when a
+	// teardown starts. A host killed between the two then keeps the record the
+	// next session's reaper reads. #1724: the spawn's marker guards the
+	// pid-recycling window, so a NEW child that claimed this pid stays listed.
+	const forgetChild = (): void => {
+		void removeLspChild(
+			lspProcess.pid,
+			extractSpawnMarker(lspProcess.args),
+		).catch((err) => {
+			logLatency({
+				type: "phase",
+				phase: "lsp_registry_write_failed",
+				filePath: "",
+				durationMs: 0,
+				metadata: { op: "remove", pid: lspProcess.pid, error: String(err) },
+			});
+		});
+	};
+	if (
+		lspProcess.process.exitCode != null ||
+		lspProcess.process.signalCode != null
+	)
+		forgetChild();
+	else lspProcess.process.on("exit", forgetChild);
 
 	const startupState: {
 		exitCode: number | null;
@@ -7106,6 +7690,9 @@ export async function createLSPClient(options: {
 		rulesGeneration: 0,
 		diagnosticFences: new Map(),
 		closedDocuments: new Set(),
+		...(options.openDocumentCap !== undefined && {
+			openDocumentCap: options.openDocumentCap,
+		}),
 		openDocumentUris: new Map(),
 		pendingOpens: new Set(),
 		projectIdentityProbedFiles: new Set(),
@@ -7168,7 +7755,7 @@ export async function createLSPClient(options: {
 
 	let initResult: Awaited<ReturnType<typeof safeSendRequest>>;
 	try {
-		initResult = await withTimeout(
+		initResult = await withDeadline(
 			safeSendRequest(connection, "initialize", {
 				processId: process.pid,
 				rootUri: pathToFileURL(root).href,
@@ -7178,7 +7765,7 @@ export async function createLSPClient(options: {
 				capabilities: CLIENT_CAPABILITIES,
 				initializationOptions: initialization,
 			}),
-			initializeTimeoutMs,
+			{ ms: initializeTimeoutMs },
 		);
 	} catch (err) {
 		// #1969: claim this kill BEFORE issuing it. `setupConnectionLifecycle`
@@ -7196,23 +7783,8 @@ export async function createLSPClient(options: {
 		// Hard-kill the hung process so it doesn't become a zombie.
 		// SIGTERM alone is unreliable on Windows for cmd.exe/PowerShell trees.
 		const pid = lspProcess.pid;
+		// The registry entry recorded above leaves on the observed exit (#5699).
 		void killProcessTree(lspProcess.process, pid);
-		// A child registered above (recordLspChild) but never reaching a healthy
-		// createLSPClient return must still be deregistered here — otherwise the
-		// registry keeps a stale entry for a process we just killed.
-		void removeLspChild(pid, extractSpawnMarker(lspProcess.args)).catch(
-			(err) => {
-				// best-effort — a stale registry entry is harmless (the reaper's
-				// liveness check will find it dead on the next sweep regardless)
-				logLatency({
-					type: "phase",
-					phase: "lsp_registry_write_failed",
-					filePath: "",
-					durationMs: 0,
-					metadata: { op: "remove", pid, error: String(err) },
-				});
-			},
-		);
 		setTimeout(() => {
 			// #1114: gate on the process's own observed `exitCode`/`signalCode`,
 			// not `.killed` — `killProcessTree` above signals the POSIX process
@@ -7352,7 +7924,11 @@ export async function createLSPClient(options: {
 		checkAlive: () => checkProcessAlive(),
 
 		/** #1277: cheap request round-trip proving the server still responds. */
-		pingLiveness: (timeoutMs?: number) => clientPingLiveness(state, timeoutMs),
+		pingLiveness: (timeoutMs?: number, signal?: AbortSignal) =>
+			clientPingLiveness(state, timeoutMs, signal),
+
+		/** #5487: the server announced it is still loading (see interface doc). */
+		readinessBlock: () => readinessBlockOf(state),
 
 		/** #2358: the OS pid of the live server process (see interface doc). */
 		getProcessPid: () => lspProcess.pid,
@@ -7436,6 +8012,7 @@ export async function createLSPClient(options: {
 					diags: LSPDiagnostic[];
 					ts: number;
 					binding?: StoredDiagnosticBinding;
+					closed?: true;
 				}
 			>();
 			const keys = new Set([
@@ -7447,6 +8024,9 @@ export async function createLSPClient(options: {
 					diags: getMergedDiagnosticsForPath(state, key),
 					ts: diagnosticsPublishedAtForPath(state, key) ?? 0,
 					binding: state.diagnosticBindings.get(key),
+					// #5700: the open-document cap closed it; the server no longer
+					// re-checks it, so these are its last findings, not live ones.
+					...(state.closedDocuments?.has(key) && { closed: true }),
 				});
 			}
 			return result;
@@ -7655,7 +8235,7 @@ export async function createLSPClient(options: {
 
 		async workspaceSymbol(query) {
 			if (!isClientAlive(state)) return [];
-			// Route through navRequest for the shared withTimeout ceiling — a hung
+			// Route through navRequest for the sender's shared ceiling — a hung
 			// server would otherwise await forever (safeSendRequest only settles on
 			// a reply or a destroyed stream). No staleCheckPath: not single-file.
 			const result = await navRequest<LSPSymbol[]>(state, "workspace/symbol", {
@@ -7665,9 +8245,9 @@ export async function createLSPClient(options: {
 		},
 
 		async codeAction(filePath, line, character, endLine, endCharacter) {
-			if (!isClientAlive(state)) return [];
+			if (!isClientAlive(state)) return undefined;
 			const uri = pathToFileURL(filePath).href;
-			// navRequest adds the shared withTimeout ceiling + single-file
+			// navRequest adds the sender's shared ceiling + single-file
 			// stale-drop (matches documentSymbol); a hung server no longer awaits
 			// forever, and code actions computed against superseded content drop.
 			const result = await navRequest<unknown[]>(
@@ -7688,7 +8268,13 @@ export async function createLSPClient(options: {
 				},
 				filePath,
 			);
-			if (!result || !Array.isArray(result)) return [];
+			// #5258: only the server's own list (or its `null`, the protocol's "no
+			// actions") is an answer. `undefined` is a request that was cancelled,
+			// ContentModified twice, lost its stream or went stale; a reply that is
+			// neither a list nor `null` is malformed, not "no actions".
+			if (result === undefined) return undefined;
+			if (result === null) return [];
+			if (!Array.isArray(result)) return undefined;
 			const actions = result.filter(
 				(item): item is LSPCodeAction =>
 					typeof item === "object" && item !== null && "title" in item,
@@ -7985,12 +8571,49 @@ async function safeSendNotification(
 
 const activeRequestsByConnection = new WeakMap<MessageConnection, number>();
 
-/** Sentinel `safeSendRequest` races against a reply when `releaseOnAbort` is set. */
+/** Sentinels a bounded `safeSendRequest` races against the reply. */
 const RELEASED_ON_ABORT = Symbol("released-on-abort");
+const RELEASED_ON_TIMEOUT = Symbol("released-on-timeout");
 
 /** A request pi-lens sent on this connection is still unanswered. */
 export function isConnectionBusy(connection: MessageConnection): boolean {
 	return (activeRequestsByConnection.get(connection) ?? 0) > 0;
+}
+
+/**
+ * #5097: the wall bound a caller gives `safeSendRequest` when it will not wait
+ * for the answer past a deadline or an abort. Passing one is what opts a
+ * request into release: the bound fires, or the caller's `signal` aborts, and
+ * the request is let go once, here, instead of per caller. Omitting it keeps
+ * the request pending on purpose, for the callers that watch for the late
+ * answer themselves (the pull diagnostics, `abandonedPullRequests`).
+ *
+ * Transitions (the sender applies them; no caller does). Cancel-and-release
+ * kinds are navigation, `codeAction/resolve`, the liveness ping and the
+ * read-only command; the mutating `executeCommand` releases without a cancel:
+ *
+ * - Answer in time: busy -1, no cancel.
+ * - Timeout: busy -1 before the caller resumes; `$/cancelRequest` sent unless
+ *   `cancel` is false (the command may still be applying server-side); the
+ *   call rejects `Timeout after <ms>ms`.
+ * - Caller abort: the same release and cancel, then returns `undefined`. The
+ *   mutating command takes no signal.
+ * - Server exits: the stream error settles the request; busy -1, `undefined`.
+ * - Late settlement of a released request: observed, never unhandled, and
+ *   handed to `onLateSettle` after a timeout only.
+ */
+interface RequestBound {
+	timeoutMs: number;
+	/** Send `$/cancelRequest` when the timer fires. A caller abort always cancels; a call that must never cancel passes no signal. */
+	cancel: boolean;
+	/**
+	 * The released request settled after a TIMEOUT: `answered` is true for a
+	 * real reply, false for a rejection (the cancel's own `RequestCancelled`
+	 * included). Navigation counts the first as a discarded late answer. It
+	 * never runs for an abort (an Esc is not a degradation) and never throws
+	 * into the sender.
+	 */
+	onLateSettle?: (answered: boolean) => void;
 }
 
 // Helper to safely send requests - catches stream destruction
@@ -8004,32 +8627,44 @@ async function safeSendRequest<T>(
 	// Item 1). The rejection that follows is swallowed (treated as `undefined`).
 	signal?: AbortSignal,
 	settlement?: { cancelled: boolean },
-	// #4801: vscode-jsonrpc settles a cancelled request only when the server
-	// answers it, so a server that ignores `$/cancelRequest` (a wedged one)
-	// holds the busy count for good. A caller that has already given up on the
-	// answer and wants the connection counted idle again passes true: abort then
-	// also settles this call locally, right after the cancel is sent. Off by
-	// default because the pull-diagnostic and navigation callers keep the
-	// request pending on purpose, to watch for the late answer.
-	releaseOnAbort = false,
+	// #4801, #5097: vscode-jsonrpc settles a cancelled request only when the
+	// server answers it, so a server that ignores `$/cancelRequest` (a wedged
+	// one) holds the busy count for good. A caller that has given up on the
+	// answer passes a bound: timeout and abort then also settle this call
+	// locally, right after the cancel (when `bound.cancel`) is sent.
+	bound?: RequestBound,
 ): Promise<T | undefined> {
 	// Already abandoned before we even sent — don't bother the server.
 	if (signal?.aborted) return undefined;
 
 	let tokenSource: InstanceType<typeof CancellationTokenSource> | undefined;
 	let onAbort: (() => void) | undefined;
-	let released: Promise<typeof RELEASED_ON_ABORT> | undefined;
-	let release: (() => void) | undefined;
+	let released:
+		| Promise<typeof RELEASED_ON_ABORT | typeof RELEASED_ON_TIMEOUT>
+		| undefined;
+	let release:
+		| ((why: typeof RELEASED_ON_ABORT | typeof RELEASED_ON_TIMEOUT) => void)
+		| undefined;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let timeoutError: Error | undefined;
+	if (signal || bound?.cancel) tokenSource = new CancellationTokenSource();
+	if (bound) {
+		released = new Promise((resolve) => {
+			release = resolve;
+		});
+		timer = setTimeout(
+			() => {
+				timeoutError = new Error(`Timeout after ${bound.timeoutMs}ms`);
+				if (bound.cancel) tokenSource?.cancel();
+				release?.(RELEASED_ON_TIMEOUT);
+			},
+			Math.max(0, bound.timeoutMs),
+		);
+	}
 	if (signal) {
-		tokenSource = new CancellationTokenSource();
-		if (releaseOnAbort) {
-			released = new Promise((resolve) => {
-				release = () => resolve(RELEASED_ON_ABORT);
-			});
-		}
 		onAbort = () => {
 			tokenSource?.cancel();
-			release?.();
+			release?.(RELEASED_ON_ABORT);
 		};
 		signal.addEventListener("abort", onAbort, { once: true });
 	}
@@ -8057,8 +8692,21 @@ async function safeSendRequest<T>(
 		for (let attempt = 1; ; attempt++) {
 			try {
 				if (!released) return (await send()) as T;
-				const reply = await Promise.race([send(), released]);
-				if (reply === RELEASED_ON_ABORT) return undefined;
+				const sent = Promise.resolve(send());
+				const reply = await Promise.race([sent, released]);
+				if (reply === RELEASED_ON_ABORT || reply === RELEASED_ON_TIMEOUT) {
+					// The abandoned request may still settle (a server that ignores the
+					// cancel, or answers it): observe it so its rejection is never
+					// unhandled, and tell the caller's hook about a late timeout answer.
+					const lateHook =
+						reply === RELEASED_ON_TIMEOUT ? bound?.onLateSettle : undefined;
+					sent.then(
+						() => lateHook?.(true),
+						() => lateHook?.(false),
+					);
+					if (reply === RELEASED_ON_TIMEOUT) throw timeoutError;
+					return undefined;
+				}
 				return reply as T;
 			} catch (err) {
 				if (isCancellationError(err)) {
@@ -8084,6 +8732,7 @@ async function safeSendRequest<T>(
 		const remaining = (activeRequestsByConnection.get(connection) ?? 1) - 1;
 		if (remaining > 0) activeRequestsByConnection.set(connection, remaining);
 		else activeRequestsByConnection.delete(connection);
+		if (timer) clearTimeout(timer);
 		if (signal && onAbort) signal.removeEventListener("abort", onAbort);
 		tokenSource?.dispose();
 	}

@@ -1,0 +1,19 @@
+[
+	[
+		{
+			"type": "toolCall",
+			"name": "write",
+			"id": "w1",
+			"arguments": {
+				"path": "a.html",
+				"content": "<html><body><img></body></html>\n"
+			}
+		}
+	],
+	[
+		{
+			"type": "text",
+			"text": "written"
+		}
+	]
+]

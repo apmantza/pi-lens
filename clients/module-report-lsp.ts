@@ -22,7 +22,8 @@
  * implementation; do not re-flag in dead-code sweeps while #236 is open.
  */
 
-import { withinRemaining } from "./deadline-utils.js";
+import { nonNegativeIntEnv } from "./env-utils.js";
+import { withDeadline } from "./deadline-utils.js";
 import type { LSPLocation } from "./lsp/client.js";
 import type { ModuleSymbolUsedBy } from "./module-report.js";
 import { uriToPath } from "./path-utils.js";
@@ -37,13 +38,12 @@ export function _resetModuleReportConfigForTests(): void {
 	lspEnrichmentTail = Promise.resolve();
 }
 
-function getLspBudgetMs(): number {
+export function getLspBudgetMs(): number {
 	if (_lspBudgetMs === undefined) {
-		const raw = Number(process.env.PI_LENS_MODULE_REPORT_LSP_BUDGET_MS);
 		// Default OFF (0) after the #256 OOM: the live-LSP tier is opt-in until the
 		// bounded/file-scoped path is validated in a real pi session. A finite >=0
 		// value is honored verbatim (set 3000 to enable); anything else → 0.
-		_lspBudgetMs = Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 0;
+		_lspBudgetMs = nonNegativeIntEnv("PI_LENS_MODULE_REPORT_LSP_BUDGET_MS", 0);
 	}
 	return _lspBudgetMs;
 }
@@ -194,6 +194,9 @@ async function enrichModuleReportWithLspNow(
 
 	const lsp = getLSPService();
 	const deadlineAt = Date.now() + budgetMs;
+	// A probe that misses the shared deadline contributes nothing; one that
+	// rejects contributes nothing either (`Promise.allSettled` in `enrichOne`).
+	const withinSweep = { deadlineAt, onTimeout: "undefined" } as const;
 	const byName = new Map<
 		string,
 		{ usedBy?: ModuleSymbolUsedBy[]; hasImpl?: boolean }
@@ -206,9 +209,9 @@ async function enrichModuleReportWithLspNow(
 	async function enrichOne(sym: ExtractedSymbol): Promise<void> {
 		if (Date.now() >= deadlineAt) return;
 		const { line, character } = lspPosition(sym, lines);
-		const refsPromise = withinRemaining(
+		const refsPromise = withDeadline(
 			lsp.references(absPath, line, character, false),
-			deadlineAt,
+			withinSweep,
 		).then((locs) => {
 			if (!locs || Date.now() > deadlineAt) return;
 			const usedBy = lspLocationsToUsedBy(locs, maxRefs);
@@ -218,9 +221,9 @@ async function enrichModuleReportWithLspNow(
 		});
 
 		const implPromise = INTERFACE_LIKE_KINDS.has(sym.kind)
-			? withinRemaining(
+			? withDeadline(
 					lsp.implementation(absPath, line, character),
-					deadlineAt,
+					withinSweep,
 				).then((locs) => {
 					if (!locs || locs.length === 0 || Date.now() > deadlineAt) return;
 					byName.set(sym.name, { ...byName.get(sym.name), hasImpl: true });

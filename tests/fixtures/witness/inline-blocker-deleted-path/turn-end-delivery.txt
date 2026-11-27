@@ -21,8 +21,7 @@ base
 
 
 🔴 STOP — 2 issue(s) must be fixed:
-  L1: values.yaml:1: replicas must be an integer, got string
-      → apiVersion: apps/v1
+  <PROJECT>/charts/intact/values.yaml L1: values.yaml:1: replicas must be an integer, got string
   L4: templates/deployment.yaml:4: nil pointer evaluating interface {}.image
       → replicas: {{ .Values.replicas }}
 --- turn_end context message ---
@@ -32,5 +31,5 @@ keep working
 
 Unresolved from this turn — charts/intact/templates/deployment.yaml:
 🔴 STOP — 2 issue(s) must be fixed:
-  L1: values.yaml:1: replicas must be an integer, got string
+  <PROJECT>/charts/intact/values.yaml L1: values.yaml:1: replicas must be an integer, got string
   L4: templates/deployment.yaml:4: nil pointer evaluating interface {}.image

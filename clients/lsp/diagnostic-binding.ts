@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
+import { hashContentBytes } from "../content-stamp.js";
 import { PathKeyedMap } from "../path-keyed-map.js";
 import { normalizeEphemeralMapKey } from "../path-utils.js";
 
@@ -137,12 +137,26 @@ export interface TouchFileResult {
 	 */
 	inconclusiveServerIds?: string[];
 	/**
+	 * #5727: on an inconclusive touch, the auxiliaries whose answer is bound to
+	 * these bytes (published for them, or a binding that matches them). Each
+	 * is that server's verdict on the file while the primary gave none. An
+	 * auxiliary that did not answer is not here; the inconclusive touch names
+	 * no coverage gap, so an id missing from both lists is not one that
+	 * answered. Absent on every other touch.
+	 */
+	answeredServerIds?: string[];
+	/**
 	 * #1549: which deadline produced the verdict — the notify write that never
 	 * landed, the diagnostics wait that lapsed, or both. Named so a forensic sweep
 	 * of `latency.log`/`cascade.log` reads the cause instead of inferring it from
 	 * duration histograms.
 	 */
 	inconclusiveReason?: TouchInconclusiveReason;
+	/**
+	 * #5487: the server's own message for a failed workspace load, present only
+	 * on a `"server-load-failed"` touch whose server sent one.
+	 */
+	inconclusiveDetail?: string;
 	/**
 	 * #4403: the subset of {@link inconclusiveServerIds} the operator turned off
 	 * in `lsp.disabledServers`, present only on a `"primary-unavailable"`
@@ -212,8 +226,13 @@ export interface TouchFileResult {
 	 * which is about silence rather than a reused observation). Auxiliary
 	 * contributors never appear: their answers are file-local, so an edit to
 	 * another file cannot invalidate them (#1720).
+	 *
+	 * `rechecks` (#5675): the server is declared to check unchanged bytes again
+	 * and publish for them (`resendRecheck: "rechecks"`, #4782), so sending the
+	 * document once more is a request it answers. Absent for every other server:
+	 * a re-send there would empty this very answer with none coming.
 	 */
-	reusedAnswer?: { serverId: string; publishedAt: number };
+	reusedAnswer?: { serverId: string; publishedAt: number; rechecks?: true };
 	binding?: DiagnosticBinding;
 }
 
@@ -222,12 +241,32 @@ export interface TouchFileResult {
  * primary's notify write and the diagnostics wait lapsed on this touch.
  * #4322: `"primary-unavailable"` means no language server was acquired for a
  * file that has one, so only auxiliaries (if any) answered.
+ * #5487: `"server-loading"` means the diagnostics wait lapsed on a primary that
+ * had announced it was still loading its workspace (rust-analyzer's
+ * `experimental/serverStatus`), so no answer it gave was a verdict;
+ * `"server-load-failed"` is the same for a workspace that failed to load
+ * (`health: "error"`), which no wait fixes.
  */
-type TouchInconclusiveReason =
+export type TouchInconclusiveReason =
 	| "notify-write"
 	| "diagnostics-wait"
+	| "server-loading"
+	| "server-load-failed"
 	| "mixed"
 	| "primary-unavailable";
+
+/** Human-facing cause for an inconclusive touch, owned with its touch taxonomy. */
+export const TOUCH_INCONCLUSIVE_REASON_PHRASE: Record<
+	TouchInconclusiveReason,
+	string
+> = {
+	"notify-write": "the document write did not finish within its budget",
+	"diagnostics-wait": "no document diagnostics arrived within the wait budget",
+	"server-loading": "the language server is still loading",
+	"server-load-failed": "the language server failed to load",
+	mixed: "the document write and diagnostics wait did not both finish",
+	"primary-unavailable": "no primary language server answered",
+};
 
 /** The inputs {@link resolveTouchVerdict} decides a touch's honesty verdict from. */
 export interface TouchVerdictInput {
@@ -261,6 +300,18 @@ export interface TouchVerdictInput {
 	 * stands on `diagnosticsTimedOut`, just unattributed.
 	 */
 	diagnosticsUnansweredServerIds: readonly string[];
+	/**
+	 * #5487: PRIMARY-role servers whose diagnostics wait lapsed while they still
+	 * announced they were loading. Names the cause only; whether the touch is
+	 * inconclusive stays decided by `diagnosticsTimedOut` and the unanswered ids.
+	 */
+	loadingServerIds?: readonly string[];
+	/**
+	 * #5487: the subset whose workspace failed to load (`health: "error"`), and
+	 * the first server message among them.
+	 */
+	loadFailedServerIds?: readonly string[];
+	loadFailureDetail?: string;
 }
 
 /** The verdict fields {@link resolveTouchVerdict} produces. */
@@ -268,6 +319,7 @@ export interface TouchVerdict {
 	inconclusive: boolean;
 	inconclusiveServerIds?: string[];
 	inconclusiveReason?: TouchInconclusiveReason;
+	inconclusiveDetail?: string;
 	disabledPrimaryServerIds?: string[];
 	primaryUnavailableCause?: PrimaryUnavailableCause;
 }
@@ -318,16 +370,31 @@ export function resolveTouchVerdict(input: TouchVerdictInput): TouchVerdict {
 		return { inconclusive: false };
 	}
 	const serverIds = [...new Set([...notifyIds, ...waitIds])];
+	const loadingIds = new Set(input.loadingServerIds ?? []);
+	const failedIds = new Set(input.loadFailedServerIds ?? []);
+	const lapsedNotReady =
+		waitIds.length > 0 &&
+		waitIds.every((id) => loadingIds.has(id) || failedIds.has(id));
+	const lapsedLoadFailed =
+		lapsedNotReady && waitIds.some((id) => failedIds.has(id));
 	const reason: TouchInconclusiveReason =
 		notifyIds.length > 0 && input.diagnosticsTimedOut
 			? "mixed"
 			: notifyIds.length > 0
 				? "notify-write"
-				: "diagnostics-wait";
+				: lapsedLoadFailed
+					? "server-load-failed"
+					: lapsedNotReady
+						? "server-loading"
+						: "diagnostics-wait";
 	return {
 		inconclusive: true,
 		...(serverIds.length > 0 && { inconclusiveServerIds: serverIds }),
 		inconclusiveReason: reason,
+		...(reason === "server-load-failed" &&
+			input.loadFailureDetail !== undefined && {
+				inconclusiveDetail: input.loadFailureDetail,
+			}),
 	};
 }
 
@@ -553,7 +620,7 @@ export function auxiliaryCoverageGap(
  * CRLF and BOM bytes identically. See `createDiskBindingCache`.
  */
 export function hashDiagnosticContent(content: string): string {
-	return createHash("sha256").update(content).digest("hex");
+	return hashContentBytes(Buffer.from(content, "utf8"));
 }
 
 /**

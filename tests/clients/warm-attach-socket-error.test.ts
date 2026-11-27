@@ -18,9 +18,10 @@
  * no in-process double emits it, and a double that did would be pinning this
  * test's own fixture rather than the host boundary. So the server is the
  * production one (`configureWarmAttach`) and the client is a real
- * `net.createConnection`. No child process and no raw timer: the accept waits
- * on the kit's `waitFor` (a `setImmediate` pump under a real-clock deadline,
- * #4865), so none of `flake-shape-ratchet`'s four detectors
+ * `net.createConnection`. No child process and no raw timer: every wait here is
+ * the kit's `waitFor` or its `setImmediate` pump under a real-clock deadline
+ * (#4865, shape 86: a wait ends on its event or on the clock, never on a turn
+ * count), so none of `flake-shape-ratchet`'s four detectors
  * (real-process-spawn, elapsed-time-assertion, raw-timer-wait,
  * ungoverned-wait-for) apply.
  *
@@ -41,7 +42,10 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
-import { diagnosticsIpcPathForCwd } from "../../clients/mcp/ipc.js";
+import {
+	boundUnixSocketPath,
+	diagnosticsIpcPathForCwd,
+} from "../../clients/mcp/ipc.js";
 import {
 	_resetWarmAttachForTests,
 	_warmAttachServerForTests,
@@ -50,6 +54,7 @@ import {
 import { removeTempDirSync } from "./test-utils.js";
 import { waitFor } from "./interleaving-kit.js";
 import { scaledTestTimeout } from "../support/test-timeout-scale.js";
+import { ambientSocketNameIsShared } from "../support/socket-identity.js";
 
 /** One event-loop turn, including the poll phase that delivers socket I/O. */
 const pump = (): Promise<void> =>
@@ -58,224 +63,269 @@ const pump = (): Promise<void> =>
 	});
 
 /**
- * The ledger group for `kind`, once it appears. Bounded by turns, not by the
- * clock: pre-fix nothing ever records it, and the caller's first assertion is
- * the uncaught-exception list, so an exhausted pump reports the real defect
- * rather than a timeout.
+ * The ledger group for `kind`, once it appears. Shape 86 (#4865): the ceiling
+ * was 500 `setImmediate` turns -- a count, not a duration -- so it is now a
+ * real-clock deadline that follows `PI_LENS_TEST_TIMEOUT_SCALE`, with `pump()`
+ * as the yield so the socket I/O still lands. The contract is unchanged: it
+ * returns undefined rather than throwing, so pre-fix the caller's first
+ * assertion, the uncaught-exception list, still names the real defect.
  */
 async function waitForGroup(
 	kind: string,
+	timeoutMs = 2_000,
 ): Promise<DegradationGroup | undefined> {
-	for (let turn = 0; turn < 500; turn++) {
-		const group = getDegradationSummary().find(
-			(candidate) => candidate.kind === kind,
-		);
-		if (group) return group;
+	const find = () =>
+		getDegradationSummary().find((candidate) => candidate.kind === kind);
+	const deadlineAt = Date.now() + scaledTestTimeout(timeoutMs);
+	let group = find();
+	while (!group && Date.now() < deadlineAt) {
 		await pump();
+		group = find();
 	}
-	return undefined;
+	return group;
 }
 
-describe("warm diagnostics server: an accepted socket's error event (#3389)", () => {
-	let root: string;
-	let home: string;
-	let savedHome: string | undefined;
-	let savedOptIn: string | undefined;
-	const uncaught: Error[] = [];
-	const capture = (failure: Error): void => {
-		uncaught.push(failure);
-	};
+// lane: Unit tests (CI's short TMPDIR); where the cut makes this process's
+// pid-scoped endpoint a shared name, no case here can own a live listener.
+describe.skipIf(ambientSocketNameIsShared(process.pid))(
+	"warm diagnostics server: an accepted socket's error event (#3389)",
+	() => {
+		let root: string;
+		let home: string;
+		let savedHome: string | undefined;
+		let savedOptIn: string | undefined;
+		const uncaught: Error[] = [];
+		const capture = (failure: Error): void => {
+			uncaught.push(failure);
+		};
 
-	beforeEach(() => {
-		root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-3389-root-"));
-		home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-3389-home-"));
-		savedHome = process.env.PI_LENS_HOME;
-		savedOptIn = process.env.PI_LENS_WARM_ATTACH;
-		process.env.PI_LENS_HOME = home;
-		process.env.PI_LENS_WARM_ATTACH = "1";
-		uncaught.length = 0;
-		resetDegradationLedger();
-		// The host's own default disposition is what kills it; capturing here
-		// keeps the escape observable instead of taking the whole worker down.
-		process.on("uncaughtException", capture);
-	});
-
-	afterEach(() => {
-		process.off("uncaughtException", capture);
-		_resetWarmAttachForTests();
-		resetDegradationLedger();
-		if (savedHome === undefined) delete process.env.PI_LENS_HOME;
-		else process.env.PI_LENS_HOME = savedHome;
-		if (savedOptIn === undefined) delete process.env.PI_LENS_WARM_ATTACH;
-		else process.env.PI_LENS_WARM_ATTACH = savedOptIn;
-		removeTempDirSync(root);
-		removeTempDirSync(home);
-	});
-
-	it("survives a client that disconnects mid-reply, and counts the errno", async () => {
-		await configureWarmAttach(root);
-		const endpoint = diagnosticsIpcPathForCwd(root, process.pid);
-		const client = net.createConnection(endpoint);
-		// The peer half is not under test: the client is the side that walks away.
-		client.on("error", () => {});
-		await new Promise<void>((resolve, reject) => {
-			client.once("connect", resolve);
-			client.once("error", reject);
+		beforeEach(() => {
+			root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-3389-root-"));
+			home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-3389-home-"));
+			savedHome = process.env.PI_LENS_HOME;
+			savedOptIn = process.env.PI_LENS_WARM_ATTACH;
+			process.env.PI_LENS_HOME = home;
+			process.env.PI_LENS_WARM_ATTACH = "1";
+			uncaught.length = 0;
+			resetDegradationLedger();
+			// The host's own default disposition is what kills it; capturing here
+			// keeps the escape observable instead of taking the whole worker down.
+			process.on("uncaughtException", capture);
 		});
-		// An unusable request line the server answers immediately, and a reset
-		// before the reply can land — `requestWarmDiagnostics`'s `finish()`
-		// destroys its socket exactly this way on every timeout and refusal.
-		client.write("not-json\n");
-		client.destroy();
 
-		const group = await waitForGroup("warm-attach-socket-error");
-		// F1: pre-fix the socket error escapes — `write EPIPE` in this
-		// in-process run, `read ECONNRESET` in the child-host probe. Either way,
-		// in production it is the host's last breath.
-		expect(uncaught).toEqual([]);
-		// F2: a listener that swallowed silently would leave a peer resetting
-		// every request invisible to `pilens degradation` / `/lens-perf`.
-		expect(group?.count ?? 0).toBeGreaterThanOrEqual(1);
-		// The subject is the errno the socket reported (ECONNRESET on read, EPIPE
-		// when the reply write loses the race), not a fixed label: a constant
-		// would make every peer failure one indistinguishable row.
-		expect(group?.latestReasons[0]?.subject).toMatch(/^E[A-Z]+$/);
-		expect(group?.latestReasons[0]?.reason).toContain(
-			group?.latestReasons[0]?.subject ?? "",
-		);
-	});
+		afterEach(() => {
+			process.off("uncaughtException", capture);
+			_resetWarmAttachForTests();
+			resetDegradationLedger();
+			if (savedHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = savedHome;
+			if (savedOptIn === undefined) delete process.env.PI_LENS_WARM_ATTACH;
+			else process.env.PI_LENS_WARM_ATTACH = savedOptIn;
+			removeTempDirSync(root);
+			removeTempDirSync(home);
+		});
 
-	it(
-		"records an unknown subject for a code-less error and leaves the connection usable",
-		async () => {
-			// Review round 1, F3395-01: the `error` EVENT channel accepts any `Error`,
-			// not only Node's errno-carrying system errors, so the handler's
-			// `?? "unknown"` arm IS reachable — round 1 of this PR wrongly declared it
-			// unreachable. Two things must hold: one bounded row whose subject says
-			// `unknown` rather than a missing or empty string, and a connection that
-			// stays usable, because a code-less error is not evidence the transport is
-			// gone (a real system failure destroys the stream before the handler runs;
-			// this one does not).
-			const accepted: net.Socket[] = [];
-			await configureWarmAttach(root);
-			// The accepted socket has exactly one input channel and no other reachable
-			// handle: `node:net`'s ESM namespace is not configurable, so the factory
-			// cannot be wrapped from here. The server's OWN `connection` event hands
-			// over the same socket production's handler already received.
-			_warmAttachServerForTests()?.on("connection", (socket) => {
-				accepted.push(socket);
-			});
-			const endpoint = diagnosticsIpcPathForCwd(root, process.pid);
-			const client = net.createConnection(endpoint);
-			client.setEncoding("utf8");
-			client.on("error", () => {});
-			await new Promise<void>((resolve, reject) => {
-				client.once("connect", resolve);
-				client.once("error", reject);
-			});
-			await waitFor(
-				() => accepted.length,
-				(n) => n > 0,
-				{
-					timeoutMs: 4_000,
-					yieldControl: pump,
-				},
-			);
-			const socket = accepted[0];
-			expect(socket).toBeDefined();
-			socket?.emit("error", new Error("code-less socket failure"));
-
-			const group = await waitForGroup("warm-attach-socket-error");
-			expect(uncaught).toEqual([]);
-			expect(group?.count ?? 0).toBe(1);
-			expect(group?.latestReasons[0]?.subject).toBe("unknown");
-			expect(group?.latestReasons[0]?.reason).toContain(
-				"code-less socket failure",
-			);
-			// Still usable: the request written after the event is still answered, so
-			// the handler cannot be turned into a teardown without this failing.
-			const reply = await new Promise<string>((resolve) => {
-				client.once("data", (chunk) => resolve(String(chunk)));
+		it(
+			"survives a client that disconnects mid-reply, and counts the errno",
+			async () => {
+				await configureWarmAttach(root);
+				const endpoint = diagnosticsIpcPathForCwd(root, process.pid);
+				const client = net.createConnection(boundUnixSocketPath(endpoint));
+				// The peer half is not under test: the client is the side that walks away.
+				client.on("error", () => {});
+				await new Promise<void>((resolve, reject) => {
+					client.once("connect", resolve);
+					client.once("error", reject);
+				});
+				// An unusable request line the server answers immediately, and a reset
+				// before the reply can land — `requestWarmDiagnostics`'s `finish()`
+				// destroys its socket exactly this way on every timeout and refusal.
 				client.write("not-json\n");
-			});
-			expect(reply).toContain("error");
-			client.end();
-		},
-		scaledTestTimeout(20_000),
-	);
+				client.destroy();
 
-	it.each([
-		["empty", ""],
-		["whitespace-only", "   "],
-	])(
-		"records an unknown subject for a %s errno on the accepted socket",
-		async (_label, code) => {
-			// Verify round 2, F3395-02: a socket error carrying `code: ""` wrote
-			// `subject: ""` — a row that discriminates nothing and renders as
-			// `⚠ warm-attach-socket-error: 1 — : …`. Blank and missing are one case
-			// for a subject; the rule itself lives in the ledger's write paths
-			// (`tests/clients/degradation-ledger.test.ts`), and this case pins the
-			// INPUT CHANNEL that reached it.
-			const accepted: net.Socket[] = [];
-			await configureWarmAttach(root);
-			_warmAttachServerForTests()?.on("connection", (socket) => {
-				accepted.push(socket);
-			});
-			const client = net.createConnection(
-				diagnosticsIpcPathForCwd(root, process.pid),
-			);
-			client.on("error", () => {});
-			await new Promise<void>((resolve, reject) => {
-				client.once("connect", resolve);
-				client.once("error", reject);
-			});
-			await waitFor(
-				() => accepted.length,
-				(n) => n > 0,
-				{
+				const group = await waitForGroup("warm-attach-socket-error");
+				// F1: pre-fix the socket error escapes — `write EPIPE` in this
+				// in-process run, `read ECONNRESET` in the child-host probe. Either way,
+				// in production it is the host's last breath.
+				expect(uncaught).toEqual([]);
+				// F2: a listener that swallowed silently would leave a peer resetting
+				// every request invisible to `pilens degradation` / `/lens-perf`.
+				expect(group?.count ?? 0).toBeGreaterThanOrEqual(1);
+				// The subject is the errno the socket reported (ECONNRESET on read, EPIPE
+				// when the reply write loses the race), not a fixed label: a constant
+				// would make every peer failure one indistinguishable row.
+				expect(group?.latestReasons[0]?.subject).toMatch(/^E[A-Z]+$/);
+				expect(group?.latestReasons[0]?.reason).toContain(
+					group?.latestReasons[0]?.subject ?? "",
+				);
+			},
+			// #4865 r1 F7: the wait's own ceiling is scaled, so the test budget that
+			// contains it must scale with it. At `PI_LENS_TEST_TIMEOUT_SCALE=3` the
+			// 2 s `waitForGroup` is 6 s, and Vitest's unscaled 5 s default reported
+			// "Test timed out in 5000ms" over the assertion that names the defect.
+			scaledTestTimeout(20_000),
+		);
+
+		it(
+			"records an unknown subject for a code-less error and leaves the connection usable",
+			async () => {
+				// Review round 1, F3395-01: the `error` EVENT channel accepts any `Error`,
+				// not only Node's errno-carrying system errors, so the handler's
+				// `?? "unknown"` arm IS reachable — round 1 of this PR wrongly declared it
+				// unreachable. Two things must hold: one bounded row whose subject says
+				// `unknown` rather than a missing or empty string, and a connection that
+				// stays usable, because a code-less error is not evidence the transport is
+				// gone (a real system failure destroys the stream before the handler runs;
+				// this one does not).
+				const accepted: net.Socket[] = [];
+				await configureWarmAttach(root);
+				// The accepted socket has exactly one input channel and no other reachable
+				// handle: `node:net`'s ESM namespace is not configurable, so the factory
+				// cannot be wrapped from here. The server's OWN `connection` event hands
+				// over the same socket production's handler already received.
+				_warmAttachServerForTests()?.on("connection", (socket) => {
+					accepted.push(socket);
+				});
+				const endpoint = diagnosticsIpcPathForCwd(root, process.pid);
+				const client = net.createConnection(boundUnixSocketPath(endpoint));
+				client.setEncoding("utf8");
+				client.on("error", () => {});
+				await new Promise<void>((resolve, reject) => {
+					client.once("connect", resolve);
+					client.once("error", reject);
+				});
+				await waitFor(
+					() => accepted.length,
+					(n) => n > 0,
+					{
+						timeoutMs: 4_000,
+						yieldControl: pump,
+					},
+				);
+				const socket = accepted[0];
+				expect(socket).toBeDefined();
+				socket?.emit("error", new Error("code-less socket failure"));
+
+				const group = await waitForGroup("warm-attach-socket-error");
+				expect(uncaught).toEqual([]);
+				expect(group?.count ?? 0).toBe(1);
+				expect(group?.latestReasons[0]?.subject).toBe("unknown");
+				expect(group?.latestReasons[0]?.reason).toContain(
+					"code-less socket failure",
+				);
+				// Still usable: the request written after the event is still answered, so
+				// the handler cannot be turned into a teardown without this failing.
+				const reply = await new Promise<string>((resolve) => {
+					client.once("data", (chunk) => resolve(String(chunk)));
+					client.write("not-json\n");
+				});
+				expect(reply).toContain("error");
+				client.end();
+			},
+			scaledTestTimeout(20_000),
+		);
+
+		it.each([
+			["empty", ""],
+			["whitespace-only", "   "],
+		])(
+			"records an unknown subject for a %s errno on the accepted socket",
+			async (_label, code) => {
+				// Verify round 2, F3395-02: a socket error carrying `code: ""` wrote
+				// `subject: ""` — a row that discriminates nothing and renders as
+				// `⚠ warm-attach-socket-error: 1 — : …`. Blank and missing are one case
+				// for a subject; the rule itself lives in the ledger's write paths
+				// (`tests/clients/degradation-ledger.test.ts`), and this case pins the
+				// INPUT CHANNEL that reached it.
+				const accepted: net.Socket[] = [];
+				await configureWarmAttach(root);
+				_warmAttachServerForTests()?.on("connection", (socket) => {
+					accepted.push(socket);
+				});
+				const client = net.createConnection(
+					boundUnixSocketPath(diagnosticsIpcPathForCwd(root, process.pid)),
+				);
+				client.on("error", () => {});
+				await new Promise<void>((resolve, reject) => {
+					client.once("connect", resolve);
+					client.once("error", reject);
+				});
+				await waitFor(
+					() => accepted.length,
+					(n) => n > 0,
+					{
+						timeoutMs: 4_000,
+						yieldControl: pump,
+					},
+				);
+				accepted[0]?.emit(
+					"error",
+					Object.assign(new Error("malformed errno"), { code }),
+				);
+
+				const group = await waitForGroup("warm-attach-socket-error");
+				expect(uncaught).toEqual([]);
+				expect(group?.count ?? 0).toBe(1);
+				expect(group?.latestReasons[0]?.subject).toBe("unknown");
+				client.end();
+			},
+			scaledTestTimeout(20_000),
+		);
+
+		it(
+			"records nothing when a client closes cleanly after an unterminated line",
+			async () => {
+				// The negative direction of the same discriminator (state table R7): a
+				// client that sends a partial request and closes is ordinary traffic —
+				// `end`, `close`, no `error` — and a ledger row here would be noise on
+				// every abandoned edit.
+				await configureWarmAttach(root);
+				const endpoint = diagnosticsIpcPathForCwd(root, process.pid);
+				// Shape 86 (#4865): the wait ends on the event it waits for. The 50
+				// `setImmediate` turns were standing in for the server-side close of the
+				// accepted socket, so the case takes that event: `allowHalfOpen` is false,
+				// so Node ends the server's side on the client's FIN and the socket emits
+				// `close` about one turn later (measured 1 ms in a bare `net` probe).
+				// `waitFor` bounds it on the real clock, pumped on the same seam as the
+				// accept above -- so no raw timer and no turn count, and a close path that
+				// never runs reports the wait's own diagnostic instead of a clean case.
+				const server = _warmAttachServerForTests();
+				expect(
+					server,
+					"configureWarmAttach did not leave a server to observe",
+				).toBeDefined();
+				let serverSocketClosed = false;
+				server?.once("connection", (socket) => {
+					socket.once("close", () => {
+						serverSocketClosed = true;
+					});
+				});
+				const client = net.createConnection(boundUnixSocketPath(endpoint));
+				client.on("error", () => {});
+				await new Promise<void>((resolve, reject) => {
+					client.once("connect", resolve);
+					client.once("error", reject);
+				});
+				client.write('{"route":"diagnostics"');
+				await new Promise<void>((resolve) => {
+					client.once("close", resolve);
+					client.end();
+				});
+				await waitFor(() => serverSocketClosed, Boolean, {
 					timeoutMs: 4_000,
 					yieldControl: pump,
-				},
-			);
-			accepted[0]?.emit(
-				"error",
-				Object.assign(new Error("malformed errno"), { code }),
-			);
+				});
 
-			const group = await waitForGroup("warm-attach-socket-error");
-			expect(uncaught).toEqual([]);
-			expect(group?.count ?? 0).toBe(1);
-			expect(group?.latestReasons[0]?.subject).toBe("unknown");
-			client.end();
-		},
-		scaledTestTimeout(20_000),
-	);
-
-	it("records nothing when a client closes cleanly after an unterminated line", async () => {
-		// The negative direction of the same discriminator (state table R7): a
-		// client that sends a partial request and closes is ordinary traffic —
-		// `end`, `close`, no `error` — and a ledger row here would be noise on
-		// every abandoned edit.
-		await configureWarmAttach(root);
-		const endpoint = diagnosticsIpcPathForCwd(root, process.pid);
-		const client = net.createConnection(endpoint);
-		client.on("error", () => {});
-		await new Promise<void>((resolve, reject) => {
-			client.once("connect", resolve);
-			client.once("error", reject);
-		});
-		client.write('{"route":"diagnostics"');
-		await new Promise<void>((resolve) => {
-			client.once("close", resolve);
-			client.end();
-		});
-		for (let turn = 0; turn < 50; turn++) await pump();
-
-		expect(uncaught).toEqual([]);
-		expect(
-			getDegradationSummary().find(
-				(candidate) => candidate.kind === "warm-attach-socket-error",
-			),
-		).toBeUndefined();
-	});
-});
+				expect(uncaught).toEqual([]);
+				expect(
+					getDegradationSummary().find(
+						(candidate) => candidate.kind === "warm-attach-socket-error",
+					),
+				).toBeUndefined();
+			},
+			// #4865 r1 F7: same reason -- the `waitFor` above allows 4 scaled seconds,
+			// which is 12 s at scale 3 and so outlives the unscaled 5 s default.
+			scaledTestTimeout(20_000),
+		);
+	},
+);

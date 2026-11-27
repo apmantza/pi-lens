@@ -400,14 +400,16 @@ export function mergeBulletSection(
 	// tolerate both so a single parser/merger works for both sections.
 	const bulletRe = /^- \*\*(.+?)\*\*(?:\s*\([^)]*\))?:\s*(.*)$/;
 	const byKey = new Map();
-	// Trailing non-bullet lines within the body (e.g. a blank line at EOF when
-	// this is the last section) — preserved after the sorted bullets rather than
-	// dropped.
-	const trailing = [];
+	// Keep the section's non-bullet prefix (for example the raw-capability
+	// introduction) above the sorted bullets. Non-bullet lines after the first
+	// bullet trail the sorted bullets, as they did before the split, so a line
+	// between two bullets is kept (#5526).
+	let firstBullet = bodyEnd;
 	for (let i = bodyStart; i < bodyEnd; i++) {
 		const m = bulletRe.exec(lines[i]);
-		if (m) byKey.set(m[1], lines[i]);
-		else trailing.push(lines[i]);
+		if (!m) continue;
+		if (firstBullet === bodyEnd) firstBullet = i;
+		byKey.set(m[1], lines[i]);
 	}
 	let added = false;
 	for (const k of keysToCarry) {
@@ -421,7 +423,10 @@ export function mergeBulletSection(
 	const sortedLines = [...byKey.keys()]
 		.sort(compareStableStrings)
 		.map((k) => byKey.get(k));
-	const before = lines.slice(0, bodyStart);
+	const before = lines.slice(0, firstBullet);
+	const trailing = lines
+		.slice(firstBullet, bodyEnd)
+		.filter((line) => !bulletRe.test(line));
 	const after = lines.slice(bodyEnd);
 	return [...before, ...sortedLines, ...trailing, ...after].join("\n");
 }
@@ -631,6 +636,36 @@ export function advancePendingClass(confirmed, pending, observed, agreeRuns) {
 	};
 }
 
+/**
+ * The two-night hold of one published cell group (#3405 save verdicts, #5667
+ * the idle-eviction doc), over `advancePendingClass`. `prior` is what the doc
+ * publishes now and `observed` what tonight measured, both as one comparable
+ * string; `isSettled` says whether a value is a real answer. A settled prior is
+ * never replaced by a night that could not tell (the pending flip is carried,
+ * neither advanced nor cleared), and changes to another settled answer only
+ * after `TIER_CHANGE_AGREE_RUNS` consecutive nights agree on it. A prior that
+ * holds no settled answer has nothing to protect: the first measurement
+ * publishes. The caller persists `pending` (undefined clears it).
+ *
+ * @param {{ prior: string, observed: string, pending?: { value: string, runs: number }, isSettled: (value: string) => boolean }} night
+ * @returns {{ publish: boolean, pending?: { value: string, runs: number }, held?: "unsettled" | "pending" }}
+ */
+export function holdSettledCell({ prior, observed, pending, isSettled }) {
+	if (isSettled(prior) && !isSettled(observed))
+		return { publish: false, pending, held: "unsettled" };
+	if (isSettled(prior) && observed !== prior) {
+		const advanced = advancePendingClass(
+			prior,
+			pending,
+			observed,
+			TIER_CHANGE_AGREE_RUNS,
+		);
+		if (!advanced.committed)
+			return { publish: false, pending: advanced.pending, held: "pending" };
+	}
+	return { publish: true, pending: undefined };
+}
+
 /** @param {Date | number | string} now @returns {string} UTC `YYYY-MM-DD` */
 function utcDay(now) {
 	if (isUtcDay(now)) return now;
@@ -726,6 +761,41 @@ function sanitizeMissedProbeState(map) {
 /** The refresh-state key holding the idle-eviction promotion bookkeeping (#3989). */
 export const IDLE_EVICTION_KEY = "idle-eviction";
 
+/** The refresh-state key holding the pending save-verdict flips (#3405). */
+export const SAVE_VERDICT_KEY = "save-verdict";
+
+/** The refresh-state key holding the pending idle-eviction doc flips (#5667). */
+export const IDLE_EVICTION_DOC_KEY = "idle-eviction-doc";
+
+/**
+ * #3405, #5667: keep only well-formed pending flips, `{ [server]: { [field]:
+ * value, runs } }`: the settled value one night measured against the published
+ * one (`pendingSaveVerdict`, `pendingCells`), and how many consecutive nights
+ * agreed on it. A hand-edited or old block cannot carry garbage into the
+ * section: an entry that is not a non-empty string with a positive whole count
+ * is dropped. The value is not checked against its vocabulary here (that lives
+ * with the column's owner): the hold only ever compares it for equality with a
+ * settled night, so a value nobody planned can never commit.
+ *
+ * @param {unknown} map
+ * @param {string} field
+ */
+export function sanitizePendingFlips(map, field) {
+	const out = {};
+	if (!map || typeof map !== "object") return out;
+	for (const server of Object.keys(map).sort(compareStableStrings)) {
+		const e = map[server];
+		if (
+			typeof e?.[field] === "string" &&
+			e[field] !== "" &&
+			Number.isInteger(e.runs) &&
+			e.runs > 0
+		)
+			out[server] = { [field]: e[field], runs: e.runs };
+	}
+	return out;
+}
+
 /**
  * #3989: keep only well-formed idle-eviction nights, at most two per server
  * (the promotion window), so a hand-edited or old block cannot carry garbage
@@ -754,18 +824,18 @@ function sanitizeIdleEvictionState(map) {
 }
 
 /**
- * #3989: replace the `idle-eviction` key of the refresh-state block in `text`,
- * leaving the other keys as parsed. An empty map removes the key (and the
- * section when nothing else is left).
+ * Replace one key of the refresh-state block in `text` (`idle-eviction`,
+ * `save-verdict`: the keys whose own nightly step writes them), leaving the
+ * other keys as parsed. An empty map removes the key (and the section when
+ * nothing else is left). The render below sanitizes the value, so a key it does
+ * not know is dropped, never carried.
  *
  * @param {string} text
- * @param {Record<string, { nights: { day: string, rssMb: number | null, coldMs: number }[] }>} idleEviction
+ * @param {string} key
+ * @param {Record<string, unknown>} value
  */
-export function setIdleEvictionState(text, idleEviction) {
-	const state = {
-		...parseRefreshState(text),
-		[IDLE_EVICTION_KEY]: idleEviction,
-	};
+export function setRefreshStateKey(text, key, value) {
+	const state = { ...parseRefreshState(text), [key]: value };
 	return replaceRefreshStateSection(text, renderRefreshStateSection(state));
 }
 
@@ -810,6 +880,14 @@ function renderRefreshStateSection(state) {
 	}
 	const idleEviction = sanitizeIdleEvictionState(state?.[IDLE_EVICTION_KEY]);
 	const missedProbe = sanitizeMissedProbeState(state?.[MISSED_PROBE_KEY]);
+	const saveVerdict = sanitizePendingFlips(
+		state?.[SAVE_VERDICT_KEY],
+		"pendingSaveVerdict",
+	);
+	const idleEvictionDoc = sanitizePendingFlips(
+		state?.[IDLE_EVICTION_DOC_KEY],
+		"pendingCells",
+	);
 	const payload = {};
 	if (Object.keys(cleanBehavior).length)
 		payload["clean-behavior"] = cleanBehavior;
@@ -817,14 +895,19 @@ function renderRefreshStateSection(state) {
 	if (Object.keys(idleEviction).length)
 		payload[IDLE_EVICTION_KEY] = idleEviction;
 	if (Object.keys(missedProbe).length) payload[MISSED_PROBE_KEY] = missedProbe;
+	if (Object.keys(saveVerdict).length) payload[SAVE_VERDICT_KEY] = saveVerdict;
+	if (Object.keys(idleEvictionDoc).length)
+		payload[IDLE_EVICTION_DOC_KEY] = idleEvictionDoc;
 	if (Object.keys(payload).length === 0) return [];
 	return [
 		REFRESH_STATE_HEADING,
 		"",
 		"Bookkeeping for the two-run `first-publish`/`clean-behavior` hysteresis, the",
 		"first-miss stamps (#3401, #4615), the consecutive-night `missed-probe`",
-		"streaks behind the `stale` column (#4512) and consecutive-night",
-		"`idle-eviction` counts (#3989). Regenerated every run; never a measurement.",
+		"streaks behind the `stale` column (#4512), consecutive-night",
+		"`idle-eviction` counts (#3989), the pending `save-verdict` flips (#3405) and",
+		"the pending `idle-eviction-doc` flips (#5667).",
+		"Regenerated every run; never a measurement.",
 		"",
 		REFRESH_STATE_FENCE,
 		JSON.stringify(payload),
@@ -926,6 +1009,10 @@ export function refreshCapabilityMatrix(text, observations, opts = {}) {
 		// The idle-eviction bookkeeping belongs to its own nightly step; this
 		// refresh must carry it through, not drop it (#3989).
 		[IDLE_EVICTION_KEY]: prior[IDLE_EVICTION_KEY],
+		// Likewise the save-verdict probe's pending flips (#3405).
+		[SAVE_VERDICT_KEY]: prior[SAVE_VERDICT_KEY],
+		// And the idle-eviction doc's pending flips (#5667).
+		[IDLE_EVICTION_DOC_KEY]: prior[IDLE_EVICTION_DOC_KEY],
 	};
 	const staleLangs = [];
 	const raisedLangs = [];

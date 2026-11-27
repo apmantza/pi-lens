@@ -22,8 +22,22 @@ export interface Symbol {
 	 * read ranges and the read-guard's `enclosingSymbol` coverage. */
 	endLine?: number;
 	column: number;
+	/**
+	 * 1-based position of the symbol's identifier, when the extractor captured
+	 * it. `line`/`column` are the declaration start (`pub`, `async`, a leading
+	 * annotation), where an LSP `references` request can answer empty (#5559);
+	 * use `nameLine ?? line` / `nameColumn ?? column` for an LSP position.
+	 */
+	nameLine?: number;
+	nameColumn?: number;
 	signature?: string; // For functions: "(a: T, b: U) => R"
-	isExported: boolean;
+	/**
+	 * true: exported; false: the language's export rule decided it is not;
+	 * undefined: no rule for this language can decide (#5599), which a reader
+	 * must not take for false. Mirrors `ReviewGraphNode.exported`, already
+	 * optional.
+	 */
+	isExported?: boolean;
 	/**
 	 * Access visibility when the language exposes a REAL, detectable modifier
 	 * (TS/JS `private`/`protected`/`#`). Undefined = public or not applicable —

@@ -558,6 +558,19 @@ describe("#3528: a drain that outlives its session writes nothing into the next"
 		expect(staleWriteSubjects()).toEqual([`runtime-session:${filePath}`]);
 	});
 
+	it("Straddle (#3528, #5551): a session-1 drain asks for no read guard of session 1 once session 2 replaced it", async () => {
+		const c = armChild({ write: true });
+		const drain = handleAgentEnd(drainDeps({ currentSessionId: "SESSION-1" }));
+		await c.didRead;
+		// Installed after the drain parked: its entry read of session 1 is not counted.
+		const readGuardFor = vi.spyOn(runtime, "readGuardFor");
+		runtime.resetForSession(Date.now());
+		c.openWrite();
+		await drain;
+		// The lazy readGuard getter (#3528): a replaced session's guard is never created.
+		expect(readGuardFor).not.toHaveBeenCalledWith("SESSION-1");
+	});
+
 	it("StraddleState (#3528): an abandoned session-1 format is not requeued into session 2's cleared queue", async () => {
 		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 		const c = armChild({ write: true });
@@ -743,12 +756,17 @@ describe("#3528: a drain that outlives its session writes nothing into the next"
 		it("the format's recordWritten, change log, modified range and turn summary land in its own session", async () => {
 			flags.add("lens-turn-summary");
 			const addModifiedRange = vi.spyOn(cacheManager, "addModifiedRange");
+			// An import line, so the drain's import flag is set on the bytes it wrote.
+			fs.writeFileSync(filePath, 'import "./dep";\nconst x=1\n');
 			armChild();
 			const summary = await handleAgentEnd(drainDeps());
 			expect(summary?.changed).toEqual([filePath]);
 			expect(blindEditVerdict()).toBe("allow");
 			expect(runtime.getFileSeq(filePath)).toBe(1);
 			expect(addModifiedRange).toHaveBeenCalledTimes(1);
+			// The third argument is importsChanged (#5551): the drain must carry it
+			// through, or the turn state misses an import change.
+			expect(addModifiedRange.mock.calls[0]?.[2]).toBe(true);
 			expect(runtime.turnSummary.peek()).toEqual([
 				expect.objectContaining({
 					filePath,

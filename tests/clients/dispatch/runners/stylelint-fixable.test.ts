@@ -6,7 +6,10 @@ import { setupTestEnvironment } from "../../test-utils.js";
 
 const safeSpawnAsync = vi.fn();
 
-vi.mock("../../../../clients/safe-spawn.js", () => ({
+vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/safe-spawn.js")
+	>()),
 	safeSpawn: vi.fn(),
 	safeSpawnAsync,
 }));
@@ -17,11 +20,6 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: () => ({
-			isAvailable: () => true,
-			isAvailableAsync: async () => true,
-			getCommand: () => "stylelint",
-		}),
 		resolveToolCommandWithInstallFallback: vi.fn(async () => "stylelint"),
 	}),
 );
@@ -32,7 +30,6 @@ vi.mock("../../../../clients/tool-policy.js", async (importOriginal) => {
 	return {
 		...actual,
 		getLinterPolicyForCwd: () => null,
-		hasStylelintConfig: () => true,
 	};
 });
 

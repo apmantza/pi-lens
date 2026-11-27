@@ -4,7 +4,8 @@
  * ## The recurrence this guards
  *
  * `PI_LENS_DISABLE_TOOL_INSTALL=1` was read by the managed installer only. The
- * lazy installer (`gem install rubocop`, `rustup component add`) and
+ * lazy installer (`gem install rubocop`, `rustup component add`, deleted by
+ * #5410 D9) and
  * govulncheck's `go install` checked project trust and spawned anyway, and
  * Biome's presence probe ran `npx @biomejs/biome --version` with no spawn
  * options, so the registry saw a download with the switch set. The `#1759 F2`
@@ -164,6 +165,7 @@ const KNOWN_GOOD: Readonly<Record<string, readonly string[]>> = {
 	gh: ["auth", "token"],
 	git: [
 		"--exclude-standard",
+		"--git-common-dir",
 		"--ignored",
 		"--is-inside-work-tree",
 		"--name-only",
@@ -642,11 +644,6 @@ interface GatedFile {
  * answers "unavailable" before any spawn-shaped token.
  */
 const GATED_FILES: Readonly<Record<string, GatedFile>> = {
-	"clients/dispatch/runners/utils/lazy-installer.ts": {
-		entries: [
-			{ symbol: "runLazyInstall", before: ["performInstall("], consults: 1 },
-		],
-	},
 	"clients/govulncheck-client.ts": {
 		entries: [
 			{
@@ -836,17 +833,20 @@ const SEAM =
 	"the spawn chokepoint's own forwarding between its entry points, its tool-probe wrapper, or a fixed process-table query (ps/wmic), which take their command from a caller already counted here";
 const PM =
 	"a package-manager query or run-script (config get prefix, bin -g, the repo's rebuild script), not an install verb";
+const REVIEW =
+	"the repo's rebuild script through its package manager (not an install verb), and the fresh-analyze worker: the running node on pi-lens's own worker file, which installs nothing";
 const LSP =
 	"language-server launch and install code: its installs follow PI_LENS_DISABLE_LSP_INSTALL (canInstall in clients/lsp/server.ts, a separate switch), and its probes (java finder, --version) install nothing";
 const OPERAND =
-	"a known-good command and literal words plus one computed operand the census cannot fold: mix credo's file argument is path.resolve(cwd, file), an absolute path that cannot read as an option, and git diff's two operands are commit ids readGitHead read from git rev-parse; neither tool installs anything. Each call's words and options are pinned by text";
+	"a known-good command and literal words plus one computed operand the census cannot fold: mix credo's file argument is path.resolve(cwd, file), an absolute path that cannot read as an option, and its `...config` spread is either nothing or the literal `--config-file <generated overlay path>` of the same runner's two call sites (#5594), git diff's two operands are commit ids readGitHead read from git rev-parse, and the complexity baseline's git for-each-ref lists fixed ref names and its git show names `<ref>:./<path>`, a revision spec that cannot read as an option; no tool here installs anything. Each call's words and options are pinned by text";
+const STAGED_REPLAY =
+	"the staged-delta gate's one git runner (runGit in clients/staged-delta.ts): it replays the agent's own git add, git rm (as rm --cached), git mv (as mv -n, then update-index on the copy) and git commit --dry-run, the command about to run, on a private index copy with core.hooksPath set to a net whose prepare-commit-msg hook refuses, and reads blobs with rev-parse, ls-files, diff, hash-object and cat-file; the command is git and no verb it runs installs anything";
 const REGISTRY_PATH =
 	"a PowerShell -Command whose script is one fixed string literal reading the Machine and User Path variables (readWindowsRegistryPath); it starts no installer, and its script is pinned by text, so a changed script is a finding";
 
 const ROWS: Readonly<Record<string, Row>> = {
 	// ROWS-BEGIN
 	// -- gated: the install spawns the tool switch governs (entries verified) --
-	"clients/dispatch/runners/utils/lazy-installer.ts#safeSpawnAsync": GATED(1),
 	"clients/govulncheck-client.ts#safeSpawnAsync": GATED(2),
 	"clients/installer/index.ts#probeToolAsync": GATED(3),
 	"clients/installer/index.ts#run": GATED(2),
@@ -855,7 +855,6 @@ const ROWS: Readonly<Record<string, Row>> = {
 	"clients/installer/managed-tool-refresh.ts#safeSpawnAsync": GATED(2),
 	// -- the rest: classified, each count pinned --
 	...because(LSP, {
-		"clients/lsp/jvm-runtime.ts#safeSpawnAsync": 1,
 		"clients/lsp/launch.ts#safeSpawn": 1,
 		"clients/lsp/server.ts#safeSpawnAsync": {
 			sites: 4,
@@ -870,13 +869,28 @@ const ROWS: Readonly<Record<string, Row>> = {
 		"clients/dispatch/runners/credo.ts#safeSpawnAsync": {
 			sites: 1,
 			pins: [
-				`"mix" ["credo", "--format", "json", "--strict", absPath] {timeout: 30000, cwd}`,
+				`"mix" ["credo", "--format", "json", "--strict", ...config, absPath] {timeout: 30000, cwd, ...(env ? {env} : {})}`,
+			],
+		},
+		"clients/metrics/complexity-baseline.ts#safeSpawnAsync": {
+			sites: 2,
+			pins: [
+				`"git" ["for-each-ref", "--format=%(refname)%09%(symref)", "refs/remotes/origin/HEAD", ...DEFAULT_BRANCH_REFS] {cwd, timeout: GIT_TIMEOUT_MS, ...(signal && {signal}), resourceLabel: "complexity-main"}`,
+				'"git" ["show", `${ref}:./${relative}`] {cwd, timeout: GIT_TIMEOUT_MS, ...(signal && {signal}), maxOutputBytes: MAX_BLOB_BYTES, env: {LC_ALL: "C"}, resourceLabel}',
 			],
 		},
 		"clients/opaque-mutation-scan.ts#safeSpawnAsync": {
 			sites: 1,
 			pins: [
 				`"git" ["diff", "--name-only", "--no-renames", "-z", from, to] {cwd: root, timeout: 5000, maxOutputBytes: MAX_GIT_STATUS_OUTPUT_BYTES}`,
+			],
+		},
+	}),
+	...because(STAGED_REPLAY, {
+		"clients/staged-delta.ts#safeSpawnAsync": {
+			sites: 1,
+			pins: [
+				`"git" [...replay.globals, ...(extra.config === undefined ? [] : ["-c", extra.config]), ...args] {cwd: replay.cwd, env: {...replay.env, ...extra.env, ...(extra.index === undefined ? {} : {GIT_INDEX_FILE: extra.index}), GIT_TERMINAL_PROMPT: "0", GIT_EDITOR: "false"}, timeout: GIT_TIMEOUT_MS, maxOutputBytes: MAX_GIT_OUTPUT_BYTES, input: extra.input ?? "", ...(signal === undefined ? {} : {signal})}`,
 			],
 		},
 	}),
@@ -888,8 +902,10 @@ const ROWS: Readonly<Record<string, Row>> = {
 			],
 		},
 	}),
+	...because(REVIEW, {
+		"clients/mcp/review.ts#safeSpawnAsync": 2,
+	}),
 	...because(PM, {
-		"clients/mcp/review.ts#safeSpawnAsync": 1,
 		"clients/package-manager.ts#probeToolAsync": 1,
 		"clients/package-manager.ts#safeSpawnAsync": 1,
 	}),
@@ -897,7 +913,8 @@ const ROWS: Readonly<Record<string, Row>> = {
 		"clients/process-snapshot.ts#spawnCollectStdoutResult": 2,
 		// #5289: `safeSpawnBatch` and the sync `isCommandAvailable` (deleted)
 		// each held one computed-command site.
-		"clients/safe-spawn.ts#safeSpawn": 1,
+		// #5410 S5: the sync `findCommand` (deleted) held the one `safeSpawn` site
+		// left here, so its row goes with it.
 		"clients/safe-spawn.ts#safeSpawnAsync": 2,
 		"clients/tool-probe.ts#safeSpawnAsync": 1,
 	}),
@@ -907,7 +924,6 @@ const ROWS: Readonly<Record<string, Row>> = {
 		"clients/dead-code-client.ts#probeToolAsync": 1,
 		"clients/dead-code-client.ts#safeSpawnAsync": 1,
 		"clients/dependency-checker.ts#safeSpawnAsync": 2,
-		"clients/dispatch/dispatcher.ts#probeToolAsync": 1,
 		"clients/dispatch/runners/actionlint.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/biome-check.ts#safeSpawnAsync": 2,
 		"clients/dispatch/runners/cpp-check.ts#safeSpawnAsync": 1,
@@ -931,11 +947,7 @@ const ROWS: Readonly<Record<string, Row>> = {
 		"clients/dispatch/runners/mypy.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/oxlint.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/php-lint.ts#safeSpawnAsync": 1,
-		"clients/dispatch/runners/phpstan.ts#safeSpawnAsync": 1,
-		"clients/dispatch/runners/prisma-validate.ts#resolveLocalFirstAsync": {
-			sites: 1,
-			pins: [`"prisma" cwd`],
-		},
+		"clients/dispatch/runners/phpstan.ts#safeSpawnAsync": 2,
 		"clients/dispatch/runners/prisma-validate.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/psscriptanalyzer.ts#probeToolAsync": 2,
 		"clients/dispatch/runners/psscriptanalyzer.ts#safeSpawnAsync": 1,
@@ -956,7 +968,7 @@ const ROWS: Readonly<Record<string, Row>> = {
 		"clients/dispatch/runners/trivy-config.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/utils/candidate-probe.ts#probeToolAsync": 1,
 		"clients/dispatch/runners/utils/runner-helpers.ts#probeToolAsync": 1,
-		"clients/dispatch/runners/utils/runner-helpers.ts#safeSpawnAsync": 3,
+		"clients/dispatch/runners/utils/runner-helpers.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/vale.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/yamllint.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/zig-check.ts#safeSpawnAsync": 1,
@@ -972,7 +984,6 @@ const ROWS: Readonly<Record<string, Row>> = {
 		"clients/security-scan-client.ts#probeToolAsync": 1,
 		"clients/sg-runner.ts#probeToolAsync": 1,
 		"clients/sg-runner.ts#safeSpawnAsync": 4,
-		"clients/test-runner-client.ts#safeSpawn": 1,
 		"clients/test-runner-client.ts#safeSpawnAsync": 1,
 		"clients/trivy-client.ts#safeSpawnAsync": 1,
 	}),

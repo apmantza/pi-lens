@@ -27,7 +27,7 @@ import {
 	recordDegradationOnce,
 } from "./degradation-ledger.js";
 import { BoundedFifoMap } from "./bounded-cache.js";
-import { withTimeout } from "./deadline-utils.js";
+import { withDeadline } from "./deadline-utils.js";
 import { loadWebTreeSitter } from "./deps/web-tree-sitter.js";
 import { transientRetryDelayMs } from "./dispatch/runners/utils/availability-policy.js";
 import { getProjectIgnoreMatcher, isExcludedDirName } from "./file-utils.js";
@@ -144,6 +144,12 @@ function queryBatchIdentity(queryDefs: readonly TreeSitterQuery[]): string {
 // must not stall the batched query walk; the filter fails open when this cap
 // is reached so unrelated diagnostics and the current match are preserved.
 const NO_NESTED_ANCHOR_VISIT_CAP = 10_000;
+// #5466: `has_react_context` is keyed on the import source, never a `use*` name.
+const REACT_FAMILY_MODULE_SEGMENT = /^(react|preact)(-[a-z0-9-]+)?$/;
+const REACT_JSX_NODE_TYPES: ReadonlySet<string> = new Set([
+	"jsx_element",
+	"jsx_self_closing_element",
+]);
 // The execute-style Python DB-API/ORM methods this rule treats as SQL sinks.
 // Hoisted so the post-filter does not rebuild the set per match.
 const PYTHON_SQL_SINK_METHODS: ReadonlySet<string> = new Set([
@@ -331,7 +337,7 @@ type GrammarFetchFailureCause =
 	| "load-timed-out";
 
 /**
- * `withTimeout` rejects with this EXACT message (`clients/deadline-utils.ts`)
+ * `withDeadline` rejects with this EXACT message (`clients/deadline-utils.ts`)
  * only when its own timer wins the race, so it is the one rejection that means
  * the load was abandoned and may still settle. Mirrors `isPullTimeoutError`
  * (#1713) and `isNavTimeoutError` (#1716) in `clients/lsp/client.ts`.
@@ -1738,9 +1744,13 @@ export class TreeSitterClient {
 		// #1536 review F1: incrementDegradationCount keeps ONE ring-buffer slot
 		// per subject (bumping its count in place) instead of recordDegradation's
 		// one-new-entry-per-call — a grammar retrying every cooldown window would
-		// otherwise flood the shared "grammar-blocked" kind's 20-slot ring and
-		// evict unrelated entries (e.g. a different grammar's V8-crash block
-		// reason from loadLanguage/grammarBlockReason) after ~20 cycles.
+		// otherwise flood the "grammar-blocked" kind's 20-slot ring and evict
+		// unrelated entries (e.g. a different grammar's V8-crash block reason from
+		// loadLanguage/grammarBlockReason) after ~20 cycles. #5400 moved the
+		// PowerShell `-File` run failures (the one non-grammar producer this kind
+		// had) to `powershell-run-failed`, so the ring's population is grammars
+		// again: an eviction can only displace another grammar's reason, never an
+		// unrelated tool's, and the bound itself is unchanged.
 		incrementDegradationCount({
 			kind: "grammar-blocked",
 			subject: grammarFile,
@@ -2077,10 +2087,9 @@ export class TreeSitterClient {
 			const started: Promise<TreeSitterLanguage> =
 				this.LanguageLoader.load(grammarPath);
 			loading = started;
-			const language = await withTimeout<TreeSitterLanguage>(
-				started,
-				GRAMMAR_LOAD_TIMEOUT_MS,
-			);
+			const language = await withDeadline<TreeSitterLanguage>(started, {
+				ms: GRAMMAR_LOAD_TIMEOUT_MS,
+			});
 			this.dbg(`Language loaded: ${language?.name || "unknown"}`);
 			if (language) {
 				this.languages.set(languageId, language);
@@ -2523,6 +2532,7 @@ export class TreeSitterClient {
 			(tree) => {
 				try {
 					const rootNode = tree.rootNode;
+					const invocationState: { reactContext?: boolean } = {};
 					for (const match of batch.query.matches(rootNode)) {
 						const owner = batch.ownerOfPattern[match.patternIndex];
 						if (owner === undefined) continue;
@@ -2543,6 +2553,7 @@ export class TreeSitterClient {
 								entry.postFilterParams,
 								captures,
 								rootNode,
+								invocationState,
 							)
 						) {
 							continue;
@@ -3756,6 +3767,7 @@ export class TreeSitterClient {
 		postFilterParams: any,
 		captures: Record<string, TreeSitterNode>,
 		rootNode?: TreeSitterNode,
+		invocationState?: { reactContext?: boolean },
 	): boolean {
 		/**
 		 * Extract the list of declared slot names from a class_definition's
@@ -3898,6 +3910,58 @@ export class TreeSitterClient {
 						(node) => node.type === "package_declaration",
 					);
 				} catch {
+					return true;
+				}
+			}
+			case "has_react_context": {
+				// #5466: React context = a top-level ES `import` from the react/preact
+				// family, or any JSX node. `require("react")`,
+				// `import X = require("react")`, `export ... from "react"` and dynamic
+				// `import()` do not count; a failed probe keeps the finding.
+				if (invocationState?.reactContext !== undefined) {
+					return invocationState.reactContext;
+				}
+				try {
+					if (!rootNode) return true;
+					for (const child of rootNode.children ?? []) {
+						if (child.type !== "import_statement") continue;
+						const source =
+							child.childForFieldName?.("source")?.text ??
+							child.children?.find((node) => node.type === "string")?.text ??
+							"";
+						const spec = source.replace(/^["'`]|["'`]$/g, "");
+						const reactFamily =
+							spec.startsWith("@preact/") ||
+							spec
+								.split("/")
+								.some((segment) => REACT_FAMILY_MODULE_SEGMENT.test(segment));
+						if (reactFamily) {
+							if (invocationState) invocationState.reactContext = true;
+							return true;
+						}
+					}
+					const pending: TreeSitterNode[] = [...(rootNode.children ?? [])];
+					while (pending.length > 0) {
+						const node = pending.pop();
+						if (!node) continue;
+						if (REACT_JSX_NODE_TYPES.has(node.type)) {
+							if (invocationState) invocationState.reactContext = true;
+							return true;
+						}
+						pending.push(...node.children);
+					}
+					if (invocationState) invocationState.reactContext = false;
+					return false;
+				} catch (thrown) {
+					// none: reportPostFilterFailure records once per filter and client.
+					this.reportWasmAbort(thrown);
+					const reason =
+						thrown instanceof Error ? thrown.message : String(thrown);
+					this.reportPostFilterFailure(
+						postFilter,
+						`context probe failed${reason ? `: ${reason}` : ""}`,
+					);
+					if (invocationState) invocationState.reactContext = true;
 					return true;
 				}
 			}
@@ -5416,6 +5480,7 @@ export class TreeSitterClient {
 			(tree) => {
 				try {
 					const rootNode = tree.rootNode;
+					const invocationState: { reactContext?: boolean } = {};
 					const queryMatches = query.matches(rootNode);
 
 					for (const match of queryMatches) {
@@ -5441,6 +5506,7 @@ export class TreeSitterClient {
 								postFilterParams,
 								captures,
 								rootNode,
+								invocationState,
 							)
 						) {
 							continue;

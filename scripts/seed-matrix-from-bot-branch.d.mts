@@ -2,6 +2,7 @@
 
 export const BOT_BRANCH: string;
 export const MATRIX_DOC: string;
+export const IDLE_DOC: string;
 
 export function decideMatrixSeed(facts: {
 	masterBlob: string | null;

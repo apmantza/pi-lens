@@ -31,6 +31,7 @@ import {
 	loadRuleIgnorePatterns,
 } from "./rule-ignores.js";
 import type { DefectClass, Diagnostic, OutputSemantic } from "./types.js";
+import { semanticFor } from "./types.js";
 
 export interface AuxiliaryLspProfile {
 	/** LSPServerInfo.id of the auxiliary server. */
@@ -159,7 +160,7 @@ const blockOnErrorWhenAllowed = (
 	d: LSPDiagnostic,
 	{ blockingAllowed }: { blockingAllowed: boolean },
 ): OutputSemantic =>
-	blockingAllowed && d.severity === 1 ? "blocking" : "warning";
+	semanticFor(blockingAllowed && d.severity === 1 ? "error" : "warning");
 
 export const AUXILIARY_LSP_PROFILES: readonly AuxiliaryLspProfile[] = [
 	{
@@ -256,8 +257,7 @@ export const AUXILIARY_LSP_PROFILES: readonly AuxiliaryLspProfile[] = [
 		optInFlag: "lens-fallow",
 		// Advisory in this cut: no `allowBlocking`, so even an ERROR-severity
 		// finding stays a warning. fallow publishes unused-code findings as LSP
-		// HINT (severity 4, the editor's greyed-out tag), which the generic
-		// conversion would render as no semantic at all.
+		// HINT (severity 4, the editor's greyed-out tag); those stay advisory too.
 		semantic: () => "warning",
 		defectClass: (d) => {
 			const code = String(d.code ?? "");

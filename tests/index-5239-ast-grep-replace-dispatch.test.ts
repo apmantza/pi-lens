@@ -45,6 +45,33 @@ import {
 	startPiSession,
 } from "./support/pi-session.js";
 
+/**
+ * #5417: `ast_grep_replace` refuses `apply: true` under `no-autofix`, which
+ * the session helper turns on by default. The cases below apply a rewrite, so
+ * their sessions run the guarded set with that flag off: a `false` entry
+ * deletes the default key (`flagMap` in support/pi-session.ts); an absent one
+ * leaves it on.
+ */
+const APPLY_FLAGS: ReadonlyArray<[string, boolean]> = GUARDED_FLAGS.map(
+	([name, value]): [string, boolean] => [
+		name,
+		name === "no-autofix" ? false : value,
+	],
+);
+
+function openApplySession(
+	root: string,
+	proj: string,
+	responses: Parameters<typeof openGuardedSession>[2],
+) {
+	return startPiSession({
+		root,
+		cwd: proj,
+		flags: new Map(APPLY_FLAGS),
+		responses,
+	});
+}
+
 const fixture = piSessionFixture();
 
 beforeAll(() => warmGuardedSession(fixture.root));
@@ -60,22 +87,27 @@ function replace(
 	paths: string[] | undefined,
 	apply: boolean,
 	structural = false,
+	id?: string,
 ): Record<string, unknown> {
-	return fauxToolCall("ast_grep_replace", {
-		pattern: "return $X;",
-		rewrite: "debugger;\n\treturn $X;",
-		lang: "typescript",
-		...(paths ? { paths } : {}),
-		// `insideKind` is structural intent: the call takes `replaceWithRule`.
-		...(structural ? { insideKind: "function_declaration" } : {}),
-		apply,
-	});
+	return fauxToolCall(
+		"ast_grep_replace",
+		{
+			pattern: "return $X;",
+			rewrite: "debugger;\n\treturn $X;",
+			lang: "typescript",
+			...(paths ? { paths } : {}),
+			// `insideKind` is structural intent: the call takes `replaceWithRule`.
+			...(structural ? { insideKind: "function_declaration" } : {}),
+			apply,
+		},
+		id === undefined ? undefined : { id },
+	);
 }
 
 /**
  * A tool pi-lens never met: it writes nothing and only names `target` in its
  * result's `details.appliedFiles`. Only that claim could make pi-lens dispatch
- * the file, so a dispatch here is the tool-name gate failing.
+ * the file, so a dispatch here is a result's own claim being admitted.
  */
 function foreignClaimTool(target: string): ToolDefinition {
 	return {
@@ -110,7 +142,7 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 
 	it("refuses a commit over the blocker an applied replace introduced", async () => {
 		const { proj, target } = seed(fixture.root, "apply-gate", CLEAN_FILE);
-		const handle = await openGuardedSession(fixture.root, proj, [
+		const handle = await openApplySession(fixture.root, proj, [
 			step(readTarget(target), "reading"),
 			step(activateReplace(), "activating"),
 			step(replace([target], true), "replacing"),
@@ -128,13 +160,48 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 		expect(commits[0]?.isError).toBe(true);
 	});
 
+	// Recurrence prevented (review r1 F1 on #5635): the call's written set was
+	// noted under the id the tool's `execute` received (raw) and taken under
+	// `resolveToolCallCorrelationId` (sanitized), so a host id the sanitizer
+	// changes lost the call's dispatch and the commit gate saw no blocker. pi-ai
+	// builds OpenAI Responses ids as `call_id|item_id` (a pipe) and they can pass
+	// the 64-character cap (hashed). The plain-id case above stayed green.
+	it.each([
+		["a pipe in the host id", "call_abc|fc_123"],
+		[
+			"an id over 64 characters",
+			"call_" + "x".repeat(90) + "|fc_" + "y".repeat(40),
+		],
+	])(
+		"refuses a commit over the blocker a replace introduced under %s",
+		{ timeout: 180_000 },
+		async (_name, hostId) => {
+			const { proj, target } = seed(fixture.root, "apply-host-id", CLEAN_FILE);
+			const handle = await openApplySession(fixture.root, proj, [
+				step(readTarget(target), "reading"),
+				step(activateReplace(), "activating"),
+				step(replace([target], true, false, hostId), "replacing"),
+				step(commitAttempt(), "committing"),
+				endTurn("done"),
+			]);
+			await handle.prompt("rewrite and commit");
+
+			expect(fs.readFileSync(target, "utf8")).toBe(BLOCKING_FILE);
+			const commits = toolResults(handle.requests.at(-1) ?? [], "bash");
+			expect(commits).toHaveLength(1);
+			expect(commits[0]?.text).toContain(GATE_BLOCK);
+			expect(commits[0]?.text).not.toContain(RAN_MARKER);
+			expect(commits[0]?.isError).toBe(true);
+		},
+	);
+
 	// Recurrence prevented (CodeRabbit on #5244 r4): the relative-`path` refusal
 	// in `handleToolResult` returned before the applied-files feed for
 	// `lsp_navigation`. `ast_grep_replace` names `paths`, not `path`, so it never
 	// takes that return; this pins that a RELATIVE entry still dispatches.
 	it("refuses a commit over the blocker a replace with a relative path introduced", async () => {
 		const { proj, target } = seed(fixture.root, "apply-relative", CLEAN_FILE);
-		const handle = await openGuardedSession(fixture.root, proj, [
+		const handle = await openApplySession(fixture.root, proj, [
 			step(readTarget(target), "reading"),
 			step(activateReplace(), "activating"),
 			step(replace([path.relative(proj, target)], true), "replacing"),
@@ -156,7 +223,7 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 		const untouched = path.join(proj, "src", "untouched.ts");
 		fs.writeFileSync(second, CLEAN_FILE);
 		fs.writeFileSync(untouched, "export const keep = 1;\n");
-		const handle = await openGuardedSession(fixture.root, proj, [
+		const handle = await openApplySession(fixture.root, proj, [
 			step(activateReplace(), "activating"),
 			// A dry run first: it writes nothing and must dispatch nothing.
 			step(replace([path.join(proj, "src")], false), "previewing"),
@@ -203,7 +270,7 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 		const target = path.join(proj, "src", "target.py");
 		const clean = "import hashlib\n\ndef f(d):\n    return hashlib.sha256(d)\n";
 		fs.writeFileSync(target, clean);
-		const handle = await openGuardedSession(fixture.root, proj, [
+		const handle = await openApplySession(fixture.root, proj, [
 			step(readTarget(target), "reading"),
 			step(activateReplace(), "activating"),
 			step(
@@ -239,7 +306,7 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 
 	// Recurrence prevented (Greptile T3 on #5244 r3): the structural apply loops
 	// over `paths`, rewrites a matching file, then a later path that is stale or
-	// fails returned early with no `appliedFiles`, so the rewritten file never
+	// fails returned early with no list of its files, so the rewritten file never
 	// reached the dispatcher or the commit gate. The first path writes before
 	// the second is checked, so the failure is real on disk, not a mock. The CLI
 	// error exit has no real-CLI trigger (a missing path is a stale preview), so
@@ -255,7 +322,7 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 			);
 			const second = path.join(proj, "src", "nomatch.ts");
 			fs.writeFileSync(second, "export const k = 1;\n");
-			const handle = await openGuardedSession(fixture.root, proj, [
+			const handle = await openApplySession(fixture.root, proj, [
 				step(activateReplace(), "activating"),
 				step(replace([target, second], true, true), "replacing"),
 				step(commitAttempt(), "committing"),
@@ -284,10 +351,10 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 		},
 	);
 
-	// Recurrence prevented: the tool-result feed reads `details.appliedFiles`
-	// from ANY tool's result, so a tool another extension registers could make
-	// pi-lens dispatch a file it never wrote. The name check in
-	// `appliedFilesOfOwnTool` is the only barrier (review r1 F1 on #5244).
+	// Recurrence prevented: a tool-result feed that reads a file list from ANY
+	// tool's result lets a tool another extension registers make pi-lens
+	// dispatch a file it never wrote (review r1 F1 on #5244). Since #5551 the
+	// feed is the call's written set, which only the mutation bridge fills.
 	it(
 		"dispatches nothing for a tool pi-lens does not own that names a file in details.appliedFiles",
 		{ timeout: 180_000 },

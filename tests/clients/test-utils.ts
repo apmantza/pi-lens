@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -838,6 +839,35 @@ export function connectOutcome(endpoint: string): Promise<string> {
 			resolve((error as NodeJS.ErrnoException).code ?? String(error)),
 		);
 	});
+}
+
+/** The shortest root {@link tmpRootOfLength} can make: the OS temp root, a
+ *  separator, `pi-lens-` and four random hex characters. */
+export function minTmpRootLength(): number {
+	return Buffer.byteLength(os.tmpdir()) + 1 + "pi-lens-".length + 4;
+}
+
+/** A new `pi-lens-` directory directly under the OS temp root whose path is
+ *  exactly `bytes` long, so a socket test can put the `sun_path` cut on a
+ *  chosen byte of the endpoint name. Callers skip below
+ *  {@link minTmpRootLength}. Registered like a `setupTestEnvironment` root. */
+export function tmpRootOfLength(bytes: number): string {
+	const pad = bytes - minTmpRootLength();
+	if (pad < 0) throw new Error(`no ${bytes}-byte root under ${os.tmpdir()}`);
+	for (;;) {
+		const dir = path.join(
+			os.tmpdir(),
+			`pi-lens-${crypto.randomBytes(2).toString("hex")}${"p".repeat(pad)}`,
+		);
+		try {
+			fs.mkdirSync(dir);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
+			throw error;
+		}
+		registerTmpRoot(getTmpRootRegistry(), dir, "registered");
+		return dir;
+	}
 }
 
 /** Leave a stale Unix socket file at `file`, as a killed host does, without a

@@ -15,14 +15,13 @@
  * needed). The `.mjs` row covers the non-TypeScript (`javascript` in
  * `clients/language-registry.ts`) side of this language-neutral seam.
  */
+import { hasToolConfig } from "../../../../clients/tool-config-presence.js";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import biomeRunner from "../../../../clients/dispatch/runners/biome-check.js";
 import {
 	getJstsLintPolicyForCwd,
 	getPreferredJstsLintRunners,
-	hasEslintConfig,
-	hasOxlintConfig,
 } from "../../../../clients/tool-policy.js";
 import { makeRunnerCtx } from "../../../support/runner-ctx.js";
 import { createTempFile, setupTestEnvironment } from "../../test-utils.js";
@@ -63,7 +62,7 @@ describe("monorepo flat-config discovery (#3017)", () => {
 			const { env, pkgDir } = makeMonorepo("file.ts");
 			try {
 				createTempFile(env.tmpDir, configName, "export default [];\n");
-				expect(hasEslintConfig(pkgDir)).toBe(true);
+				expect(hasToolConfig("eslint", pkgDir)).toBe(true);
 			} finally {
 				env.cleanup();
 			}
@@ -79,7 +78,7 @@ describe("monorepo flat-config discovery (#3017)", () => {
 			try {
 				createTempFile(env.tmpDir, "eslint.config.mjs", "export default [];\n");
 				// The eslint runner gate: a config is detected, so eslint runs.
-				expect(hasEslintConfig(pkgDir)).toBe(true);
+				expect(hasToolConfig("eslint", pkgDir)).toBe(true);
 				const policy = getJstsLintPolicyForCwd(pkgDir);
 				expect(policy.hasExplicitNonBiomeLinter).toBe(true);
 				expect(
@@ -105,7 +104,7 @@ describe("monorepo flat-config discovery (#3017)", () => {
 		const { env, filePath, pkgDir } = makeMonorepo("file.ts");
 		try {
 			createTempFile(env.tmpDir, ".oxlintrc.json", "{}\n");
-			expect(hasOxlintConfig(pkgDir)).toBe(true);
+			expect(hasToolConfig("oxlint", pkgDir)).toBe(true);
 			const policy = getJstsLintPolicyForCwd(pkgDir);
 			expect(policy.hasExplicitNonBiomeLinter).toBe(true);
 			expect(policy.preferredRunners).toEqual(["oxlint"]);
@@ -123,7 +122,7 @@ describe("monorepo flat-config discovery (#3017)", () => {
 		const { env, pkgDir } = makeMonorepo("file.ts");
 		try {
 			createTempFile(env.tmpDir, ".eslintrc.json", "{}\n");
-			expect(hasEslintConfig(pkgDir)).toBe(false);
+			expect(hasToolConfig("eslint", pkgDir)).toBe(false);
 			expect(getJstsLintPolicyForCwd(pkgDir).hasExplicitNonBiomeLinter).toBe(
 				false,
 			);
@@ -140,7 +139,7 @@ describe("monorepo flat-config discovery (#3017)", () => {
 				"package.json",
 				JSON.stringify({ name: "root", eslintConfig: { rules: {} } }),
 			);
-			expect(hasEslintConfig(pkgDir)).toBe(false);
+			expect(hasToolConfig("eslint", pkgDir)).toBe(false);
 		} finally {
 			env.cleanup();
 		}

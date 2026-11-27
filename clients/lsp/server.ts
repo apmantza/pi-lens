@@ -7,7 +7,7 @@
  * - Platform-specific handling
  */
 
-import { existsSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { access, readFile, readdir, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -50,6 +50,7 @@ import {
 	normalizeEphemeralMapKey,
 	pathsEqual,
 	realpathOrResolve,
+	relativeInside,
 	toPosix,
 	toProjectRelativePath,
 	walkUpDirs,
@@ -118,7 +119,9 @@ import {
 import {
 	type LSPProcess,
 	admitProjectSuppliedTsserver,
+	isLspProjectCodeAdmitted,
 	launchLSP,
+	launchViaNode,
 } from "./launch.js";
 import { ephemeralStagingRoot } from "../ephemeral-root.js";
 import { createLombokJdtlsArgs } from "./lombok.js";
@@ -133,6 +136,7 @@ import {
 import {
 	isUntrustedProjectPath,
 	recordProjectCommandRefusal,
+	withUnadmittedRootSpawns,
 } from "../session-repository.js";
 
 // --- Types ---
@@ -142,10 +146,28 @@ export type RootFunction = ((file: string) => Promise<string | undefined>) & {
 	rootMarkers?: readonly string[];
 };
 
-function withRootMarkers(
-	root: RootFunction,
+/**
+ * #5720: a root policy can refuse a file outright (a Deno project is not the
+ * TypeScript server's), which is a verdict and not a missing root. A unique
+ * symbol cannot be mistaken for a path: a consumer that joins, resolves or
+ * logs the result fails to compile, and `RootFunction` (the path-only wrapper
+ * input) cannot accept a declining root.
+ */
+export const LSP_ROOT_DECLINED: unique symbol = Symbol(
+	"pi-lens.lsp-root-declined",
+);
+
+/** A server's root answer: a path, no root found, or an explicit decline. */
+export type LspRootVerdict = string | undefined | typeof LSP_ROOT_DECLINED;
+
+export type ServerRootFunction = ((file: string) => Promise<LspRootVerdict>) & {
+	rootMarkers?: readonly string[];
+};
+
+function withRootMarkers<R extends ServerRootFunction>(
+	root: R,
 	markers: readonly string[],
-): RootFunction {
+): R {
 	root.rootMarkers = markers;
 	return root;
 }
@@ -231,7 +253,11 @@ export async function resolveLspServerCwd(
 	let serverRoot: string | undefined;
 	let rootFailed = false;
 	try {
-		serverRoot = await server.root(filePath);
+		const verdict = await server.root(filePath);
+		// #5720: a declined file gets no cwd at all, not the file-dir fallback
+		// below, so the server stays unrooted and its `fallbackFor` alternate runs.
+		if (verdict === LSP_ROOT_DECLINED) return undefined;
+		serverRoot = verdict;
 	} catch (error) {
 		const reason = error instanceof Error ? error.message : String(error);
 		rootFailed = true;
@@ -597,6 +623,35 @@ async function nearestNonExcludedFallbackRoot(
 	return nearestAllowed ?? fsRoot;
 }
 
+export interface LSPSpawnResult {
+	process: LSPProcess;
+	initialization?: Record<string, unknown>;
+	source?: "direct" | "managed" | "package-manager" | "interactive";
+	/**
+	 * Which concrete binary/protocol variant was launched for this server
+	 * id, when a single `LSPServerInfo.id` can mean more than one actual
+	 * server (e.g. "typescript" = classic typescript-language-server OR
+	 * TS7's native `tsc --lsp --stdio`). Per-server behavioral knowledge
+	 * keyed by server id (`wait-policy/strategies.ts`'s `silentOnClean` etc.)
+	 * is only proven for the variant it was measured against — this lets
+	 * such knowledge-consumers (the #458 cascade tier classifier) tell
+	 * the variants apart. Undefined = single-variant server, or a
+	 * variant-carrying server that hasn't been updated to report one yet;
+	 * treat as the classic/default behavior (fail-safe).
+	 */
+	launchVariant?: LspLaunchVariant;
+	/**
+	 * A replacement launch the registry takes at most once when this process
+	 * fails before `initialize` completes (`createLSPClient` throws). Only a
+	 * launch with a known-good sibling sets it (#5504: effect-tsgo -> native).
+	 * The callback writes its own record; a fallback result's own
+	 * `initializeFallback` is ignored.
+	 */
+	initializeFallback?: (
+		failure: unknown,
+	) => Promise<LSPSpawnResult | undefined>;
+}
+
 export interface LSPSpawnOptions {
 	allowInstall?: boolean;
 	/** Session trust does not authorize adopted project code. */
@@ -609,11 +664,13 @@ export interface LSPServerInfo {
 	name: string;
 	extensions: readonly string[];
 	/**
-	 * Idle-eviction policy for this server's clients. `transparent` = the client
-	 * may be released after the shared idle window and rebuilds on the next
-	 * request; it requires measured per-server evidence. `resident` = deliberately
-	 * kept resident. `unmeasured` = no evidence yet; treated as resident so an
-	 * unmeasured server is never evicted by omission.
+	 * Idle-eviction policy for this server's clients. #5700: every client is
+	 * released after the shared idle window and rebuilds on the next request,
+	 * unless the server is declared `resident` (the only opt-out; it needs a
+	 * reason row in `tests/config/lsp-idle-eviction-reasons.json`).
+	 * `transparent` = the nightly measured the release as safe (findings
+	 * preserved after respawn). `unmeasured` = no such evidence yet; evicted
+	 * all the same, and the nightly's drift check flags a measured veto.
 	 */
 	idleEviction: "transparent" | "resident" | "unmeasured";
 	/** True for entries supplied through `lsp.servers.*`, not the built-in table. */
@@ -651,7 +708,7 @@ export interface LSPServerInfo {
 	 * so a covers entry cannot be invented per row without review.
 	 */
 	covers?: readonly string[];
-	root: RootFunction;
+	root: ServerRootFunction;
 	/** Marker table used by the shared LSP cwd/root seam. */
 	rootMarkers?: readonly string[];
 	/**
@@ -798,27 +855,7 @@ export interface LSPServerInfo {
 	spawn(
 		root: string,
 		options?: LSPSpawnOptions,
-	): Promise<
-		| {
-				process: LSPProcess;
-				initialization?: Record<string, unknown>;
-				source?: "direct" | "managed" | "package-manager" | "interactive";
-				/**
-				 * Which concrete binary/protocol variant was launched for this server
-				 * id, when a single `LSPServerInfo.id` can mean more than one actual
-				 * server (e.g. "typescript" = classic typescript-language-server OR
-				 * TS7's native `tsc --lsp --stdio`). Per-server behavioral knowledge
-				 * keyed by server id (`wait-policy/strategies.ts`'s `silentOnClean` etc.)
-				 * is only proven for the variant it was measured against — this lets
-				 * such knowledge-consumers (the #458 cascade tier classifier) tell
-				 * the variants apart. Undefined = single-variant server, or a
-				 * variant-carrying server that hasn't been updated to report one yet;
-				 * treat as the classic/default behavior (fail-safe).
-				 */
-				launchVariant?: LspLaunchVariant;
-		  }
-		| undefined
-	>;
+	): Promise<LSPSpawnResult | undefined>;
 	autoInstall?: () => Promise<boolean>;
 }
 
@@ -1038,6 +1075,81 @@ export interface ResolveAndLaunchSpec {
 		/** After a successful install, retry these candidates (defaults to spec.candidates) */
 		retryCandidates?: string[];
 	};
+	/**
+	 * #5674: the trust refusals of a spawn that tries several stages. The spawn
+	 * passes one object to every stage; each call adds the refusals it met, so a
+	 * later managed lookup obeys a refusal an earlier stage met (#4515).
+	 */
+	refusals?: { refused: boolean; bareRefused: boolean };
+}
+
+/**
+ * #4515/#5674: whether a bare-name lookup this process starts (the installer's
+ * PATH rung, its npm and Python probes, a runtime install) can reach a root the
+ * spawn has not admitted for project code: a PATH entry reaches the root, or a
+ * stage already refused a bare candidate that resolved into it. The launcher
+ * drops those entries from its own child's PATH; these lookups read the
+ * process PATH, so their callers skip the lookup instead.
+ */
+function bareLookupReachesUnadmittedRoot(
+	cwd: string,
+	refusals?: ResolveAndLaunchSpec["refusals"],
+): boolean {
+	return (
+		!isLspProjectCodeAdmitted() &&
+		(refusals?.bareRefused === true || commandSearchReachesProject(cwd))
+	);
+}
+
+/**
+ * #4515: the managed rung of a launch. The repair must not run project code,
+ * so when a bare-name lookup can reach an unadmitted root, only pi-lens's own
+ * store is read and nothing is installed. Every LSP managed lookup goes
+ * through here: the resolver, Python's managed stage, and TypeScript's.
+ */
+async function lookupManagedTool(
+	toolId: string,
+	cwd: string,
+	refusals: ResolveAndLaunchSpec["refusals"],
+	...ensureOptions: [] | [{ allowInstall?: boolean; forceReinstall?: boolean }]
+): Promise<{ found: string | undefined; storeOnly: boolean }> {
+	const storeOnly = bareLookupReachesUnadmittedRoot(cwd, refusals);
+	if (storeOnly) {
+		// #5678 verify V3: the reason names the trigger that held.
+		const trigger =
+			refusals?.bareRefused === true
+				? "a bare candidate resolved into the project and was refused"
+				: "a PATH entry reaches a project not admitted for project code";
+		recordDegradationOnce({
+			kind: "lsp-registry-decision",
+			subject: `store-only-repair:${toolId}`,
+			reason: `LSP repair read only the pi-lens tool store: ${trigger}, so nothing was probed on PATH or installed`,
+			metadata: { field: "store-only-repair", tool: toolId },
+		});
+	}
+	logSessionStart(
+		`lsp launch ensure-tool start tool=${toolId} cwd=${cwd} storeOnly=${storeOnly}`,
+	);
+	return {
+		found: await (storeOnly
+			? getToolPath(toolId, { storeOnly: true })
+			: spawnsJudgedAgainstRoot(cwd, () =>
+					ensureTool(toolId, ...ensureOptions),
+				)),
+		storeOnly,
+	};
+}
+
+/**
+ * #5674: run `lookup` so that, for a root not admitted for project code, every
+ * bare name it spawns (the installer's PATH rung and probes, a runtime
+ * install) is refused at the spawn seam when it resolves into the root: a
+ * link in a global bin dir passes the PATH-entry test above, not this one.
+ */
+function spawnsJudgedAgainstRoot<T>(cwd: string, lookup: () => T): T {
+	return isLspProjectCodeAdmitted()
+		? lookup()
+		: withUnadmittedRootSpawns(cwd, lookup);
 }
 
 export async function resolveAndLaunch(
@@ -1193,6 +1305,12 @@ export async function resolveAndLaunch(
 		);
 		trackRuntimeFailure(failure.err);
 	}
+	const refusals = spec.refusals ?? { refused: false, bareRefused: false };
+	for (const failure of candidateFailures) {
+		if (!hasSpawnFailureKind(failure.err, "trust-refused")) continue;
+		refusals.refused = true;
+		if (isSimpleCommand(failure.command)) refusals.bareRefused = true;
+	}
 	// #4515: a project-local candidate refused by trust is repairable too: the
 	// managed install lives outside the project, so it needs no trust.
 	const hasOnlyRepairableCandidateFailures = candidateFailures.every(
@@ -1220,28 +1338,13 @@ export async function resolveAndLaunch(
 				globalInstallDisabled: isLspInstallDisabled(),
 			},
 		});
-		// A trust refusal is not tool-not-found: keep surfacing it.
-		if (lastRuntimeFailure) throw lastRuntimeFailure;
+		// #5674: repairable candidates exhausted this stage, not the caller's
+		// later stages. Refusals retain their decision and candidate records.
 		return undefined;
 	}
 
-	// #4515: after a trust refusal the repair must not run project code. The
-	// installer spawns bare names (its PATH rung, npm and Python probes, the
-	// package manager), so when a refused bare candidate or a PATH entry reaches
-	// the project, only pi-lens's own store is read and nothing is installed.
-	// Step 4 runs a runtime in the project cwd, so it is skipped after any
-	// refusal.
-	const isRefusal = (failure: (typeof candidateFailures)[number]): boolean =>
-		hasSpawnFailureKind(failure.err, "trust-refused");
-	const trustRefused = candidateFailures.some(isRefusal);
-	const storeOnly =
-		trustRefused &&
-		(candidateFailures.some(
-			(failure) => isRefusal(failure) && isSimpleCommand(failure.command),
-		) ||
-			commandSearchReachesProject(spec.cwd));
-
-	// Step 3 — managed install via installer registry
+	// Step 3 — managed install via installer registry (#4515: store only after
+	// a refusal that a bare-name lookup could reach; see lookupManagedTool)
 	if (spec.managedToolId) {
 		// Neither the managed-dir stat (#2140) nor any bare-PATH candidate
 		// resolved this tool — the negative counterpart to the fast-path
@@ -1274,22 +1377,12 @@ export async function resolveAndLaunch(
 			producer: "lsp-launch",
 			evidence: classifiedFailure.evidence,
 		});
-		if (storeOnly) {
-			recordDegradationOnce({
-				kind: "lsp-registry-decision",
-				subject: `store-only-repair:${spec.managedToolId}`,
-				reason:
-					"LSP repair read only the pi-lens tool store: after a trust refusal a bare-name lookup reaches the project, so nothing was probed on PATH or installed",
-				metadata: { field: "store-only-repair", tool: spec.managedToolId },
-			});
-		}
-		logSessionStart(
-			`lsp launch ensure-tool start tool=${spec.managedToolId} cwd=${spec.cwd} storeOnly=${storeOnly}`,
-		);
 		const installStartedAt = Date.now();
-		const installed = await (storeOnly
-			? getToolPath(spec.managedToolId, { storeOnly: true })
-			: ensureTool(spec.managedToolId));
+		const { found: installed, storeOnly } = await lookupManagedTool(
+			spec.managedToolId,
+			spec.cwd,
+			refusals,
+		);
 		const installAttempt = storeOnly
 			? undefined
 			: captureInstallAttempt(spec.managedToolId);
@@ -1470,16 +1563,24 @@ export async function resolveAndLaunch(
 		}
 	}
 
-	// Step 4 — language-native runtime install (go install, gem install, …)
-	const runtimeInstall = trustRefused ? undefined : spec.runtimeInstall;
+	// Step 4 — language-native runtime install (go install, gem install, …).
+	// #4515: it runs a runtime in the project cwd, so any refusal skips it.
+	// #5674: so does a PATH that reaches an unadmitted root (the runtime is a
+	// bare name resolved through the process PATH).
+	const runtimeInstall =
+		refusals.refused || bareLookupReachesUnadmittedRoot(spec.cwd, refusals)
+			? undefined
+			: spec.runtimeInstall;
 	const runtimeAvailable = runtimeInstall
-		? await isOnPath(runtimeInstall.runtimeCommand)
+		? await isCommandAvailableAsync(runtimeInstall.runtimeCommand)
 		: false;
 	if (staleLaunch(generation, `${toolLabel}:runtimeAvailability`)) {
 		return undefined;
 	}
 	if (runtimeInstall && runtimeAvailable) {
-		const ok = await runtimeInstall.install();
+		const ok = await spawnsJudgedAgainstRoot(spec.cwd, () =>
+			runtimeInstall.install(),
+		);
 		if (staleLaunch(generation, `${toolLabel}:runtimeInstall`)) {
 			return undefined;
 		}
@@ -1545,7 +1646,7 @@ async function resolveAndLaunchBundle(
 	// hang; just probe). No runtime → graceful skip (coverage notice).
 	let runtime: string | undefined;
 	for (const candidate of spec.runtimeCandidates) {
-		if (await isOnPath(candidate)) {
+		if (await isCommandAvailableAsync(candidate)) {
 			runtime = candidate;
 			break;
 		}
@@ -1690,18 +1791,18 @@ function piAgentExtensionsRootKey(file: string): string | undefined {
 }
 
 function IgnoreHomeRoot(primary: RootFunction): RootFunction {
-	// #1193 P3: the former `normalizeRootKey` folded case on win32 but left the
-	// separator alone; both sides of the comparison below go through the same
-	// derivation, so adding the seam's slash fold cannot change the verdict for
-	// any spelling the old copy already agreed on, and it makes a mixed-separator
-	// root agree with the home directory it names. #4689: the primary returns
-	// the root's path identity, so the home is taken as its identity too; a
-	// home spelled through a link (`/home -> var/home`) is still refused.
-	const homeKey = normalizeEphemeralMapKey(realpathOrResolve(os.homedir()));
+	// #4689/#5728: fold onto the shared `isAtOrAboveHomeDir` ceiling over path
+	// identities on both sides so HOME (including a link-spelled home such as
+	// `/home -> var/home`) and every ancestor of HOME are refused; read
+	// `os.homedir()` per call so an environment change takes effect without a
+	// module reload.
 	return withRootMarkers(async (file: string): Promise<string | undefined> => {
 		const root = await primary(file);
 		if (!root) return undefined;
-		return normalizeEphemeralMapKey(path.resolve(root)) === homeKey
+		return isAtOrAboveHomeDir(
+			realpathOrResolve(root),
+			realpathOrResolve(os.homedir()),
+		)
 			? undefined
 			: root;
 	}, primary.rootMarkers ?? []);
@@ -1768,6 +1869,8 @@ interface InteractiveServerSpec {
 	 * silently failing. Currently only "java" (jdtls).
 	 */
 	runtime?: "java";
+	/** #4782 unchanged-bytes re-check; see {@link LspResendRecheck}. */
+	resendRecheck?: LspResendRecheck;
 }
 
 function createInteractiveServer(spec: InteractiveServerSpec): LSPServerInfo {
@@ -1786,6 +1889,9 @@ function createInteractiveServer(spec: InteractiveServerSpec): LSPServerInfo {
 		fallbackFor: spec.fallbackFor,
 		requiresProjectRoot: spec.requiresProjectRoot,
 		executesProjectCode: spec.executesProjectCode,
+		...(spec.resendRecheck !== undefined && {
+			resendRecheck: spec.resendRecheck,
+		}),
 		availabilityKey:
 			typeof spec.command === "string" && isSimpleCommand(spec.command)
 				? spec.command
@@ -2134,11 +2240,7 @@ export function NearestRoot(
 			const stop = stopDir ? realpathOrResolve(stopDir) : fsRoot;
 
 			for (const currentDir of walkUpDirs(startDir)) {
-				if (
-					stop !== fsRoot &&
-					currentDir.startsWith(stop + path.sep) === false &&
-					currentDir !== stop
-				) {
+				if (stop !== fsRoot && relativeInside(stop, currentDir) === undefined) {
 					break;
 				}
 
@@ -2219,19 +2321,6 @@ export function NearestRoot(
 export const createRootDetector = NearestRoot;
 
 // --- Runtime Tool Helpers ---
-
-/**
- * Check if a command is available on system PATH.
- *
- * Async (was a blocking `spawnSync("where"/"which")`): runs on the spawn
- * fall-through path (Step 4, runtime-install gate). The shared
- * `isCommandAvailableAsync` spawns the same finder via `safeSpawnAsync` with a
- * 5s timeout, so a stalled finder can no longer freeze the loop. Semantics are
- * preserved: true iff the finder exits 0.
- */
-function isOnPath(command: string): Promise<boolean> {
-	return isCommandAvailableAsync(command);
-}
 
 /**
  * Try to install gopls via `go install`. Resolves true if the install succeeded.
@@ -2541,8 +2630,14 @@ async function findTsserverPath(
 	// #4414: `ensureTool` answers a PATH hit with the bare command name. Resolve
 	// it to the real file once, so the tsserver layout probe and the version
 	// read below see the same absolute path a managed or npm-global hit has.
+	// #5674: through the store-only rule, so an unadmitted root's `tsc` on PATH
+	// is never version-probed; the repair below goes through it too.
 	const discoveredTsc = await absoluteCommandPath(
-		await ensureTool("typescript", { allowInstall: installAllowed }),
+		(
+			await lookupManagedTool("typescript", root, undefined, {
+				allowInstall: installAllowed,
+			})
+		).found,
 	);
 	const discoveredTsserver = await tsserverForTsc(discoveredTsc);
 	if (
@@ -2574,19 +2669,77 @@ async function findTsserverPath(
 			: `lsp typescript: managed compiler resolved to TypeScript ${discoveredVersion?.version}, which ships no tsserver.js; reinstalling pinned classic fallback`,
 	);
 	const repairedTsc = await absoluteCommandPath(
-		await ensureTool("typescript", {
-			allowInstall: true,
-			forceReinstall: true,
-		}),
+		(
+			await lookupManagedTool("typescript", root, undefined, {
+				allowInstall: true,
+				forceReinstall: true,
+			})
+		).found,
 	);
 	return tsserverForTsc(repairedTsc);
 }
 
 interface NativeTypeScriptLsp {
+	/**
+	 * The project file the trust gate admits and the log names: the
+	 * `.bin/tsc[.cmd|.exe]` link for `bin-link`, the `@typescript/native`
+	 * alias's own bin script for `node-script`.
+	 */
 	command: string;
 	version: string;
-	/** The `node_modules` directory the nearest TypeScript 7+ package sits in. */
+	entry: "bin-link" | "node-script";
+	/**
+	 * The `node_modules` directory the compiler was found at; for the alias,
+	 * the level holding `@typescript/`, not the alias directory.
+	 */
 	nodeModulesDir: string;
+}
+
+function typeScriptMajor(version: string): number {
+	const majorText = version.split(".", 1)[0] ?? "";
+	return /^\d+$/.test(majorText) ? Number(majorText) : Number.NaN;
+}
+
+/**
+ * #5504: TypeScript 7 installed as `@typescript/native` (`npm:typescript@7`)
+ * beside a TypeScript 6 `typescript`. Accepted only with a manifest named
+ * `typescript`, major >= 7 and a `bin.tsc` file that exists; the answer is that
+ * bin script, which the caller runs with Node (never `.bin/tsc`, which may
+ * link the TypeScript 6 package).
+ */
+async function findTypeScriptNativeAlias(
+	nodeModulesDir: string,
+): Promise<{ command: string; version: string } | undefined> {
+	const aliasDir = path.join(nodeModulesDir, "@typescript", "native");
+	let manifest: unknown;
+	try {
+		manifest = JSON.parse(
+			await readFile(path.join(aliasDir, "package.json"), "utf8"),
+		);
+	} catch {
+		// none: an absent or unreadable alias is the common layout; classic answers.
+		return undefined;
+	}
+	if (typeof manifest !== "object" || manifest === null) return undefined;
+	const { name, version, bin } = manifest as Record<string, unknown>;
+	if (name !== "typescript") return undefined;
+	if (typeof version !== "string" || !(typeScriptMajor(version) >= 7)) {
+		return undefined;
+	}
+	const tsc =
+		typeof bin === "object" && bin !== null
+			? (bin as Record<string, unknown>).tsc
+			: undefined;
+	if (typeof tsc !== "string" || !tsc) return undefined;
+	const command = path.resolve(aliasDir, tsc);
+	try {
+		// A directory at `bin.tsc` is no launcher; `access` alone accepts one.
+		if (!(await stat(command)).isFile()) return undefined;
+	} catch {
+		// none: a manifest whose bin file is absent is not a usable alias; classic answers.
+		return undefined;
+	}
+	return { command, version };
 }
 
 /**
@@ -2595,6 +2748,10 @@ interface NativeTypeScriptLsp {
  * `lib/tsserver.js`. Resolve the nearest TypeScript package using normal
  * node_modules ancestor semantics so a monorepo package can use its hoisted
  * compiler, while never falling through to a PATH/global `tsc`.
+ *
+ * #5504: a level whose `node_modules/typescript` is version 6 or older also
+ * checks `node_modules/@typescript/native` at that same level (same-level
+ * only, never an ancestor's) and answers its own `bin/tsc`, run with Node.
  */
 async function findNativeTypeScriptLsp(
 	root: string,
@@ -2604,7 +2761,8 @@ async function findNativeTypeScriptLsp(
 
 	for (const currentDir of walkUpDirs(root, { spelling: true })) {
 		if (isAtOrAboveHomeDir(realpathOrResolve(currentDir), home)) break;
-		const typescriptDir = path.join(currentDir, "node_modules", "typescript");
+		const nodeModulesDir = path.join(currentDir, "node_modules");
+		const typescriptDir = path.join(nodeModulesDir, "typescript");
 		const packageJsonPath = path.join(typescriptDir, "package.json");
 
 		let packageJsonText: string;
@@ -2647,11 +2805,14 @@ async function findNativeTypeScriptLsp(
 		// The nearest installed package shadows any ancestor TypeScript package,
 		// matching Node/package-manager resolution. Never skip a local TS <=6 or
 		// malformed install just to select an unrelated ancestor TS 7 binary.
-		const majorText = version.split(".", 1)[0] ?? "";
-		const major = /^\d+$/.test(majorText) ? Number(majorText) : Number.NaN;
-		if (!Number.isFinite(major) || major < 7) return undefined;
+		const major = typeScriptMajor(version);
+		if (!Number.isFinite(major)) return undefined;
+		if (major < 7) {
+			const alias = await findTypeScriptNativeAlias(nodeModulesDir);
+			return alias && { ...alias, entry: "node-script", nodeModulesDir };
+		}
 
-		const localTsc = path.join(currentDir, "node_modules", ".bin", "tsc");
+		const localTsc = path.join(nodeModulesDir, ".bin", "tsc");
 		const candidates =
 			process.platform === "win32"
 				? [`${localTsc}.cmd`, `${localTsc}.exe`, localTsc]
@@ -2663,7 +2824,8 @@ async function findNativeTypeScriptLsp(
 				return {
 					command,
 					version,
-					nodeModulesDir: path.join(currentDir, "node_modules"),
+					entry: "bin-link",
+					nodeModulesDir,
 				};
 			} catch {
 				/* not found */
@@ -2672,6 +2834,96 @@ async function findNativeTypeScriptLsp(
 		return undefined;
 	}
 	return undefined;
+}
+
+/**
+ * Launch the native TypeScript server found by `findNativeTypeScriptLsp`.
+ * The trust gate admits the project file (`command`), which for the alias is
+ * the script `launchLSP` would not see behind `process.execPath`. A refusal
+ * answers `undefined`; a launch throw propagates.
+ */
+async function launchNativeTypeScript(
+	nativeLsp: NativeTypeScriptLsp,
+	root: string,
+	options?: LSPSpawnOptions,
+): Promise<LSPSpawnResult | undefined> {
+	if (
+		!admitProjectSuppliedTsserver(
+			nativeLsp.command,
+			root,
+			true,
+			options?.projectCodeAllowed,
+		)
+	) {
+		return undefined;
+	}
+	const env = await getToolEnvironment();
+	logSessionStart(
+		`lsp typescript-native: version=${nativeLsp.version} command=${nativeLsp.command} entry=${nativeLsp.entry}`,
+	);
+	const args = ["--lsp", "--stdio"];
+	if (nativeLsp.entry !== "node-script") {
+		const proc = await launchLSP(nativeLsp.command, args, { cwd: root, env });
+		return { process: proc, source: "direct", launchVariant: "native-ts7" };
+	}
+	// #5504 F2: the alias is chosen beside a TypeScript <=6, whose classic
+	// server master ran for the project. An alias that cannot start (its
+	// `bin/tsc` exits inside the startup window, or before `initialize`
+	// answers) falls back once to that launch. No classic candidate answers
+	// nothing, and the original failure goes on to the registry's ladder.
+	const classicInstead = async (
+		failure: unknown,
+		why: string,
+	): Promise<LSPSpawnResult | undefined> => {
+		const classic = await launchClassicTypeScript(root, options);
+		if (!classic) return undefined;
+		const detail = failure instanceof Error ? failure.message : String(failure);
+		recordDegradationOnce({
+			kind: "lsp-registry-decision",
+			subject: `typescript-native-alias:g${getDegradationLedgerGeneration()}:${root}`,
+			reason: `the @typescript/native alias failed to start, using the classic launch: ${detail}`,
+			metadata: { field: "typescript-native-alias", launchVariant: "classic" },
+		});
+		logSessionStart(
+			`lsp typescript-native: alias ${why}, falling back to classic: ${detail}`,
+		);
+		return classic;
+	};
+	let proc: LSPProcess;
+	try {
+		proc = await launchViaNode(nativeLsp.command, args, { cwd: root, env });
+	} catch (launchFailure) {
+		logSessionStart(
+			`lsp typescript-native: alias failed to launch: ${launchFailure instanceof Error ? launchFailure.message : String(launchFailure)}`,
+		);
+		const classic = await classicInstead(launchFailure, "failed to launch");
+		if (classic) return classic;
+		throw launchFailure;
+	}
+	return {
+		process: proc,
+		source: "direct",
+		launchVariant: "native-ts7",
+		initializeFallback: (failure) =>
+			classicInstead(failure, "failed to initialize"),
+	};
+}
+
+/** The `effect-tsgo-launch` record, written by the launch and initialize fallbacks. */
+function recordEffectTsgoFallback(
+	root: string,
+	reason: string,
+	failure: unknown,
+): void {
+	recordDegradationOnce({
+		kind: "lsp-registry-decision",
+		subject: `effect-tsgo-launch:g${getDegradationLedgerGeneration()}:${root}`,
+		reason: `${reason}: ${failure instanceof Error ? failure.message : String(failure)}`,
+		metadata: {
+			field: "effect-tsgo-launch",
+			launchVariant: "effect-tsgo",
+		},
+	});
 }
 
 interface EffectTsgoLsp {
@@ -2685,7 +2937,8 @@ interface EffectTsgoLsp {
  * wrapper (`effect-tsgo tsc --lsp --stdio`). Opting in is the install itself.
  *
  * `nodeModulesDir` is the level `findNativeTypeScriptLsp` found the nearest
- * TypeScript 7+ at, and only that level is read: a TypeScript 7 package with
+ * TypeScript 7+ at (for a `@typescript/native` alias, the level holding
+ * `@typescript/`), and only that level is read: a TypeScript 7 package with
  * no `@effect/tsgo` beside it, or a malformed one (no readable manifest
  * version, no bin), answers `undefined` and the caller keeps the native
  * launch. Never an ancestor's `@effect/tsgo`, which the nearer TypeScript does
@@ -2746,21 +2999,47 @@ function dotnetToolCandidates(tool: string): string[] {
  * #4530 (#4776): these are toolchain dirs (`$GOPATH/bin`, `$CARGO_HOME/bin`),
  * and the launcher starts a named file without judging it, so an entry that is
  * the session repository's bytes is dropped here until pi trusts the project.
+ *
+ * #5715: on win32 the extensionless spelling is only ever a PATHEXT completion
+ * (cmd.exe runs `<dir>\<tool>.exe`, `.cmd`, `.bat`, ... for it), so judging the
+ * file by that spelling cannot see what runs. It is withheld from an untrusted
+ * project dir whatever sits beside it; no list of extensions is consulted to
+ * decide, only to name the refused sibling in the record.
  */
 function binExeVariants(dir: string, tool: string): string[] {
-	const variants =
-		process.platform === "win32"
-			? [path.join(dir, `${tool}.exe`), path.join(dir, tool)]
-			: [path.join(dir, tool)];
+	const win32 = process.platform === "win32";
+	const bare = path.join(dir, tool);
+	const variants = win32 ? [path.join(dir, `${tool}.exe`), bare] : [bare];
 	const admitted: string[] = [];
 	for (const candidate of variants) {
 		if (existsSync(candidate) && isUntrustedProjectPath(candidate)) {
 			recordProjectCommandRefusal(candidate);
 			continue;
 		}
+		if (win32 && candidate === bare && isUntrustedProjectPath(bare)) {
+			const sibling = pathextSibling(dir, tool);
+			if (sibling) recordProjectCommandRefusal(sibling);
+			continue;
+		}
 		admitted.push(candidate);
 	}
 	return admitted;
+}
+
+/** A file in `dir` named `<tool>` or `<tool>.<anything>`, case-insensitively. */
+function pathextSibling(dir: string, tool: string): string | undefined {
+	const wanted = tool.toLowerCase();
+	try {
+		const name = readdirSync(dir).find((entry) => {
+			const lower = entry.toLowerCase();
+			return lower === wanted || lower.startsWith(`${wanted}.`);
+		});
+		return name === undefined ? undefined : path.join(dir, name);
+	} catch {
+		// none: a missing or unreadable dir has no sibling to name; the
+		// candidate is withheld by the caller whatever this returns.
+		return undefined;
+	}
 }
 
 /**
@@ -2811,15 +3090,17 @@ export async function tryGemInstall(gem: string): Promise<boolean> {
 }
 
 /**
- * Wraps a root function so it returns undefined for files inside a Deno project.
+ * Wraps a root function so it declines files inside a Deno project
+ * (`LSP_ROOT_DECLINED`, not `undefined`: `resolveLspServerCwd` turns a missing
+ * root into the file-dir fallback, which let TypeScript claim Deno files, #5720).
  * Prevents TypeScript LSP from being spawned alongside Deno LSP for the same file,
  * which would produce false diagnostics for Deno-specific APIs.
  */
-export function DenoExcludeRoot(primary: RootFunction): RootFunction {
+export function DenoExcludeRoot(primary: RootFunction): ServerRootFunction {
 	const denoDetector = createRootDetector(["deno.json", "deno.jsonc"]);
-	return async (file: string): Promise<string | undefined> => {
+	return async (file: string): Promise<LspRootVerdict> => {
 		const denoRoot = await denoDetector(file);
-		if (denoRoot) return undefined;
+		if (denoRoot) return LSP_ROOT_DECLINED;
 		return primary(file);
 	};
 }
@@ -2981,7 +3262,7 @@ async function classifyAgentLevelMarker(
 	return undefined;
 }
 
-const TypeScriptRoot: RootFunction = withRootMarkers(
+const TypeScriptRoot: ServerRootFunction = withRootMarkers(
 	DenoExcludeRoot(async (file) => {
 		// #4689: a file spelled outside the boundary whose identity is inside it
 		// (`checkout/packages/myext -> ~/.pi/agent/extensions/myext`) takes the
@@ -2994,8 +3275,11 @@ const TypeScriptRoot: RootFunction = withRootMarkers(
 		if (extensionRootKey) {
 			// Bounded walk so we never adopt a parent (e.g. ~/.pi/agent/) as the
 			// LSP root.
-			const bounded = await findExtensionBoundedRoot(file, extensionRootKey);
-			if (bounded) return bounded;
+			const extensionRoot = await findExtensionBoundedRoot(
+				file,
+				extensionRootKey,
+			);
+			if (extensionRoot) return extensionRoot;
 			// No marker inside the extension boundary. An explicit agent-level
 			// tsconfig is the user opting the extensions into one project
 			// (#5335): it roots them, as the path identity the bounded walk
@@ -3026,6 +3310,85 @@ const TypeScriptRoot: RootFunction = withRootMarkers(
 	}),
 	[...TS_CONFIG_MARKERS, ...TS_TOOLING_MARKERS],
 );
+
+/**
+ * The classic launch: `typescript-language-server` over the admitted
+ * `tsserver.js`. It is what a TypeScript <=6 project ran before the native
+ * launches existed, and the sibling the alias launch falls back to (#5504).
+ */
+async function launchClassicTypeScript(
+	root: string,
+	options?: LSPSpawnOptions,
+): Promise<LSPSpawnResult | undefined> {
+	let source: "direct" | "managed" = "direct";
+
+	// TypeScript <=6 uses typescript-language-server + tsserver.js. Prefer a
+	// project-local wrapper, then fall back to discovered/managed tooling.
+	// #1412 M1: walk up from root (Windows .cmd first, then Unix at each
+	// level) — a nested config root's node_modules/.bin lives at an ancestor,
+	// not necessarily directly under the LSP root.
+	let lspPath: string | undefined = await findAncestorFileAmong(root, [
+		["node_modules", ".bin", "typescript-language-server.cmd"],
+		["node_modules", ".bin", "typescript-language-server"],
+	]);
+
+	// Fall back to a discovered or managed install. ensureTool() runs PATH /
+	// npm-global discovery even when install is disabled (only the download is
+	// gated by canInstall), so a globally-installed typescript-language-server
+	// resolves even without a per-project node_modules/.bin entry. #5674: the
+	// store-only rule applies, as for every LSP managed lookup.
+	if (!lspPath) {
+		({ found: lspPath } = await lookupManagedTool(
+			"typescript-language-server",
+			root,
+			undefined,
+			{ allowInstall: canInstall(options?.allowInstall) },
+		));
+		if (lspPath) source = "managed";
+		if (!lspPath) {
+			return undefined;
+		}
+	}
+
+	// An unset/invalid hint lets the wrapper select project bytes itself.
+	// Require an admitted compiler before launching the classic wrapper.
+	const tsserverPath = await findTsserverPath(
+		root,
+		options?.allowInstall,
+		options,
+	);
+	if (!tsserverPath) {
+		admitProjectSuppliedTsserver(
+			undefined,
+			root,
+			true,
+			options?.projectCodeAllowed,
+		);
+		return undefined;
+	}
+	if (tsserverPath) source = "managed";
+
+	// The installed wrapper selects its child from the
+	// `initialization.tsserver.path` returned below; the legacy
+	// `TSSERVER_PATH` variable is set too, but this wrapper version does not
+	// read it. Both name the same admitted path, so neither an older wrapper
+	// that reads the variable nor this one can fork a different compiler.
+	const env = await getToolEnvironment();
+	const proc = await launchLSP(lspPath, ["--stdio"], {
+		cwd: root,
+		env: {
+			...env,
+			TSSERVER_PATH: tsserverPath,
+		},
+	});
+
+	return {
+		process: proc,
+		source,
+		initialization: { tsserver: { path: tsserverPath } },
+		launchVariant: "classic",
+	};
+}
 
 export const TypeScriptServer: LSPServerInfo = {
 	id: "typescript",
@@ -3075,6 +3438,17 @@ export const TypeScriptServer: LSPServerInfo = {
 					process: proc,
 					source: "direct",
 					launchVariant: "effect-tsgo",
+					initializeFallback: async (failure) => {
+						recordEffectTsgoFallback(
+							root,
+							"effect-tsgo failed to initialize, using the native launch",
+							failure,
+						);
+						logSessionStart(
+							`lsp typescript-effect-tsgo: initialize failed, falling back to native: ${failure instanceof Error ? failure.message : String(failure)}`,
+						);
+						return launchNativeTypeScript(nativeLsp, root, options);
+					},
 				};
 			} catch (launchFailure) {
 				// Existence is not launchability: a shim without the exec bit or a
@@ -3082,104 +3456,21 @@ export const TypeScriptServer: LSPServerInfo = {
 				// project worked on the native launch before it installed
 				// `@effect/tsgo`, so it keeps that launch instead of losing the
 				// TypeScript server to the registry's spawn cooldown. A process that
-				// starts and then fails `initialize` is not covered (client.ts).
-				recordDegradationOnce({
-					kind: "lsp-registry-decision",
-					subject: `effect-tsgo-launch:g${getDegradationLedgerGeneration()}:${root}`,
-					reason: `effect-tsgo launch failed, using the native launch: ${launchFailure instanceof Error ? launchFailure.message : String(launchFailure)}`,
-					metadata: {
-						field: "effect-tsgo-launch",
-						launchVariant: "effect-tsgo",
-					},
-				});
+				// starts and then exits or fails `initialize` is covered by
+				// `initializeFallback`, which the registry takes (#5504).
+				recordEffectTsgoFallback(
+					root,
+					"effect-tsgo launch failed, using the native launch",
+					launchFailure,
+				);
 			}
 		}
-		if (
-			nativeLsp &&
-			admitProjectSuppliedTsserver(
-				nativeLsp.command,
-				root,
-				true,
-				options?.projectCodeAllowed,
-			)
-		) {
-			const env = await getToolEnvironment();
-			logSessionStart(
-				`lsp typescript-native: version=${nativeLsp.version} command=${nativeLsp.command}`,
-			);
-			const proc = await launchLSP(nativeLsp.command, ["--lsp", "--stdio"], {
-				cwd: root,
-				env,
-			});
-			return { process: proc, source: "direct", launchVariant: "native-ts7" };
+		if (nativeLsp) {
+			const native = await launchNativeTypeScript(nativeLsp, root, options);
+			if (native) return native;
 		}
 
-		let source: "direct" | "managed" = "direct";
-
-		// TypeScript <=6 uses typescript-language-server + tsserver.js. Prefer a
-		// project-local wrapper, then fall back to discovered/managed tooling.
-		// #1412 M1: walk up from root (Windows .cmd first, then Unix at each
-		// level) — a nested config root's node_modules/.bin lives at an ancestor,
-		// not necessarily directly under the LSP root.
-		let lspPath: string | undefined = await findAncestorFileAmong(root, [
-			["node_modules", ".bin", "typescript-language-server.cmd"],
-			["node_modules", ".bin", "typescript-language-server"],
-		]);
-
-		// Fall back to a discovered or managed install. ensureTool() runs PATH /
-		// npm-global discovery even when install is disabled (only the download is
-		// gated by canInstall), so a globally-installed typescript-language-server
-		// resolves even without a per-project node_modules/.bin entry.
-		if (!lspPath) {
-			lspPath = await ensureTool("typescript-language-server", {
-				allowInstall: canInstall(options?.allowInstall),
-			});
-			if (lspPath) source = "managed";
-			if (!lspPath) {
-				return undefined;
-			}
-		}
-
-		// An unset/invalid hint lets the wrapper select project bytes itself.
-		// Require an admitted compiler before launching the classic wrapper.
-		const tsserverPath = await findTsserverPath(
-			root,
-			options?.allowInstall,
-			options,
-		);
-		if (!tsserverPath) {
-			admitProjectSuppliedTsserver(
-				undefined,
-				root,
-				true,
-				options?.projectCodeAllowed,
-			);
-			return undefined;
-		}
-		if (tsserverPath) source = "managed";
-
-		// The installed wrapper selects its child from the
-		// `initialization.tsserver.path` returned below; the legacy
-		// `TSSERVER_PATH` variable is set too, but this wrapper version does not
-		// read it. Both name the same admitted path, so neither an older wrapper
-		// that reads the variable nor this one can fork a different compiler.
-		const env = await getToolEnvironment();
-		const proc = await launchLSP(lspPath, ["--stdio"], {
-			cwd: root,
-			env: {
-				...env,
-				TSSERVER_PATH: tsserverPath,
-			},
-		});
-
-		return {
-			process: proc,
-			source,
-			initialization: tsserverPath
-				? { tsserver: { path: tsserverPath } }
-				: undefined,
-			launchVariant: "classic",
-		};
+		return launchClassicTypeScript(root, options);
 	},
 };
 
@@ -3260,6 +3551,9 @@ export const PythonServer: LSPServerInfo = {
 		const toolEnvironment = await getToolEnvironment();
 		const env = augmentPythonEnvironment(toolEnvironment, pythonEnvironment);
 		let source: "direct" | "managed" | "package-manager" = "direct";
+		// #5674: the stages share one refusal record, so the managed stage below
+		// reads only the store after a refusal a bare-name lookup could reach.
+		const refusals = { refused: false, bareRefused: false };
 
 		// Project ownership outranks checker preference: exhaust explicit project
 		// candidates before a bare command can resolve to pi-lens's managed bin or
@@ -3282,6 +3576,7 @@ export const PythonServer: LSPServerInfo = {
 				args: ["--stdio"],
 				cwd: root,
 				env,
+				refusals,
 			},
 			false,
 		);
@@ -3303,6 +3598,7 @@ export const PythonServer: LSPServerInfo = {
 				args: ["server"],
 				cwd: root,
 				env,
+				refusals,
 			},
 			false,
 		);
@@ -3319,6 +3615,7 @@ export const PythonServer: LSPServerInfo = {
 				args: ["--stdio"],
 				cwd: root,
 				env,
+				refusals,
 			},
 			false,
 		);
@@ -3336,6 +3633,7 @@ export const PythonServer: LSPServerInfo = {
 				args: ["server"],
 				cwd: root,
 				env,
+				refusals,
 			},
 			false,
 		);
@@ -3344,10 +3642,14 @@ export const PythonServer: LSPServerInfo = {
 		}
 
 		// Discover a globally-installed pyright even when install is disabled;
-		// only the download is gated by canInstall.
-		const pyrightPath = await ensureTool("pyright", {
-			allowInstall: canInstall(options?.allowInstall),
-		});
+		// only the download is gated by canInstall. After a refusal that a
+		// bare-name lookup could reach, only the store is read (#5674).
+		const { found: pyrightPath } = await lookupManagedTool(
+			"pyright",
+			root,
+			refusals,
+			{ allowInstall: canInstall(options?.allowInstall) },
+		);
 		if (!pyrightPath) return undefined;
 		source = "managed";
 
@@ -3408,6 +3710,9 @@ export const PythonJediServer: LSPServerInfo = {
 		const initialization = pythonEnvironment
 			? { workspace: { environmentPath: pythonEnvironment.pythonPath } }
 			: {};
+		// #5674: both tiers share one refusal record, so the managed tier reads
+		// only the store after a project-tier refusal a bare lookup could reach.
+		const refusals = { refused: false, bareRefused: false };
 
 		if (pythonEnvironment) {
 			// A project launch can fail for a reason other than "tool not found"
@@ -3424,6 +3729,7 @@ export const PythonJediServer: LSPServerInfo = {
 						args: [],
 						cwd: root,
 						env,
+						refusals,
 					},
 					options?.allowInstall,
 				);
@@ -3450,6 +3756,7 @@ export const PythonJediServer: LSPServerInfo = {
 				cwd: root,
 				env: toolEnvironment,
 				managedToolId: "jedi-language-server",
+				refusals,
 			},
 			options?.allowInstall,
 		);
@@ -3699,7 +4006,7 @@ function JavaWorkspaceRoot(): RootFunction {
 
 export const RustServer: LSPServerInfo = {
 	id: "rust",
-	idleEviction: "unmeasured",
+	idleEviction: "resident",
 	role: "language",
 	// Measured (#3750): rust-analyzer answers an empty result for a detached file.
 	requiresProjectRoot: true,
@@ -3853,11 +4160,11 @@ function buildPsesArgs(bundleDir: string): string[] {
 	const logPath = path.join(sessionDir, "pses.log");
 	const sessionDetailsPath = path.join(sessionDir, "session.json");
 	// Use -File with each PSES parameter as a SEPARATE argv element (the canonical
-	// editor launch form). This deliberately avoids `-Command "& '...'"`: pwsh.exe
-	// commonly lives under "C:\Program Files\…" (a space), which forces launchLSP's
-	// Windows shell path, and an embedded `&`/quotes in a single -Command string
-	// gets mangled by cmd.exe. Plain argv tokens survive shell escaping (our paths
-	// are under ~/.pi-lens, no spaces). -Stdio makes PSES speak LSP over this
+	// editor launch form). This deliberately avoids `-Command "& '...'"`: an
+	// embedded `&`/quotes in a single -Command string is mangled by any cmd.exe
+	// layer, and plain argv tokens need no escaping. pwsh.exe commonly lives under
+	// "C:\Program Files\…" (a space); launchLSP spawns an .exe there directly,
+	// never through cmd.exe, so the server ends with pi (#5694). -Stdio makes PSES speak LSP over this
 	// process's stdin/stdout; -LanguageServiceOnly skips the debug adapter.
 	return [
 		"-NoLogo",
@@ -3890,7 +4197,7 @@ function buildPsesArgs(bundleDir: string): string[] {
 
 export const PowerShellServer: LSPServerInfo = {
 	id: "powershell",
-	idleEviction: "unmeasured",
+	idleEviction: "resident",
 	role: "language",
 	name: "PowerShell Editor Services",
 	executesProjectCode: true,
@@ -4006,11 +4313,17 @@ export const JavaServer = createInteractiveServer({
 	command: () => process.env.JDTLS_PATH || "jdtls",
 	args: (root) => createLombokJdtlsArgs(root),
 	runtime: "java",
+	// #5675: jdtls 1.63.0 (Temurin 25.0.5+8) answers a didChange that carries
+	// the bytes it already holds: the cascade's re-send of an importer at
+	// 19.331 was published for the new version at 19.847 (+516 ms, docVersion 1)
+	// and republished the other importer at 19.855, 3/3 on the real smoke row
+	// (see LspResendRecheck; transcripts in the PR body).
+	resendRecheck: "rechecks",
 });
 
 export const KotlinServer: LSPServerInfo = {
 	id: "kotlin",
-	idleEviction: "unmeasured",
+	idleEviction: "resident",
 	role: "language",
 	name: "Kotlin Language Server",
 	executesProjectCode: true,
@@ -4271,7 +4584,7 @@ export const ElixirServer = createInteractiveServer({
 
 export const ElixirExpertServer: LSPServerInfo = {
 	id: "expert",
-	idleEviction: "unmeasured",
+	idleEviction: "resident",
 	role: "language",
 	name: "Expert",
 	executesProjectCode: true,
@@ -4866,7 +5179,7 @@ export const VueServer: LSPServerInfo = {
 export const SvelteServer: LSPServerInfo = {
 	id: "svelte",
 	executesProjectCode: true,
-	idleEviction: "unmeasured",
+	idleEviction: "resident",
 	role: "language",
 	name: "Svelte Language Server",
 	extensions: [".svelte"],

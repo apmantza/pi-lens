@@ -177,10 +177,16 @@ describe("#5131 — the client's own watched-files notice cannot clear a real er
 			const result = await touch(service, "a.groovy", BROKEN);
 			// Pre-fix: `confirmed` with no diagnostics (the live false clean).
 			expect(codes(result)).toEqual([ERROR_CODE]);
-			// The notice is not what changed: the server still hears it.
-			expect(traceLines()).toContain(
-				`watched ${pathToFileURL(path.join(tmp, "a.groovy")).href} 1`,
-			);
+			// The notice is not what changed: the server still hears it. Its type
+			// is not this test's claim: Created or Changed follows the 100 ms
+			// birth margin (#4320), and the time from this file's write to the
+			// client's start sits near it (66-74 ms locally). Recurrence: #5622
+			// r3, where a 30 ms delay on the server spawn turned the notice into
+			// a Changed and this line redded CI shard 4.
+			const notice = `watched ${pathToFileURL(path.join(tmp, "a.groovy")).href} `;
+			expect(
+				traceLines().filter((line) => line.startsWith(notice)),
+			).toHaveLength(1);
 			// Bounded observability: one counted row for the held publish.
 			expect(
 				getDegradationSummary().find(

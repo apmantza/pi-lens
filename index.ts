@@ -28,6 +28,7 @@ import {
 	adoptProjectTrustFromPorts,
 	assertInstallAllowed,
 	readProjectTrustFromContext,
+	setHostProjectTrustLoader,
 } from "./clients/project-trust.js";
 import {
 	type ExtensionRunMode,
@@ -62,12 +63,16 @@ import { resolveSkillPaths } from "./clients/skills-resolver.js";
 import {
 	getFailedLspServerIds,
 	getSessionLanguages,
+	getWidgetSummary,
 	reconcileCascadeNeighborLspErrors,
 	renderWidget,
 	scheduleStaleReconcile,
 	setRenderCallback,
+	setWidgetChangeCallback,
+	clearWidgetChangeCallback,
 	wireWidgetDispositionSubscriber,
 } from "./clients/widget-state.js";
+import { formatIssuesStatus } from "./clients/issues-status.js";
 import { selectLspStatus } from "./clients/lsp-status.js";
 import {
 	branchToolResultIds,
@@ -123,7 +128,11 @@ import {
 	rebindableProcessBridgeDeps,
 	type BridgeActivation,
 } from "./clients/process-bridge.js";
-import { isExternalOrVendorFile } from "./clients/path-utils.js";
+import {
+	isExternalOrVendorFile,
+	resolveToolCallFilePath,
+	toPosix,
+} from "./clients/path-utils.js";
 import {
 	isPathIgnoredByProject,
 	isRecordableProjectPath,
@@ -538,6 +547,12 @@ function getStableSessionId(ctx: unknown): string | undefined {
 
 export interface CreateHostPortsOptions {
 	getContext: () => unknown;
+	/**
+	 * The context a status write targets. Defaults to `getContext`; an activation
+	 * that owns a status projection passes its OWN live event ctx, so a sibling
+	 * activation's later event cannot redirect that activation's footer write.
+	 */
+	getStatusContext?: () => unknown;
 	getProjectRoot?: () => string | undefined;
 	getRenderInvalidator?: () => (() => void) | undefined;
 }
@@ -548,6 +563,10 @@ export function createHostPorts(
 	options: CreateHostPortsOptions,
 ): HostPorts {
 	const context = () => options.getContext() as any;
+	const statusContext = () =>
+		(options.getStatusContext
+			? options.getStatusContext()
+			: options.getContext()) as any;
 	const currentMode = () => readExtensionMode(context());
 	const emit = (channel: string, payload: unknown): void => {
 		const bus = pi.events;
@@ -598,7 +617,9 @@ export function createHostPorts(
 				}),
 		},
 		emit: { bus: emit },
-		status: { set: (name, value) => context()?.ui?.setStatus?.(name, value) },
+		status: {
+			set: (name, value) => statusContext()?.ui?.setStatus?.(name, value),
+		},
 		spawn: {
 			abortSignal: () => context()?.signal,
 			isAllowed: assertInstallAllowed,
@@ -815,10 +836,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// copy of the package when jiti transpiles pi-lens (its native import fails
 	// on the host-provided static imports) and can reach a second copy where
 	// those resolve natively; clients/file-mutation-queue.ts checks which, and
-	// a host without the export records a degradation.
-	setHostFileMutationQueueLoader(
-		() => import("@earendil-works/pi-coding-agent"),
-	);
+	// a host without the export records a degradation. #5469: adopted-root
+	// trust reads pi's trust store through the same single lazy lookup.
+	const loadHostSdk = () => import("@earendil-works/pi-coding-agent");
+	setHostProjectTrustLoader(loadHostSdk);
+	setHostFileMutationQueueLoader(loadHostSdk);
 	const testRunnerDeliveryOwnerId = `activation-${++_nextTestRunnerDeliveryOwnerId}`;
 	// Event contexts belong to the activation that owns this factory closure.
 	// The process-global latest ctx remains only a boot-window fallback.
@@ -1026,6 +1048,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 	let renderInvalidator: (() => void) | undefined;
 	const hostPorts = createHostPorts(pi, {
 		getContext: () => latestEventCtx,
+		// Status writes belong to THIS activation's live ctx. `latestEventCtx`
+		// belongs to whichever activation received the last event, so a sibling's
+		// start would otherwise redirect this activation's footer write.
+		getStatusContext: () => ownEventCtx,
 		getProjectRoot: () => runtime.projectRoot,
 		getRenderInvalidator: () => renderInvalidator,
 	});
@@ -1047,6 +1073,38 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// never captured once — a session replacement invalidates the old ctx.ui.
 	// #1334 S2: the ports notifier owns mode suppression + live-ctx resolution
 	// (per-call, never captured -- the #338/#798 detached-callback rule).
+	// The `pi-lens-issues` key is a projection of the widget store, published
+	// from the live status port so RPC and non-TUI modes reach it too. The
+	// flag is read at publish time (#4913 forbids a factory-time read), and
+	// identical consecutive text is dropped: `setStatus` repaints the host.
+	let issuesStatusPublished = false;
+	let lastIssuesStatus: string | undefined;
+	function resetIssuesStatusPublish(): void {
+		issuesStatusPublished = false;
+		lastIssuesStatus = undefined;
+	}
+	function updateIssuesStatus(): void {
+		const enabled = getLensFlag("lens-issues-status") === true;
+		const next = enabled ? formatIssuesStatus(getWidgetSummary()) : undefined;
+		if (issuesStatusPublished && next === lastIssuesStatus) return;
+		// Flag off from the start: publish nothing, so the footer is
+		// byte-identical to a pi-lens without the feature.
+		if (!enabled && !issuesStatusPublished) return;
+		// The store write that triggered this call already committed; a stale ctx
+		// or a host that refuses the key must not escape the writer. The dedupe
+		// state advances only AFTER the host accepted the value, so a failed
+		// publish is retried on the next store change.
+		try {
+			hostPorts.status.set("pi-lens-issues", next);
+		} catch (err) {
+			dbg(
+				`pi-lens-issues publish skipped: ${err instanceof Error ? err.message : String(err)}`,
+			);
+			return;
+		}
+		issuesStatusPublished = true;
+		lastIssuesStatus = next;
+	}
 	const refreshCtxDerivedPlumbing = (): void => {
 		// These targets are module singletons, while hostPorts is scoped to this
 		// extension activation. A sibling activation can overwrite them and then
@@ -1409,8 +1467,12 @@ function activateExtension(hostPi: ExtensionAPI) {
 	type LensWidgetSetWidget = (
 		id: string,
 		widget: LensWidgetFactory | undefined,
-		options?: { placement: "belowEditor" },
+		options?: { placement: "aboveEditor" | "belowEditor" },
 	) => void;
+	// widget.position / widget.hideWhenClean (global config only).
+	const widgetPlacement: "aboveEditor" | "belowEditor" =
+		globalConfig?.widget?.position ?? "belowEditor";
+	const widgetHideWhenClean = globalConfig?.widget?.hideWhenClean === true;
 
 	/**
 	 * #1334 S2: the widget is a terminal-only custom component. The host's own
@@ -1453,7 +1515,15 @@ function activateExtension(hostPi: ExtensionAPI) {
 				return {
 					render: (width: number) => {
 						scheduleStaleReconcile();
-						return renderWidget(width, theme, { compact: compactWidget });
+						const lines = renderWidget(width, theme, {
+							compact: compactWidget,
+							hideWhenClean: widgetHideWhenClean,
+						});
+						// Above the editor, a trailing blank line separates the
+						// widget from the next widget stacked beneath it.
+						return widgetPlacement === "aboveEditor" && lines.length > 0
+							? [...lines, ""]
+							: lines;
 					},
 					invalidate: () => {
 						renderInvalidator = undefined;
@@ -1461,7 +1531,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 					},
 				};
 			},
-			{ placement: "belowEditor" },
+			{ placement: widgetPlacement },
 		);
 		mountedLensWidgetUi = ui;
 		return true;
@@ -1528,7 +1598,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 
 	pi.registerCommand("lens-widget-toggle", {
 		description:
-			"Show or hide the pi-lens diagnostics widget below the editor. Usage: /lens-widget-toggle",
+			"Show or hide the pi-lens diagnostics widget. Usage: /lens-widget-toggle",
 		handler: async (_args, ctx) => {
 			const nextVisible = !lensWidgetVisible;
 			const mode = readExtensionMode(ctx);
@@ -1843,9 +1913,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 				for (const v of diagStats.topViolations.slice(0, 5)) {
 					const samplePath =
 						v.samplePaths.length > 0
-							? path
-									.relative(runtime.projectRoot, v.samplePaths[0])
-									.replace(/\\/g, "/")
+							? toPosix(path.relative(runtime.projectRoot, v.samplePaths[0]))
 							: "";
 					const pathSuffix = samplePath ? ` (e.g. ${samplePath})` : "";
 					lines.push(`  ${v.ruleId}: ${v.count}${pathSuffix}`);
@@ -2049,14 +2117,18 @@ function activateExtension(hostPi: ExtensionAPI) {
 			"Allow one edit to a file without a prior read. Usage: /lens-allow-edit <path>",
 		handler: async (args, ctx) => {
 			const [rawTarget] = normalizeCommandArgs(args);
-			if (!rawTarget) {
+			// Shape 74: the exemption is keyed like the edit's own tool call, so the
+			// path resolves through the same host seam (`~`, `@`, `file://`).
+			const target = resolveToolCallFilePath(
+				rawTarget,
+				ctx.cwd,
+				runtime.projectRoot,
+			);
+			if (!target) {
 				notifyUi(ctx, "Usage: /lens-allow-edit <path>", "warning");
 				return;
 			}
-
-			const targetPath = path.isAbsolute(rawTarget)
-				? rawTarget
-				: path.resolve(ctx.cwd ?? runtime.projectRoot, rawTarget);
+			const targetPath = target.path;
 			runtime.readGuardFor(getStableSessionId(ctx)).addExemption(targetPath);
 			notifyUi(
 				ctx,
@@ -2136,8 +2208,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// pi-lens's behavior before this feature existed.
 	const lazyTools = [
 		createAstGrepSearchTool(astGrepClient),
-		createAstGrepReplaceTool(astGrepClient, () =>
-			runtime.captureSessionGeneration(),
+		createAstGrepReplaceTool(
+			astGrepClient,
+			() => runtime.captureSessionGeneration(),
+			(name, cwd) => getLensFlag(name, cwd),
 		),
 		createAstGrepOutlineTool(astGrepClient),
 		createLspNavigationTool((name, cwd) => getLensFlag(name, cwd), {
@@ -3071,6 +3145,15 @@ function activateExtension(hostPi: ExtensionAPI) {
 					dbg(
 						`session_start: ${sessionReason ?? "startup"} — session stores from ${handoffSource}`,
 					);
+					// Resumed state and `/new` both land in the store above; publish
+					// once now rather than only on the next store mutation. Only the
+					// admitted primary owns the status listener: a declined
+					// concurrent secondary must not replace it with its own closure.
+					// The host clears extension statuses on a session reset, so the
+					// dedupe must not suppress this session's first publish.
+					setWidgetChangeCallback(updateIssuesStatus);
+					resetIssuesStatusPublish();
+					updateIssuesStatus();
 
 					if (lensWidgetVisible) {
 						mountLensWidget(ctx.ui, readExtensionMode(ctx));
@@ -3249,6 +3332,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 		const editClass = isEditClassToolResult(
 			event as { toolName?: string; input?: { command?: unknown } },
 			ctx?.cwd ?? runtime.projectRoot ?? process.cwd(),
+			runtime,
 		);
 		if (rtMutation) {
 			logLatency({
@@ -3314,10 +3398,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 				resetLSPService,
 				// #4942: the read guard of the session whose tool result this is.
 				readGuard: runtime.readGuardFor(getStableSessionId(ctx)),
-				agentBehaviorRecord: (toolName, filePath) =>
+				agentBehaviorRecord: (toolName, filePath, progress) =>
 					(
 						resident?.agentBehaviorClient ?? getAgentBehaviorClient()
-					).recordToolCall(toolName, filePath),
+					).recordToolCall(toolName, filePath, progress),
 				formatBehaviorWarnings: (warnings) =>
 					(
 						resident?.agentBehaviorClient ?? getAgentBehaviorClient()
@@ -3411,6 +3495,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 						(_ctx as { cwd?: string })?.cwd ??
 							runtime.projectRoot ??
 							process.cwd(),
+						runtime,
 					)
 						? "tool_result_edit"
 						: "tool_result_read_only";
@@ -3475,6 +3560,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// biome-ignore lint/suspicious/noExplicitAny: heterogeneous pi event ctx shapes
 	const onTurnStart = (_event: any, ctx: any) => {
 		rememberOwnEventCtx(ctx);
+		// A sibling activation can take the process-global listener slot; the
+		// live primary reclaims it each turn, as it reclaims the render callback.
+		if (ownedSessionRole === "primary")
+			setWidgetChangeCallback(updateIssuesStatus);
 		// Trust can change without a new session. Re-adopt before this turn can
 		// reach any install-capable or LSP-spawn path.
 		adoptProjectTrustFromPorts(hostPorts);
@@ -4422,6 +4511,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// The LSP idle-reset timer (240s) is unref'd but we cancel it explicitly here
 	// so it does not fire after shutdown. resetLSPService shuts down any live clients.
 	(pi as any).on("session_shutdown", (event: unknown, ctx: unknown) => {
+		// A departed activation must not keep publishing to a footer its host has
+		// already replaced; the clear is identity-checked, so a successor's
+		// listener is untouched.
+		clearWidgetChangeCallback(updateIssuesStatus);
 		// #473: a concurrently-live in-process subagent session shutting down
 		// (its sibling primary — the real parent — still active) must NOT run
 		// the shared-infra teardown below: no LSP fleet shutdown, no idle-timer
@@ -4680,7 +4773,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 			cancelLSPIdleReset();
 			// #449 slice 1: SYNC-only deregistration (no child spawns — see the
 			// processExiting note below); safe to call unconditionally here.
-			deregisterInstance();
+			// #5699: on a quit the entry outlives this call while LSP children
+			// are held; the exit hook removes it once their kills are confirmed.
+			deregisterInstance({ processExiting: shutdownReason === "quit" });
 			// #2467: no analyzer bootstrap may START loading from here on. A demand
 			// already in flight keeps its promise and still settles — the gate is
 			// checked only when no flight exists. Nothing is spawned, which is what
@@ -4999,11 +5094,18 @@ function activateExtension(hostPi: ExtensionAPI) {
 			// repeat's blockers keeps showing them, so the repeat adds nothing and
 			// spends none of the 64-entry cap.
 			const turnEndFindings =
-				consumedTurnEnd?.repeatBody !== undefined &&
-				rebuilt?.holds(consumedTurnEnd.repeatBody)
+				consumedTurnEnd?.repeatBodies !== undefined &&
+				rebuilt !== undefined &&
+				consumedTurnEnd.repeatBodies.every((body) => rebuilt.holds(body))
 					? undefined
 					: consumedTurnEnd;
-			const sessionGuidance = consumeSessionStartGuidance(cacheManager, cwd);
+			// #5792: the guidance record is the writing session's, like the turn-end
+			// slot above; `telemetrySessionId` is the coordinator's id, the one its
+			// `session_start` stamped.
+			const sessionGuidance = consumeSessionStartGuidance(cacheManager, cwd, {
+				sessionId: readerSessionId,
+				coordinatorId: runtime.telemetrySessionId,
+			});
 			const testFindings = consumeStagedTestRunnerFindings({
 				cwd,
 				sessionId: readerSessionId,

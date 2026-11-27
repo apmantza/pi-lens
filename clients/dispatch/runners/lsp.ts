@@ -115,8 +115,12 @@ function normalizeActionTitle(title: string): string {
 	return title.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * A lookup with no client to ask (`undefined`, #5554) suggests nothing, as an
+ * empty list does; the call's catch would give the same result.
+ */
 function buildCodeActionSuggestion(
-	actions: import("../../lsp/client.js").LSPCodeAction[],
+	actions: import("../../lsp/client.js").LSPCodeAction[] = [],
 ): string | undefined {
 	if (!actions.length) return undefined;
 	const quickFixes = actions.filter((action) =>
@@ -196,6 +200,9 @@ const lspRunner: RunnerDefinition = {
 		// confirmed clean result and must not be reported as one (#570).
 		let diagnosticsInconclusive = false;
 		let inconclusiveServerIds: readonly string[] = [];
+		let inconclusiveReason:
+			| import("../../lsp/diagnostic-binding.js").TouchInconclusiveReason
+			| undefined;
 		// #4403: set when the touch says no primary answered (`primary-unavailable`).
 		let primaryUnavailable:
 			| Pick<
@@ -211,6 +218,8 @@ const lspRunner: RunnerDefinition = {
 		// diagnostics means clean".
 		let unconfirmedServerIds: readonly string[] = [];
 		let deferredServerIds: readonly string[] = [];
+		// #5727: auxiliaries that answered these bytes on an inconclusive touch.
+		let answeredServerIds: readonly string[] = [];
 		// #5008: did the PRIMARY answer these bytes? A collecting touch says so by
 		// completing its confirmation policy (`confirmed`, or `partial` when only
 		// an auxiliary went missing) — the one owner of that question. Only that
@@ -323,6 +332,7 @@ const lspRunner: RunnerDefinition = {
 				lspDiags = touched.diags;
 				diagnosticsInconclusive = touched.inconclusive === true;
 				inconclusiveServerIds = touched.inconclusiveServerIds ?? [];
+				inconclusiveReason = touched.inconclusiveReason;
 				if (touched.inconclusiveReason === "primary-unavailable") {
 					const disabledPrimaryServerIds =
 						touched.disabledPrimaryServerIds ?? [];
@@ -345,6 +355,7 @@ const lspRunner: RunnerDefinition = {
 					]),
 				];
 				deferredServerIds = touched.deferredServerIds ?? [];
+				answeredServerIds = touched.answeredServerIds ?? [];
 				// #5051: the cascade's confirmed-touch display reads the same
 				// verdict through the same reader.
 				primaryAnswerStale = readBoundToCurrentDisk(touched) === false;
@@ -383,6 +394,9 @@ const lspRunner: RunnerDefinition = {
 						}
 					}
 					lspDiags = currentContentDiags;
+					// #5727: every row withheld, so no server's answer is about
+					// these bytes either.
+					if (!namesStaleContributor) answeredServerIds = [];
 				}
 			}
 		} catch (err) {
@@ -467,6 +481,17 @@ const lspRunner: RunnerDefinition = {
 				status: "skipped",
 				diagnostics: [],
 				semantic: "none",
+				...(inconclusiveReason !== undefined && {
+					inconclusiveReason,
+				}),
+				...(inconclusiveServerIds.length > 0 &&
+					inconclusiveReason !== "primary-unavailable" && {
+						unconfirmedServerIds: [...inconclusiveServerIds],
+					}),
+				// #5727: the run has no verdict, but these servers answered clean.
+				...(answeredServerIds.length > 0 && {
+					answeredServerIds: [...answeredServerIds],
+				}),
 				...primaryUnavailable,
 			};
 		}
@@ -701,11 +726,15 @@ const lspRunner: RunnerDefinition = {
 			// reading (a diagnostics-unsupported primary, an incumbent built before the
 			// confirmation field), which is today's behaviour.
 			...(diagnosticsInconclusive && { inconclusive: true as const }),
+			...(inconclusiveReason !== undefined && { inconclusiveReason }),
 			...(unconfirmedServerIds.length > 0 && {
 				unconfirmedServerIds: [...unconfirmedServerIds],
 			}),
 			...(deferredServerIds.length > 0 && {
 				deferredServerIds: [...deferredServerIds],
+			}),
+			...(answeredServerIds.length > 0 && {
+				answeredServerIds: [...answeredServerIds],
 			}),
 			...(outOfEditScope.length > 0 && { outOfEditScope }),
 			...(withheldNotice !== undefined && { withheldNotice }),

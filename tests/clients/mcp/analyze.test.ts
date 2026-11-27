@@ -64,7 +64,7 @@ import {
 import { analyzeFile } from "../../../clients/mcp/analyze.js";
 import { verdictUncheckedReason } from "../../../clients/dispatch/types.js";
 import { createLensDiagnosticMarkTool } from "../../../tools/lens-diagnostic-mark.js";
-import { createCaseAliasFixture } from "../test-utils.js";
+import { createCaseAliasFixture, pinFixtureHome } from "../test-utils.js";
 
 const warningDiagnostic = {
 	id: "warn-1",
@@ -869,6 +869,54 @@ describe("analyzeFile", () => {
 		mockBuildOrUpdateGraph.mockRejectedValueOnce(new Error("graph boom"));
 		const result = await analyzeFile(tsFile, tmpDir, { updateGraph: true });
 		expect(result.counts.diagnostics).toBe(0);
+	});
+
+	// RECURRENCE GUARDED: shape 74. `pilens_analyze` joined its `path` argument
+	// onto the cwd with a bare `path.resolve`, so `@app.ts` and `~/app.ts` named
+	// `<cwd>/@app.ts` and `<cwd>/~/app.ts`, files that cannot exist, while the
+	// sibling MCP tools resolve the same argument through `resolveHostToolPath`.
+	it.each(["@app.ts", "~/app.ts"])(
+		"analyzes the file a host spelling names: %s (shape 74)",
+		async (spelling) => {
+			vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
+			const { home, restore } = pinFixtureHome("mcp-analyze-host-path");
+			try {
+				const homeFile = path.join(home, "app.ts");
+				fs.writeFileSync(homeFile, "export const a = 1;\n");
+				const result = await analyzeFile(spelling, tmpDir);
+				// `@` strips to a cwd-relative name; `~/` is the pinned home.
+				expect(result.filePath).toBe(
+					spelling === "@app.ts" ? tsFile : homeFile,
+				);
+			} finally {
+				restore();
+			}
+		},
+	);
+
+	// RECURRENCE GUARDED: Qodo MEDIUM on #5494 b599493fb. `pilens_analyze` takes
+	// `cwd` as a free string. `resolveHostToolPath` expanded a `~` cwd to find
+	// the file, but host creation, root classification, dispatch and turn-state
+	// registration kept the raw `~`, which `path.resolve` reads as `<process
+	// cwd>/~`: the file resolved into the workspace while every other seam
+	// judged it outside, so the worklist stayed empty.
+	it("uses one absolute root for a host-spelled cwd (Qodo, #5494)", async () => {
+		vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
+		const { home, restore } = pinFixtureHome("mcp-analyze-host-cwd");
+		try {
+			const homeFile = path.join(home, "app.ts");
+			fs.writeFileSync(homeFile, "export const a = 1;\n");
+			const result = await analyzeFile("app.ts", "~", {
+				registerTurnState: true,
+			});
+			expect(result.filePath).toBe(homeFile);
+			expect(vi.mocked(dispatchForFile).mock.calls[0][0].cwd).toBe(home);
+			expect(Object.keys(new CacheManager().readTurnState(home).files)).toEqual(
+				["app.ts"],
+			);
+		} finally {
+			restore();
+		}
 	});
 });
 

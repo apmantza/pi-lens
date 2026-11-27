@@ -44,6 +44,7 @@ vi.mock("../../../clients/atomic-write.js", () => ({
 	writeFileAtomicAsync: mockWriteFileAtomicAsync,
 }));
 
+import { registeredBackgroundWriteDrainsForTests } from "../../../clients/background-write-drains.js";
 import {
 	checkProbeCache,
 	flushProbeCache,
@@ -422,6 +423,82 @@ describe("updateProbeCache", () => {
 		await vi.advanceTimersByTimeAsync(700);
 		expect(mockFsMkdir.mock.calls.length).toBeGreaterThan(1);
 		expect(mockWriteFileAtomicAsync).not.toHaveBeenCalled();
+	});
+
+	// Recurrence: #5657. `ensureTool` calls `void updateProbeCache(...)`; the
+	// fallow archive test's teardown settled the cache while that update was still
+	// awaiting its `stat`, saw nothing dirty, and the update then armed the
+	// debounced flush that wrote `probe-cache.json` into the removed fixture root.
+	it("the registry settle joins an update that has not marked its change yet", async () => {
+		mockFsReadFile.mockResolvedValue(JSON.stringify({}));
+		let releaseStat: (value: {
+			mtimeMs: number;
+			size: number;
+		}) => void = () => {};
+		mockFsStat.mockReturnValue(
+			new Promise((resolve) => {
+				releaseStat = resolve;
+			}),
+		);
+
+		void updateProbeCache(TOOL_ID, TOOL_PATH);
+		// The installer's own drain, by name: running the whole registry would let
+		// the other writers' drains hold the call back past the release below.
+		const entry = registeredBackgroundWriteDrainsForTests().find(
+			({ drain }) => drain.name === "settleProbeCacheForTests",
+		);
+		expect(
+			entry,
+			"the installer registers its probe-cache drain",
+		).toBeDefined();
+		const settle = (
+			entry as { drain: () => Promise<string | undefined> }
+		).drain();
+		// A macrotask later: a settle that did not join the update has already
+		// answered idle by now, and the release below marks the change after it.
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		releaseStat({ mtimeMs: MTIME_MS, size: 1 });
+		expect(await settle).toBeUndefined();
+
+		expect(mockWriteFileAtomicAsync).toHaveBeenCalledTimes(1);
+		expect(await flushProbeCache()).toBe("idle");
+	});
+
+	// Recurrence: #5657. The pending Set keeps an update only until it settles. A
+	// Set that kept settled entries would grow by one per `ensureTool` for the life
+	// of the process. The reset returns the count it drops, so these cases read the
+	// set without a new export. The never-settling case below proves the set holds
+	// an entry in flight, so a 0 here is not an empty set that was never filled.
+	it("empties the pending set once a successful stat settles", async () => {
+		mockFsReadFile.mockResolvedValue(JSON.stringify({}));
+		mockFsStat.mockResolvedValue({ mtimeMs: MTIME_MS, size: 1 });
+
+		await updateProbeCache(TOOL_ID, TOOL_PATH);
+
+		expect(resetProbeCacheStateForTesting()).toBe(0);
+	});
+
+	it("empties the pending set once a failing stat settles", async () => {
+		mockFsReadFile.mockResolvedValue(JSON.stringify({}));
+		mockFsStat.mockRejectedValue(new Error("ENOENT"));
+
+		await updateProbeCache(TOOL_ID, TOOL_PATH);
+
+		expect(resetProbeCacheStateForTesting()).toBe(0);
+	});
+
+	// Recurrence: #5657 review F4. A stat that never settles keeps its entry, and
+	// the reset must clear it, or every later settle in the file waits on it. The
+	// first read proves the update entered the set; the second proves the reset
+	// emptied it.
+	it("the reset clears an update that never settles", () => {
+		mockFsReadFile.mockResolvedValue(JSON.stringify({}));
+		mockFsStat.mockReturnValue(new Promise(() => {}));
+
+		void updateProbeCache(TOOL_ID, TOOL_PATH);
+
+		expect(resetProbeCacheStateForTesting()).toBe(1);
+		expect(resetProbeCacheStateForTesting()).toBe(0);
 	});
 
 	it("retains an update that arrives during the atomic write", async () => {

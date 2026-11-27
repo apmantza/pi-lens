@@ -307,7 +307,7 @@ function recordGhTokenUnavailable(
  */
 function recordZizmorOfflineDegradation(reason: string): void {
 	incrementDegradationCount({
-		kind: "mode-suppression",
+		kind: "zizmor-offline",
 		subject: "zizmor",
 		reason,
 	});

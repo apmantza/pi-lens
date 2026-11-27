@@ -13,7 +13,10 @@ const safeSpawn = vi.fn((..._args: unknown[]) => ({
 const safeSpawnAsync = vi.fn((...args: Parameters<typeof safeSpawn>) =>
 	Promise.resolve(safeSpawn(...args)),
 );
-vi.mock("../../../../clients/safe-spawn.js", () => ({
+vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/safe-spawn.js")
+	>()),
 	safeSpawn,
 	safeSpawnAsync,
 }));
@@ -25,11 +28,6 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: () => ({
-			isAvailable: () => true,
-			isAvailableAsync: async () => true,
-			getCommand: () => "taplo",
-		}),
 		resolveToolCommandWithInstallFallback: async () => "taplo",
 		lspPrimaryCoversFile: (...args: unknown[]) => lspPrimaryCoversFile(...args),
 	}),

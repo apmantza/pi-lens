@@ -83,9 +83,15 @@ const CONSUMERS = [
 	"tests/clients/socket-error-listener-sweep.test.ts",
 	"tests/config/bounded-container-guard.test.ts",
 	"tests/config/bounded-eviction-idiom-sweep.test.ts",
+	// #5410: counts every client-owned binary-lookup primitive by AST leaf.
+	"tests/config/client-ladder-census.test.ts",
 	"tests/config/flag-read-registry-sweep.test.ts",
 	"tests/config/install-kill-switch-census.test.ts",
 	"tests/config/lsp-override-copy-census.test.ts",
+	// #5418: classifies every `createAvailabilityChecker` reference in
+	// clients/dispatch/runners, so a CLI probe that is not a literal call, a
+	// plain import or the bound command-spec form reaches the census as unclassified.
+	"tests/config/registry-parity.test.ts",
 	"tests/config/runner-group-id-census.test.ts",
 	"tests/config/spawn-chokepoint-sweep.test.ts",
 	"tests/config/tree-census-timeout.test.ts",
@@ -196,11 +202,11 @@ const ADMITTED_ACCESSOR_SITES: readonly AccessorAdmission[] = [
 			"#4946: `parameterNames` reads one function's parameter list; nothing is visited",
 	},
 	{
-		file: "tests/clients/abort-listener-release-sweep.test.ts",
-		text: "if (node.children().length > 0) return undefined;",
+		file: "tests/config/registry-parity.test.ts",
+		text: "?.children()",
 		count: 1,
 		reason:
-			"a leaf test on one node (no children means a token); nothing is visited",
+			"#5418: reads ONE call's own argument list to classify its first argument; nothing is visited",
 	},
 	{
 		file: "tests/clients/abort-listener-release-sweep.test.ts",
@@ -258,6 +264,41 @@ const ADMITTED_ACCESSOR_SITES: readonly AccessorAdmission[] = [
 		count: 1,
 		reason:
 			"enumerates one call's direct argument nodes to find its callback and budget; no recursive traversal",
+	},
+	{
+		file: "tests/config/tree-census-timeout.test.ts",
+		text: "for (const parameter of holder.children())",
+		count: 1,
+		reason:
+			"`bindingScopes` reads one parameter list's direct children for the names they bind; one level, no recursive traversal",
+	},
+	{
+		file: "tests/config/tree-census-timeout.test.ts",
+		text: 'const pairs = second.children().filter((node) => node.kind() === "pair");',
+		count: 1,
+		reason:
+			"`bodyAndBudget` reads one options object's direct pairs for its `timeout`; one level, no recursive traversal",
+	},
+	{
+		file: "tests/config/tree-census-timeout.test.ts",
+		text: "for (const child of node.children()) {",
+		count: 1,
+		reason:
+			"`declarationNames` reads a declaration's direct children for its `variable_declarator`s; one level, no recursive traversal",
+	},
+	{
+		file: "tests/config/tree-census-timeout.test.ts",
+		text: "for (const child of pattern.children())",
+		count: 1,
+		reason:
+			"`boundNames` recurses a destructuring pattern's own parts to the names it binds; bounded by the pattern, no file traversal",
+	},
+	{
+		file: "tests/config/tree-census-timeout.test.ts",
+		text: "for (const statement of root.children()) {",
+		count: 1,
+		reason:
+			"`readShape` enumerates a module's top-level statements, one level, to seed its shape table",
 	},
 	{
 		file: "tests/config/runner-group-id-census.test.ts",

@@ -8,15 +8,27 @@ const safeSpawnAsync = vi.fn();
 const ensureTool = vi.fn();
 const getLinterPolicyForCwd = vi.fn();
 
-vi.mock("../../../../clients/safe-spawn.js", () => ({
+vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/safe-spawn.js")
+	>()),
 	safeSpawnAsync,
 }));
 
-vi.mock("../../../../clients/installer/index.js", () => ({
+vi.mock("../../../../clients/installer/index.js", async (importOriginal) => ({
+	// #5410 D9: `shouldAutoInstallTool` reads the opt-in off the real `TOOLS`.
+	TOOLS: (
+		await importOriginal<
+			typeof import("../../../../clients/installer/index.js")
+		>()
+	).TOOLS,
 	ensureTool,
 }));
 
-vi.mock("../../../../clients/tool-policy.js", () => ({
+vi.mock("../../../../clients/tool-policy.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/tool-policy.js")
+	>()),
 	getLinterPolicyForCwd,
 }));
 
@@ -31,12 +43,13 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: (command: string) => ({
-			isAvailableAsync: async () => toolState.available,
-			getCommand: () => (toolState.available ? command : null),
-		}),
-		resolveAvailableOrInstall: async (_checker: unknown, toolId: string) =>
-			toolState.available ? "terragrunt" : ensureTool(toolId),
+		// The runner resolves through the registry resolver, which binds the real
+		// checker inside runner-helpers, so a checker double never reaches it
+		// (#5410 S2). Same answer, at the seam the runner now calls.
+		resolveToolCommandWithInstallFallback: async (
+			_cwd: string,
+			toolId: string,
+		) => (toolState.available ? "terragrunt" : ensureTool(toolId)),
 	}),
 );
 

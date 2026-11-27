@@ -5,7 +5,16 @@ import { FactStore } from "../../../../clients/dispatch/fact-store.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
 const safeSpawnAsync = vi.hoisted(() => vi.fn());
-let actionlintAvailable = true;
+// Drives the `--version` probe both runners make through the real
+// availability seams (the resolver for actionlint, the cwd probe for credo).
+let toolAvailable = true;
+const toolNotFound = {
+	error: new Error("spawn ENOENT"),
+	status: null,
+	stdout: "",
+	stderr: "",
+	spawnFailure: { kind: "tool-not-found" },
+};
 
 vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
 	...(await importOriginal<
@@ -13,20 +22,6 @@ vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
 	>()),
 	safeSpawnAsync,
 }));
-vi.mock(
-	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
-	async (importOriginal) => ({
-		...(await importOriginal<
-			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
-		>()),
-		createAvailabilityChecker: (command: string) => ({
-			isAvailable: () => command !== "actionlint" || actionlintAvailable,
-			isAvailableAsync: async () =>
-				command !== "actionlint" || actionlintAvailable,
-			getCommand: () => command,
-		}),
-	}),
-);
 
 type Tool = "actionlint" | "credo";
 type SpawnResult = {
@@ -50,6 +45,15 @@ async function dispatchOutcome(tool: Tool, result: SpawnResult) {
 			filePath,
 			tool === "actionlint" ? "name: CI\n" : "defmodule Example do\nend\n",
 		);
+		if (!toolAvailable) {
+			// The unavailable case must not inherit a host PATH binary or a managed
+			// copy from another test/process. Keep both discovery roots fixture-local.
+			const emptyPath = path.join(env.tmpDir, "empty-path");
+			fs.mkdirSync(emptyPath);
+			vi.stubEnv("PATH", emptyPath);
+			vi.stubEnv("PI_LENS_HOME", path.join(env.tmpDir, "pi-lens-home"));
+			vi.stubEnv("PI_LENS_DISABLE_TOOL_INSTALL", "1");
+		}
 		if (tool === "credo")
 			fs.writeFileSync(
 				path.join(env.tmpDir, "mix.exs"),
@@ -57,9 +61,10 @@ async function dispatchOutcome(tool: Tool, result: SpawnResult) {
 			);
 		safeSpawnAsync.mockImplementation(
 			async (_command: string, args: string[]) => {
-				return args.includes("--version")
+				if (!args.includes("--version")) return result;
+				return toolAvailable
 					? { error: null, status: 0, stdout: "credo 1.7", stderr: "" }
-					: result;
+					: toolNotFound;
 			},
 		);
 		const { createDispatchContext, dispatchForFile, RunnerRegistry } =
@@ -88,6 +93,7 @@ async function dispatchOutcome(tool: Tool, result: SpawnResult) {
 		);
 		return { status, output: output.output, ledger: getDegradationSummary() };
 	} finally {
+		vi.unstubAllEnvs();
 		env.cleanup();
 	}
 }
@@ -176,10 +182,151 @@ const findings = {
 	}),
 };
 
+const credoBitmaskFixtures = {
+	readability: fs.readFileSync(
+		"tests/fixtures/witness/runner-outcome-actionlint-credo/credo-readability.json",
+		"utf8",
+	),
+	mixed: fs.readFileSync(
+		"tests/fixtures/witness/runner-outcome-actionlint-credo/credo-mixed.json",
+		"utf8",
+	),
+};
+
+const credoBitmaskStatusCells = [
+	{ status: 1 },
+	{ status: 2 },
+	{ status: 3 },
+	{ status: 4 },
+	{ status: 5 },
+	{ status: 6 },
+	{ status: 7 },
+	{ status: 8 },
+	{ status: 9 },
+	{ status: 10 },
+	{ status: 11 },
+	{ status: 12 },
+	{ status: 13 },
+	{ status: 14 },
+	{ status: 15 },
+	{ status: 16 },
+	{ status: 17 },
+	{ status: 18 },
+	{ status: 19 },
+	{ status: 20 },
+	{ status: 21 },
+	{ status: 22 },
+	{ status: 23 },
+	{ status: 24 },
+	{ status: 25 },
+	{ status: 26 },
+	{ status: 27 },
+	{ status: 28 },
+	{ status: 29 },
+	{ status: 30 },
+	{ status: 31 },
+	{ status: 32 },
+	{ status: 33 },
+	{ status: 34 },
+	{ status: 35 },
+	{ status: 36 },
+	{ status: 37 },
+	{ status: 38 },
+	{ status: 39 },
+	{ status: 40 },
+	{ status: 41 },
+	{ status: 42 },
+	{ status: 43 },
+	{ status: 44 },
+	{ status: 45 },
+	{ status: 46 },
+	{ status: 47 },
+	{ status: 48 },
+	{ status: 49 },
+	{ status: 50 },
+	{ status: 51 },
+	{ status: 52 },
+	{ status: 53 },
+	{ status: 54 },
+	{ status: 55 },
+	{ status: 56 },
+	{ status: 57 },
+	{ status: 58 },
+	{ status: 59 },
+	{ status: 60 },
+	{ status: 61 },
+	{ status: 62 },
+	{ status: 63 },
+	{ status: 64 },
+	{ status: 65 },
+	{ status: 66 },
+	{ status: 67 },
+	{ status: 68 },
+	{ status: 69 },
+	{ status: 70 },
+	{ status: 71 },
+	{ status: 72 },
+	{ status: 73 },
+	{ status: 74 },
+	{ status: 75 },
+	{ status: 76 },
+	{ status: 77 },
+	{ status: 78 },
+	{ status: 79 },
+	{ status: 80 },
+	{ status: 81 },
+	{ status: 82 },
+	{ status: 83 },
+	{ status: 84 },
+	{ status: 85 },
+	{ status: 86 },
+	{ status: 87 },
+	{ status: 88 },
+	{ status: 89 },
+	{ status: 90 },
+	{ status: 91 },
+	{ status: 92 },
+	{ status: 93 },
+	{ status: 94 },
+	{ status: 95 },
+	{ status: 96 },
+	{ status: 97 },
+	{ status: 98 },
+	{ status: 99 },
+	{ status: 100 },
+	{ status: 101 },
+	{ status: 102 },
+	{ status: 103 },
+	{ status: 104 },
+	{ status: 105 },
+	{ status: 106 },
+	{ status: 107 },
+	{ status: 108 },
+	{ status: 109 },
+	{ status: 110 },
+	{ status: 111 },
+	{ status: 112 },
+	{ status: 113 },
+	{ status: 114 },
+	{ status: 115 },
+	{ status: 116 },
+	{ status: 117 },
+	{ status: 118 },
+	{ status: 119 },
+	{ status: 120 },
+	{ status: 121 },
+	{ status: 122 },
+	{ status: 123 },
+	{ status: 124 },
+	{ status: 125 },
+	{ status: 126 },
+	{ status: 127 },
+];
+
 describe("actionlint and credo shared runner outcome seam (#1816)", () => {
 	beforeEach(() => {
 		safeSpawnAsync.mockReset();
-		actionlintAvailable = true;
+		toolAvailable = true;
 	});
 
 	for (const tool of ["actionlint", "credo"] as const) {
@@ -211,8 +358,10 @@ describe("actionlint and credo shared runner outcome seam (#1816)", () => {
 				expect(observed.ledger[0]?.latestReasons[0]?.subject).toBe(tool);
 		});
 
+		// #5437 review F4: this toggle used to drive a checker double the
+		// actionlint runner no longer calls, so the cell passed vacuously.
 		it(`${tool}: unavailable does not report clean`, async () => {
-			actionlintAvailable = false;
+			toolAvailable = false;
 			const observed = await dispatchOutcome(tool, {
 				error: new Error("missing"),
 				status: null,
@@ -220,6 +369,12 @@ describe("actionlint and credo shared runner outcome seam (#1816)", () => {
 				stderr: "",
 			});
 			expect(observed.status).toBe("skipped");
+			// The availability verdict, not the lint spawn's own failure, skips it.
+			expect(
+				safeSpawnAsync.mock.calls.filter(
+					([, args]) => !(args as string[]).includes("--version"),
+				),
+			).toEqual([]);
 		});
 
 		it(`${tool}: nonzero empty output is one bounded ledger row across two files`, async () => {
@@ -230,6 +385,48 @@ describe("actionlint and credo shared runner outcome seam (#1816)", () => {
 			expect(rows[0]?.count).toBe(2);
 		});
 	}
+
+	it.each([
+		["Readability", 4, credoBitmaskFixtures.readability, "ModuleDoc"],
+		["mixed categories", 6, credoBitmaskFixtures.mixed, "TagTODO"],
+	])(
+		"credo reports real %s output for bitmask exit %s",
+		async (_name, status, stdout, rule) => {
+			const observed = await dispatchOutcome("credo", {
+				error: null,
+				status,
+				stdout,
+				stderr: "",
+			});
+			expect(observed.status).toBe("failed");
+			expect(observed.output).toContain(rule);
+		},
+	);
+
+	// A status dropped from the credo exit table reads as a rejected invocation
+	// (#5608), so each row drives the real runner and reds only its own case.
+	it.each(credoBitmaskStatusCells)(
+		"credo admits bitmask status $status as a completed analysis",
+		async ({ status }) => {
+			const observed = await dispatchOutcome("credo", {
+				error: null,
+				status,
+				stdout: findings.credo,
+				stderr: "",
+			});
+			expect(observed.status).toBe("failed");
+		},
+	);
+
+	it("credo rejects an invocation error status above the bitmask", async () => {
+		const observed = await dispatchOutcome("credo", {
+			error: null,
+			status: 128,
+			stdout: credoBitmaskFixtures.readability,
+			stderr: "unknown option",
+		});
+		expect(observed.status).toBe("skipped");
+	});
 
 	it("actionlint pins the real JSON output format instead of claiming a text parser", async () => {
 		await dispatchOutcome("actionlint", {

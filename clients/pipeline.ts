@@ -13,6 +13,11 @@
  */
 
 import { resolveLensToolName, type LensToolHost } from "./tool-config.js";
+import {
+	admitBlockerReplay,
+	type BlockerReplayCommit,
+	unconfirmedBlockerNote,
+} from "./finding-delivery-gate.js";
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import type { PiLensFlagSource } from "./lens-config.js";
@@ -65,17 +70,15 @@ import { toRunnerDisplayPath } from "./dispatch/runner-context.js";
 import {
 	type AvailabilityLatch,
 	classifyProbeFailure,
-	createAvailabilityChecker,
 	createAvailabilityLatch,
 	describeProbeEvidence,
 	logAvailabilityDecision,
 	startHostStallSampler,
-	resolveAvailableOrInstall,
-	resolveCommandArgsWithInstallFallback,
+	resolveRubocopCommand,
 	resolveToolCommand,
 	resolveToolCommandWithInstallFallback,
 } from "./dispatch/runners/utils/runner-helpers.js";
-import { findToolConfig } from "./tool-config-presence.js";
+import { findToolConfig, hasToolConfig } from "./tool-config-presence.js";
 import {
 	verdictRunnerIds,
 	checkedWholeFile,
@@ -86,8 +89,10 @@ import {
 	recordedUnchecked,
 } from "./dispatch/types.js";
 import {
+	crossFileRowLabel,
 	formatDiagnostics,
 	formatPromotionNotes,
+	type RenderedFor,
 } from "./dispatch/utils/format-utils.js";
 import { detectFileKind, getFileKindLabel } from "./file-kinds.js";
 import {
@@ -139,18 +144,11 @@ import { dropFindingsForMissingPaths } from "./advisory-provenance.js";
 import {
 	getAutofixPolicyForFile,
 	getPreferredAutofixTools,
-	getRubocopCommand,
-	hasBiomeConfig,
-	hasDetektConfig,
-	hasEslintConfig,
-	hasGolangciConfig,
 	hasKtfmtConfig,
 	hasKtlintConfig,
-	hasOxlintConfig,
-	hasRubocopConfig,
-	hasSqlfluffConfig,
-	hasStylelintConfig,
+	getRubocopCommand,
 	markdownlintConfigArgs,
+	optionSafeTargetArg,
 } from "./tool-policy.js";
 import type { PathSetLike } from "./runtime-coordinator.js";
 import { exceedsLspSyncLimits } from "./lsp/content-limits.js";
@@ -294,6 +292,18 @@ export interface PipelineContext {
 	 * pi-lens writers or edit-directed finding delivery (#3226).
 	 */
 	allowAutonomousWriters?: boolean;
+	/**
+	 * #5616: whether the authorship covers the bytes and not only their
+	 * blockers. pi-lens's own writers (format, autofix) run only then. A script
+	 * write credited for its blockers sets it false: no pre-write check covered
+	 * its bytes. Omitted: `allowAutonomousWriters`.
+	 */
+	bytesAuthored?: boolean;
+	/**
+	 * #5616: for a run without authorship, what pi-lens knows of the write,
+	 * which the withheld line states. Omitted: `changed`.
+	 */
+	withheldEvidence?: WithheldEvidence;
 	modifiedRanges?: { start: number; end: number }[];
 	/**
 	 * #4484 round 2: the file's recorded inline blockers before this run, read
@@ -485,12 +495,20 @@ export interface PipelineResult {
 	/**
 	 * #5108: the one line a run without authorship (#3226) ends with when it
 	 * holds blockers it withheld from the STOP block and the record: names the
-	 * file and the count, directs no edit. `output` carries the same line, so
+	 * file, the count and (#5616) each blocker's line and rule, and asks for a
+	 * fix only if the agent's call wrote the file. `output` carries the same line, so
 	 * the all-clear never renders over a blocker; this copy is what a host that
 	 * abandoned the handler (`index.ts`' tool_result bound) queues for the
 	 * agent's next context. Absent when nothing was withheld.
 	 */
 	withheldBlockerLine?: string;
+	/**
+	 * #5788 review F4: the replay latch write this run's blocker line asks for
+	 * (`admitBlockerReplay`). The tool result commits it only when it is
+	 * delivered (`commitBlockerReplay`), so an abandoned delivery latches
+	 * nothing.
+	 */
+	blockerReplayCommit?: BlockerReplayCommit;
 	/**
 	 * #4733 r5 G3: how many blocking findings the observation still holds that
 	 * the #4483 seed called pre-existing (`DispatchResult.preExisting`). Absent
@@ -589,8 +607,6 @@ function createPhaseTracker(toolName: string, filePath: string): PhaseTracker {
 
 // --- ESLint autofix helpers ---
 
-export { hasEslintConfig, hasSqlfluffConfig, hasStylelintConfig };
-
 /**
  * eslint autofix availability, per cwd + PATH. The verdict is owned by the
  * shared availability latch (#1494): a `missing` / `non-installable` outcome
@@ -617,7 +633,7 @@ async function tryEslintFix(
 	cwd: string,
 	writeHold?: FileMutationHold,
 ): Promise<number> {
-	const userHasConfig = hasEslintConfig(cwd);
+	const userHasConfig = hasToolConfig("eslint", cwd);
 	if (!userHasConfig) return 0;
 	// PATH is part of command resolution; include it so an install or PATH
 	// refresh cannot leave a negative eslint result live for the session.
@@ -700,7 +716,6 @@ async function tryEslintFix(
 		cmd,
 		["--fix", "--no-error-on-unmatched-pattern", filePath],
 		cwd,
-		[1],
 	);
 }
 
@@ -718,7 +733,6 @@ async function tryStylelintFix(
 		cmd,
 		["--fix", "--allow-empty-input", filePath],
 		cwd,
-		[2],
 	);
 }
 
@@ -732,7 +746,7 @@ async function trySqlfluffFix(
 	if (writeHold) await writeHold.acquire();
 
 	const args = ["fix", "--force", filePath];
-	if (!hasSqlfluffConfig(cwd)) {
+	if (!hasToolConfig("sqlfluff", cwd)) {
 		args.splice(2, 0, "--dialect", "ansi");
 	}
 	return detectFileChangedAfterCommand(filePath, cmd, args, cwd);
@@ -743,13 +757,7 @@ async function tryRubocopFix(
 	cwd: string,
 	writeHold?: FileMutationHold,
 ): Promise<number> {
-	const resolved = await resolveCommandArgsWithInstallFallback(
-		getRubocopCommand(cwd),
-		"rubocop",
-		cwd,
-		["--version"],
-		10000,
-	);
+	const resolved = await resolveRubocopCommand(getRubocopCommand(cwd), cwd);
 	if (!resolved) return 0;
 	if (writeHold) await writeHold.acquire();
 
@@ -758,7 +766,6 @@ async function tryRubocopFix(
 		resolved.cmd,
 		[...resolved.args, "-a", "--no-color", filePath],
 		cwd,
-		[1],
 	);
 }
 
@@ -771,23 +778,8 @@ async function tryKtlintFix(
 	if (!cmd) return 0;
 	if (writeHold) await writeHold.acquire();
 
-	return detectFileChangedAfterCommand(
-		filePath,
-		cmd,
-		["-F", filePath],
-		cwd,
-		[1],
-	);
+	return detectFileChangedAfterCommand(filePath, cmd, ["-F", filePath], cwd);
 }
-
-// golangci-lint/detekt/ktfmt have no TOOL_COMMAND_SPEC; resolve via availability
-// checkers like their runners do.
-const golangciAutofixChecker = createAvailabilityChecker(
-	"golangci-lint",
-	".exe",
-);
-const detektAutofixChecker = createAvailabilityChecker("detekt", ".bat");
-const ktfmtAutofixChecker = createAvailabilityChecker("ktfmt", ".bat");
 
 async function tryKtfmtFix(
 	filePath: string,
@@ -795,17 +787,13 @@ async function tryKtfmtFix(
 	writeHold?: FileMutationHold,
 ): Promise<number> {
 	// Config-first: the autofix policy only reaches here when the project opted
-	// into ktfmt, so resolveAvailableOrInstall honors that gate. ktfmt writes the
+	// into ktfmt, so the registry resolver honors that gate. ktfmt writes the
 	// formatted file in place and exits 0; treat any byte change as the fix.
-	const cmd = await resolveAvailableOrInstall(
-		ktfmtAutofixChecker,
-		"ktfmt",
-		cwd,
-	);
+	const cmd = await resolveToolCommandWithInstallFallback(cwd, "ktfmt");
 	if (!cmd) return 0;
 	if (writeHold) await writeHold.acquire();
 	const absPath = path.resolve(cwd, filePath);
-	return detectFileChangedAfterCommand(filePath, cmd, [absPath], cwd, [0]);
+	return detectFileChangedAfterCommand(filePath, cmd, [absPath], cwd);
 }
 
 async function tryGolangciLintFix(
@@ -814,14 +802,10 @@ async function tryGolangciLintFix(
 	writeHold?: FileMutationHold,
 ): Promise<number> {
 	// Config-first: the autofix policy only reaches here when a .golangci.* config
-	// exists. resolveAvailableOrInstall honors that gate (won't auto-install a
+	// exists. The registry resolver honors that gate (won't auto-install a
 	// config-first tool). golangci-lint exits non-zero when issues remain after
 	// --fix, so allow its issue-found codes.
-	const cmd = await resolveAvailableOrInstall(
-		golangciAutofixChecker,
-		"golangci-lint",
-		cwd,
-	);
+	const cmd = await resolveToolCommandWithInstallFallback(cwd, "golangci-lint");
 	if (!cmd) return 0;
 	if (writeHold) await writeHold.acquire();
 	return detectFileChangedAfterCommand(
@@ -829,7 +813,6 @@ async function tryGolangciLintFix(
 		cmd,
 		["run", "--fix", filePath],
 		cwd,
-		[1, 7],
 	);
 }
 
@@ -840,8 +823,7 @@ async function tryDetektFix(
 ): Promise<number> {
 	const configPath = findToolConfig("detekt", cwd)?.file;
 	if (!configPath) return 0;
-	if (!(await detektAutofixChecker.isAvailableAsync(cwd))) return 0;
-	const cmd = detektAutofixChecker.getCommand(cwd);
+	const cmd = await resolveToolCommandWithInstallFallback(cwd, "detekt");
 	if (!cmd) return 0;
 	if (writeHold) await writeHold.acquire();
 	const absPath = path.resolve(cwd, filePath);
@@ -850,7 +832,6 @@ async function tryDetektFix(
 		cmd,
 		["--auto-correct", "--input", absPath, "--config", configPath],
 		cwd,
-		[1, 2],
 	);
 }
 
@@ -867,12 +848,19 @@ async function tryMarkdownlintFix(
 	// default all-rules-on config again (the whole-file CHANGELOG/AGENTS
 	// reformat + `#946` → `# 946` corruption).
 	// markdownlint-cli2 --fix exits non-zero when unfixable violations remain.
+	// #5544 round 2: the target comes from the same builder as the lint runner, so
+	// `--fix` names the file the way cli2's `ignores` can see it (an absolute
+	// target in a `.claude/` lane selected nothing: `Linting: 0 files`, and the
+	// fixable finding stayed fixable). Change detection keeps the absolute path.
 	return detectFileChangedAfterCommand(
 		filePath,
 		cmd,
-		[...markdownlintConfigArgs(cwd), "--fix", filePath],
+		[
+			...markdownlintConfigArgs(cwd),
+			"--fix",
+			optionSafeTargetArg(cwd, filePath),
+		],
 		cwd,
-		[1],
 	);
 }
 
@@ -887,9 +875,8 @@ async function tryOxlintFix(
 	return detectFileChangedAfterCommand(
 		filePath,
 		cmd,
-		["--fix", filePath],
+		["--fix", optionSafeTargetArg(cwd, filePath)],
 		cwd,
-		[1],
 	);
 }
 
@@ -948,10 +935,10 @@ interface WholePackageFixOutcome {
 async function wholePackageChangedFiles(
 	root: string,
 	before: FileSnapshot,
-	result: Awaited<ReturnType<typeof safeSpawnAsync>>,
 	agentEdited: readonly string[],
 ): Promise<string[]> {
-	if (result.error || result.status !== 0) return [];
+	// The diff is the answer whatever the tool's exit code: a fixer that
+	// rewrites files and then exits nonzero changed them (#5417).
 	const edited = new Set(agentEdited);
 	const changed = await diffProjectSnapshot(root, before);
 	return changed.flatMap((file) => (edited.has(file) ? [] : [file]));
@@ -983,8 +970,8 @@ async function tryRustClippyFix(
 				["clippy", "--fix", "--allow-dirty", "--allow-staged", "-q"],
 				{ timeout: 30000, cwd: cargoDir },
 			),
-		(result, agentEdited) =>
-			wholePackageChangedFiles(cargoDir, before, result, agentEdited),
+		(_result, agentEdited) =>
+			wholePackageChangedFiles(cargoDir, before, agentEdited),
 	);
 	return { changedFiles, restoring };
 }
@@ -1012,8 +999,8 @@ async function tryDartFix(
 				timeout: 30000,
 				cwd: pubspecDir,
 			}),
-		(result, agentEdited) =>
-			wholePackageChangedFiles(pubspecDir, before, result, agentEdited),
+		(_result, agentEdited) =>
+			wholePackageChangedFiles(pubspecDir, before, agentEdited),
 	);
 	return { changedFiles, restoring };
 }
@@ -1102,16 +1089,16 @@ export async function runAutofix(
 	}
 
 	const autofixContext = {
-		hasEslintConfig: hasEslintConfig(cwd),
-		hasStylelintConfig: hasStylelintConfig(cwd),
-		hasSqlfluffConfig: hasSqlfluffConfig(cwd),
-		hasRubocopConfig: hasRubocopConfig(cwd),
-		hasBiomeConfig: hasBiomeConfig(cwd),
-		hasGolangciConfig: hasGolangciConfig(cwd),
-		hasDetektConfig: hasDetektConfig(cwd),
+		hasEslintConfig: hasToolConfig("eslint", cwd),
+		hasStylelintConfig: hasToolConfig("stylelint", cwd),
+		hasSqlfluffConfig: hasToolConfig("sqlfluff", cwd),
+		hasRubocopConfig: hasToolConfig("rubocop", cwd),
+		hasBiomeConfig: hasToolConfig("biome", cwd),
+		hasGolangciConfig: hasToolConfig("golangci-lint", cwd),
+		hasDetektConfig: hasToolConfig("detekt", cwd),
 		hasKtfmtConfig: hasKtfmtConfig(cwd),
 		hasKtlintConfig: hasKtlintConfig(cwd),
-		hasOxlintConfig: hasOxlintConfig(cwd),
+		hasOxlintConfig: hasToolConfig("oxlint", cwd),
 	};
 	const autofixPolicy = getAutofixPolicyForFile(filePath, autofixContext);
 	const preferredAutofixTools = autofixPolicy?.safe
@@ -1166,15 +1153,19 @@ export async function runAutofix(
 		}
 
 		if (toolName === "ruff") {
-			const ruffReady = ruffClient.isPythonFile(filePath)
-				? await ruffClient.ensureAvailable()
-				: false;
-			if (!ruffReady) {
+			const ruffResolution = ruffClient.isPythonFile(filePath)
+				? await ruffClient.resolveCommandForFile(filePath, cwd)
+				: undefined;
+			if (!ruffResolution || ruffResolution.command === null) {
 				dbg(`autofix: ruff unavailable for ${filePath}`);
 				continue;
 			}
 			if (writeHold) await writeHold.acquire();
-			const result = await ruffClient.fixFileAsync(filePath, cwd);
+			const result = await ruffClient.fixFileAsync(
+				filePath,
+				cwd,
+				ruffResolution.command,
+			);
 			if (result.success && result.fixed > 0) {
 				fixedCount += result.fixed;
 				autofixTools.push(`ruff:${result.fixed}`);
@@ -1778,29 +1769,56 @@ function shortBlockerRule(rule: string): string {
 function formatStillUnfixedLine(
 	blockers: readonly Diagnostic[],
 	filePath: string,
+	display: string,
 ): string {
 	const count = blockers.length;
-	return `🔴 Still unfixed: ${count} blocker${count === 1 ? "" : "s"} reported earlier${formatBlockerPlaces(blockers, filePath)}.`;
+	return `🔴 Still unfixed: ${count} blocker${count === 1 ? "" : "s"} reported earlier${formatBlockerPlaces(blockers, filePath)}.${noteSuffix(unconfirmedBlockerNote(blockers, display))}`;
 }
+
+/** #5784: a sentence appended to a line, with its leading space, or nothing. */
+function noteSuffix(note: string | undefined): string {
+	return note === undefined ? "" : ` ${note}`;
+}
+
+/**
+ * #5616: what pi-lens knows of a write it does not credit to the agent.
+ * `changed`: recovery saw the file change while the agent's call ran.
+ * `named`: the call names the file, and no observation confirmed a change.
+ */
+export type WithheldEvidence = "changed" | "named";
 
 /**
  * #5108: the line a run without authorship (#3226) gets for blockers it
  * withheld. The STOP block and the commit gate stay off for bytes pi-lens
  * cannot prove the agent wrote, but the agent is told the blockers exist, so a
- * withheld verdict never reads as the all-clear (defect shape 10). It states a
- * fact and names where the findings are; it asks for no edit.
+ * withheld verdict never reads as the all-clear (defect shape 10).
+ *
+ * #5616: it names each blocker's line and rule, bounded as the still-unfixed
+ * line is (#5008), states the one fact pi-lens holds (`evidence`), and asks for
+ * a fix only if the agent's call wrote the file. An agent that read "not your
+ * edit" left its own script's blockers in place.
  */
 export function formatWithheldBlockerLine(
-	count: number,
+	blockers: readonly Diagnostic[],
+	filePath: string,
 	display: string,
+	evidence: WithheldEvidence = "changed",
 	host: LensToolHost = "pi",
 ): string {
+	const count = blockers.length;
+	const them = count === 1 ? "it" : "them";
 	// #2535 F3: a host with no such tool gets no pointer, never a dead name.
 	const diagnosticsTool = resolveLensToolName("lens_diagnostics", host);
 	const pointer = diagnosticsTool
-		? ` ${diagnosticsTool} mode=all lists ${count === 1 ? "it" : "them"}.`
+		? ` ${diagnosticsTool} mode=all lists ${them}.`
 		: "";
-	return `\u26a0 ${count} blocking finding${count === 1 ? "" : "s"} in ${display} withheld: the file was changed by a script, so pi-lens cannot tell it was your edit and shows no fix prompt.${pointer}`;
+	const known =
+		evidence === "changed"
+			? "the file changed while this call ran, but pi-lens cannot confirm this call wrote it"
+			: "this call names the file, but pi-lens could not confirm the call changed it";
+	// #5784: a blocker no source re-checked on this write says so, and what
+	// settles it, in the delivery gate's one sentence.
+	return `\u26a0 ${count} blocking finding${count === 1 ? "" : "s"} in ${display}${formatBlockerPlaces(blockers, filePath)} withheld: ${known}.${noteSuffix(unconfirmedBlockerNote(blockers, display, { host }))} If this call wrote it, fix ${them}.${pointer}`;
 }
 
 /**
@@ -1904,7 +1922,7 @@ export async function runFormatPhase(
 				});
 			}
 			formattersUsed = result.formatters
-				.filter((f) => f.outcome !== "unavailable")
+				.filter((f) => f.outcome !== "unavailable" && f.outcome !== "skipped")
 				.map((f) => f.name);
 			if (result.anyChanged) {
 				formatChanged = true;
@@ -1983,6 +2001,7 @@ export async function runFormatPhase(
 function buildEnrichedBlockerOutput(
 	blockers: Diagnostic[],
 	fileContent = "",
+	renderedFor?: RenderedFor,
 ): string {
 	// #3188: no blockers, no banner. The delivery gate above can retract every
 	// blocker (all cited files deleted), and the header interpolates the count,
@@ -2003,12 +2022,21 @@ function buildEnrichedBlockerOutput(
 	for (const d of shown) {
 		const lineNo = d.line ?? 1;
 		const nodeCtx = d.astNodeType ? ` (${d.astNodeType})` : "";
-		out += `  L${lineNo}: ${d.message}${nodeCtx}\n`;
+		// A row citing another file names it (`crossFileRowLabel`), and its
+		// line is that file's, so the edited file's line N is not its snippet.
+		const label = crossFileRowLabel(
+			d,
+			renderedFor?.editedFile,
+			renderedFor?.root,
+		);
+		out += `  ${label}L${lineNo}: ${d.message}${nodeCtx}\n`;
 		// Prefer the exact matched node text (tree-sitter); fall back to the
 		// full source line (LSP / other runners).
 		const snippet = d.matchedText
 			? d.matchedText.trim().split("\n")[0]?.slice(0, MAX_SNIPPET)
-			: fileLines[lineNo - 1]?.trim().slice(0, MAX_SNIPPET);
+			: label
+				? undefined
+				: fileLines[lineNo - 1]?.trim().slice(0, MAX_SNIPPET);
 		if (snippet) out += `      → ${snippet}\n`;
 		if (d.fixSuggestion) out += `      💡 ${d.fixSuggestion}\n`;
 	}
@@ -2032,7 +2060,9 @@ function buildEnrichedBlockerOutput(
  * observed copies matched this way are returned as `matched`. One matched only
  * by `stillObserved` stays as its observed copy. One no finding matches stays,
  * at its position when it has one, only when its runner or server reached no
- * verdict; that carry is counted per file. Round 6: a runner whose verdict
+ * verdict; that carry is counted per file. #5727: a blocker whose own server
+ * answered these bytes, although its runner reached no verdict
+ * (`answeredServerIds`), is judged by that answer. Round 6: a runner whose verdict
  * covers only the edit (`editScopedRunnerIds`) answers only for a blocker
  * inside it: its line was edited or deleted, or its line now lies in
  * `editRanges`. One outside, or unplaced, stays as for no verdict.
@@ -2053,7 +2083,18 @@ function carryRecordedBlockers(
 ): { carried: Diagnostic[]; matched: ReadonlySet<Diagnostic> } {
 	if (prior.length === 0) return { carried: [], matched: new Set() };
 	const runnerIds = new Set(dispatchResult.inconclusiveSources?.runnerIds);
+	const rechecking = new Set(
+		dispatchResult.inconclusiveSources?.collectLaterRunnerIds,
+	);
 	const serverIds = new Set(dispatchResult.inconclusiveSources?.serverIds);
+	const answered = dispatchResult.inconclusiveSources?.answeredServerIds;
+	// #5727: a runner with no verdict keeps its recorded blockers, except one
+	// whose own server answered these bytes all the same: that answer judges it.
+	const runnerKeeps = (d: Diagnostic) =>
+		d.runnerId !== undefined &&
+		runnerIds.has(d.runnerId) &&
+		(d.serverId === undefined ||
+			!answered?.get(d.runnerId)?.includes(d.serverId));
 	const editScoped = new Set(dispatchResult.editScopedRunnerIds);
 	const insideEdit = (d: Diagnostic) => {
 		const at = d.line === undefined ? ANY_POSITION : positionOf(d);
@@ -2071,7 +2112,7 @@ function carryRecordedBlockers(
 			positionOf,
 			matchesAnywhere,
 			keepUnobserved: (d) =>
-				(d.runnerId !== undefined && runnerIds.has(d.runnerId)) ||
+				runnerKeeps(d) ||
 				(d.serverId !== undefined && serverIds.has(d.serverId)) ||
 				(d.runnerId !== undefined &&
 					editScoped.has(d.runnerId) &&
@@ -2082,13 +2123,25 @@ function carryRecordedBlockers(
 	const carried = kept.flatMap((d) => {
 		if (observedNow.has(d)) return [];
 		if (!recorded.has(d)) return [d];
+		// #5784: a recorded blocker still here was kept by `keepUnobserved`, so
+		// its source gave no verdict for it on this write. Its own server names
+		// that source when it has one, else its runner.
+		// #5788 review F2: a collect-later re-check still in flight answers for
+		// it on its own, so it is marked as running, not as needing a probe.
+		// A marker from an earlier carry is this write's to restate, not keep.
+		const { recheckRunning: _earlier, ...row } = d;
+		const marker = {
+			unconfirmedBy: d.serverId ?? d.runnerId ?? "unknown",
+			...(d.runnerId !== undefined &&
+				rechecking.has(d.runnerId) && { recheckRunning: true as const }),
+		};
 		const at = positionOf(d);
 		// #4509 (N3): kept without a place in these bytes, its line number is
 		// from older bytes; say so instead of leaving a later write to infer it
 		// from one line's hash.
 		if (typeof at !== "number")
-			return [d.positionStale ? d : { ...d, positionStale: true as const }];
-		return [at === d.line ? d : { ...d, line: at }];
+			return [{ ...row, positionStale: true as const, ...marker }];
+		return [{ ...row, line: at, ...marker }];
 	});
 	if (carried.some((d) => !dispatchResult.stillObserved?.includes(d))) {
 		incrementDegradationCount({
@@ -2338,17 +2391,11 @@ async function analysePipeline(
 		resolveAnalysisRoot(filePath, ctx.projectRoot ?? cwd) === "adopted" ||
 		!!getFlag("no-autoformat", filePath);
 	const immediateFormat = !!getFlag("immediate-format");
+	// #5616: the writers need the bytes authored, not only their blockers.
+	const writersAllowed = allowAutonomousWriters && ctx.bytesAuthored !== false;
 	const formatDeferred =
-		allowAutonomousWriters &&
-		!autoformatDisabled &&
-		!immediateFormat &&
-		!!fileContent;
-	if (
-		allowAutonomousWriters &&
-		!autoformatDisabled &&
-		immediateFormat &&
-		fileContent
-	) {
+		writersAllowed && !autoformatDisabled && !immediateFormat && !!fileContent;
+	if (writersAllowed && !autoformatDisabled && immediateFormat && fileContent) {
 		const formatResult = await runFormatPhase(
 			filePath,
 			getFormatService,
@@ -2393,7 +2440,7 @@ async function analysePipeline(
 		}
 	} else if (formatDeferred) {
 		dbg(`autoformat: deferred until agent_end for ${filePath}`);
-	} else if (!allowAutonomousWriters) {
+	} else if (!writersAllowed) {
 		dbg(`autoformat: skipped for ${filePath} (mutation ownership is unproven)`);
 	} else if (autoformatDisabled) {
 		const source = getFlagSource?.("no-autoformat", filePath);
@@ -2416,7 +2463,7 @@ async function analysePipeline(
 	let autofixRestoring: Promise<FixRunLoss> | undefined;
 	let fixRefresh = false;
 	let autofixSkipReason: string | undefined;
-	if (!allowAutonomousWriters) {
+	if (!writersAllowed) {
 		autofixSkipReason = "mutation_ownership_unproven";
 		dbg(`autofix: skipped for ${filePath} (mutation ownership is unproven)`);
 	} else if (ctx.autofixMode === "deferred") {
@@ -2789,7 +2836,10 @@ async function analysePipeline(
 		// Enrich blocker output with a code snippet so the agent can see the
 		// exact line it wrote that caused each violation — no re-read needed.
 		if (deliverableBlockers.length > 0) {
-			output += buildEnrichedBlockerOutput(deliverableBlockers, fileContent);
+			output += buildEnrichedBlockerOutput(deliverableBlockers, fileContent, {
+				editedFile: filePath,
+				root: ctx.projectRoot ?? cwd,
+			});
 		}
 		// Append fixed/coverage parts from the original output (slice off the
 		// blocker section we're replacing).
@@ -2805,7 +2855,10 @@ async function analysePipeline(
 			rendersStop &&
 			deliverableBlockers.length !== dispatchResult.blockers.length
 		) {
-			let gatedOut = buildEnrichedBlockerOutput(deliverableBlockers);
+			let gatedOut = buildEnrichedBlockerOutput(deliverableBlockers, "", {
+				editedFile: filePath,
+				root: ctx.projectRoot ?? cwd,
+			});
 			const rest = dispatchResult.output.slice(
 				dispatchResult.blockerOutput.length,
 			);
@@ -2819,8 +2872,21 @@ async function analysePipeline(
 			output += `\n\n${deliveredOutput}`;
 		}
 	}
-	if (stillUnfixed.length > 0) {
-		output += `\n\n${formatStillUnfixedLine(stillUnfixed, filePath)}`;
+	// #5784: the delivery gate decides whether this write's blocker line is a
+	// delivery or an identical replay of blockers no source has re-checked. It
+	// judges the file's whole live set, so any verdict on this write delivers.
+	const replay = admitBlockerReplay({
+		surface: allowAutonomousWriters ? "still-unfixed-line" : "withheld-line",
+		filePath,
+		blockers: liveBlockers,
+	});
+	const replaySuppressed =
+		replay.shown === "suppress" &&
+		(allowAutonomousWriters
+			? stillUnfixed.length > 0
+			: liveBlockers.length > 0);
+	if (stillUnfixed.length > 0 && !replaySuppressed) {
+		output += `\n\n${formatStillUnfixedLine(stillUnfixed, filePath, toRunnerDisplayPath(cwd, filePath))}`;
 	}
 	if (preExisting.length > 0) {
 		output += `\n\n${formatPreExistingLine(preExisting, filePath)}`;
@@ -2829,10 +2895,12 @@ async function analysePipeline(
 	// ones it withheld are still on the file. Say so before the all-clear below
 	// can render over them.
 	const withheldBlockerLine =
-		!allowAutonomousWriters && liveBlockers.length > 0
+		!allowAutonomousWriters && liveBlockers.length > 0 && !replaySuppressed
 			? formatWithheldBlockerLine(
-					liveBlockers.length,
+					liveBlockers,
+					filePath,
 					toRunnerDisplayPath(cwd, filePath),
+					ctx.withheldEvidence,
 				)
 			: undefined;
 	if (withheldBlockerLine) {
@@ -2936,7 +3004,9 @@ async function analysePipeline(
 	// layer up. Treat it as output here, or a format-only change would newly
 	// gain an "all clear" line it never had while the sentence lived inline.
 	let checkedClean = false;
-	if (!output && !postAutofixNotice) {
+	// #5784: a held-back replay still has blockers on the file, so no all-clear
+	// (not even an unconfirmed one) may stand in for the line it replaced.
+	if (!output && !postAutofixNotice && !replaySuppressed) {
 		output = buildAllClearOutput(dispatchResult, elapsed, filePath);
 		// #4734 r3: the all-clear line is not the verdict. A language server
 		// answered, and the run recorded nothing for the file: no delta finding
@@ -3001,7 +3071,10 @@ async function analysePipeline(
 		// write that adds nothing new refreshes the record instead of clearing it.
 		inlineBlockerSummary:
 			recordBlockers.length > 0
-				? formatDiagnostics(recordBlockers, "blocking").trim() || undefined
+				? formatDiagnostics(recordBlockers, "blocking", undefined, {
+						editedFile: filePath,
+						root: ctx.projectRoot ?? cwd,
+					}).trim() || undefined
 				: undefined,
 		// #1561 F1: taken from the very diagnostics `blockerOutput` was rendered
 		// from, so the provenance can never disagree with the text it guards. An
@@ -3060,6 +3133,9 @@ async function analysePipeline(
 		// #4484: what a clear must find empty, whatever the authorship.
 		currentBlockerCount: liveBlockers.length,
 		...(withheldBlockerLine !== undefined && { withheldBlockerLine }),
+		// #5788 review F4: committed only once the tool result reached the agent
+		// (`clients/runtime-tool-result.ts`).
+		...(replay.commit !== undefined && { blockerReplayCommit: replay.commit }),
 		...(preExisting.length > 0 && {
 			preExistingBlockerCount: preExisting.length,
 		}),

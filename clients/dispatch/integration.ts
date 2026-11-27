@@ -31,18 +31,23 @@ import {
 	type RunnerResultSink,
 	skipGeneratedFile,
 } from "./dispatcher.js";
-import { spawnAbortScope } from "../safe-spawn.js";
+import { safeSpawnAsync, spawnAbortScope } from "../safe-spawn.js";
 import { emitBounded } from "../bounded-telemetry.js";
 import {
 	incrementDegradationCount,
 	recordDegradationOnce,
 } from "../degradation-ledger.js";
 import { FactStore, setFactStoreEvictionReporter } from "./fact-store.js";
-import { canWriteAnalysisRoot, resolveAnalysisRoot } from "../analysis-root.js";
+import {
+	canWriteAnalysisRoot,
+	resolveAnalysisRoot,
+	type AnalysisRootMode,
+} from "../analysis-root.js";
 import { resolveLanguageRootForFile } from "../language-profile.js";
 import { classifyObservedRunner } from "./collect-later-tier.js";
 import {
-	PRE_EDIT_SEED_RUNNER_IDS,
+	isPreEditSeedRunner,
+	type PreEditBytes,
 	preEditSeedFactKey,
 	seedFromCapture,
 } from "./pre-edit-seed.js";
@@ -54,6 +59,7 @@ import {
 	unchecked,
 } from "./types.js";
 import type {
+	Diagnostic,
 	DispatchContext,
 	DispatchResult,
 	ModifiedRange,
@@ -66,6 +72,7 @@ export type { DispatchLatencyReport, RunnerLatency };
 // Re-export latency tracking types and functions
 export { clearLatencyReports, formatLatencyReport, getLatencyReports };
 
+import { randomBytes } from "node:crypto";
 import * as nodeFs from "node:fs";
 import * as nodePath from "node:path";
 import { fileURLToPath } from "node:url";
@@ -121,6 +128,7 @@ import {
 	isExternalOrVendorFile,
 	normalizeMapKey,
 	toPosix,
+	walkUpDirs,
 } from "../path-utils.js";
 import { getProjectIgnoreMatcher } from "../file-utils.js";
 import {
@@ -156,10 +164,8 @@ import {
 import { clearModuleGraphCache } from "../review-graph/workspace-modules.js";
 import { releaseWorkspaceTopologyIdleTimers } from "../workspace-topology.js";
 import { RUNTIME_CONFIG } from "../runtime-config.js";
-import {
-	findCompiledClassesDir,
-	hasJavaBuildDescriptor,
-} from "../tool-policy.js";
+import { hasToolConfig } from "../tool-config-presence.js";
+import { findCompiledClassesDir } from "../tool-policy.js";
 import {
 	removeWordIndexDocumentAsync,
 	updateWordIndexDocumentForEdit,
@@ -255,6 +261,8 @@ const sessionFacts = new FactStore("dispatch");
 const preEditCaptureFacts = new FactStore("pre-edit-capture");
 /** #4543: retain live slots through teardown, including across session reset. */
 const preEditCapturesInFlight = new Map<string, AbortController>();
+/** #5553: the staged-delta read's own facts (`collectStagedLaneBlockers`). */
+const stagedDeltaFacts = new FactStore("staged-delta");
 const MAX_PRE_EDIT_CAPTURES = 4;
 
 // #2243 item 4: wire the fact-store's capacity-eviction telemetry to the
@@ -490,7 +498,10 @@ function withSpotbugsGroup(
 ): RunnerGroup[] {
 	if (!SPOTBUGS_SUPPORTED_KINDS.has(kind)) return groups;
 	if (!ctx.pi.getFlag("lens-spotbugs")) return groups;
-	if (!hasJavaBuildDescriptor(ctx.cwd) || !findCompiledClassesDir(ctx.cwd)) {
+	if (
+		!hasToolConfig("javaBuild", ctx.cwd) ||
+		!findCompiledClassesDir(ctx.cwd)
+	) {
 		return groups;
 	}
 	if (groups.some((group) => group.runnerIds.includes("spotbugs")))
@@ -581,6 +592,7 @@ export function resetDispatchBaselines(cwd?: string): void {
 	// #4483: the pre-edit capture's file facts and availability go with them.
 	for (const controller of preEditCapturesInFlight.values()) controller.abort();
 	preEditCaptureFacts.clearAll();
+	stagedDeltaFacts.clearAll();
 	resetSessionSlopScore();
 	clearCoverageNoticeState();
 	clearReviewGraphWorkspaceCache();
@@ -834,13 +846,23 @@ function isConfirmedTouch(rawDiags: TouchFileResult): boolean {
  */
 function readReusedAnswer(
 	rawDiags: unknown,
-): { serverId: string; publishedAt: number } | undefined {
+): { serverId: string; publishedAt: number; rechecks: boolean } | undefined {
 	const reused = (
-		rawDiags as { reusedAnswer?: { serverId?: unknown; publishedAt?: unknown } }
+		rawDiags as {
+			reusedAnswer?: {
+				serverId?: unknown;
+				publishedAt?: unknown;
+				rechecks?: unknown;
+			};
+		}
 	)?.reusedAnswer;
 	return typeof reused?.serverId === "string" &&
 		typeof reused.publishedAt === "number"
-		? { serverId: reused.serverId, publishedAt: reused.publishedAt }
+		? {
+				serverId: reused.serverId,
+				publishedAt: reused.publishedAt,
+				rechecks: reused.rechecks === true,
+			}
 		: undefined;
 }
 
@@ -948,9 +970,9 @@ function setReverseDepsEntry(
 	}
 }
 
-function reverseDepsReuseEnabled(): boolean {
-	const raw = process.env.PI_LENS_REVERSE_DEPS_REUSE;
-	return raw !== "0" && raw !== "false";
+/** Only the literal `"0"` turns reuse off (#5419); every other value is the default, on. */
+export function reverseDepsReuseEnabled(): boolean {
+	return process.env.PI_LENS_REVERSE_DEPS_REUSE !== "0";
 }
 
 /** Test-reset hook — mirrors clearReviewGraphWorkspaceCache's scope. */
@@ -1676,8 +1698,11 @@ export async function computeCascadeForFile(
 				// overlapping these calls shares one 750ms window between them and drops
 				// the later symbols' answers (a one-at-a-time double returned 1 of 3
 				// symbols). Measured gain of overlapping: 6-44 ms on tsserver, 1-3 ms on
-				// clangd; rust-analyzer and gopls were not measured. Each call keeps its
-				// own 750ms, so re-measure before overlapping these calls again.
+				// clangd. On rust-analyzer (clap, 3 symbols) the median gain is 5 ms warm,
+				// 16 ms after a body edit, and 21-77 ms after a structural edit, when a
+				// quarter of the calls already hit their 750ms either way. The bar to
+				// overlap was a stable 50 ms median gain (#5174); gopls was not measured.
+				// Each call keeps its own 750ms, so re-measure before overlapping them.
 				for (const symbolName of impact.changedSymbols.slice(0, 3)) {
 					const symbolNodeId = symbolNodeIds.find((id) => {
 						const node = graph.nodes.get(id);
@@ -1685,8 +1710,15 @@ export async function computeCascadeForFile(
 					});
 					if (!symbolNodeId) continue;
 					const node = graph.nodes.get(symbolNodeId);
-					const line = Number(node?.metadata?.line ?? 0);
-					const column = Number(node?.metadata?.column ?? 0);
+					// The identifier, not the declaration start: rust-analyzer answers
+					// empty at a `pub` keyword (#5559). Graphs built before the
+					// extractor recorded it fall back to the declaration start.
+					const line = Number(
+						node?.metadata?.nameLine ?? node?.metadata?.line ?? 0,
+					);
+					const column = Number(
+						node?.metadata?.nameColumn ?? node?.metadata?.column ?? 0,
+					);
 					if (line <= 0) continue;
 					// #1109: store the timer and clear it once the race settles. Without
 					// this, when `references()` wins (the common case), the losing
@@ -2492,16 +2524,49 @@ export async function computeCascadeForFile(
 					// per `neighborPath` (`getClientForFile` → `getServersForFileWithConfig`),
 					// so a multi-language neighbor still gets its OWN language server,
 					// not the primary edit's.
-					const rawDiags = await lspService.touchFile(neighborPath, content, {
-						diagnostics: "document",
-						collectDiagnostics: true,
-						maxClientWaitMs: isColdSnapshot ? 1000 : 2000,
-						silent: true,
-						source: "cascade",
-						clientScope: "primary",
-						readStamp,
-						nameUnansweredPrimaries: true,
-					});
+					const touchNeighbor = (resendUnchanged: boolean) =>
+						lspService.touchFile(neighborPath, content, {
+							diagnostics: "document",
+							collectDiagnostics: true,
+							maxClientWaitMs: isColdSnapshot ? 1000 : 2000,
+							silent: true,
+							source: "cascade",
+							clientScope: "primary",
+							readStamp,
+							nameUnansweredPrimaries: true,
+							...(resendUnchanged && { resendUnchanged: true }),
+						});
+					const firstTouch = await touchNeighbor(false);
+					// #5675: the answer this touch reused predates the run, and a
+					// push-only server (jdtls) republishes a dependent when ITS model
+					// changes, never because it was asked: it republished one importer
+					// before this run started and left the other on its warm-up answer.
+					// The touch above sent nothing (same bytes, debounced), so nothing
+					// has asked since the exporter changed. Ask once, by sending the
+					// document again: a re-sent document is the one request such a
+					// server takes, but only a server declared to re-check unchanged
+					// bytes (`resendRecheck`, #4782; the touch result says so): one that
+					// publishes nothing for them would lose this very answer with none
+					// coming. Once per neighbour per run, and the answer decides
+					// as the first would have: a re-touch that still reads pre-edit,
+					// came back inconclusive or timed out leaves the neighbour
+					// unconfirmed through the branches below, and one that throws is
+					// the touch-error fallback's case, the same as a first touch that
+					// throws. Not for `primary-unavailable`: its reused answer belongs
+					// to an alternate, and re-sending to the missing primary asks no one.
+					const firstReused =
+						firstTouch !== undefined &&
+						firstTouch.inconclusiveReason !== "primary-unavailable" &&
+						isPreEditAnswer(firstTouch, cascadeStart)
+							? readReusedAnswer(firstTouch)
+							: undefined;
+					const retouchedAnswer = firstReused?.rechecks
+						? firstReused
+						: undefined;
+					const retouched = retouchedAnswer !== undefined;
+					const rawDiags = retouched
+						? ((await touchNeighbor(true)) ?? firstTouch)
+						: firstTouch;
 					if (!rawDiags) {
 						// #3483: the idle reset can destroy the service this compute
 						// captured while neighbours are still being touched; both
@@ -2621,7 +2686,7 @@ export async function computeCascadeForFile(
 						incrementDegradationCount({
 							kind: "cascade-pre-edit-answer",
 							subject: `${reusedAnswer.serverId}:${normalizeMapKey(neighborPath)}`,
-							reason: `no publication for this dependent since the edit, so the cached answer is ${Math.max(0, cascadeStart - reusedAnswer.publishedAt)} ms older than this run`,
+							reason: `no publication for this dependent since the edit, so the cached answer is ${Math.max(0, cascadeStart - reusedAnswer.publishedAt)} ms older than this run${retouched ? " (re-touched once, and the server did not answer it)" : ""}`,
 						});
 						logCascade({
 							phase: "neighbor_touch",
@@ -2638,6 +2703,7 @@ export async function computeCascadeForFile(
 								answerPublishedAt: reusedAnswer.publishedAt,
 								cascadeStart,
 								answerAgeMs: cascadeStart - reusedAnswer.publishedAt,
+								...(retouched && { retouched: true }),
 							},
 						});
 						// Not an answer (#240 doctrine): the degraded-fallback path below
@@ -2661,6 +2727,19 @@ export async function computeCascadeForFile(
 					const confirmed = isConfirmedTouch(rawDiags);
 					const bindingRejected = readBoundToCurrentDisk(rawDiags) === false;
 					const inconclusive = readInconclusive(rawDiags);
+					// #5675: the re-touch itself did not conclude (its notify write or its
+					// diagnostics wait lapsed). The neighbour is unconfirmed below, as any
+					// inconclusive touch is; this is the one counted record of why, in the
+					// pre-edit answer's own kind, because the reused answer that sent it
+					// here is no longer on the result.
+					if (inconclusive && retouchedAnswer !== undefined) {
+						incrementDegradationCount({
+							kind: "cascade-pre-edit-answer",
+							subject: `${retouchedAnswer.serverId}:${normalizeMapKey(neighborPath)}`,
+							reason:
+								"re-touched once and the re-touch did not conclude (its notify write or diagnostics wait lapsed)",
+						});
+					}
 					// #1470/#1493: the third, independent reason a touch is unconfirmed — an
 					// auxiliary that never reported, cut off by our grace timer or silent
 					// with nothing published for this content. Logged alongside the other two
@@ -2718,6 +2797,10 @@ export async function computeCascadeForFile(
 							...(unconfirmedServerIds.length > 0 && {
 								unconfirmedServerIds: [...unconfirmedServerIds],
 							}),
+							// #5675: the one trace that a re-sent document is what
+							// concluded (or failed to conclude) this neighbour; the
+							// failure rows above carry the same flag.
+							...(retouched && { retouched: true }),
 						},
 					});
 
@@ -3452,7 +3535,11 @@ export type PreEditCaptureSkip =
 	| "no-kind"
 	| "generated"
 	| "no-linter"
-	| "unreadable";
+	| "unreadable"
+	/** #5616: `before` found no earlier copy (a file the write created). */
+	| "absent-before"
+	/** #5616: the earlier bytes could not be written beside the file. */
+	| "copy-unwritable";
 
 /** #4483: what one pre-edit capture did, for the `tool_call` record. */
 export type PreEditCaptureOutcome =
@@ -3480,14 +3567,21 @@ export type PreEditCaptureOutcome =
  * its first edit this session, and install their blocking findings as the
  * file's pre-edit seed (clients/dispatch/pre-edit-seed.ts).
  *
- * Called from the `tool_call` of a classified write or edit, under the
- * caller's bound, before the host writes. Only linter runners run (no
- * language server, type checker, gated runner or scanner), and not one the
- * observed tier has moved to collect-later. The seed is installed only while
+ * Called from the `tool_call` of a classified write or edit, and (#5553) of
+ * each writer that names a file it is about to change, under the caller's
+ * bound, before the write. Only linter runners run (no language server, type
+ * checker or scanner), plus the edit-gated ast-grep and tree-sitter lanes
+ * when the writer is `spanless`, and not one the observed tier has moved to
+ * collect-later. The seed is installed only while
  * it still describes the file before its first dispatch: no delta baseline
  * or seed exists yet, the file still holds the bytes the runs read, and the
  * session is the one that started the capture. A capture the caller stopped
  * waiting for therefore installs nothing once the host has written.
+ *
+ * #5616: `before` supplies the bytes when the write has already happened (a
+ * script write credited at `tool_result`, whose file was clean, so its HEAD
+ * copy is what it held); the file itself holds the write. The lanes lint
+ * those bytes as `prepareSeedLaneRun` says (#5621).
  */
 export async function capturePreEditLinterFindings(
 	filePath: string,
@@ -3495,6 +3589,10 @@ export async function capturePreEditLinterFindings(
 	pi: PiAgentAPI,
 	session: { isCurrent(): boolean },
 	signal?: AbortSignal,
+	/** #5553: the writer names no edit span, so the edit-gated lanes read the
+	 *  whole file and are seeded with the linters. */
+	spanless = false,
+	before?: (signal?: AbortSignal) => Promise<PreEditBytes>,
 ): Promise<PreEditCaptureOutcome> {
 	if (pi.getFlag("no-delta")) return { outcome: "skipped", reason: "no-delta" };
 	const analysisRootMode = resolveAnalysisRoot(filePath, workspaceRoot);
@@ -3522,11 +3620,135 @@ export async function capturePreEditLinterFindings(
 		});
 		return { outcome: "skipped", reason: "capacity" };
 	}
+	// The capture runs under its own 1500 ms bound, so a runner the observed
+	// tier has moved to collect-later stays out of it.
+	const admit = (id: string): boolean =>
+		classifyObservedRunner(projectRoot, id) === "inline";
+	const prepared = await prepareSeedLaneRun(
+		[
+			filePath,
+			dispatchCwd,
+			projectRoot,
+			analysisRootMode,
+			pi,
+			spanless,
+			preEditCaptureFacts,
+			admit,
+		],
+		before && { dir: nodePath.dirname(filePath), read: () => before(signal) },
+	);
+	if ("skip" in prepared) return { outcome: "skipped", reason: prepared.skip };
+	const run = prepared.run;
+	const { ctx, content } = run;
+	const controller = new AbortController();
+	const captureSignal = signal
+		? AbortSignal.any([signal, controller.signal])
+		: controller.signal;
+	preEditCapturesInFlight.set(keyPath, controller);
+	try {
+		const result = await spawnAbortScope.run(captureSignal, () =>
+			dispatchSeedLanes(run, preEditCaptureFacts),
+		);
+		if (captureSignal.aborted)
+			return { outcome: "discarded", reason: "aborted" };
+		if (!session.isCurrent())
+			return { outcome: "discarded", reason: "session-replaced" };
+		if (dispatched())
+			return { outcome: "discarded", reason: "already-dispatched" };
+		// The bytes the lanes read, still there (a copy's lanes read the copy; a
+		// content run read bytes the file never held).
+		if (run.bytesOnDisk) {
+			let now: Buffer | undefined;
+			try {
+				now = nodeFs.readFileSync(ctx.filePath);
+			} catch {
+				now = undefined;
+			}
+			if (!now?.equals(run.before))
+				return { outcome: "discarded", reason: "bytes-changed" };
+		}
+		const seed = seedFromCapture(result.blockers, content, spanless);
+		sessionFacts.setBoundedSessionFact(seedKey, seed);
+		return {
+			outcome: "seeded",
+			seeded: seed.length,
+			runners: run.groups.flatMap((g) => g.runnerIds),
+		};
+	} finally {
+		preEditCapturesInFlight.delete(keyPath);
+		dropSeedCopy(run);
+	}
+}
+
+/** What {@link selectSeedLanes} takes, but the copy's place. */
+type SeedLaneArgs = [
+	filePath: string,
+	dispatchCwd: string,
+	projectRoot: string,
+	analysisRootMode: AnalysisRootMode,
+	pi: PiAgentAPI,
+	spanless: boolean,
+	facts: FactStore,
+	admit: (runnerId: string) => boolean,
+];
+
+/** One file's run of the seeded lanes, built by {@link prepareSeedLaneRun}. */
+interface SeedLaneRun {
+	ctx: DispatchContext;
+	groups: ReturnType<typeof withSpotbugsGroup>;
+	/** The bytes the lanes read. */
+	before: Buffer;
+	content: string;
+	/** Whether the lanes read them from `ctx.filePath` (the file or its copy). */
+	bytesOnDisk: boolean;
+	/** The copy written beside the file for the run; the caller removes it. */
+	copy?: string;
+}
+
+/**
+ * #5616, #5621: bytes the file does not hold, for a run that lints them.
+ * `read` supplies them (HEAD's copy of a credited write, an index blob), and
+ * `dir` is where a copy would sit when a lane needs one.
+ */
+interface GivenBytes {
+	dir: string;
+	read(): Promise<PreEditBytes>;
+}
+
+/**
+ * #4483, #5553: the lanes a capture runs over one file's bytes. The pre-edit
+ * capture seeds with their blockers; the commit gate's staged-delta read
+ * (`collectStagedLaneBlockers`) judges them. `admit` keeps a runner (the
+ * capture keeps the inline tier); `copyAt` is where a copy of given bytes
+ * would be written, judged with `filePath`'s kind and lanes. It is returned
+ * as `copyAt` only when a selected runner reads the disk (no
+ * `lintsGivenContent`, #5621) and takes the lanes' path then; otherwise the
+ * lanes keep `filePath` and take the bytes as content. `skip` is why no lane
+ * applies. Reads no bytes (#5616: a credited script write's seed reads its
+ * HEAD copy only once a lane applies).
+ */
+function selectSeedLanes(
+	filePath: string,
+	dispatchCwd: string,
+	projectRoot: string,
+	analysisRootMode: AnalysisRootMode,
+	pi: PiAgentAPI,
+	spanless: boolean,
+	facts: FactStore,
+	admit: (runnerId: string) => boolean,
+	copyAt?: string,
+):
+	| { skip: PreEditCaptureSkip }
+	| {
+			ctx: DispatchContext;
+			groups: SeedLaneRun["groups"];
+			copyAt?: string;
+	  } {
 	const created = createDispatchContext(
 		filePath,
 		dispatchCwd,
 		pi,
-		preEditCaptureFacts,
+		facts,
 		true,
 		undefined,
 		projectRoot,
@@ -3537,74 +3759,271 @@ export async function capturePreEditLinterFindings(
 		undefined,
 		analysisRootMode,
 	);
-	const ctx: DispatchContext = {
+	const base: DispatchContext = {
 		...created,
 		deltaMode: false,
 		preEditCapture: true,
-		hasTool: (command) => checkToolAvailability(command, sessionFacts),
+		hasTool: (command) => checkToolAvailability(command),
 	};
-	const kind = ctx.kind;
-	if (!kind) return { outcome: "skipped", reason: "no-kind" };
-	if (ctx.fileRole === "generated")
-		return { outcome: "skipped", reason: "generated" };
+	const kind = base.kind;
+	if (!kind) return { skip: "no-kind" };
+	if (base.fileRole === "generated") return { skip: "generated" };
 	const groups = withSpotbugsGroup(
 		kind,
 		getDispatchGroupsForKind(kind, pi),
-		ctx,
+		base,
 	).flatMap((group) => {
 		const runnerIds = group.runnerIds.filter(
-			(id) =>
-				PRE_EDIT_SEED_RUNNER_IDS.has(id) &&
-				classifyObservedRunner(projectRoot, id) === "inline",
+			(id) => isPreEditSeedRunner(id, spanless) && admit(id),
 		);
 		return runnerIds.length > 0 ? [{ ...group, runnerIds }] : [];
 	});
-	if (groups.length === 0) return { outcome: "skipped", reason: "no-linter" };
-	let before: Buffer;
-	try {
-		before = nodeFs.readFileSync(ctx.filePath);
-	} catch {
-		return { outcome: "skipped", reason: "unreadable" };
-	}
-	const content = before.toString("utf8");
-	const controller = new AbortController();
-	const captureSignal = signal
-		? AbortSignal.any([signal, controller.signal])
-		: controller.signal;
-	preEditCapturesInFlight.set(keyPath, controller);
-	preEditCaptureFacts.clearFileFactsFor(ctx.filePath);
-	preEditCaptureFacts.setFileFact(ctx.filePath, "file.content", content);
-	try {
-		const result = await spawnAbortScope.run(captureSignal, () =>
-			dispatchForFile(ctx, groups, sessionRunnerRegistry, undefined, {
-				dedupeCoverageNotice: false,
-			}),
+	if (groups.length === 0) return { skip: "no-linter" };
+	// An unregistered id reads the disk too: refusing it content is the safe side.
+	const readsDisk =
+		copyAt !== undefined &&
+		groups.some((group) =>
+			group.runnerIds.some(
+				(id) => sessionRunnerRegistry.get(id)?.lintsGivenContent !== true,
+			),
 		);
-		if (captureSignal.aborted)
-			return { outcome: "discarded", reason: "aborted" };
-		if (!session.isCurrent())
-			return { outcome: "discarded", reason: "session-replaced" };
-		if (dispatched())
-			return { outcome: "discarded", reason: "already-dispatched" };
-		let now: Buffer | undefined;
-		try {
-			now = nodeFs.readFileSync(ctx.filePath);
-		} catch {
-			now = undefined;
-		}
-		if (!now?.equals(before))
-			return { outcome: "discarded", reason: "bytes-changed" };
-		const seed = seedFromCapture(result.blockers, content);
-		sessionFacts.setBoundedSessionFact(seedKey, seed);
-		return {
-			outcome: "seeded",
-			seeded: seed.length,
-			runners: groups.flatMap((g) => g.runnerIds),
-		};
-	} finally {
-		preEditCapturesInFlight.delete(keyPath);
-		preEditCaptureFacts.endDispatchFor(ctx.filePath);
+	return readsDisk
+		? { ctx: { ...base, filePath: normalizeMapKey(copyAt) }, groups, copyAt }
+		: { ctx: base, groups };
+}
+
+/**
+ * The nearest directory above `file` that exists: a replayed `git mv` names a
+ * destination whose directory the real move has not made yet.
+ */
+function existingDirOf(file: string): string {
+	const start = nodePath.dirname(file);
+	for (const dir of walkUpDirs(start, { spelling: true }))
+		if (nodeFs.existsSync(dir)) return dir;
+	return start;
+}
+
+/** Remove the copy a run wrote beside the file, if it wrote one. */
+function dropSeedCopy(run: SeedLaneRun): void {
+	if (run.copy) nodeFs.rmSync(run.copy, { force: true });
+}
+
+/** A name for a copy of given bytes in `dir`, for the one run. */
+function seedCopyName(dir: string, filePath: string): string {
+	return nodePath.join(
+		dir,
+		`pi-lens-seed-${randomBytes(4).toString("hex")}.${nodePath.basename(filePath)}`,
+	);
+}
+
+/** The name every seed copy starts with, as one git exclude pattern. */
+const SEED_COPY_EXCLUDE = "pi-lens-seed-*";
+
+/**
+ * #5621: keep a seed copy out of `git add -A`. Adds {@link SEED_COPY_EXCLUDE}
+ * to the repository's local exclude file (`info/exclude` of the common git
+ * dir, which a linked worktree shares), once and only when absent: never a
+ * tracked `.gitignore`, never committed. Outside a repository there is nothing
+ * to do. A file that cannot be read or written does not stop the copy (the run
+ * is worth more than the exclusion); the failure is one record per session.
+ * The read and the append run with no await between them, so two seeds of one
+ * process cannot both append.
+ */
+async function ensureSeedCopyExcluded(dir: string): Promise<void> {
+	try {
+		const found = await safeSpawnAsync(
+			"git",
+			["rev-parse", "--git-common-dir"],
+			{ cwd: dir, timeout: 5000, resourceLabel: "seed-copy-exclude" },
+		);
+		const exited = found.status;
+		// git missing, timed out or killed gives no exit code: no answer, so the
+		// record below says so.
+		if (exited === null)
+			throw new Error("git rev-parse gave no answer: " + String(found.failure));
+		// A non-zero exit is "not a repository": nothing to exclude from.
+		if (exited !== 0) return;
+		// Relative to `dir` unless git gave an absolute path (a linked worktree).
+		const excludeFile = nodePath.resolve(
+			dir,
+			found.stdout.trim(),
+			"info",
+			"exclude",
+		);
+		const held = nodeFs.existsSync(excludeFile)
+			? nodeFs.readFileSync(excludeFile, "utf8")
+			: "";
+		if (held.split(/\r?\n/).some((line) => line.trim() === SEED_COPY_EXCLUDE))
+			return;
+		nodeFs.mkdirSync(nodePath.dirname(excludeFile), { recursive: true });
+		nodeFs.appendFileSync(
+			excludeFile,
+			(held === "" || held.endsWith("\n") ? "" : "\n") +
+				SEED_COPY_EXCLUDE +
+				"\n",
+		);
+	} catch (failure) {
+		recordDegradationOnce({
+			kind: "seed-exclude-unwritable",
+			subject: "info/exclude",
+			reason: `the seed copy is not excluded from git: ${failure instanceof Error ? failure.message : String(failure)}`,
+		});
 	}
+}
+
+/**
+ * {@link selectSeedLanes}, then the bytes the lanes lint, read once. From
+ * disk, or `given` (#5616, #5621): handed to the lanes as `ctx.givenContent`
+ * when every runner takes content (`lintsGivenContent`), so nothing is written
+ * beside the file; otherwise written beside it under a `pi-lens-seed-` name
+ * for the one run, which a linter that reads the disk reads under the
+ * project's config. The caller removes `run.copy`.
+ */
+async function prepareSeedLaneRun(
+	args: SeedLaneArgs,
+	given?: GivenBytes,
+): Promise<{ skip: PreEditCaptureSkip } | { run: SeedLaneRun }> {
+	const [filePath] = args;
+	const lanes = selectSeedLanes(
+		...args,
+		given && seedCopyName(given.dir, filePath),
+	);
+	if ("skip" in lanes) return lanes;
+	if (!given) {
+		let before: Buffer;
+		try {
+			before = nodeFs.readFileSync(lanes.ctx.filePath);
+		} catch {
+			return { skip: "unreadable" };
+		}
+		return {
+			run: {
+				...lanes,
+				before,
+				content: before.toString("utf8"),
+				bytesOnDisk: true,
+			},
+		};
+	}
+	const earlier = await given.read();
+	if (earlier === "absent") return { skip: "absent-before" };
+	if (earlier === "unreadable") return { skip: "unreadable" };
+	const { content } = earlier;
+	const before = Buffer.from(content, "utf8");
+	if (lanes.copyAt === undefined)
+		return {
+			run: {
+				...lanes,
+				ctx: { ...lanes.ctx, givenContent: content },
+				before,
+				content,
+				bytesOnDisk: false,
+			},
+		};
+	await ensureSeedCopyExcluded(given.dir);
+	try {
+		nodeFs.writeFileSync(lanes.copyAt, content, { flag: "wx" });
+	} catch {
+		// A write that fails after the file was created (a size limit, a full
+		// disk) leaves a partial copy the exclude line hides from `git status`:
+		// remove it, as the commit gate's own writer did (#5621).
+		nodeFs.rmSync(lanes.copyAt, { force: true });
+		// none: the skip reason is the record; recordPreEditCapture logs it.
+		return { skip: "copy-unwritable" };
+	}
+	return {
+		run: { ...lanes, before, content, bytesOnDisk: true, copy: lanes.copyAt },
+	};
+}
+
+/** Dispatch the lanes of a prepared run, releasing the file's facts after. */
+async function dispatchSeedLanes(
+	{ ctx, groups, content }: SeedLaneRun,
+	facts: FactStore,
+): Promise<DispatchResult> {
+	facts.clearFileFactsFor(ctx.filePath);
+	facts.setFileFact(ctx.filePath, "file.content", content);
+	try {
+		return await dispatchForFile(
+			ctx,
+			groups,
+			sessionRunnerRegistry,
+			undefined,
+			{
+				dedupeCoverageNotice: false,
+			},
+		);
+	} finally {
+		facts.endDispatchFor(ctx.filePath);
+	}
+}
+
+/**
+ * #5553: the blocking findings of the seeded lanes (linters, and the
+ * edit-gated ast-grep and tree-sitter lanes read whole) over the bytes
+ * `filePath` holds now, or over `stagedContent` (an index blob) judged as
+ * `filePath` (#5621: through stdin where every lane takes content, else a copy
+ * beside the file, as `prepareSeedLaneRun` says): the commit gate's own read of a file the commit
+ * carries, whoever wrote it. Read-only: it installs no seed and takes no delta
+ * baseline, and runs on a fact store of its own so a capture of the same file
+ * never shares its facts. Every seeded runner runs, a collect-later one
+ * included, inside the gate's bound. `unanswered` names the runners that ran
+ * and reached no verdict (failed, deferred or inconclusive); a runner skipped
+ * for a stated cause (a missing tool, no config, not preferred) read nothing
+ * and is not one. Findings are the lanes' raw blockers; the caller places them
+ * on the lines the commit adds and applies the finding policy.
+ */
+export async function collectStagedLaneBlockers(
+	filePath: string,
+	workspaceRoot: string,
+	pi: PiAgentAPI,
+	stagedContent?: string,
+): Promise<
+	| { outcome: "ran"; blockers: Diagnostic[]; unanswered: string[] }
+	| { outcome: "skipped"; reason: PreEditCaptureSkip }
+> {
+	const analysisRootMode = resolveAnalysisRoot(filePath, workspaceRoot);
+	if (analysisRootMode === "none" || analysisRootMode === "adopted")
+		return { outcome: "skipped", reason: "outside-session-root" };
+	const projectRoot = nodePath.resolve(workspaceRoot);
+	const prepared = await prepareSeedLaneRun(
+		[
+			filePath,
+			resolveLanguageRootForFile(filePath, workspaceRoot),
+			projectRoot,
+			analysisRootMode,
+			pi,
+			true,
+			stagedDeltaFacts,
+			() => true,
+		],
+		stagedContent === undefined
+			? undefined
+			: {
+					dir: existingDirOf(filePath),
+					read: async () => ({ content: stagedContent }),
+				},
+	);
+	if ("skip" in prepared) return { outcome: "skipped", reason: prepared.skip };
+	let result: DispatchResult;
+	try {
+		result = await dispatchSeedLanes(prepared.run, stagedDeltaFacts);
+	} finally {
+		dropSeedCopy(prepared.run);
+	}
+	const rows = new Map(
+		(result.latencyReport?.runners ?? []).map((row) => [row.runnerId, row]),
+	);
+	// Each named with how it ended, so the refusal says what to fix.
+	const unanswered = (result.inconclusiveSources?.runnerIds ?? []).flatMap(
+		(id) => {
+			const row = rows.get(id);
+			if (row?.status === "skipped" && row.skipReason !== undefined) return [];
+			const how = [row?.status, row?.failureKind].filter(Boolean).join(": ");
+			return [how ? `${id} (${how})` : id];
+		},
+	);
+	return { outcome: "ran", blockers: result.blockers, unanswered };
 }
 
 /** Per-runner outcome captured while driving the real dispatch path. */

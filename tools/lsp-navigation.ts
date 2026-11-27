@@ -93,6 +93,16 @@ const VALID_OPERATIONS = [
 	"capabilities",
 ] as const;
 
+// JSON-RPC command arguments are LSPAny: servers use primitives, arrays, and
+// objects with command-specific keys. A Type.Unknown item becomes `{}`, which
+// strict Responses schemas reject, and pi-ai strict conversion does not support
+// a structured `anyOf` union. The tool opts out of strict conversion because an
+// open LSPAny value cannot be closed (#5506). The JSON Schema type array keeps
+// the complete JSON value space for non-strict providers.
+const LSP_ANY_SCHEMA = Type.Unsafe<unknown>({
+	type: ["string", "number", "boolean", "object", "array", "null"],
+});
+
 const NAVIGABLE_SYMBOL_KINDS = new Set([
 	5, // Class
 	6, // Method
@@ -524,7 +534,7 @@ function pickLocalSymbolLocation(
 				return { uri: symbol.location.uri, range: symbol.location.range };
 			}
 			if (symbol.range) {
-				return { uri, range: symbol.range };
+				return { uri, range: symbol.selectionRange ?? symbol.range };
 			}
 			return undefined;
 		})
@@ -934,7 +944,7 @@ export function createLspNavigationTool(
 				}),
 			),
 			commandArguments: Type.Optional(
-				Type.Array(Type.Unknown(), {
+				Type.Array(LSP_ANY_SCHEMA, {
 					description: "Arguments for the server command.",
 				}),
 			),
@@ -1014,7 +1024,7 @@ export function createLspNavigationTool(
 			const workspaceScopeAttribution: LSPWorkspaceScopeAttribution = {};
 
 			const finalize = (
-				unreported: {
+				payload: {
 					content: Array<{ type: "text"; text: string }>;
 					isError?: boolean;
 					details?: Record<string, unknown>;
@@ -1028,24 +1038,10 @@ export function createLspNavigationTool(
 					callSiteUri?: string;
 				},
 			): typeof payload & {
-				details: typeof unreported.details & {
+				details: typeof payload.details & {
 					failureKind: string;
 				};
 			} => {
-				// #5248: the files the apply wrote and the mutation bridge accepted,
-				// for `handleToolResult`'s dispatch feed. A failed, skipped or
-				// dry-run call accepted none, so it reports none.
-				const payload =
-					mutationContext?.acceptedFiles &&
-					mutationContext.acceptedFiles.length > 0
-						? {
-								...unreported,
-								details: {
-									...unreported.details,
-									appliedFiles: [...mutationContext.acceptedFiles],
-								},
-							}
-						: unreported;
 				if (
 					payload.isError &&
 					requestedApply &&
@@ -1254,7 +1250,6 @@ export function createLspNavigationTool(
 					cwd,
 					sessionId: ctx.sessionManager?.getSessionId?.(),
 					correlationId: newLspMutationCorrelationId(_toolCallId),
-					acceptedFiles: [],
 					// #4187 R4-1: the call whose `tool_call` licensed the paths it
 					// named; the workspace edit's other files (a rename's importers)
 					// are unlicensed, so they end an authorship instead of advancing it.
@@ -1563,7 +1558,7 @@ export function createLspNavigationTool(
 					PythonCompileWithheld | undefined
 				> = [];
 				const result = Array.from(allDiagnostics.entries()).map(
-					([trackedFile, { diags, ts }]) => {
+					([trackedFile, { diags, ts, closed }]) => {
 						let kept = diags;
 						if (diags.length > 0) {
 							const policy = applyProbeFindingPolicy(
@@ -1586,6 +1581,9 @@ export function createLspNavigationTool(
 							diagnostics: kept,
 							count: kept.length,
 							lag: formatCacheAgeLabel(ts),
+							// #5700: the open-document cap closed this file on its server,
+							// which no longer re-checks it; a touch opens it again.
+							...(closed && { closed: true }),
 						};
 					},
 				);
@@ -1593,6 +1591,14 @@ export function createLspNavigationTool(
 					dispositionSuppressedLine(snapshotSuppressed);
 				const snapshotWithheld = mergeWithheld(snapshotWithheldEntries);
 				const snapshotWithheldLine = withheldCompileNote(snapshotWithheld);
+				const closedRows = result.reduce(
+					(count, row) => count + (row.closed ? 1 : 0),
+					0,
+				);
+				const snapshotClosedLine =
+					closedRows > 0
+						? `${closedRows} file(s) with closed: true were closed on their server by the open-document cap; their rows are the last findings, not a re-check. Provide path to check one again.`
+						: undefined;
 				const noteMap2: Record<string, string> = {
 					"push-only":
 						"Note: push-only tracked diagnostics snapshot (not full workspace pull diagnostics).",
@@ -1606,7 +1612,7 @@ export function createLspNavigationTool(
 						content: [
 							{
 								type: "text" as const,
-								text: `${note}\n${JSON.stringify(result)}${snapshotSuppressedLine ? `\nNote: ${snapshotSuppressedLine}` : ""}${snapshotWithheldLine ? `\nNote: ${snapshotWithheldLine}` : ""}`,
+								text: `${note}\n${JSON.stringify(result)}${snapshotSuppressedLine ? `\nNote: ${snapshotSuppressedLine}` : ""}${snapshotWithheldLine ? `\nNote: ${snapshotWithheldLine}` : ""}${snapshotClosedLine ? `\nNote: ${snapshotClosedLine}` : ""}`,
 							},
 						],
 						details: {

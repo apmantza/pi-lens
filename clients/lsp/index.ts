@@ -51,13 +51,9 @@ import {
 import { shouldPreferPullOnlyDiagnostics } from "../lsp-budget.js";
 import { sampleProcessTreeCpuPercent } from "../resource-sampler.js";
 import { RUNTIME_CONFIG } from "../runtime-config.js";
-import {
-	bounded,
-	untilAborted,
-	withDeadline,
-	withTimeout,
-} from "../deadline-utils.js";
+import { bounded, untilAborted, withDeadline } from "../deadline-utils.js";
 import { HOOK_WALL_BUDGET_MS } from "../hook-budgets.js";
+import { nonNegativeIntEnv } from "../env-utils.js";
 import type { LedgerHookKey } from "../hook-budgets.js";
 import { getAmbientAbortSignal } from "../safe-spawn.js";
 import { abortDeferredLspWork } from "../deferred-lsp-work.js";
@@ -80,9 +76,9 @@ import {
 } from "./pending-aux-coverage.js";
 import {
 	isAtOrAboveHomeDir,
-	isWithinForm,
 	normalizeMapKey,
 	realpathOrResolve,
+	rootsOverlap,
 	toPosix,
 	uriToPath,
 } from "../path-utils.js";
@@ -334,11 +330,12 @@ export interface LSPState {
 // stop re-paying its notify budget on every file. A single successful write
 // resets the streak.
 const NOTIFY_BACKPRESSURE_BROKEN_AFTER = 3;
-const NAV_CLIENT_WAIT_TIMEOUT_MS = Math.max(
-	0,
-	Number.parseInt(process.env.PI_LENS_LSP_NAV_CLIENT_WAIT_MS ?? "1500", 10) ||
-		1500,
-);
+// #5419 F1: positive-or-default, not "0 means no wait". A 0 budget reaches
+// getClientForFile as maxWaitMs 0, its no-timeout branch, so a server that never
+// initializes would block the navigation call without a bound. runtime-tool-call.ts
+// reads the same knob with the same `|| 1500`.
+export const NAV_CLIENT_WAIT_TIMEOUT_MS =
+	nonNegativeIntEnv("PI_LENS_LSP_NAV_CLIENT_WAIT_MS", 1500) || 1500;
 /**
  * #4532 gap 9: the touch debounce's ONLY remaining job is to switch the skip
  * off (`0` disables it). It no longer bounds how long an entry stays useful,
@@ -347,10 +344,9 @@ const NAV_CLIENT_WAIT_TIMEOUT_MS = Math.max(
  * container bound so a deployment that turns the feature off gets no skips at
  * all.
  */
-const TOUCH_DEBOUNCE_MS = Math.max(
-	0,
-	Number.parseInt(process.env.PI_LENS_LSP_TOUCH_DEBOUNCE_MS ?? "1500", 10) ||
-		1500,
+export const TOUCH_DEBOUNCE_MS = nonNegativeIntEnv(
+	"PI_LENS_LSP_TOUCH_DEBOUNCE_MS",
+	1500,
 );
 /**
  * #4532 gap 9 F4: the per-server touch-record cap. Entries are per
@@ -381,7 +377,7 @@ const RENAME_NOTIFY_TIMEOUT_MS = Math.max(
 );
 
 // #1621: bound a single rename-propagation notify call and classify how it
-// failed. `withTimeout` rejects with the deterministic `"Timeout after Nms"`
+// failed. `withDeadline` rejects with the deterministic `"Timeout after Nms"`
 // message on the timer branch (see deadline-utils.ts) — the same signal
 // `navRequest`/`clientPingLiveness` in clients/lsp/client.ts already match on
 // to tell a timeout from a genuine rejection, reused here rather than forking
@@ -395,7 +391,7 @@ async function runRenameNotify(
 	timeoutMs: number,
 ): Promise<RenameNotifyResult> {
 	try {
-		await withTimeout(send(), timeoutMs);
+		await withDeadline(send(), { ms: timeoutMs });
 		return { ok: true };
 	} catch (err) {
 		const timedOut =
@@ -504,28 +500,19 @@ function readTsserverSyncGraceMs(): number {
 }
 /** Servers named in one no-client `lsp_touch_file` row (#3873 O9). */
 const MAX_TOUCH_CANDIDATES = 8;
-const DIAGNOSTICS_SEMANTIC_SETTLE_THRESHOLD_MS = Math.max(
-	0,
-	Number.parseInt(
-		process.env.PI_LENS_LSP_DIAGNOSTICS_SEMANTIC_THRESHOLD_MS ?? "250",
-		10,
-	) || 250,
+export const DIAGNOSTICS_SEMANTIC_SETTLE_THRESHOLD_MS = nonNegativeIntEnv(
+	"PI_LENS_LSP_DIAGNOSTICS_SEMANTIC_THRESHOLD_MS",
+	250,
 );
-const DIAGNOSTICS_SEMANTIC_SETTLE_WAIT_MS = Math.max(
-	0,
-	Number.parseInt(
-		process.env.PI_LENS_LSP_DIAGNOSTICS_SEMANTIC_SETTLE_MS ?? "400",
-		10,
-	) || 400,
+export const DIAGNOSTICS_SEMANTIC_SETTLE_WAIT_MS = nonNegativeIntEnv(
+	"PI_LENS_LSP_DIAGNOSTICS_SEMANTIC_SETTLE_MS",
+	400,
 );
 // Once the fastest client has diagnostics, remaining clients get this window before
 // we proceed with whatever results are ready. 0 disables early-unblock.
-const EARLY_UNBLOCK_GRACE_MS = Math.max(
-	0,
-	Number.parseInt(
-		process.env.PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS ?? "400",
-		10,
-	) || 400,
+export const EARLY_UNBLOCK_GRACE_MS = nonNegativeIntEnv(
+	"PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS",
+	400,
 );
 
 type OutstandingAuxNotifyWrite = {
@@ -713,6 +700,21 @@ export interface LSPTouchFileOptions {
 	 * which their clientless fallbacks rely on.
 	 */
 	nameUnansweredPrimaries?: boolean;
+	/**
+	 * #5675: send this content again even though the server already holds it.
+	 * The notify debounce (`shouldSkipNotify`) exists so a second touch of the
+	 * same bytes does not clear a cache the server is still filling; a caller
+	 * that holds a cached answer it cannot trust asks for the opposite. The one
+	 * reader is the cascade's re-touch of a push-only dependent whose only
+	 * answer predates the edit: such a server republishes a dependent when its
+	 * own model changes, not when asked, and a re-sent document is the only
+	 * request it takes. Honoured per server, and only for a server declared
+	 * `resendRecheck: "rechecks"` (#4782): one that publishes nothing for
+	 * unchanged bytes would lose its cached answer with none coming. Honoured by a
+	 * touch that waits for diagnostics only; the whole-call skip of a
+	 * `diagnostics: "none"` touch does not read it.
+	 */
+	resendUnchanged?: boolean;
 	/** Hook identity for bounded abandonment attribution (defaults to tool_result_edit). */
 	hook?: LedgerHookKey;
 	/**
@@ -2883,8 +2885,7 @@ export class LSPService {
 			const separator = key.indexOf(":");
 			const serverId = separator >= 0 ? key.slice(0, separator) : key;
 			const root = normalizeMapKey(client.root);
-			const sameOrNested =
-				isWithinForm(root, normalizedCwd) || isWithinForm(normalizedCwd, root);
+			const sameOrNested = rootsOverlap(root, normalizedCwd);
 			if (!sameOrNested) continue;
 			entries.push({ clientKey: key, serverId, client });
 		}
@@ -4763,13 +4764,18 @@ export class LSPService {
 			// no-new-version baseline below.
 			const notifySkippedServerIds = new Set(
 				spawned
-					.filter((entry) =>
-						this.shouldSkipNotify(
-							filePath,
-							contentHash,
-							entry.info.id,
-							entry.client,
-						),
+					.filter(
+						(entry) =>
+							!(
+								options.resendUnchanged === true &&
+								serverTraits(entry.info).resendRecheck === "rechecks"
+							) &&
+							this.shouldSkipNotify(
+								filePath,
+								contentHash,
+								entry.info.id,
+								entry.client,
+							),
 					)
 					.map((entry) => entry.info.id),
 			);
@@ -5215,6 +5221,12 @@ export class LSPService {
 			// #1549: the primary subset of the list above, captured when the wait lapsed
 			// so the attribution survives the silent-clean/sync gates clearing the flag.
 			let diagnosticsUnansweredPrimaryServerIds: string[] = [];
+			// #5487: the primaries whose wait lapsed while they still announced they
+			// were loading (a subset of the lapsed waits).
+			const loadingExpiredServerIds = new Set<string>();
+			// #5487: and those whose workspace failed to load, with the first message.
+			const loadFailedExpiredServerIds = new Set<string>();
+			let loadFailureDetail: string | undefined;
 			// #1549: a gate that certifies silence AS the answer (the tsserver sync
 			// confirm, either silent-clean gate) retracts the primary attribution with it —
 			// those servers answered, in the only way their capabilities allow, so they
@@ -5726,6 +5738,15 @@ export class LSPService {
 								!isSilentOnCleanServer(entry)
 							) {
 								expiredWaitServerIds.add(entry.info.id);
+								// #5487: it lapsed while the server still announced it was
+								// loading, so the verdict names that, not a silent server.
+								const block = entry.client.readinessBlock?.();
+								if (block?.reason === "server-loading") {
+									loadingExpiredServerIds.add(entry.info.id);
+								} else if (block?.reason === "server-load-failed") {
+									loadFailedExpiredServerIds.add(entry.info.id);
+									loadFailureDetail ??= block.detail;
+								}
 							}
 							return outcome;
 						});
@@ -6358,43 +6379,49 @@ export class LSPService {
 					diagnosticsTimedOut =
 						(!hasWaitedPrimary && !hasUnsupportedPrimary) ||
 						diagnosticsUnansweredPrimaryServerIds.length > 0;
-					for (const entry of unanswered) {
-						incrementDegradationCount({
-							kind: "lsp-diagnostics-timeout",
-							// `info.id` is the authoritative server identity carried by
-							// every spawned entry. The client test doubles (and some
-							// lightweight clients) need not expose a serverId property;
-							// ledger recording must never abort the touch or alter #570's
-							// timeout-preserves-last-known-diagnostics semantics.
-							subject: entry.info.id,
-							reason: "diagnostics wait timed out",
+					// #5097: a wait the caller's Esc ended is no budget that lapsed. The
+					// verdict above stays what it is (no answer, so inconclusive), and
+					// the budget rows below are for lapses only: written for an abort
+					// they would charge the server a timeout it never had.
+					if (getAmbientAbortSignal()?.aborted !== true) {
+						for (const entry of unanswered) {
+							incrementDegradationCount({
+								kind: "lsp-diagnostics-timeout",
+								// `info.id` is the authoritative server identity carried by
+								// every spawned entry. The client test doubles (and some
+								// lightweight clients) need not expose a serverId property;
+								// ledger recording must never abort the touch or alter #570's
+								// timeout-preserves-last-known-diagnostics semantics.
+								subject: entry.info.id,
+								reason: "diagnostics wait timed out",
+							});
+						}
+						logLatency({
+							type: "phase",
+							phase: "lsp_diagnostics_timeout",
+							filePath: normalizedPath,
+							durationMs: waitedMs,
+							metadata: {
+								source,
+								// #1444: WHICH server(s) burned the budget — without this the
+								// ~221/day timeout rows can't be attributed to a server at all.
+								// `info.id` (not `client.serverId`) for the same reason the
+								// degradation ledger above uses it: test doubles and lightweight
+								// clients need not expose `serverId`.
+								serverIds: spawned.map((e) => e.info.id),
+								clientScope,
+								diagnosticsMode,
+								timeoutMs,
+								// #1549: which of those servers actually produced no evidence, and
+								// whether the lapse is attributable to a primary (the touch is
+								// inconclusive) or only to auxiliaries (a named coverage gap, with
+								// the primary's findings intact). Without these two fields a
+								// forensic sweep cannot tell the two apart at all.
+								unansweredServerIds: diagnosticsUnansweredServerIds,
+								attributedToPrimary: diagnosticsTimedOut,
+							},
 						});
 					}
-					logLatency({
-						type: "phase",
-						phase: "lsp_diagnostics_timeout",
-						filePath: normalizedPath,
-						durationMs: waitedMs,
-						metadata: {
-							source,
-							// #1444: WHICH server(s) burned the budget — without this the
-							// ~221/day timeout rows can't be attributed to a server at all.
-							// `info.id` (not `client.serverId`) for the same reason the
-							// degradation ledger above uses it: test doubles and lightweight
-							// clients need not expose `serverId`.
-							serverIds: spawned.map((e) => e.info.id),
-							clientScope,
-							diagnosticsMode,
-							timeoutMs,
-							// #1549: which of those servers actually produced no evidence, and
-							// whether the lapse is attributable to a primary (the touch is
-							// inconclusive) or only to auxiliaries (a named coverage gap, with
-							// the primary's findings intact). Without these two fields a
-							// forensic sweep cannot tell the two apart at all.
-							unansweredServerIds: diagnosticsUnansweredServerIds,
-							attributedToPrimary: diagnosticsTimedOut,
-						},
-					});
 				}
 
 				// #814: capability-aware AGGREGATE wait — generalize #799's
@@ -6473,7 +6500,10 @@ export class LSPService {
 								const liveness = await Promise.all(
 									outstanding.map((entry) =>
 										(
-											entry.client.pingLiveness?.() ?? Promise.resolve(true)
+											entry.client.pingLiveness?.(
+												undefined,
+												getAmbientAbortSignal(),
+											) ?? Promise.resolve(true)
 										).catch(() => false),
 									),
 								);
@@ -6757,7 +6787,10 @@ export class LSPService {
 						// responding before its silence is trusted as a clean confirm; a
 						// server that doesn't answer in time leaves the touch inconclusive.
 						const alive = await (
-							spawned[0].client.pingLiveness?.() ?? Promise.resolve(true)
+							spawned[0].client.pingLiveness?.(
+								undefined,
+								getAmbientAbortSignal(),
+							) ?? Promise.resolve(true)
 						).catch(() => false);
 						if (alive) {
 							diagnosticsTimedOut = false;
@@ -6808,6 +6841,9 @@ export class LSPService {
 				primaryNotifyWriteTimedOutServerIds,
 				diagnosticsTimedOut,
 				diagnosticsUnansweredServerIds: diagnosticsUnansweredPrimaryServerIds,
+				loadingServerIds: [...loadingExpiredServerIds],
+				loadFailedServerIds: [...loadFailedExpiredServerIds],
+				...(loadFailureDetail !== undefined && { loadFailureDetail }),
 			});
 			const inconclusive = verdict.inconclusive;
 
@@ -7063,8 +7099,17 @@ export class LSPService {
 					result.inconclusiveServerIds = verdict.inconclusiveServerIds;
 				}
 				result.inconclusiveReason = verdict.inconclusiveReason;
+				if (verdict.inconclusiveDetail !== undefined) {
+					result.inconclusiveDetail = verdict.inconclusiveDetail;
+				}
 				if (verdict.disabledPrimaryServerIds) {
 					result.disabledPrimaryServerIds = verdict.disabledPrimaryServerIds;
+				}
+				// #5727: the auxiliaries whose answer is bound to these bytes (the
+				// merge's frozen set). This branch names no coverage gap, so "not
+				// named" is no evidence an auxiliary answered; only this list is.
+				if (auxCoveredAtMerge.size > 0) {
+					result.answeredServerIds = [...auxCoveredAtMerge];
 				}
 				if (verdict.primaryUnavailableCause) {
 					result.primaryUnavailableCause = verdict.primaryUnavailableCause;
@@ -7170,7 +7215,13 @@ export class LSPService {
 						reusedAnswer === undefined ||
 						publishedAt < reusedAnswer.publishedAt
 					) {
-						reusedAnswer = { serverId: entry.info.id, publishedAt };
+						reusedAnswer = {
+							serverId: entry.info.id,
+							publishedAt,
+							...(serverTraits(entry.info).resendRecheck === "rechecks" && {
+								rechecks: true as const,
+							}),
+						};
 					}
 				}
 				if (reusedAnswer) result.reusedAnswer = reusedAnswer;
@@ -7245,6 +7296,9 @@ export class LSPService {
 					}),
 					...(verdict.inconclusiveReason && {
 						inconclusiveReason: verdict.inconclusiveReason,
+					}),
+					...(verdict.inconclusiveDetail !== undefined && {
+						inconclusiveDetail: verdict.inconclusiveDetail,
 					}),
 					// #1470: the touch's own honesty verdict, so a `cut_off` row in
 					// `lsp_aux_wait_outcome` can be joined to the touch that produced it and
@@ -7325,8 +7379,10 @@ export class LSPService {
 				server.root(filePath),
 			),
 		);
-		return candidates.find((candidate): candidate is string =>
-			Boolean(candidate),
+		// #5720: a declined root is a symbol, never a path, so `typeof` drops it.
+		return candidates.find(
+			(candidate): candidate is string =>
+				typeof candidate === "string" && candidate !== "",
 		);
 	}
 
@@ -7566,6 +7622,13 @@ export class LSPService {
 		// Document mode: 0ms grace — return as soon as any client has results.
 		// Full mode: 400ms grace — wait a bit for other clients to catch up.
 		const graceMs = diagnosticsMode === "document" ? 0 : EARLY_UNBLOCK_GRACE_MS;
+		// #5419 F2: PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS=0 disables early unblock in
+		// full mode: no answer finalizes the race, so every client is waited for,
+		// each already bounded by its own aggregateWaitMs. raceToCompletion keeps its
+		// own graceMs 0 ("finalize at the first answer") for document mode and
+		// client.ts, so the disable is this caller's predicate, not that contract.
+		const earlyUnblockOn =
+			diagnosticsMode === "document" || EARLY_UNBLOCK_GRACE_MS > 0;
 
 		// R8 (#714) / #1458 S2: per-promise role descriptors so raceToCompletion
 		// can apply a bounded aux grace once every language-role promise has
@@ -7609,6 +7672,7 @@ export class LSPService {
 		const perServer = await raceToCompletion(
 			clientWaits,
 			(results) =>
+				earlyUnblockOn &&
 				results.some(
 					(r) =>
 						r.diagnosticCount > 0 ||
@@ -8286,7 +8350,9 @@ export class LSPService {
 			filePath,
 			NAV_CLIENT_WAIT_TIMEOUT_MS,
 		);
-		if (!spawned) return [];
+		// #5554 r2 F6: no client to ask (none for the file, or the service is
+		// destroyed) is no answer, never an empty list of actions.
+		if (!spawned) return undefined;
 		if (!spawned.client.getOperationSupport().codeAction) {
 			throw new Error(
 				"__UNSUPPORTED__ Active LSP server does not advertise support for codeAction",
@@ -9115,7 +9181,13 @@ export class LSPService {
 			}
 		}
 
-		if (failedServerIds.length > 0) {
+		// #5097: an abort cut this warm-up, and its pull was cancelled with it, so
+		// the server was never asked to finish: unknown, not cold. The sweep's own
+		// signal and the call's ambient scope are two spellings of the same Esc.
+		const abandoned =
+			options.signal?.aborted === true ||
+			getAmbientAbortSignal()?.aborted === true;
+		if (failedServerIds.length > 0 && !abandoned) {
 			// #799: record the negative cache so a LATER sweep this session
 			// skips straight past re-paying this warm-up (initial + retry).
 			// Cleared automatically the moment the server demonstrates
@@ -10318,6 +10390,9 @@ export class LSPService {
 				diags: import("./client.js").LSPDiagnostic[];
 				ts: number;
 				binding?: DiagnosticBinding;
+				/** #5700: a contributing client's open-document cap closed the
+				 *  file; its rows are that server's last findings, not live ones. */
+				closed?: true;
 			}
 		>
 	> {
@@ -10327,6 +10402,7 @@ export class LSPService {
 				diags: import("./client.js").LSPDiagnostic[];
 				ts: number;
 				binding?: DiagnosticBinding;
+				closed?: true;
 			}
 		>();
 		// #1095: per-file stored bindings across every contributing client, merged
@@ -10368,8 +10444,15 @@ export class LSPService {
 						...attributed,
 					]);
 					existing.ts = Math.max(existing.ts, entry.ts);
+					// #5700 F1: one open contributor makes the aggregate open. `closed`
+					// is set at creation and only cleared here, so it never comes back.
+					if (!entry.closed) delete existing.closed;
 				} else {
-					all.set(filePath, { diags: attributed, ts: entry.ts });
+					all.set(filePath, {
+						diags: attributed,
+						ts: entry.ts,
+						...(entry.closed && { closed: true }),
+					});
 				}
 				const list = bindingsByPath.get(filePath) ?? [];
 				list.push(entry.binding);

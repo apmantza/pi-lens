@@ -48,6 +48,7 @@ import {
 	syncGitGuardRecord,
 	type TurnEndFindingsCache,
 } from "../../clients/git-guard.js";
+import { applyInlineBlockerPolicy } from "../../clients/inline-blocker-dispositions.js";
 import { consumeTurnEndFindings } from "../../clients/runtime-context.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import {
@@ -367,6 +368,30 @@ describe("git-guard commit gate honors the turn-end disposition policy (#3248)",
 			expect(record?.hasBlockers).toBe(true);
 			expect(record?.blockerContent ?? "").toContain("finding 2");
 			expect(record?.blockerContent ?? "").toContain("finding 4");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// Recurrence (#5788 review N1): the session read's all-clear names each held
+	// record's surviving rows from this outcome; the marked rows counted too
+	// would name a file's blocker count the agent had already answered.
+	it("hands back exactly the rows its marks left", () => {
+		const env = setupTestEnvironment("pi-lens-5788-kept-rows-");
+		try {
+			const cwd = env.tmpDir;
+			const filePath = path.join(cwd, "pay.ts");
+			fs.writeFileSync(filePath, "one();\ntwo();\nthree();\nfour();\n");
+			const diagnostics = [1, 2, 3, 4].map((line) =>
+				blockingDiagnostic(filePath, line, `finding ${line}`),
+			);
+			markFalsePositive(cwd, diagnostics[0]);
+			markFalsePositive(cwd, diagnostics[2]);
+			const outcome = applyInlineBlockerPolicy(
+				{ filePath, summary: "pay", diagnostics },
+				cwd,
+			);
+			expect(outcome.keptDiagnostics.map((d) => d.line)).toEqual([2, 4]);
 		} finally {
 			env.cleanup();
 		}
@@ -1145,12 +1170,16 @@ describe("git-guard commit gate honors the turn-end disposition policy (#3248)",
 			// #4943 adds one: the session the composer addressed `content` to.
 			// The same reader rule holds, and the gate never reads it.
 			const V4943_KEYS = ["deliverTo"];
+			// #5532 adds one: how `content` renders each blocker, which the request
+			// that takes it counts. The same reader rule holds; the gate never reads it.
+			const V5532_KEYS = ["blockerDeliveries"];
 			expect(
 				Object.keys(after).filter(
 					(key) =>
 						!V4_2_1_KEYS.includes(key) &&
 						!V4750_KEYS.includes(key) &&
-						!V4943_KEYS.includes(key),
+						!V4943_KEYS.includes(key) &&
+						!V5532_KEYS.includes(key),
 				),
 			).toEqual([]);
 		} finally {

@@ -32,6 +32,7 @@ import {
 	installCauses,
 	saveVerdictCells,
 } from "../../scripts/lib/save-verdict.mjs";
+import { drainRegisteredBackgroundWritesForTests } from "../support/background-write-drains.js";
 import { withEnv } from "../support/with-env.js";
 
 // `clients/safe-spawn` is pi-lens's single child-process seam, so the mocked
@@ -95,9 +96,20 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-	(await import("../../clients/project-trust.js")).resetProjectTrust();
-	restoreEnv();
-	fs.rmSync(piLensHome, { recursive: true, force: true });
+	try {
+		// #5657: a successful install leaves a dirty probe-cache entry, and its
+		// 300 ms debounced flush writes into this per-test root. Each test removes
+		// its root here, so the drain runs first, before the removal, and the
+		// flush must read idle after it.
+		await drainRegisteredBackgroundWritesForTests();
+		const { flushProbeCache } =
+			await import("../../clients/installer/index.js");
+		expect(await flushProbeCache()).toBe("idle");
+	} finally {
+		(await import("../../clients/project-trust.js")).resetProjectTrust();
+		restoreEnv();
+		fs.rmSync(piLensHome, { recursive: true, force: true });
+	}
 });
 
 describe("installCauses: the cause a failed ensureTool leaves (#4999 R3-1)", () => {

@@ -58,7 +58,7 @@ export function registerDefaultRunners(registry: RunnerRegistry): void {
 	// Register all runners (ordered by priority)
 	// Unified LSP runner for all languages (TypeScript, Python, Go, Rust, etc.) - priority 4
 	registry.register(lspRunner); // Unified LSP type-checking for all languages (priority 4)
-	registry.register(pyrightRunner); // Python type-checking (priority 5) - fallback when --lens-lsp disabled
+	registry.register(pyrightRunner); // Python type-checking (priority 5) - fallback when --no-lsp is set
 	registry.register(biomeCheckJsonRunner); // Biome check with JSON output for diagnostic capture (priority 9)
 	registry.register(astGrepNapiRunner); // JS/TS, CSS, and HTML structural analysis via NAPI (priority 15)
 	registry.register(treeSitterRunner); // Tree-sitter structural analysis (priority 14)
@@ -79,7 +79,7 @@ export function registerDefaultRunners(registry: RunnerRegistry): void {
 	registry.register(rustClippyRunner); // Rust analysis (priority 50)
 	registry.register(markdownlintRunner); // Markdown lint (priority 30)
 	registry.register(mypyRunner); // Python type checking — mypy (priority 20, config-gated)
-	registry.register(stylelintRunner); // CSS/SCSS/Less lint (priority 10, config-gated)
+	registry.register(stylelintRunner); // CSS/SCSS/Less lint (priority 10, runs default rules without config)
 	registry.register(swiftlintRunner); // Swift lint — out-of-the-box defaults (priority 20)
 	registry.register(shfmtRunner); // Shell formatting check (priority 10)
 	registry.register(fishIndentRunner); // Fish script formatting check (priority 10)
@@ -104,7 +104,7 @@ export function registerDefaultRunners(registry: RunnerRegistry): void {
 	registry.register(cppCheckRunner); // C/C++ compile diagnostics via compiler syntax checks (priority 20)
 	registry.register(zigCheckRunner); // Zig compile diagnostics via zig build-exe (priority 20)
 	registry.register(gleamCheckRunner); // Gleam project diagnostics via gleam check (priority 20)
-	registry.register(credoRunner); // Elixir static analysis via credo (priority 20, mix.exs-gated)
+	registry.register(credoRunner); // Elixir static analysis via credo (priority 20, skips a directory without mix.exs; the policy selects it without config)
 	registry.register(elixirCheckRunner); // Elixir compile/syntax diagnostics via mix/elixirc (priority 20)
 	registry.register(phpstanRunner); // PHP static analysis via phpstan (priority 20, config-gated)
 	registry.register(cueVetRunner); // CUE evaluation-error validation via cue vet (priority 20) — covers the class cuelsp doesn't publish

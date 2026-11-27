@@ -18,8 +18,9 @@ A new test starts from `tests/support/`: a registration question (flags,
 tools, commands, declarations) goes through tier 1
 (`tests/support/pi-runner.ts`, a real `ExtensionRunner`), a session-flow case
 through tier 2 (`tests/support/pi-session.ts`), and a JSON-lines sink through
-`readNdjsonRows` (`tests/support/ndjson-rows.ts`), asserting `skipped === 0`
-when the claim needs the complete output. No fake of an in-process store or
+`readNdjsonRows` (`tests/support/ndjson-rows.ts`), never a local `JSON.parse`
+loop, asserting `skipped === 0` when the claim needs the complete output,
+because the reader drops a line it cannot parse. No fake of an in-process store or
 registry; other doubles only as `AGENTS.md` admits them.
 
 - Trace the production entry point and reproduce the defect through it
@@ -119,6 +120,11 @@ registry; other doubles only as `AGENTS.md` admits them.
   `MUTATION` line, and no survivor triage. The nightly Stryker report on master
   is exploratory and is not read here. Use bounded hand probes locally; never
   run a full Stryker campaign in a worktree.
+- For parsers, path keys, config merging and any round-trip or invariant code,
+  prefer a `fast-check` property (a dev dependency; see
+  `tests/clients/dispatch/rule-policy-merge-properties.test.ts`) over
+  hand-picked cases: its inputs do not share the author's blind spots, and
+  shape 57 adds the shapes older released writers produced (#5753).
 - A PR that relaxes or rewrites an existing assertion (a changed meaning makes
   the old expectation wrong) mutates the behaviour that test is named for. Quote
   the red on the new assertion. A rewrite that stays green with that
@@ -240,6 +246,10 @@ registry; other doubles only as `AGENTS.md` admits them.
   an unfixed finding reds each one.
 
 ## Before the report
+
+Before any `gh issue comment`, `gh pr comment` or thread reply over 12 lines,
+run `node scripts/check-prose.mjs --comment --body-file <f>`
+(`docs/prose-standard.md` "Comment layout").
 
 Re-climb the minimalism ladder on what you built. Challenge anything
 unnecessary or unverified with a probe, delete what can go, and simplify what

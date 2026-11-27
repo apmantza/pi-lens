@@ -27,10 +27,12 @@ import {
 	capThenTimedOutSpawnResult,
 } from "../../../support/spawn-shapes.js";
 
-const { safeSpawnAsync, resolveAvailableOrInstall } = vi.hoisted(() => ({
-	safeSpawnAsync: vi.fn(),
-	resolveAvailableOrInstall: vi.fn(),
-}));
+const { safeSpawnAsync, resolveToolCommandWithInstallFallback } = vi.hoisted(
+	() => ({
+		safeSpawnAsync: vi.fn(),
+		resolveToolCommandWithInstallFallback: vi.fn(),
+	}),
+);
 
 vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
 	...(await importOriginal<
@@ -44,7 +46,7 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		resolveAvailableOrInstall,
+		resolveToolCommandWithInstallFallback,
 	}),
 );
 
@@ -186,8 +188,8 @@ beforeEach(() => {
 	workspace = fs.realpathSync(
 		fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-helm-render-test-")),
 	);
-	resolveAvailableOrInstall.mockReset();
-	resolveAvailableOrInstall.mockResolvedValue("helm");
+	resolveToolCommandWithInstallFallback.mockReset();
+	resolveToolCommandWithInstallFallback.mockResolvedValue("helm");
 	safeSpawnAsync.mockReset();
 	resetProjectLensConfigCache();
 	resetWorkspaceTopology();
@@ -215,7 +217,7 @@ describe("helm-render opt-in gate", () => {
 		);
 
 		expect(result).toMatchObject({ status: "skipped", diagnostics: [] });
-		expect(resolveAvailableOrInstall).not.toHaveBeenCalled();
+		expect(resolveToolCommandWithInstallFallback).not.toHaveBeenCalled();
 		expect(safeSpawnAsync).not.toHaveBeenCalled();
 	});
 
@@ -280,7 +282,7 @@ describe("helm-render opt-in gate", () => {
 		);
 
 		expect(safeSpawnAsync).not.toHaveBeenCalled();
-		expect(resolveAvailableOrInstall).not.toHaveBeenCalled();
+		expect(resolveToolCommandWithInstallFallback).not.toHaveBeenCalled();
 		// And the refusal is legible — not a silent skip the user reads as clean.
 		expect(result.diagnostics).toHaveLength(1);
 		expect(result.diagnostics[0].rule).toBe("render-untrusted");
@@ -409,7 +411,7 @@ describe("helm-render failure semantics", () => {
 	it("reports an absent helm as runner-unavailable, not as chart findings", async () => {
 		const chart = installChart("valid-chart");
 		optIn({ helm: { renderValidation: { enabled: true } } });
-		resolveAvailableOrInstall.mockResolvedValue(null);
+		resolveToolCommandWithInstallFallback.mockResolvedValue(null);
 		stubSpawns({ render: { status: 0 } });
 
 		const result = await helmRenderRunner.run(
@@ -675,8 +677,8 @@ describe("helm-render rendered-manifest checks", () => {
 			helm: { renderValidation: { enabled: true } },
 			trivy: { enabled: true },
 		});
-		resolveAvailableOrInstall.mockImplementation(
-			async (_checker: unknown, toolId: string) =>
+		resolveToolCommandWithInstallFallback.mockImplementation(
+			async (_cwd: string, toolId: string) =>
 				toolId === "helm" ? "helm" : null,
 		);
 		stubSpawns({

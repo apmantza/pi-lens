@@ -11,3 +11,19 @@ invalid:
   - 'new URL(s)'
   - 'execSync(cmd)'
   - 'execSync(cmd, opts)'
+  # #5466 documented limit (why this rule ships below `error`): The check is
+  # lexical. A call counts as checked when any enclosing `try` statement
+  # contains it, whatever the function boundary and whichever block (try,
+  # catch or finally). A `try` or `safe(() => …)` wrapper in a caller of the
+  # function is invisible, so a handled call can still be reported and an
+  # unhandled one can be missed. Read a hit as a prompt to verify the handling.
+  # The caller below wraps parse() in try/catch, and `safe(() => …)`-style
+  # wrappers exist, but neither is visible inside parse() — so this still
+  # reports, at warning severity.
+  - |
+    function parse(raw) {
+      return JSON.parse(raw);
+    }
+    try {
+      parse(raw);
+    } catch (e) {}

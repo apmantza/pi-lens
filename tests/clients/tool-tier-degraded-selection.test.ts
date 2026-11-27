@@ -55,13 +55,18 @@ vi.mock("../../clients/latency-logger.js", async (importOriginal) => {
 	return { ...actual, logLatency };
 });
 
-vi.mock("../../clients/safe-spawn.js", () => ({
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
 	safeSpawn,
 	safeSpawnAsync,
 	isCommandAvailableAsync: vi.fn(async () => false),
 }));
 
-vi.mock("../../clients/installer/index.js", () => ({
+vi.mock("../../clients/installer/index.js", async (importOriginal) => ({
+	// #5410 D9: `shouldAutoInstallTool` reads the opt-in off the real `TOOLS`.
+	TOOLS: (
+		await importOriginal<typeof import("../../clients/installer/index.js")>()
+	).TOOLS,
 	ensureTool,
 	getInstallAttempt: vi.fn(() => undefined),
 	isSpawnableCommand: vi.fn(async () => true),

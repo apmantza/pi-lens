@@ -90,5 +90,6 @@ export async function probeToolAsync(
 	// contract says and what `exactOptionalPropertyTypes` wants (a present
 	// `cwd: undefined` is a strictness spike the `tests/config` ratchet counts).
 	const { cwd: _strippedCwd, ...rest } = (options ?? {}) as SafeSpawnOptions;
-	return safeSpawnAsync(command, [...args], { ...rest });
+	// #5413: a probe never arms the runner spawn-timeout cooldown (#1467).
+	return safeSpawnAsync(command, [...args], { ...rest, cooldown: false });
 }

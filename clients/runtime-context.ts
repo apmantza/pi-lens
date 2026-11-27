@@ -21,8 +21,11 @@ export const AUTOMATION_FRAMING =
 
 type ContextResult = {
 	messages: Array<{ role: "user"; content: string }>;
-	/** #5240: the blocker text of a repeat message, for the retained-injection check. */
-	repeatBody?: string;
+	/**
+	 * #5240: each blocker section a repeat speaks for, in full, for the
+	 * retained-injection check (#5532: whatever the repeat renders for it).
+	 */
+	repeatBodies?: string[];
 };
 
 /**
@@ -33,14 +36,33 @@ type ContextResult = {
 export const BLOCKER_REPEAT_HEADING =
 	"Still unresolved (already reported on an earlier turn, not new):";
 
-export function blockerRepeatContent(blockers: string): string {
-	return `${BLOCKER_REPEAT_HEADING}\n\n${blockers}`;
+/**
+ * #5240: a repeat message from its capped blocker text. A repeat of collapsed
+ * lines alone (#5532) is just those lines: one line per blocker, as capped.
+ */
+export function blockerRepeatContent(
+	blockers: string,
+	pointerOnly: boolean,
+): string {
+	return pointerOnly ? blockers : `${BLOCKER_REPEAT_HEADING}\n\n${blockers}`;
+}
+
+/** #5532: how a blocker past its delivery cap reads; `cappedBlockerLine` builds it. */
+export const BLOCKER_CAPPED_MARK = "older blocker still open";
+
+/**
+ * #5532: the one line that replaces a capped blocker's section. It names the
+ * file and the pull that lists every blocker; the full text stays in
+ * `lens_diagnostics` and the commit gate.
+ */
+export function cappedBlockerLine(displayPath: string): string {
+	return `${displayPath}: ${BLOCKER_CAPPED_MARK} (already reported, not new). ${blockerRepeatPointer()}`;
 }
 
 /**
  * #5240: the last line of a delivered repeat. The staged blocker text is
  * capped (`capTurnEndMessage`), so the repeat names the pull that lists every
- * blocker. Added when the repeat is rendered, never staged: `repeatBody` must
+ * blocker. Added when the repeat is rendered, never staged: `repeatBodies` must
  * stay exactly the blocker text for the retained-injection check.
  */
 function blockerRepeatPointer(): string {
@@ -221,24 +243,48 @@ export function consumeTurnEndFindings(
 	if (validation.allFilesDeleted) return;
 	// Marked, fixed or retired since it was staged: nothing is left to repeat.
 	if (findings.data.repeat === true && !repeat.blockersLive) return;
+	const staged = findings.data.content;
+	const current = validation.status === "current";
+	// #5532: a message of collapsed lines alone is just those lines.
+	const onlyCappedLines = staged
+		.split("\n\n")
+		.every((paragraph) => paragraph.includes(BLOCKER_CAPPED_MARK));
+	const lines = (content: string): ContextResult["messages"] => [
+		{ role: "user", content: `${AUTOMATION_FRAMING}${content}` },
+	];
+	// #5532: the one count site. The message reaches the model now, so each
+	// blocker it renders within the cap counts: in full toward the cap, as its
+	// pointer line toward the cap's one row. A record from before #5532, or an
+	// MCP turn end's, lists none.
+	if (Array.isArray(findings.data.blockerDeliveries))
+		for (const delivery of findings.data.blockerDeliveries)
+			runtime?.recordBlockerDelivery(
+				delivery.filePath,
+				delivery.shown,
+				delivery.displayPath,
+			);
+	if (findings.data.repeat !== true)
+		return {
+			messages: onlyCappedLines
+				? lines(staged)
+				: [turnEndMessage(staged, current, findings.data.provenance)],
+		};
+	const repeatBodies = Array.isArray(findings.data.repeatBodies)
+		? { repeatBodies: findings.data.repeatBodies }
+		: {};
 	return {
-		messages: [
-			turnEndMessage(
-				findings.data.repeat === true
-					? `${findings.data.content}\n\n${blockerRepeatPointer()}`
-					: findings.data.content,
-				validation.status === "current",
-				findings.data.provenance,
-			),
-		],
-		...(findings.data.repeat === true &&
-		findings.data.content.startsWith(BLOCKER_REPEAT_HEADING)
-			? {
-					repeatBody: findings.data.content.slice(
-						BLOCKER_REPEAT_HEADING.length + 2,
+		messages: onlyCappedLines
+			? lines(staged)
+			: [
+					turnEndMessage(
+						staged.includes(BLOCKER_CAPPED_MARK)
+							? staged
+							: `${staged}\n\n${blockerRepeatPointer()}`,
+						current,
+						findings.data.provenance,
 					),
-				}
-			: {}),
+				],
+		...repeatBodies,
 	};
 }
 
@@ -414,24 +460,66 @@ export function acknowledgeTestFindings(
 	retireTestFindings(cacheManager, cwd);
 }
 
+/**
+ * #5792: the per-project `session-start-guidance` record. `sessionId` is the
+ * session whose full `session_start` wrote it (the coordinator's telemetry
+ * id, the same id its requests read as). Absent on every record written
+ * before #5792: such a record is the coordinator's (see
+ * `consumeSessionStartGuidance`).
+ */
+export interface SessionStartGuidanceRecord {
+	content: string;
+	sessionId?: string | undefined;
+}
+
+/**
+ * Take the guidance the reading session's own `session_start` wrote. `reader`
+ * names the request's session (`sessionId`) and the process coordinator's id
+ * (`coordinatorId`, the writer's identity): only a declined concurrent
+ * secondary reads as a different id, and it never writes guidance. A record
+ * stamped for another session is left untouched for that session and
+ * recorded once per owner. A record with no stamp (written before #5792) is
+ * the coordinator's, since the only writer was its full start; a secondary
+ * cannot prove it wrote one. The 30-minute `readCache` age bound refuses a
+ * record no session has taken, and a session end or next full start replaces
+ * the one record per project, so nothing accumulates (#4943's slot rule).
+ */
 export function consumeSessionStartGuidance(
 	cacheManager: CacheManager,
 	cwd: string,
+	reader: { sessionId: string; coordinatorId: string },
 	host: LensToolHost = "pi",
 ): ContextResult | undefined {
-	const guidance = cacheManager.readCache<{ content: string }>(
+	const guidance = cacheManager.readCache<SessionStartGuidanceRecord>(
 		"session-start-guidance",
 		cwd,
 	);
 	if (!guidance?.data?.content) return;
+	const owner = guidance.data.sessionId;
+	if (
+		owner === undefined
+			? reader.sessionId !== reader.coordinatorId
+			: owner !== reader.sessionId
+	) {
+		// Once per owner, not per request: every request of the other session
+		// skips the same record until its owner reads it.
+		recordDegradationOnce({
+			kind: "session-start-guidance-addressed-elsewhere",
+			subject: owner ?? "unstamped",
+			reason:
+				"the staged session-start guidance belongs to another session; it waits for that session's next request",
+		});
+		return;
+	}
 
 	// Consume by writing empty guidance, not by casting `null` into the entry's
 	// own type. `writeCache` infers its type parameter from `data`, so the cast
 	// bought nothing and claimed the file held a `{ content: string }` when it
 	// held JSON `null`. The producer (`runtime-session.ts`) always writes
-	// `{ content }`, and this reader gates on `data?.content` being non-empty,
-	// so an empty string is the same "already consumed" signal with the type
-	// the entry actually has. Same idiom as `acknowledgeTestFindings` above.
+	// `{ content, sessionId }`, and this reader gates on `data?.content` being
+	// non-empty, so an empty string is the same "already consumed" signal with
+	// the type the entry actually has. Same idiom as `acknowledgeTestFindings`
+	// above.
 	cacheManager.writeCache("session-start-guidance", { content: "" }, cwd);
 
 	return {

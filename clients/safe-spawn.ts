@@ -22,7 +22,12 @@ import {
 } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { BoundedFifoMap, BoundedSet } from "./bounded-cache.js";
+import { BoundedFifoMap } from "./bounded-cache.js";
+import {
+	provideHeldChildrenLedger,
+	recordOwnedChild,
+	removeOwnedChild,
+} from "./held-children.js";
 import { logLatency } from "./latency-logger.js";
 import {
 	incrementDegradationCount,
@@ -35,15 +40,62 @@ import { getProjectTrustState } from "./project-trust.js";
 import {
 	admittedLookupAnswer,
 	isSessionRepositoryPath,
+	inUnadmittedSpawnRoot,
 	recordProjectCommandRefusal,
 	sessionRepositoryJudge,
+	unadmittedSpawnRoot,
 } from "./session-repository.js";
-import { windowsExe } from "./process-snapshot.js";
+import {
+	OWNER_TAG_ENV,
+	formatOwnerTag,
+	ownProcessStartIfKnown,
+	readProcessStart,
+	windowsExe,
+} from "./process-snapshot.js";
 import { startSpawnUsageSampler } from "./resource-sampler.js";
 import { isToolInstallDisabled } from "./env-utils.js";
 import { DEFAULT_MAX_OUTPUT_BYTES } from "./spawn-output-cap.js";
+import { getProcessSingleton } from "./process-singletons.js";
 import { compareOrdinal } from "./string-utils.js";
-import { spawnAbortScope } from "./spawn-abort-scope.js";
+import {
+	type SpawnCooldownIdentity,
+	spawnAbortScope,
+	spawnCooldownScope,
+} from "./spawn-abort-scope.js";
+import { noteSpawnTimeout } from "./spawn-timeout-cooldown.js";
+import { registerBackgroundWriteDrain } from "./background-write-drains.js";
+
+/**
+ * #5745 r7: owned-child ledger work still in flight: a row write waiting on its
+ * child's start read, and a removal chained after that write. Each starts off
+ * the registry tail, so the tail's settle does not join it. A session's
+ * teardown drain joins it through the drain registered below. Before that, a
+ * row landing after the drain found the registry gone, and its
+ * `instance-registry-registration-missing` ledger row re-created the removed
+ * home (CI shard 5, `pi-session-teardown`).
+ */
+const ownedChildLedgerWork = new Set<Promise<void>>();
+
+function trackOwnedChildLedger(work: Promise<void>): Promise<void> {
+	ownedChildLedgerWork.add(work);
+	void work.finally(() => ownedChildLedgerWork.delete(work));
+	return work;
+}
+
+// One drain per evaluation of this module. It resolves only when no ledger
+// work is left. It loops: a spawn while it waits adds another child's row
+// write, and a write that settles may queue its removal. Work a later drain
+// creates after this one returned (the package-manager prime's probes, #5745
+// r10) is the runner's: it repeats passes while the pending signal is true.
+async function settleOwnedChildLedgerForTests(): Promise<string | undefined> {
+	while (ownedChildLedgerWork.size > 0) await Promise.all(ownedChildLedgerWork);
+	return undefined;
+}
+
+registerBackgroundWriteDrain(
+	settleOwnedChildLedgerForTests,
+	() => ownedChildLedgerWork.size > 0,
+);
 
 export interface SpawnResourceUsage {
 	sampleCount: number;
@@ -395,6 +447,14 @@ export interface SafeSpawnOptions {
 	/** Optional stdin payload. Supplying it always writes and closes stdin. */
 	input?: string;
 	/**
+	 * Who pays when this spawn times out (#5413). A timeout of the spawn's own
+	 * budget arms the spawn-timeout cooldown for this identity. Omitted, the
+	 * runner scope the dispatcher entered applies (`spawnCooldownScope`),
+	 * except under `ignoreAmbientSignal`; `false` opts out (a probe, whose
+	 * slow answer is transient evidence, #1467).
+	 */
+	cooldown?: SpawnCooldownIdentity | false;
+	/**
 	 * Couple a long-lived, side-effecting child to this Node process. Registered
 	 * children are synchronously tree-killed during process exit/signals.
 	 * Windows Job Objects would make this kernel-enforced, but require a native
@@ -406,20 +466,25 @@ export interface SafeSpawnOptions {
 interface LifetimeCleanupState {
 	pids: Set<number>;
 	installed: boolean;
+	/** Long-lived children held for host exit (#5699); see `heldChildren`. */
+	held?: BoundedFifoMap<number, HeldChild>;
+}
+
+/** What the exit kill reads from a held child's handle (a `ChildProcess`). */
+export interface HeldChild {
+	readonly exitCode: number | null;
+	readonly signalCode: NodeJS.Signals | null;
 }
 
 // Vitest reloads modules inside a reused worker. Keep this registry on the
 // process so those module instances share one signal/exit listener set.
-const lifetimeStateKey = Symbol.for("pi-lens.safe-spawn.lifetime-state");
-const processWithLifetimeState = process as typeof process & {
-	[lifetimeStateKey]?: LifetimeCleanupState;
-};
-const lifetimeState =
-	processWithLifetimeState[lifetimeStateKey] ??
-	(processWithLifetimeState[lifetimeStateKey] = {
-		pids: new Set<number>(),
-		installed: false,
-	});
+function lifetimeState(): LifetimeCleanupState {
+	return getProcessSingleton<LifetimeCleanupState>(
+		"safe-spawn-lifetime",
+		1,
+		() => ({ pids: new Set<number>(), installed: false }),
+	);
+}
 
 /**
  * THE ownership predicate for every kill-by-raw-pid in this repo (#2042).
@@ -427,7 +492,7 @@ const lifetimeState =
  * A pid is signalable only when it is a LIVE DIRECT CHILD of this process.
  * `tests/clients/lsp/launch.test.ts` mocked `node:child_process` with a fake
  * child carrying the literal pid `2468`; `safeSpawnAsync` registered it in
- * `lifetimeState.pids`, the fake never emitted `close` so nothing removed it,
+ * `lifetimeState().pids`, the fake never emitted `close` so nothing removed it,
  * and at fork teardown `installLifetimeCleanup()` fired
  * `process.kill(-2468, "SIGKILL")`. On ~10 % of GitHub runners pid 2468 was
  * one of the job's own long-lived processes — that is the whole of #2042:
@@ -465,7 +530,7 @@ const lifetimeState =
  * the same question: a container or a hardened host can run Linux with no
  * `/proc` mounted, and there the per-pid read fails exactly the way a dead pid
  * does. Without this probe that silently refused every registration, so
- * `lifetimeState.pids` stayed empty and the host-exit tree kill stopped working
+ * `lifetimeState().pids` stayed empty and the host-exit tree kill stopped working
  * with no record anywhere.
  */
 const PROC_PPID_READABLE = ((): boolean => {
@@ -504,14 +569,31 @@ const verifiedOwnPids = new BoundedFifoMap<number, true>(VERIFIED_OWN_PID_CAP);
  *
  * The bound that remains, stated rather than implied: at most
  * `HELD_OWN_PID_SWEEP_AT` entries — the confirmed-dead sweep below runs before
- * every insert, and `BoundedSet`'s own FIFO overflow is the last resort for the
+ * every insert, and `BoundedFifoMap`'s own FIFO overflow is the last resort for the
  * case where every held group really is still alive. A crash-looping server cannot grow it without bound
  * because each sweep drops every pid whose process GROUP no longer exists,
  * which is exactly the condition under which the entry can never be needed
  * again.
  */
 const HELD_OWN_PID_SWEEP_AT = 256;
-const heldOwnPids = new BoundedSet<number>(HELD_OWN_PID_SWEEP_AT);
+
+/**
+ * #5699: the held store is also the host-exit ledger for these children. The
+ * exit and signal handlers (`installLifetimeCleanup`) SIGKILL every held
+ * process group, as they tree-kill `lifetimeState().pids`, so a server that
+ * ignores stdin EOF and SIGTERM ends with its host on every route where host
+ * code runs. It lives on the process singleton, not in module scope: the exit
+ * handler is installed once per process and must see the children of every
+ * evaluation of this module (#2146).
+ */
+function heldChildren(): BoundedFifoMap<number, HeldChild> {
+	// `??=`, not the singleton's initializer: the kill guard creates the
+	// cell with production's initializer before this module loads
+	// (tests/support/kill-guard.ts), and that initializer has no `held`.
+	const state = lifetimeState();
+	state.held ??= new BoundedFifoMap<number, HeldChild>(HELD_OWN_PID_SWEEP_AT);
+	return state.held;
+}
 
 /** A process group that no longer exists can never need another signal. */
 function groupIsGone(pid: number): boolean {
@@ -524,15 +606,16 @@ function groupIsGone(pid: number): boolean {
 }
 
 function sweepHeldOwnPids(): void {
-	if (heldOwnPids.size < HELD_OWN_PID_SWEEP_AT) return;
-	// Deleting the current entry mid-iteration is well-defined for a Set, so
+	const held = heldChildren();
+	if (held.size < HELD_OWN_PID_SWEEP_AT) return;
+	// Deleting the current entry mid-iteration is well-defined for a Map, so
 	// no snapshot copy is needed.
-	for (const pid of heldOwnPids) {
-		if (groupIsGone(pid)) heldOwnPids.delete(pid);
+	for (const pid of held.keys()) {
+		if (groupIsGone(pid)) held.delete(pid);
 	}
 	// No hand-rolled "drop the oldest" block (#2442 / #3091 round 4): the
 	// last-resort eviction, for the case where every held group is still alive
-	// at the ceiling, is `BoundedSet.add`'s own FIFO overflow; the caller
+	// at the ceiling, is `BoundedFifoMap.set`'s own FIFO overflow; the caller
 	// records it (#3096).
 }
 
@@ -548,17 +631,25 @@ function sweepHeldOwnPids(): void {
  * orphaned).
  */
 export function holdOwnChildPid(
-	pid: number | undefined,
+	child: HeldChild & { readonly pid?: number | undefined },
 	site: string,
 ): boolean {
+	const pid = child.pid;
 	const owned = isOwnLiveChild(pid, site);
-	if (!owned || !PROC_PPID_READABLE || typeof pid !== "number") return owned;
+	// #5699: every POSIX host holds, macOS too (the exit kill needs the
+	// entry). Windows holds nothing: libuv's job object ends the direct child
+	// with the host (#5694), and a held pid there would put a `taskkill` spawn
+	// in the exit handler.
+	if (!owned || process.platform === "win32" || typeof pid !== "number")
+		return owned;
 	// Exactly one home: the verification above filed the verdict in the
 	// age-bounded FIFO, and leaving a copy there would make BOTH the held set
 	// and its release mutation-inert — the FIFO copy would answer for them.
 	verifiedOwnPids.delete(pid);
 	sweepHeldOwnPids();
-	const evicted = heldOwnPids.add(pid);
+	const evicted = heldChildren()
+		.set(pid, child)
+		.map(([dropped]) => dropped);
 	if (evicted.length > 0) {
 		incrementDegradationCount({
 			kind: "held-own-pid-evicted",
@@ -567,16 +658,81 @@ export function holdOwnChildPid(
 			metadata: { evicted: evicted.length },
 		});
 	}
+	installLifetimeCleanup();
 	return true;
 }
 
 /**
- * Retire a held pid once nothing will signal it again — the end of the
- * shutdown ladder. Idempotent.
+ * Retire a held pid at the end of the shutdown ladder, once its process
+ * GROUP is confirmed ended, never on its leader's exit alone (#5733 F1). A
+ * group that outlived its leader (a descendant that ignored the ladder's
+ * SIGTERM) gets SIGKILL here, with the ownership the hold still gives, and
+ * the hold goes only once that kill is confirmed as `endHeldChildren`
+ * confirms it. A kill this process cannot confirm keeps the hold, so the
+ * host-exit handlers try again. Idempotent.
  */
 export function releaseOwnChildPid(pid: number | undefined): void {
-	if (typeof pid === "number") heldOwnPids.delete(pid);
+	if (typeof pid !== "number") return;
+	const held = heldChildren();
+	const child = held.get(pid);
+	if (child === undefined) return;
+	if (!groupIsGone(pid)) {
+		// Counted only when the leader is seen gone: after the ladder's own
+		// SIGKILL escalation the leader is merely not reaped yet.
+		if (child.exitCode !== null || child.signalCode !== null)
+			incrementDegradationCount({
+				kind: "held-group-outlived-leader",
+				subject: "lsp-shutdown",
+				reason: `process group ${pid} outlived its leader's exit at shutdown`,
+			});
+		if (!endHeldGroup(pid, child, "lsp-shutdown")) return;
+	}
+	held.delete(pid);
 }
+
+/**
+ * SIGKILL every held child's process group now (#5699) and report whether
+ * each one is confirmed gone: its group no longer exists, or the kernel
+ * accepted the SIGKILL for it. A confirmed child leaves the store. One whose
+ * kill was refused (ownership no longer provable, EPERM) stays, and the
+ * caller keeps the record the next session's reaper reads.
+ *
+ * Synchronous and spawn-free, so it is safe in an `exit` or signal handler.
+ * Idempotent: a second call finds only what the first could not end.
+ */
+function endHeldChildren(): boolean {
+	const held = heldChildren();
+	let allEnded = true;
+	for (const [pid, child] of held.entriesArray()) {
+		if (endHeldGroup(pid, child, "lsp-host-exit")) held.delete(pid);
+		else allEnded = false;
+	}
+	return allEnded;
+}
+
+function endHeldGroup(pid: number, child: HeldChild, site: string): boolean {
+	if (groupIsGone(pid)) return true;
+	// Where `/proc` cannot answer, a leader that has exited may have had its
+	// pid recycled, so the handle arm refuses the group signal there. On Linux
+	// the kernel answers, and a group outliving its leader still gets the
+	// signal (#2026).
+	if (!isOwnLiveChild(pid, site, child)) return false;
+	try {
+		process.kill(-pid, "SIGKILL");
+		return true;
+	} catch (cause) {
+		// none: the answer is the record. A refused kill reports unconfirmed,
+		// and the caller keeps the registry row the next session's reaper reads.
+		return errorCode(cause as Error) === "ESRCH";
+	}
+}
+
+// #5699: the registry asks these through `held-children.ts`; importing this
+// module there would close a module cycle.
+provideHeldChildrenLedger({
+	holds: () => heldChildren().size > 0,
+	end: endHeldChildren,
+});
 
 /** Once per session: a Linux host whose `/proc` cannot answer the question. */
 function recordProcUnavailable(site: string): void {
@@ -618,7 +774,7 @@ export function isOwnLiveChild(
 		// grandchild after the direct child has died. Ownership verified while
 		// the leader was alive is what answers that; a pid this process never
 		// owned is still refused.
-		return heldOwnPids.has(pid) || verifiedOwnPids.has(pid);
+		return heldChildren().has(pid) || verifiedOwnPids.has(pid);
 	}
 	const parent = /^PPid:\s*(\d+)$/m.exec(status);
 	if (!parent) return true;
@@ -635,7 +791,7 @@ export function isOwnLiveChild(
 		// which outlives `releaseOwnChildPid` (the FIFO copy would keep
 		// answering for a pid this process has explicitly stopped claiming) and
 		// makes the held store's own tests unable to fail.
-		if (!heldOwnPids.has(pid)) verifiedOwnPids.set(pid, true);
+		if (!heldChildren().has(pid)) verifiedOwnPids.set(pid, true);
 		return true;
 	}
 	// Alive AND someone else's: the dangerous case, and the only one worth a
@@ -651,7 +807,7 @@ export function isOwnLiveChild(
 
 /**
  * Kill one registered pid's tree at host exit. Deliberately NOT re-checked
- * against `isOwnLiveChild` here: `lifetimeState.pids` has exactly one writer
+ * against `isOwnLiveChild` here: `lifetimeState().pids` has exactly one writer
  * (the registration below), that writer is now gated, and a second gate on
  * the same feeder would make BOTH mutation-inert — remove either one and the
  * other still blocks the kill, so neither would have a test that reds. The
@@ -690,14 +846,16 @@ function killPidTreeSync(pid: number): void {
 }
 
 function installLifetimeCleanup(): void {
-	if (lifetimeState.installed) return;
-	lifetimeState.installed = true;
+	if (lifetimeState().installed) return;
+	lifetimeState().installed = true;
 	process.once("exit", () => {
-		for (const pid of lifetimeState.pids) killPidTreeSync(pid);
+		for (const pid of lifetimeState().pids) killPidTreeSync(pid);
+		endHeldChildren();
 	});
 	for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as NodeJS.Signals[]) {
 		process.once(signal, () => {
-			for (const pid of lifetimeState.pids) killPidTreeSync(pid);
+			for (const pid of lifetimeState().pids) killPidTreeSync(pid);
+			endHeldChildren();
 			if (process.platform === "win32" && signal === "SIGHUP") {
 				// Windows emits SIGHUP when its console closes, but libuv cannot
 				// self-send it (process.kill(..., "SIGHUP") throws ENOSYS). The
@@ -1435,37 +1593,46 @@ function posixSearchPathEntryDir(entry: string, cwd: string): string {
  * and a value that loses every entry is removed rather than emptied, because an
  * empty PATH makes the kernel search the child's cwd (measured: `PATH=""` ran a
  * planted `git` from the cwd, an absent PATH ran the system one). Each removed
- * directory is recorded once per session.
+ * directory is recorded once per session. #5674: `rootEntry` names more
+ * entries to drop whatever the trust; the LSP launcher passes the entries that
+ * reach a root it has not admitted for project code.
  */
 export function trustScopedSearchPath(
 	pathValue: string | undefined,
 	cwd: string = process.cwd(),
 	env: NodeJS.ProcessEnv = process.env,
+	rootEntry?: (entry: string) => boolean,
 ): string | undefined {
 	if (pathValue === undefined) return undefined;
 	const trust = getProjectTrustState();
-	if (trust === "trusted") return pathValue;
-	const owned = sessionRepositoryJudge();
+	if (trust === "trusted" && rootEntry === undefined) return pathValue;
+	const owned = trust === "trusted" ? () => false : sessionRepositoryJudge();
 	const kept: string[] = [];
 	for (const entry of pathValue.split(path.delimiter)) {
 		const dir = searchPathEntryDir(entry, cwd, env);
-		if (dir === undefined || !owned(dir)) {
+		const bySession = dir !== undefined && owned(dir);
+		const byRoot = !bySession && rootEntry?.(entry) === true;
+		if (!bySession && !byRoot) {
 			kept.push(entry);
 			continue;
 		}
-		const real = realpathOrResolve(dir);
+		const real = realpathOrResolve(dir ?? path.resolve(cwd, entry));
 		if (
 			recordDegradationOnce({
 				kind: "trust-refusal",
 				subject: `project-path-entry:${real}`,
-				reason: `search-path entry inside the project ignored: pi project trust is ${trust}`,
+				reason: byRoot
+					? `search-path entry inside an LSP root not admitted for project code ignored: pi project trust is ${trust}`
+					: `search-path entry inside the project ignored: pi project trust is ${trust}`,
 			})
 		) {
 			logExtension({
 				subsystem: "project-trust",
 				level: "warn",
 				message:
-					"search-path entry inside the project ignored: mark the project trusted in pi or upgrade pi",
+					trust === "trusted"
+						? "search-path entry inside an LSP root not admitted for project code ignored"
+						: "search-path entry inside the project ignored: mark the project trusted in pi or upgrade pi",
 				metadata: { entry, dir: real, trust },
 			});
 		}
@@ -1482,6 +1649,7 @@ export function trustScopedSearchPath(
 export function trustScopedEnvironment(
 	env: NodeJS.ProcessEnv,
 	cwd: string = process.cwd(),
+	rootEntry?: (entry: string) => boolean,
 ): NodeJS.ProcessEnv {
 	// POSIX names the key exactly; only Windows needs the scan for spellings.
 	// An absent value scopes to itself, so it returns `env` below.
@@ -1492,7 +1660,7 @@ export function trustScopedEnvironment(
 	const lastKey = keys.at(-1);
 	if (lastKey === undefined) return env;
 	const value = env[lastKey];
-	const scoped = trustScopedSearchPath(value, cwd, env);
+	const scoped = trustScopedSearchPath(value, cwd, env, rootEntry);
 	if (scoped === value) return env;
 	const next: NodeJS.ProcessEnv = { ...env };
 	for (const key of keys) {
@@ -1551,7 +1719,12 @@ function admitSpawn(
 	cwd: string | undefined,
 	env: NodeJS.ProcessEnv,
 ): SpawnAdmission {
-	if (getProjectTrustState() === "trusted") return { admitted: true, env };
+	// #5674: inside an LSP launch for a root not admitted for project code, a
+	// bare name is judged by where it resolves whatever pi's trust, so a link
+	// in a global bin dir that points into the root does not run.
+	const trusted = getProjectTrustState() === "trusted";
+	if (trusted && unadmittedSpawnRoot() === undefined)
+		return { admitted: true, env };
 	const childCwd = cwd ?? process.cwd();
 	const scoped = trustScopedEnvironment(env, childCwd);
 	if (!isSpawnLookup(command)) return { admitted: true, env: scoped };
@@ -1559,7 +1732,13 @@ function admitSpawn(
 		process.platform === "win32"
 			? resolveWindowsCommandForEnvironment(command, cwd, scoped)?.resolvedPath
 			: resolveSearchPathCommand(command, scoped.PATH, childCwd);
-	if (executable === undefined || !isSessionRepositoryPath(executable))
+	if (
+		executable === undefined ||
+		!(
+			(!trusted && isSessionRepositoryPath(executable)) ||
+			inUnadmittedSpawnRoot(executable)
+		)
+	)
 		return { admitted: true, env: scoped };
 	recordProjectCommandRefusal(executable);
 	return { admitted: false, executable };
@@ -1770,8 +1949,22 @@ export async function safeSpawnAsync(
 		scopedSignal && callerSignal
 			? AbortSignal.any([scopedSignal, callerSignal])
 			: (scopedSignal ?? callerSignal);
+	// #5413: captured at call time, beside the abort scope it mirrors.
+	const cooldown =
+		options?.cooldown ??
+		(options?.ignoreAmbientSignal ? undefined : spawnCooldownScope.getStore());
+	// #5703: every safe-spawn child carries the host incarnation that the
+	// shared orphan reaper can verify after this host crashes. This is derived
+	// once per call, before the child exists, and is not inherited from a
+	// possibly stale PI_LENS_OWNER supplied by a parent host.
+	const ownerStart =
+		process.platform === "win32" ? undefined : ownProcessStartIfKnown();
+	const ownerTag =
+		ownerStart === undefined
+			? undefined
+			: formatOwnerTag({ pid: process.pid, start: ownerStart });
 
-	return new Promise((resolve) => {
+	const result = await new Promise<SpawnResult>((resolve) => {
 		// Check for early abort
 		if (abortSignal?.aborted) {
 			const cause = new Error("Spawn aborted before start");
@@ -2027,7 +2220,10 @@ export async function safeSpawnAsync(
 			resolve(trustRefusalResult(command, admission.executable));
 			return;
 		}
-		const spawnEnv = admission.env;
+		const spawnEnv = {
+			...admission.env,
+			...(ownerTag === undefined ? {} : { [OWNER_TAG_ENV]: ownerTag }),
+		};
 		// The cwd handed to the CHILD process doesn't need OUR validation —
 		// Windows resolves it natively, exactly as it did before #817 ever
 		// touched this file. A drive-relative cwd (`D:work`) without a
@@ -2172,7 +2368,7 @@ export async function safeSpawnAsync(
 			// longer receive terminal signals directly, so the lifetime
 			// cleanup's signal forwarding IS their die-with-host path.
 			installLifetimeCleanup();
-			lifetimeState.pids.add(child.pid as number);
+			lifetimeState().pids.add(child.pid as number);
 		}
 
 		// #620: bracket this spawn's lifetime with a short-interval CPU/RSS poll
@@ -2206,6 +2402,50 @@ export async function safeSpawnAsync(
 			usageSampler = { stop: () => null };
 		}
 		const resourceLabel = options?.resourceLabel ?? command;
+		// #5703 r4: only a child the spawn-time ownership check accepted gets a
+		// row. A pid that is alive under another parent (a test double's
+		// invented pid, #2042) would otherwise be written to `instances.json`
+		// with that process's real start, for the next session's reaper.
+		const registryChildPid = ownsChildPid ? child.pid : undefined;
+		const noteOwnedChildLedgerFailure = (
+			operation: "record" | "remove",
+			err: unknown,
+		): void => {
+			recordDegradationOnce({
+				kind: "safe-spawn-owned-child-registry-failed",
+				subject: "owned-child-registry",
+				reason: `${operation} failed: ${String(err)}`,
+			});
+		};
+		// Settles once the row write has landed or failed; it never rejects.
+		const registryChildRecorded =
+			registryChildPid === undefined
+				? Promise.resolve()
+				: trackOwnedChildLedger(
+						readProcessStart(registryChildPid, { timeoutMs: 1_000 })
+							.then((processStart) =>
+								recordOwnedChild({
+									pid: registryChildPid,
+									serverId: `safe-spawn:${resourceLabel}`,
+									command: spawnCmd,
+									...(processStart === undefined ? {} : { processStart }),
+								}),
+							)
+							.catch((err) => noteOwnedChildLedgerFailure("record", err)),
+					);
+		let registryChildRemoved = false;
+		const removeRegistryChild = (): void => {
+			if (registryChildPid === undefined || registryChildRemoved) return;
+			registryChildRemoved = true;
+			// #5745 r6 (CodeRabbit): after the record. A child that closes before
+			// its start read settles would otherwise queue this removal first,
+			// find no row, and leave the record to write a finished child's row.
+			void trackOwnedChildLedger(
+				registryChildRecorded
+					.then(() => removeOwnedChild(registryChildPid))
+					.catch((err) => noteOwnedChildLedgerFailure("remove", err)),
+			);
+		};
 
 		// #3375 round 2 (H3384-1). `killTree`'s promise is AWAITED by `finalize`
 		// from a `void finalize(...)` callback, FIRED AND FORGOTTEN by `onAbort`
@@ -2619,7 +2859,7 @@ export async function safeSpawnAsync(
 			closed = true;
 			clearTimeout(timeoutId);
 			abortSignal?.removeEventListener("abort", onAbort);
-			if (child.pid) lifetimeState.pids.delete(child.pid);
+			if (child.pid) lifetimeState().pids.delete(child.pid);
 			void finalize(code, signal);
 		};
 
@@ -2657,6 +2897,7 @@ export async function safeSpawnAsync(
 			// widening it to the whole wait.
 			resolved = true;
 			await waitForPipeIdle();
+			removeRegistryChild();
 			const resourceUsage = finishResourceUsage();
 
 			const outputInfo = {
@@ -2765,6 +3006,10 @@ export async function safeSpawnAsync(
 
 		child.on("exit", onChildSettle);
 		child.on("close", onChildSettle);
+		// An asynchronous spawn failure emits `error` before `close`, and the
+		// error callback resolves the public result immediately. Keep its row
+		// until `close` proves the child handle has terminated.
+		child.once("close", removeRegistryChild);
 
 		child.on("error", (err) => {
 			// Capture unconditionally — even when `close` already resolved, this
@@ -2783,7 +3028,7 @@ export async function safeSpawnAsync(
 			if (escalationTimer && !posixProcessGroup) {
 				clearTimeout(escalationTimer);
 			}
-			if (child.pid) lifetimeState.pids.delete(child.pid);
+			if (child.pid) lifetimeState().pids.delete(child.pid);
 			const resourceUsage = finishResourceUsage();
 			let failure: SpawnFailureKind = "spawn";
 			if (aborted) failure = "aborted";
@@ -2815,6 +3060,24 @@ export async function safeSpawnAsync(
 			}
 		});
 	});
+	// #5413: a child that used up its OWN budget is negative evidence about the
+	// tool, so the next edit does not hand it another one. A budget a deadline
+	// cut short, or one gone before the child started, says nothing about it.
+	if (
+		cooldown &&
+		result.failure === "timeout" &&
+		timeout === configuredTimeout
+	) {
+		noteSpawnTimeout({
+			tool: cooldown.tool,
+			command,
+			subject: cooldown.subject,
+			phase: cooldown.phase,
+			durationMs: timeout,
+			...(result.timeoutTeardown && { teardown: result.timeoutTeardown }),
+		});
+	}
+	return result;
 }
 
 /**
@@ -2853,10 +3116,10 @@ export async function findCommandAsync(
  * This blocks the entire Node.js event loop until the process exits.
  * If the process hangs, pi will freeze.
  *
- * Kept for backward compatibility during migration (today's only caller:
- * `test-runner-client.ts`'s synchronous pytest-on-PATH probe, called from a
- * sync detection path with many sync callers/tests — not a trivial async
- * migration, see #817 follow-up discussion).
+ * Kept for the three callers that sit on a synchronous path: the stderr-guarded
+ * PowerShell probe in `clients/lsp/launch.ts`, the git-HEAD read in
+ * `clients/metrics-history.ts` (see the #817 follow-up discussion), and the
+ * ast-grep self-scan in `scripts/lib/astgrep-self-scan.mjs`.
  *
  * #817: the Windows branch used to build a `cmd.exe`/`shell:true` command
  * line from unvalidated caller input (CodeQL #17/#18/#19), same unsoundness
@@ -2997,17 +3260,4 @@ export function safeSpawn(
 		error: result.error,
 		...(spawnFailure ? { failure: "spawn" as const, spawnFailure } : {}),
 	};
-}
-
-/**
- * Find the full path to a command (sync version - deprecated)
- * @deprecated Use findCommandAsync
- */
-export function findCommand(command: string): string | null {
-	const finder = process.platform === "win32" ? "where" : "which";
-	const result = safeSpawn(finder, [command], { timeout: 5000 });
-
-	if (result.status !== 0) return null;
-
-	return admittedLookupAnswer(result.stdout);
 }

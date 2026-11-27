@@ -180,6 +180,43 @@
 				}
 			]
 		},
+		"collect-later-flight": {
+			"pins": {
+				"Identity": {
+					"value": "\"check\"",
+					"test": "tests/clients/dispatch/runner-collect-later.test.ts",
+					"title": "a session reset drops the queued rerun and the next write starts at once"
+				},
+				"Mode": {
+					"value": "\"flight\"",
+					"test": "tests/clients/dispatch/runner-collect-later.test.ts",
+					"title": "three quick writes start one run while the first is in flight, then one rerun for the latest bytes"
+				}
+			},
+			"notCodeChoice": [
+				{
+					"reason": "Scenario bound or actor set: it sizes the state space or picks which actors, inputs and steps TLC explores; no code branch reads it.",
+					"constants": [
+						"Files",
+						"MaxV"
+					]
+				}
+			]
+		},
+		"ipc-endpoint-identity": {
+			"notCodeChoice": [
+				{
+					"reason": "Owners bounds the two actors whose cut endpoint names can collide; no runtime branch reads this model population.",
+					"constants": ["Owners"]
+				}
+			],
+			"deferred": [
+				{
+					"reason": "The real bind and client witnesses in tests/mcp/harness-socket-teardown.test.ts and tests/clients/mcp/ipc.test.ts are conditional on Unix socket support and fixture path room. Their mutation proofs cover both guards, but the live-declaration pin reader intentionally excludes conditional cases.",
+					"constants": ["GuardWorkspaceBind", "GuardClients"]
+				}
+			]
+		},
 		"finding-delivery": {
 			"pins": {
 				"StampAt": {
@@ -259,7 +296,7 @@
 				"CachedGate": {
 					"value": "\"freshness\"",
 					"test": "tests/clients/runtime-turn-finding-freshness.test.ts",
-					"title": "DEMOTES a finding whose file was edited after the scan — kept, no line",
+					"title": "DEMOTES a finding whose file was edited after the scan \u2014 kept, no line",
 					"also": [
 						{
 							"test": "tests/clients/runtime-turn-finding-freshness.test.ts",
@@ -1023,7 +1060,9 @@
 						"PidReuse",
 						"OtherProcs",
 						"LateRecord",
-						"ScanFail"
+						"ScanFail",
+						"Stubborn",
+						"Descendant"
 					]
 				}
 			],
@@ -1233,6 +1272,12 @@
 					"reason": "Deferred: every `expect: pass` config agrees on one value, but no existing dispatcher or entry-point test was matched to it in #4393, which pinned read-guard first.",
 					"constants": [
 						"QueuedClose"
+					]
+				},
+				{
+					"reason": "Deferred: no single as-built value yet. This family's `expect: pass` configs set it both ways (a pass config here is not an as-built claim), so the family must first name its as-built value before a pin can agree with it.",
+					"constants": [
+						"BudgetClose"
 					]
 				}
 			]
@@ -1524,6 +1569,11 @@
 		},
 		"opaque-baseline-slot": {
 			"pins": {
+				"Credit": {
+					"value": "\"clean\"",
+					"test": "tests/index-5108-opaque-blocker-disclosure-witness.test.ts",
+					"title": "credits a node script that creates a new file"
+				},
 				"Root": {
 					"value": "\"one\"",
 					"test": "tests/index-4504-opaque-prescan-root-witness.test.ts",
@@ -2713,6 +2763,17 @@
 							"title": "runs under Gate B while it holds a recorded blocker, naming the covering lane (#4509)"
 						}
 					]
+				},
+				"CarryByServer": {
+					"value": "TRUE",
+					"test": "tests/index-4484-unfixed-blocker-witness.test.ts",
+					"title": "retires a fixed ast-grep blocker while the primary does not answer (#5727, diagnostics-wait)",
+					"also": [
+						{
+							"test": "tests/index-4484-unfixed-blocker-witness.test.ts",
+							"title": "retires the auxiliary's fixed blocker and keeps the silent primary's (#5727)"
+						}
+					]
 				}
 			},
 			"notCodeChoice": [
@@ -2726,7 +2787,7 @@
 					]
 				},
 				{
-					"reason": "Environment: which linter reports the finding (line-bound LSP ids or helm-lint's ordinal ids, a collect-later runner or none, a runner with an edit-range gate or without, an unused value or none, a second occurrence of a finding's rule already in the bytes or none, and whether that occurrence's line has the finding's own text), whether a run reaches a verdict or skips without reading the bytes, whether a write can be aligned to the bytes the record is about, whether a primary whose gate sees only the edit answers for the range-gated runner, and the user's --no-delta flag; the code must be honest under every value, so the as-built configs set them both ways.",
+					"reason": "Environment: which linter reports the finding (line-bound LSP ids or helm-lint's ordinal ids, a collect-later runner or none, a runner with an edit-range gate or without, an unused value or none, a second occurrence of a finding's rule already in the bytes or none, and whether that occurrence's line has the finding's own text), whether a run reaches a verdict or skips without reading the bytes, whether a write can be aligned to the bytes the record is about, whether a primary whose gate sees only the edit answers for the range-gated runner, whether a runner's primary server is silent while its auxiliary answers, and the user's --no-delta flag; the code must be honest under every value, so the as-built configs set them both ways.",
 					"constants": [
 						"Ordinal",
 						"Deferred",
@@ -2738,7 +2799,8 @@
 						"MaySkip",
 						"MayUnalign",
 						"TwinSameText",
-						"GateB"
+						"GateB",
+						"PrimarySilent"
 					]
 				}
 			]
@@ -2769,6 +2831,28 @@
 					"value": "TRUE",
 					"test": "tests/clients/disk-changes.test.ts",
 					"title": "isolates a throwing subscriber, still reaches the next one, and records once per consumer per session"
+				},
+				"SessionLookConfigEpoch": {
+					"value": "TRUE",
+					"test": "tests/clients/lsp/out-of-band-client-root-4532.test.ts",
+					"title": "forwards a manifest edited after the client spawned, at the session root's first look",
+					"also": [
+						{
+							"test": "tests/clients/lsp/out-of-band-client-root-4532.test.ts",
+							"title": "forwards a manifest edited after the client spawned, at the MCP cwd's first look"
+						}
+					]
+				},
+				"SessionLookInstallEpoch": {
+					"value": "FALSE",
+					"test": "tests/clients/lsp/out-of-band-client-root-4532.test.ts",
+					"title": "restarts no client for an install at the session root's first look",
+					"also": [
+						{
+							"test": "tests/clients/lsp/out-of-band-client-root-4532.test.ts",
+							"title": "restarts no client for an install at the MCP cwd's first look"
+						}
+					]
 				},
 				"TrailingSeesFlightRecord": {
 					"value": "TRUE",
@@ -2802,6 +2886,45 @@
 					]
 				}
 			]
+		},
+		"adopted-root-trust": {
+			"pins": {
+				"RootTrustGuard": {
+					"value": "TRUE",
+					"test": "tests/clients/lsp/adopted-root-trust-5469.test.ts",
+					"title": "refuses saved-false adopted Rust under trusted A"
+				},
+				"BoundSdkLoad": {
+					"value": "TRUE",
+					"test": "tests/clients/lsp/adopted-root-trust-5469.test.ts",
+					"title": "bounds a held SDK load and retries on the next owning turn"
+				},
+				"RetirementAbort": {
+					"value": "TRUE",
+					"test": "tests/clients/lsp/adopted-root-trust-5469.test.ts",
+					"title": "retires a held SDK load before shutdown joins starts"
+				},
+				"DetachedMemoGuard": {
+					"value": "TRUE",
+					"test": "tests/clients/lsp/adopted-root-trust-5469.test.ts",
+					"title": "detached diagnostics rereads saved trust after the host turn changes"
+				},
+				"ScopeGuard": {
+					"value": "TRUE",
+					"test": "tests/clients/package-manager.test.ts",
+					"title": "re-queries when the PATH view changes under a warm slot"
+				},
+				"FinderGuard": {
+					"value": "TRUE",
+					"test": "tests/clients/package-manager.test.ts",
+					"title": "sends explicit PATH deletion to both finder and query"
+				},
+				"IdentityGuard": {
+					"value": "TRUE",
+					"test": "tests/clients/package-manager.test.ts",
+					"title": "refuses a global link whose target sits in the scan root"
+				}
+			}
 		}
 	}
 }

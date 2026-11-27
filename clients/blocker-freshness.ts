@@ -186,22 +186,6 @@ import {
 } from "./tree-sitter-shared.js";
 import { TreeSitterSymbolExtractor } from "./tree-sitter-symbol-extractor.js";
 
-/** See the module doc's "Delivery cap (#1950)" section above. */
-export const DEPENDENCY_DRIFT_MAX_DELIVERIES = 3;
-
-/**
- * #4990: deliveries a `"self-drift"` demotion may re-serve before
- * `runtime-turn.ts` retires it, the self axis's sibling of
- * {@link DEPENDENCY_DRIFT_MAX_DELIVERIES}.
- *
- * The self axis is re-arming, so a record whose bytes come back is un-demoted
- * and never reaches this cap. A record the agent fixed by rewriting the file
- * does not come back, and re-served dead coordinates on every turn end for the
- * rest of the session; the cap's ledger reason keeps #1950's distinction
- * ("capped, a re-run can still confirm") rather than #1944's "unrecoverable".
- */
-export const SELF_DRIFT_MAX_DELIVERIES = 3;
-
 /**
  * #2982: total bytes the self-drift axis may hash in ONE sweep.
  *
@@ -1359,13 +1343,14 @@ export async function sweepInlineBlockerFreshness(
 				// means "could not decide", never "changed".
 				const hashBudgetWasExhausted = hashBudget.exhausted;
 				const selfDrift = (await bounded(
-					detectSelfDrift({
-						filePath: entry.filePath,
-						recordedSize: entry.recordedSize,
-						recordedHash: entry.recordedHash,
-						signal: options?.signal,
-						budget: hashBudget,
-					}),
+					(signal) =>
+						detectSelfDrift({
+							filePath: entry.filePath,
+							recordedSize: entry.recordedSize,
+							recordedHash: entry.recordedHash,
+							signal,
+							budget: hashBudget,
+						}),
 					{
 						ms: HOOK_WALL_BUDGET_MS.turn_end,
 						signal: options?.signal,

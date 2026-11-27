@@ -20,6 +20,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../../clients/cache-manager.js";
+import { homeRelativePath } from "../../clients/path-utils.js";
 import { createAstGrepOutlineTool } from "../../tools/ast-grep-outline.js";
 import { createAstGrepReplaceTool } from "../../tools/ast-grep-replace.js";
 import { createAstGrepSearchTool } from "../../tools/ast-grep-search.js";
@@ -336,6 +337,34 @@ describe("#5041 `path` is the canonical single-file parameter", () => {
 			env.cleanup();
 		}
 	});
+
+	// RECURRENCE GUARDED (shape 74, #4907): effective_config joined `path` onto
+	// the cwd with a bare `path.resolve`, so `@src/a.ts` answered for the ghost
+	// `<cwd>/@src/a.ts` and `~/...` for `<cwd>/~/...`. Both ghosts sit inside
+	// the cwd, so the containment check passed and the view explained a file
+	// that cannot exist. HOME is pinned so `~` names a file this test owns.
+	it.each([
+		["@src/a.ts", "an @-prefixed path"],
+		["~/proj/src/a.ts", "a home-relative path"],
+	])(
+		"resolves the %s spelling of effective_config `path` (%s) to the file pi opens",
+		async (spelling) => {
+			const { home, restore } = pinFixtureHome("effective-config-host-path");
+			try {
+				const proj = path.join(home, "proj");
+				fs.mkdirSync(path.join(proj, "src"), { recursive: true });
+				const target = path.join(proj, "src", "a.ts");
+				fs.writeFileSync(target, "export const value = 1;\n");
+				const tool = createEffectiveConfigTool(() => proj);
+				const result = await run(tool, { path: spelling }, proj);
+				expect(result.isError, text(result)).toBeFalsy();
+				// The view redacts home-relative paths by construction.
+				expect(result.details?.file).toBe(homeRelativePath(target, home));
+			} finally {
+				restore();
+			}
+		},
+	);
 
 	it("reads `path` on lens_diagnostic_mark, and still reads `filePath`", async () => {
 		const env = setupTestEnvironment("pi-lens-5041-mark-");

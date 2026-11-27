@@ -1,3 +1,4 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
@@ -228,7 +229,7 @@ const cppCheckRunner: RunnerDefinition = {
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const compiler = await resolveCompiler(absPath, cwd);
 		if (!compiler) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip(cwd);
 		}
 
 		const result = await safeSpawnAsync(compiler.command, compiler.args, {

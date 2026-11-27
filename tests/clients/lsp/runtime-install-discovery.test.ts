@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import * as os from "node:os";
 import * as path from "node:path";
 import { removeTempDirSync } from "../test-utils.js";
@@ -11,9 +19,22 @@ import { removeTempDirSync } from "../test-utils.js";
 // runtime-install WIRING via the candidate list and server shape (#241).
 const { launchLSP } = vi.hoisted(() => ({ launchLSP: vi.fn() }));
 const { logLatency } = vi.hoisted(() => ({ logLatency: vi.fn() }));
+const { getToolPath, onPath } = vi.hoisted(() => ({
+	getToolPath: vi.fn(async (): Promise<string | undefined> => undefined),
+	onPath: new Set<string>(),
+}));
 vi.mock("../../../clients/lsp/launch.js", () => ({
 	launchLSP,
+	launchViaNode: vi.fn(),
 	admitProjectSuppliedTsserver: (tsserverPath: string) => tsserverPath,
+	// The launcher double admits project code, as its tsserver admission does.
+	isLspProjectCodeAdmitted: () => true,
+}));
+// #5410 S5: the PATH answer (`which`, behind clients/safe-spawn) is the process
+// boundary; `onPath` stands in for what it reports.
+vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../clients/safe-spawn.js")>()),
+	isCommandAvailableAsync: async (command: string) => onPath.has(command),
 }));
 vi.mock("../../../clients/latency-logger.js", async (importActual) => ({
 	...(await importActual<
@@ -21,8 +42,15 @@ vi.mock("../../../clients/latency-logger.js", async (importActual) => ({
 	>()),
 	logLatency,
 }));
-vi.mock("../../../clients/installer/index.js", () => ({
+vi.mock("../../../clients/installer/index.js", async (importOriginal) => ({
+	// The spread keeps every other installer export real. A host with no java
+	// reaches resetPathWalkMemo through toolOnPath's tool-not-found branch, and a
+	// partial factory throws on that access (#5595 verify V1).
+	...(await importOriginal<
+		typeof import("../../../clients/installer/index.js")
+	>()),
 	ensureTool: vi.fn(async () => null),
+	getToolPath,
 	getToolEnvironment: () => ({}),
 	findManagedToolBinary: vi.fn(async () => undefined),
 }));
@@ -33,11 +61,14 @@ import {
 	goBinCandidates,
 	GoServer,
 	JavaServer,
+	PowerShellServer,
 	PythonServer,
+	resolveAndLaunch,
 	RustServer,
 	TypeScriptServer,
 } from "../../../clients/lsp/server.js";
 import { ensureTool } from "../../../clients/installer/index.js";
+import { resolveJavaRuntimeEnv } from "../../../clients/lsp/jvm-runtime.js";
 
 const isWin = process.platform === "win32";
 const sep = (...parts: string[]) => path.join(...parts);
@@ -90,12 +121,31 @@ describe("canonical-bin candidates (#241)", () => {
 });
 
 describe("runtime-install / discovery server wiring (#241)", () => {
+	// The Lombok case below is the file's only caller of `JavaServer.spawn`, and
+	// `resolveJavaRuntimeEnv` pays two one-time costs on its first call: the lazy
+	// import of the runner helpers and a real `java` PATH probe (a JVM start).
+	// Idle they cost about 0.14 s; with 10 copies of this file sharing one core
+	// they cost about 2 s, and with 28 copies the case ran 5.3-8.4 s against its
+	// 5 s cap (27 of 28 red, "Test timed out in 5000ms"; CI shard 2/5 on
+	// 2026-11-16, runs 43805743173 and 43833581791). A hook runs against
+	// hookTimeout (60 s), so no case carries the cold start. The verdict is the
+	// module's own per-process memo, so the case still drives the real function.
+	// Recurrence guarded: #4909 (the Lombok case timing out on a loaded runner).
+	beforeAll(async () => {
+		await resolveJavaRuntimeEnv();
+	});
+
 	beforeEach(() => {
+		vi.stubEnv("CARGO_HOME", undefined);
 		launchLSP.mockReset();
 		logLatency.mockReset();
 		// Reject every candidate so resolveAndLaunch exhausts the list; we only
 		// inspect WHICH commands it tried. allowInstall:false keeps installs off.
 		launchLSP.mockRejectedValue(toolNotFound());
+	});
+
+	afterEach(() => {
+		vi.unstubAllEnvs();
 	});
 
 	const triedCommands = () => launchLSP.mock.calls.map((c) => String(c[0]));
@@ -226,5 +276,121 @@ describe("runtime-install / discovery server wiring (#241)", () => {
 		} finally {
 			removeTempDirSync(tmp);
 		}
+	});
+});
+
+/**
+ * #5410 S5 deleted the `isOnPath` wrapper, so the two LSP launch decisions that
+ * asked "is this runtime on PATH" now call `isCommandAvailableAsync` directly:
+ * the language-native runtime-install gate in `resolveAndLaunch` and the runtime
+ * candidate loop in `resolveAndLaunchBundle`. No test named either decision, so
+ * a mutation of either call survived (the S5 r1 mutation `? false` on the gate
+ * left 28 tests green).
+ *
+ * Recurrence guarded: a runtime-install or bundle-launch decision that no longer
+ * follows the PATH answer (an install run for a runtime that is absent, or a
+ * skip for one that is present) staying green because every existing test
+ * stubbed the launch and never gave the gate a PATH answer to read.
+ *
+ * The PATH answer is the process boundary: `onPath` stands in for what `which`
+ * reports, so a developer machine that has `pwsh` or `dotnet` cannot change the
+ * verdict. The finder call itself (`which` / `where`) is not exercised here.
+ */
+describe("PATH gates on the runtime launch decisions (#5410 S5)", () => {
+	beforeEach(() => {
+		launchLSP.mockReset();
+		onPath.clear();
+	});
+
+	afterEach(() => {
+		onPath.clear();
+		getToolPath.mockReset();
+		getToolPath.mockResolvedValue(undefined);
+	});
+
+	describe("resolveAndLaunch runtime-install gate (#5410 S5)", () => {
+		const RUNTIME = "pi-lens-5410-runtime";
+		const SERVER = "pi-lens-5410-server";
+
+		function specWith(install: () => Promise<boolean>) {
+			return {
+				candidates: [SERVER],
+				args: ["--stdio"],
+				cwd: os.tmpdir(),
+				runtimeInstall: { runtimeCommand: RUNTIME, install },
+			};
+		}
+
+		it("runs the install and retries the candidates when the runtime is on PATH", async () => {
+			onPath.add(RUNTIME);
+			let installed = false;
+			const install = vi.fn(async () => {
+				installed = true;
+				return true;
+			});
+			const proc = { kill: vi.fn() } as never;
+			// Fails before the install, succeeds after it: the server binary appears.
+			launchLSP.mockImplementation(async () => {
+				if (!installed) throw toolNotFound();
+				return proc;
+			});
+
+			const result = await resolveAndLaunch(specWith(install), true);
+
+			expect(install).toHaveBeenCalledTimes(1);
+			expect(result).toEqual({ process: proc, source: "managed" });
+		});
+
+		it("does not run the install when the runtime is absent from PATH", async () => {
+			const install = vi.fn(async () => true);
+			launchLSP.mockRejectedValue(toolNotFound());
+
+			const result = await resolveAndLaunch(specWith(install), true);
+
+			expect(install).not.toHaveBeenCalled();
+			expect(result).toBeUndefined();
+		});
+	});
+
+	describe("resolveAndLaunchBundle runtime candidate loop (#5410 S5)", () => {
+		const BUNDLE_DIR = path.join(os.tmpdir(), "pi-lens-5410-bundle");
+
+		beforeEach(() => {
+			getToolPath.mockResolvedValue(BUNDLE_DIR);
+			launchLSP.mockResolvedValue({ kill: vi.fn() } as never);
+		});
+
+		it("skips an absent first candidate and launches the one on PATH", async () => {
+			onPath.add("powershell");
+
+			const result = await PowerShellServer.spawn(os.tmpdir(), {
+				allowInstall: false,
+			});
+
+			expect(result).toBeDefined();
+			expect(launchLSP).toHaveBeenCalledTimes(1);
+			expect(launchLSP.mock.calls[0]?.[0]).toBe("powershell");
+			expect(launchLSP.mock.calls[0]?.[1]).toContain(BUNDLE_DIR);
+		});
+
+		it("prefers the first candidate when both are on PATH", async () => {
+			onPath.add("pwsh");
+			onPath.add("powershell");
+
+			await PowerShellServer.spawn(os.tmpdir(), { allowInstall: false });
+
+			expect(launchLSP).toHaveBeenCalledTimes(1);
+			expect(launchLSP.mock.calls[0]?.[0]).toBe("pwsh");
+		});
+
+		it("skips gracefully, before any bundle lookup, when no runtime is on PATH", async () => {
+			const result = await PowerShellServer.spawn(os.tmpdir(), {
+				allowInstall: false,
+			});
+
+			expect(result).toBeUndefined();
+			expect(getToolPath).not.toHaveBeenCalled();
+			expect(launchLSP).not.toHaveBeenCalled();
+		});
 	});
 });

@@ -267,11 +267,6 @@ export const ADMITTED_SITES: Array<{
 			"standalone gate of the same rule (resolves both paths natively): guard-bash-probe loads the hook from a git ref and tests copy it alone, so it cannot import scripts/lib; its cell in tests/scripts/script-entry-gate-cells.test.ts proves it through a symlinked path",
 	},
 	{
-		file: "tests/support/kill-guard.ts",
-		site: "const host = process as typeof process & {",
-		reason: SYMBOL_KEY_ALIAS,
-	},
-	{
 		file: "tests/support/check-build-freshness.ts",
 		site: "latch: Record<symbol, unknown> = globalThis as Record<symbol, unknown>,",
 		reason: SYMBOL_KEY_ALIAS,
@@ -503,14 +498,14 @@ describe("script entry-module detection has one owner (isMainModule)", () => {
 					"if (\n\trealpathSync.native(process.argv[1]) ===\n\tlink\n) run();\n",
 				);
 				plant(
-					"tests/support/kill-guard.ts",
-					"const host = process as typeof process & {\n\tKEY: 1,\n};\nconst entry = process.argv[1];\n",
+					"tests/support/tmp-root-registry.ts",
+					"const holder = globalThis as { [REGISTRY_KEY]?: TmpRootRegistry };\n\n\nconst entry = process.argv[1];\n",
 				);
 				expect(findPrivateEntryGates(root, 1)).toEqual([
 					"scripts/deep/nested.mjs: line 1: process: if (process.argv[1] === here) main();",
 					"scripts/private.mjs: line 1: process: if (process.argv[1] === here) main();",
 					"tests/support/helper.mjs: line 1: process: if (process.argv[1] === here) main();",
-					"tests/support/kill-guard.ts: line 4: process: const entry = process.argv[1];",
+					"tests/support/tmp-root-registry.ts: line 4: process: const entry = process.argv[1];",
 				]);
 			} finally {
 				rmSync(root, { recursive: true, force: true });

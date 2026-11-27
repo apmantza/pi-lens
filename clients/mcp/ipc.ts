@@ -20,6 +20,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { writeFileAtomic } from "../atomic-write.js";
+import { hashContentBytes } from "../content-stamp.js";
 import { incrementDegradationCount } from "../degradation-ledger.js";
 import { DEFAULT_MAX_OUTPUT_BYTES } from "../spawn-output-cap.js";
 import type { LSPCodeAction, LSPDiagnostic } from "../lsp/client.js";
@@ -145,15 +146,10 @@ export function diagnosticsIpcPathForCwd(
 }
 
 /**
- * The file name Node actually binds for a Unix socket path (#4353). A path past
- * the `sun_path` size is cut to its first 108 bytes (104 on darwin) without an
- * error, so under a long TMPDIR (a 79-character root already reaches it for
- * the 33-character socket name) the bound file has lost its `.sock` tail.
- * Every stale-socket `unlink` of an endpoint must name THIS path: unlinking the
- * untruncated one misses the file, the next `listen` then fails `EADDRINUSE`,
- * and the warm channel stays down until the file is removed by hand. Connects
- * need no change, because `net.createConnection` truncates the same way.
- * Windows pipes and paths that fit come back unchanged.
+ * The explicit Unix socket path used at each `listen` and `createConnection`
+ * boundary (#4353). Kernel path limits vary: some overlong paths are rejected
+ * rather than truncated, so every network operation must use this bounded
+ * spelling. Windows pipes and paths that fit come back unchanged.
  *
  * Decision: unlink the bound name rather than move long paths to a short
  * directory. A relocation would change where the server and the hook meet and
@@ -167,6 +163,28 @@ export function boundUnixSocketPath(
 	const bytes = Buffer.from(endpoint);
 	if (limit === 0 || bytes.length <= limit) return endpoint;
 	return bytes.subarray(0, limit).toString();
+}
+
+/**
+ * Whether the bound name of `endpoint` still tells its owner apart (#5488
+ * review, F1). A cut that removes the identity token leaves a name that other
+ * workspaces or sessions derive too, so nothing binds, clears, or dials it.
+ * The token is the owner's pid marker for a pid-scoped endpoint (`ownerPid`),
+ * else the whole file name before `.sock`, so only a lost `.sock` tail keeps
+ * a workspace endpoint usable.
+ */
+export function boundUnixSocketKeepsIdentity(
+	endpoint: string,
+	options: { ownerPid?: number; platform?: NodeJS.Platform } = {},
+): boolean {
+	const bound = boundUnixSocketPath(endpoint, options.platform);
+	if (bound === endpoint) return true;
+	// Windows pipes returned above; names that can be cut use POSIX spelling.
+	const token =
+		options.ownerPid === undefined
+			? path.posix.basename(endpoint, ".sock")
+			: `pi-lens-mcp-${options.ownerPid}-`;
+	return bound.startsWith(path.posix.join(path.posix.dirname(endpoint), token));
 }
 
 export type StaleSocketOutcome =
@@ -195,13 +213,12 @@ export function unlinkStaleUnixSocket(
 	options: { ownerPid?: number; platform?: NodeJS.Platform } = {},
 ): StaleSocketOutcome {
 	if ((options.platform ?? process.platform) === "win32") return "absent";
-	const bound = boundUnixSocketPath(endpoint, options.platform);
 	if (
 		options.ownerPid !== undefined &&
-		bound !== endpoint &&
-		!bound.includes(`${path.sep}pi-lens-mcp-${options.ownerPid}-`)
+		!boundUnixSocketKeepsIdentity(endpoint, options)
 	)
 		return "shared-name";
+	const bound = boundUnixSocketPath(endpoint, options.platform);
 	try {
 		if (!fs.lstatSync(bound).isSocket()) return "not-a-socket";
 		fs.unlinkSync(bound);
@@ -209,6 +226,79 @@ export function unlinkStaleUnixSocket(
 	} catch {
 		return "absent";
 	}
+}
+
+export type IpcSocketNameClass =
+	| { kind: "workspace"; hash: string }
+	| { kind: "pid-scoped"; pid: number; hash: string };
+
+/**
+ * Which endpoint a `.sock` name in `os.tmpdir()` — the directory {@link
+ * ipcPathForCwd} and {@link diagnosticsIpcPathForCwd} join their names into —
+ * was bound for,
+ * parsed from the same shapes {@link ipcPathForCwd} (workspace-scoped,
+ * `pi-lens-mcp-<16 hex>.sock`) and {@link diagnosticsIpcPathForCwd}
+ * (pid-scoped, `pi-lens-mcp-<pid>-diagnostics-<16 hex>.sock`) write. A
+ * `sun_path`-cut bound name keeps its identity by keeping the pid or the
+ * whole pre-`.sock` token (see {@link boundUnixSocketKeepsIdentity}); a cut
+ * that drops more breaks the shape and classifies as `undefined`, which the
+ * retention sweep keeps — a name it cannot recognize is never reaped.
+ */
+export function classifyIpcSocketName(
+	name: string,
+): IpcSocketNameClass | undefined {
+	const workspace = /^pi-lens-mcp-([0-9a-f]{16})\.sock$/.exec(name);
+	const workspaceHash = workspace?.[1];
+	if (workspace && workspaceHash !== undefined) {
+		return { kind: "workspace", hash: workspaceHash };
+	}
+	const pidScoped = /^pi-lens-mcp-(\d+)-diagnostics-([0-9a-f]{16})\.sock$/.exec(
+		name,
+	);
+	const pidScopedPid = pidScoped?.[1];
+	const pidScopedHash = pidScoped?.[2];
+	if (pidScoped && pidScopedPid !== undefined && pidScopedHash !== undefined) {
+		return {
+			kind: "pid-scoped",
+			pid: Number.parseInt(pidScopedPid, 10),
+			hash: pidScopedHash,
+		};
+	}
+	return undefined;
+}
+
+export type IpcSocketListenerProbe = "live" | "dead" | "indeterminate";
+
+/**
+ * Whether a Unix socket file still has a listener behind it, answered by
+ * dialing it (the same evidence `isNoListenerError` classifies for the warm
+ * clients): `connect` is a live listener, a no-listener errno is a socket
+ * file nobody serves, and any other error or a dial that neither lands nor
+ * fails inside `timeoutMs` is indeterminate — the retention sweep keeps an
+ * entry it cannot judge. Windows named pipes have no file to scan, so the
+ * sweep never reaches this probe there.
+ */
+export function probeIpcSocketListener(
+	socketPath: string,
+	timeoutMs = 250,
+): Promise<IpcSocketListenerProbe> {
+	return new Promise((resolve) => {
+		let settled = false;
+		const finish = (value: IpcSocketListenerProbe): void => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			socket.destroy();
+			resolve(value);
+		};
+		const timer = setTimeout(() => finish("indeterminate"), timeoutMs);
+		timer.unref();
+		const socket = net.createConnection(socketPath);
+		socket.on("connect", () => finish("live"));
+		socket.on("error", (cause) =>
+			finish(isNoListenerError(cause) ? "dead" : "indeterminate"),
+		);
+	});
 }
 
 export interface WarmDiagnosticsRequest {
@@ -338,7 +428,7 @@ export type WarmDiagnosticsResult =
 	| { available: false; reason: WarmDiagnosticsFailureReason };
 
 export function contentHash(content: string): string {
-	return crypto.createHash("sha256").update(content).digest("hex");
+	return hashContentBytes(Buffer.from(content, "utf8"));
 }
 
 type WarmIpcOutcome<TResponse> =
@@ -348,15 +438,16 @@ type WarmIpcOutcome<TResponse> =
 /**
  * Shared one-shot request/response transport for the tagged IPC routes (#822):
  * connect to `endpoint`, write one JSON line, read one JSON line back,
- * classify. The endpoint is PID-scoped for the warm-attach routes and
- * workspace-scoped for the hook bin's turn-end route. The per-route `validate`
- * callback returns a failure reason for an on-time but unusable reply (schema
- * skew, staleness) or `undefined` to accept it; transport failures map
- * uniformly to timeout/ipc-error. One transport, N routes — the clients cannot
- * drift apart.
+ * classify. The endpoint is PID-scoped for the warm-attach routes (`ownerPid`
+ * is the incumbent's) and workspace-scoped for the hook bin's turn-end route.
+ * A bound name that lost its identity is never dialed: it is `no-listener`.
+ * The per-route `validate` callback returns a failure reason for an on-time
+ * but unusable reply (schema skew, staleness) or `undefined` to accept it;
+ * transport failures map uniformly to timeout/ipc-error. One transport, N
+ * routes — the clients cannot drift apart.
  */
 function requestOverWarmIpc<TResponse, TRequest extends object = object>(
-	endpoint: string,
+	target: { endpoint: string; ownerPid?: number },
 	timeoutMs: number,
 	buildRequest: (deadlineAt: number) => TRequest,
 	validate: (
@@ -364,6 +455,9 @@ function requestOverWarmIpc<TResponse, TRequest extends object = object>(
 		deadlineAt: number,
 	) => WarmDiagnosticsFailureReason | undefined,
 ): Promise<WarmIpcOutcome<TResponse>> {
+	const { endpoint } = target;
+	if (!boundUnixSocketKeepsIdentity(endpoint, target))
+		return Promise.resolve({ available: false, reason: "no-listener" });
 	return new Promise((resolve) => {
 		let settled = false;
 		const finish = (value: WarmIpcOutcome<TResponse>): void => {
@@ -374,7 +468,7 @@ function requestOverWarmIpc<TResponse, TRequest extends object = object>(
 			resolve(value);
 		};
 		const deadlineAt = Date.now() + timeoutMs;
-		const socket = net.createConnection(endpoint);
+		const socket = net.createConnection(boundUnixSocketPath(endpoint));
 		socket.setEncoding("utf8");
 		const timer = setTimeout(
 			() => finish({ available: false, reason: "timeout" }),
@@ -433,7 +527,10 @@ export function requestWarmDiagnostics(
 ): Promise<WarmDiagnosticsResult> {
 	const expectedHash = contentHash(content);
 	return requestOverWarmIpc<WarmDiagnosticsResponse>(
-		diagnosticsIpcPathForCwd(cwd, incumbentPid),
+		{
+			endpoint: diagnosticsIpcPathForCwd(cwd, incumbentPid),
+			ownerPid: incumbentPid,
+		},
 		timeoutMs,
 		(deadlineAt): WarmDiagnosticsRequest => ({
 			route: "diagnostics",
@@ -473,7 +570,10 @@ export function requestWarmCodeActions(
 	timeoutMs: number,
 ): Promise<WarmCodeActionsResult> {
 	return requestOverWarmIpc<WarmCodeActionsResponse>(
-		diagnosticsIpcPathForCwd(cwd, incumbentPid),
+		{
+			endpoint: diagnosticsIpcPathForCwd(cwd, incumbentPid),
+			ownerPid: incumbentPid,
+		},
 		timeoutMs,
 		(deadlineAt): WarmCodeActionsRequest => ({
 			route: "code-actions",
@@ -566,7 +666,7 @@ export async function requestWarmTurnEnd(
 ): Promise<WarmTurnEndResult> {
 	const startedAt = Date.now();
 	const first = await requestOverWarmIpc<WarmTurnEndResponse>(
-		ipcPathForCwd(cwd),
+		{ endpoint: ipcPathForCwd(cwd) },
 		timeoutMs,
 		(): WarmTurnEndRequest => ({
 			route: "turn-end",
@@ -584,7 +684,7 @@ export async function requestWarmTurnEnd(
 	const remainingMs = timeoutMs - (Date.now() - startedAt);
 	if (remainingMs <= 0) return { available: false, reason: "timeout" };
 	const ack = await requestOverWarmIpc<WarmTurnEndAckResponse>(
-		ipcPathForCwd(cwd),
+		{ endpoint: ipcPathForCwd(cwd) },
 		remainingMs,
 		(): WarmTurnEndAckRequest => ({
 			route: "turn-end-ack",
@@ -733,6 +833,9 @@ export function requestWarmAnalyze(
 	file: string,
 	timeoutMs = 30_000,
 ): Promise<McpAnalyzeResult | undefined> {
+	const endpoint = ipcPathForCwd(cwd);
+	if (!boundUnixSocketKeepsIdentity(endpoint))
+		return Promise.resolve(undefined);
 	return new Promise((resolve) => {
 		let settled = false;
 		const finish = (value: McpAnalyzeResult | undefined) => {
@@ -742,7 +845,7 @@ export function requestWarmAnalyze(
 			resolve(value);
 		};
 
-		const socket = net.createConnection(ipcPathForCwd(cwd));
+		const socket = net.createConnection(boundUnixSocketPath(endpoint));
 		socket.setEncoding("utf8");
 
 		const timer = setTimeout(() => {

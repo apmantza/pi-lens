@@ -3,22 +3,23 @@
  * HOME ceiling, so a stray `~/node_modules/.bin/oxfmt.cmd` (the home-level
  * pi-extensions manifest installs its own bins) was picked up as the
  * project's formatter on any box with a home-level `node_modules`. The same
- * unceilinged shape existed in `findInVendorBin` (`vendor/bin`) and
- * `findInVenv` (`.venv`/`venv`).
+ * unceilinged shape existed in `findInVendorBin` (`vendor/bin`) and the
+ * formatter venv walk, which #5410 then removed: a formatter finds a `.venv`
+ * only at exactly the project root, through the runner's ladder.
  *
- * #2544 review F2 folded all three onto the single shared walker,
+ * #2544 review F2 folded the walks onto the single shared walker,
  * `findLocalBinUpwards` (`clients/package-manager.ts`, also behind stylua,
  * taplo, knip, jscpd and madge): the ONLY thing that differs per ecosystem is
  * the `binDirs`/`windowsExt` options each `formatters.ts` delegation passes.
  * These cases therefore drive `findLocalBinUpwards` directly with exactly
  * those option sets — the ceiling has one implementation to test. That the
  * delegations pass the RIGHT options is covered through the production
- * `resolveCommand` seam by `formatters.test.ts` ("resolveCommand — .venv",
- * "resolveCommand — vendor/bin") and `formatter-unavailable-outcome.test.ts`.
+ * `resolveCommand` seam by `formatters.test.ts` ("resolveCommand — vendor/bin")
+ * and `formatter-unavailable-outcome.test.ts`.
  *
  * Per #2517's per-walker policy: these are TOOL-RESOLUTION walkers, not
  * config-file lookups — escaping the project upward past HOME must mean
- * STOP, not keep reading. A `node_modules/.bin`/`vendor/bin`/`.venv` match
+ * STOP, not keep reading. A `node_modules/.bin`/`vendor/bin` match
  * found at or above HOME can never be the project's own installed dependency.
  *
  * Every case here pins a FAKE `homeDir` explicitly (never the real
@@ -34,6 +35,9 @@ import {
 	findLocalBinsAt,
 	findLocalBinUpwards,
 	type LocalBinWalkOptions,
+	NODE_MODULES_BIN_DIRS,
+	PROJECT_BIN_DIR_WINDOWS_EXT,
+	VENDOR_BIN_DIRS,
 	VENV_BIN_DIRS,
 } from "../../clients/package-manager.js";
 import { removeTempDirSync, setupTestEnvironment } from "./test-utils.js";
@@ -62,14 +66,6 @@ const WALKERS: WalkerCase[] = [
 		options: { windowsExt: ".bat", binDirs: [path.join("vendor", "bin")] },
 		binSubpath: (binary) =>
 			path.join("vendor", "bin", isWin ? `${binary}.bat` : binary),
-	},
-	{
-		name: ".venv/venv — findInVenv / createVenvFinder / vulture (Python)",
-		options: { windowsExt: ".exe", binDirs: VENV_BIN_DIRS },
-		binSubpath: (binary) =>
-			isWin
-				? path.join(".venv", "Scripts", `${binary}.exe`)
-				: path.join(".venv", "bin", binary),
 	},
 ];
 
@@ -208,7 +204,7 @@ describe.each(WALKERS)(
 				plantBin(project, binSubpath("oxfmt"));
 				process.chdir(project);
 
-				// Pre-fold, `findInVendorBin`/`findInVenv` walked the literal string
+				// Pre-fold, `findInVendorBin` and the venv walk read the literal string
 				// and `path.parse("src").root` is "", so a relative start directory
 				// never matched anything; only `findLocalBinUpwards` resolved it.
 				expect(walk("oxfmt", "src", fakeHome)).toBe(
@@ -300,6 +296,129 @@ describe("findLocalBinUpwards candidate order (#2544 F4)", () => {
 					isWindows: true,
 				}),
 			).toEqual([path.join(project, ".venv", "Scripts", "ruff")]);
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+});
+
+/**
+ * #5410 S1 review F2: a registry spec carries ONE `windowsExt`, but the launcher
+ * a project bin dir holds depends on the dir: pip writes `<venv>/Scripts/x.exe`,
+ * npm writes `node_modules/.bin/x.cmd`. Pyright's spec says `.cmd`, so a pip
+ * venv's `Scripts\pyright.exe` was never matched on Windows and the runner fell
+ * through to a managed install. The map names each dir's own launcher extension;
+ * the spec's value stays the second candidate and the only one for an unmapped
+ * dir, so a bun `.exe` shim in `node_modules/.bin` is still found.
+ *
+ * Driven through the injected `isWindows`, so every lane sees both platforms.
+ */
+describe("per-bin-dir Windows extension (#5410 S1 F2)", () => {
+	let tmpDir: string;
+	const ALL_DIRS = [...VENV_BIN_DIRS, ...NODE_MODULES_BIN_DIRS];
+
+	function plant(...files: string[]): string {
+		const env = setupTestEnvironment("pi-lens-bin-dir-ext-");
+		tmpDir = env.tmpDir;
+		for (const file of files) {
+			const full = path.join(tmpDir, file);
+			fs.mkdirSync(path.dirname(full), { recursive: true });
+			fs.writeFileSync(full, "x");
+		}
+		return tmpDir;
+	}
+	const find = (
+		root: string,
+		isWindows: boolean,
+		windowsExt = ".cmd",
+		binDirs: readonly string[] = ALL_DIRS,
+	) =>
+		findLocalBinsAt(["pyright"], root, {
+			windowsExt,
+			binDirs,
+			binDirWindowsExt: PROJECT_BIN_DIR_WINDOWS_EXT,
+			isWindows,
+		});
+
+	it.each([
+		["venv Scripts", path.join(".venv", "Scripts", "pyright.exe")],
+		["venv bin", path.join("venv", "bin", "pyright.exe")],
+		["node_modules/.bin", path.join("node_modules", ".bin", "pyright.cmd")],
+	])("win32: %s resolves its own launcher extension", (_cell, file) => {
+		const root = plant(file);
+		try {
+			expect(find(root, true)).toEqual([path.join(root, file)]);
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+
+	it("win32: keeps the spec extension for a dir the map does not name", () => {
+		const file = path.join("vendor", "bin", "phpunit.bat");
+		const root = plant(file);
+		try {
+			expect(
+				findLocalBinsAt(["phpunit"], root, {
+					windowsExt: ".bat",
+					binDirs: VENDOR_BIN_DIRS,
+					binDirWindowsExt: PROJECT_BIN_DIR_WINDOWS_EXT,
+					isWindows: true,
+				}),
+			).toEqual([path.join(root, file)]);
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+
+	it("win32: still finds the spec extension after the dir's own (a bun .exe shim)", () => {
+		const file = path.join("node_modules", ".bin", "pyright.exe");
+		const root = plant(file);
+		try {
+			expect(find(root, true, ".exe")).toEqual([path.join(root, file)]);
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+
+	it("win32: the dir's own extension outranks the spec's within one dir", () => {
+		const root = plant(
+			path.join(".venv", "Scripts", "pyright.cmd"),
+			path.join(".venv", "Scripts", "pyright.exe"),
+		);
+		try {
+			expect(find(root, true)[0]).toBe(
+				path.join(root, ".venv", "Scripts", "pyright.exe"),
+			);
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+
+	it("win32: a venv launcher outranks the node_modules one", () => {
+		const root = plant(
+			path.join("node_modules", ".bin", "pyright.cmd"),
+			path.join(".venv", "Scripts", "pyright.exe"),
+		);
+		try {
+			expect(find(root, true)[0]).toBe(
+				path.join(root, ".venv", "Scripts", "pyright.exe"),
+			);
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+
+	it("posix: the bare name only, whatever the map says", () => {
+		const root = plant(
+			path.join(".venv", "Scripts", "pyright.exe"),
+			path.join("node_modules", ".bin", "pyright.cmd"),
+		);
+		try {
+			expect(find(root, false)).toEqual([]);
+			fs.writeFileSync(path.join(root, "node_modules", ".bin", "pyright"), "x");
+			expect(find(root, false)).toEqual([
+				path.join(root, "node_modules", ".bin", "pyright"),
+			]);
 		} finally {
 			removeTempDirSync(tmpDir);
 		}

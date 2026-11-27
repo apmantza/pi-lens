@@ -21,7 +21,7 @@ import type {
 	ReExportEntry,
 } from "../dispatch/facts/import-facts.js";
 import type { DispatchContext } from "../dispatch/types.js";
-import { lazyEnvNumber } from "../env-utils.js";
+import { lazyEnvNumber, nonNegativeIntEnv } from "../env-utils.js";
 import { featureHintMetadata } from "../feature-hints.js";
 import { detectFileKind, KIND_EXTENSIONS } from "../file-kinds.js";
 import { detectFileRole } from "../file-role.js";
@@ -42,6 +42,7 @@ import {
 	normalizeFilePath,
 	normalizeMapKey,
 	realpathOrResolve,
+	relativeInside,
 	toProjectRelativePath,
 } from "../path-utils.js";
 import { collectProjectSourceFilesWithBudgetAsync } from "../project-scan-policy.js";
@@ -149,7 +150,11 @@ import {
 // v8 (#1070): call/reference evidence now records call-like vs type-only
 // references and tree-sitter query coverage, so call-graph consumers cannot
 // mistake incomplete extraction for a clean zero.
-export const REVIEW_GRAPH_VERSION = "v8";
+// v9 (#5599): per-language export rules. A v8 snapshot has no Rust enum/trait/
+// const/type/mod nodes and writes `exported:false` for every non-JS symbol, so
+// serving it under the new extractor would keep those answers for every
+// unchanged file; it is rebuilt instead.
+export const REVIEW_GRAPH_VERSION = "v9";
 const MAIN_KINDS = new Set([
 	"jsts",
 	"python",
@@ -559,9 +564,9 @@ function graphLogMetadata(
 	return makeReviewGraphBuildMetadata(graph, options);
 }
 
-function seqFastpathEnabled(): boolean {
-	const raw = process.env.PI_LENS_GRAPH_SEQ_FASTPATH;
-	return raw !== "0" && raw !== "false";
+/** Only the literal `"0"` turns the fast path off (#5419); every other value is the default, on. */
+export function seqFastpathEnabled(): boolean {
+	return process.env.PI_LENS_GRAPH_SEQ_FASTPATH !== "0";
 }
 
 let _lastGraphBuildInfo: GraphBuildInfo = {
@@ -2084,11 +2089,11 @@ export function isReviewGraphMigrationNeeded(cwd: string): boolean {
 const GRAPH_PERSIST_DEBOUNCE_MS_DEFAULT = 1500;
 export const GRAPH_PERSIST_MAX_ELEMENTS_DEFAULT = 500_000;
 
-function graphPersistDebounceMs(): number {
-	const raw = Number(process.env.PI_LENS_GRAPH_PERSIST_DEBOUNCE_MS);
-	return Number.isFinite(raw) && raw >= 0
-		? raw
-		: GRAPH_PERSIST_DEBOUNCE_MS_DEFAULT;
+export function graphPersistDebounceMs(): number {
+	return nonNegativeIntEnv(
+		"PI_LENS_GRAPH_PERSIST_DEBOUNCE_MS",
+		GRAPH_PERSIST_DEBOUNCE_MS_DEFAULT,
+	);
 }
 
 function graphPersistMaxElements(): number {
@@ -3106,11 +3111,11 @@ function graphCheckpointEveryFiles(): number {
 		: GRAPH_CHECKPOINT_EVERY_FILES_DEFAULT;
 }
 
-function graphCheckpointMinIntervalMs(): number {
-	const raw = Number(process.env.PI_LENS_GRAPH_CHECKPOINT_MIN_INTERVAL_MS);
-	return Number.isFinite(raw) && raw >= 0
-		? raw
-		: GRAPH_CHECKPOINT_MIN_INTERVAL_MS_DEFAULT;
+export function graphCheckpointMinIntervalMs(): number {
+	return nonNegativeIntEnv(
+		"PI_LENS_GRAPH_CHECKPOINT_MIN_INTERVAL_MS",
+		GRAPH_CHECKPOINT_MIN_INTERVAL_MS_DEFAULT,
+	);
 }
 
 interface ReviewGraphCheckpointData {
@@ -3569,14 +3574,19 @@ export function flushReviewGraphPersistsForTests(): void {
 	}
 }
 
+/** How long {@link waitForReviewGraphPersistsForTests} waits, in ms. */
+const REVIEW_GRAPH_PERSIST_WAIT_MS = 2_000;
+
 /** Test-only: wait until worker requests (authoritative persist AND offloaded
  * checkpoint) have either landed or degraded. */
 export async function waitForReviewGraphPersistsForTests(): Promise<void> {
-	for (
-		let attempts = 0;
-		attempts < 200 &&
-		(_workerRequests.size > 0 || _checkpointWorkerRequests.size > 0);
-		attempts++
+	// Shape 86 (#4865): the bound was `attempts < 200` of 10 ms sleeps -- a turn
+	// count, not a duration. Same poll interval, real-clock ceiling, and the same
+	// silent return a caller file that wedges a worker depends on in teardown.
+	const deadlineAt = Date.now() + REVIEW_GRAPH_PERSIST_WAIT_MS;
+	while (
+		Date.now() < deadlineAt &&
+		(_workerRequests.size > 0 || _checkpointWorkerRequests.size > 0)
 	) {
 		await new Promise((resolve) => setTimeout(resolve, 10));
 	}
@@ -4429,11 +4439,16 @@ function addTreeSitterFile(
 			symbolName: symbol.name,
 			symbolKind: symbol.kind,
 			...(qualifiedName ? { qualifiedName } : {}),
-			exported: symbol.isExported,
+			...(symbol.isExported === undefined
+				? {}
+				: { exported: symbol.isExported }),
 			metadata: {
 				line: symbol.line,
 				endLine: symbol.endLine,
 				column: symbol.column,
+				...(symbol.nameLine !== undefined && symbol.nameColumn !== undefined
+					? { nameLine: symbol.nameLine, nameColumn: symbol.nameColumn }
+					: {}),
 				signature: symbol.signature,
 				...featureHintMetadata(`${symbol.name} ${hintPath}`),
 			},
@@ -4643,7 +4658,7 @@ function resolveCxxInclude(
 	];
 	const root = path.resolve(cwd);
 	for (const candidate of candidates) {
-		if (!candidate.startsWith(root + path.sep) && candidate !== root) continue;
+		if (relativeInside(root, candidate) === undefined) continue;
 		if (fs.existsSync(candidate) && detectFileKind(candidate) === "cxx") {
 			return normalizeMapKey(candidate);
 		}
@@ -6460,7 +6475,7 @@ export function extractSymbolsAndRefsFromGraph(graph: ReviewGraph): {
 			line: numberMetadata(node, "line") ?? 1,
 			endLine: numberMetadata(node, "endLine"),
 			column: numberMetadata(node, "column") ?? 1,
-			isExported: node.exported === true,
+			isExported: node.exported,
 		};
 		nodeSymbols.set(node.id, sym);
 		const list = allSymbols.get(node.filePath) ?? [];

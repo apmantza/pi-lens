@@ -18,7 +18,10 @@ import {
 import { createReadGuard } from "../../clients/read-guard.js";
 import { removeTempDirSync } from "./test-utils.js";
 
-vi.mock("../../clients/read-guard-logger.js", () => ({
+vi.mock("../../clients/read-guard-logger.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../clients/read-guard-logger.js")
+	>()),
 	logReadGuardEvent: vi.fn(),
 	getReadGuardLogPath: vi.fn(() => "/dev/null"),
 }));

@@ -6,6 +6,7 @@
  * mutating files mid-dispatch after LSP sync has already happened.
  */
 
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import * as path from "node:path";
 import { incrementDegradationCount } from "../../degradation-ledger.js";
 import { pathsEqual } from "../../path-utils.js";
@@ -25,10 +26,8 @@ import type {
 } from "../types.js";
 import { faultResult, faultSkip } from "../types.js";
 
-import {
-	resolveRunnerCwd,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
 
@@ -294,7 +293,7 @@ const biomeCheckJsonRunner: RunnerDefinition = {
 
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "biome");
 		if (!cmd) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip(cwd, { id: "biome" });
 		}
 
 		// Shared config-args seam (#1247): `biomeClient.fixFileAsync` consumes

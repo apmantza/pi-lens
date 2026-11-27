@@ -282,20 +282,14 @@ const REMEDIATION =
 	`${CANONICAL_FILE} — then update this file's pin. Refs #1193.`;
 
 /**
- * The raw-separator-fold census at #1193 P3, file → occurrence count. Every
- * row is an UNMIGRATED site, not an approved one: this table is the shrink
- * target the umbrella issue's P3/P4 slices work down. `auditSymbolCounts`
- * fails on movement in EITHER direction, so a new fold in a listed file, a
- * fold in an unlisted file, and a fold REMOVED without updating the pin all
- * red — the removal direction is what makes the table shrink deliberately
- * instead of drifting.
+ * The raw-separator-fold census at #1193 P3, file → occurrence count. Empty:
+ * no scanned file keeps the literal `.replace(/\\/g, "/")` fold, and the last
+ * row (`index.ts`, the `lens-health` sample path) folded in #5401. `auditSymbolCounts`
+ * reds on that literal spelling in `clients/`, `tools/`, `mcp/` or `index.ts`
+ * outside the canonical leaf; other spellings (`split(path.sep).join("/")`) are
+ * not counted.
  */
-const SLASH_FOLD_PINS: Readonly<Record<string, number>> = {
-	// Held out of the 2026-10-30 fold only because an open PR edits the file
-	// (#4628 for index.ts); the next slice folds it. dispatcher.ts folded
-	// (#5011 merged).
-	"index.ts": 1,
-};
+const SLASH_FOLD_PINS: Readonly<Record<string, number>> = {};
 
 /**
  * The path-key case-fold census, file → occurrence count. Every remaining row

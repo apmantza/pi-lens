@@ -278,8 +278,7 @@ function renderFindSymbols(
 		if (!entry) continue;
 		const depth = num(entry.depth) ?? 1;
 		// A hierarchical answer carries `line`/`character`; a flat
-		// SymbolInformation answer (the shape pi-lens asks for, since it never
-		// declares hierarchicalDocumentSymbolSupport) only has `location.range`.
+		// SymbolInformation answer only has `location.range`.
 		const ownLine = num(entry.line);
 		const at =
 			ownLine === undefined

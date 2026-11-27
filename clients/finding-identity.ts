@@ -26,8 +26,7 @@
  */
 
 import { createHash } from "node:crypto";
-import * as path from "node:path";
-import { normalizeMapKey, toPosix } from "./path-utils.js";
+import { normalizeMapKey, relativeInside } from "./path-utils.js";
 
 /** Every finding id in this codebase truncates its sha256 hex digest to this
  * many characters. Single source so the three call sites this module
@@ -80,6 +79,30 @@ export function displayedMessage(message: string): string {
  */
 export function messageIsCutWhenDisplayed(message: string): boolean {
 	return message.length > DISPLAYED_MESSAGE_MAX_CHARS || message.includes("\n");
+}
+
+/**
+ * The message without the `[<rule>] ` prefix a runner folded into it, or
+ * `undefined` when the message does not open with the finding's own rule.
+ *
+ * Many runners write their code into the message (`[import-not-found] Cannot
+ * find ...` from mypy; shellcheck, hadolint, yamllint, tflint and others do the
+ * same), and a rendered finding line prints that message whole. An agent that
+ * marks what it was shown passes the bracket as `rule` and the rest as
+ * `message`, so its anchor hashes a message no finding carries. The
+ * disposition seam accepts this form as an alias of the message it came from,
+ * through this one derivation. Only the finding's OWN rule is stripped: a
+ * bracket naming anything else (a category, another rule) is message text.
+ */
+export function messageWithoutRulePrefix(
+	message: string,
+	rule: string | undefined,
+): string | undefined {
+	if (!rule) return undefined;
+	const prefix = `[${rule}]`;
+	if (!message.startsWith(prefix)) return undefined;
+	const rest = message.slice(prefix.length).trim();
+	return rest.length > 0 ? rest : undefined;
 }
 
 /**
@@ -228,8 +251,9 @@ export function hashText(
 export function relativeFile(filePath: string, cwd: string): string {
 	const canonicalCwd = normalizeMapKey(cwd);
 	const canonicalFile = normalizeMapKey(filePath);
-	const rel = toPosix(path.relative(canonicalCwd, canonicalFile));
-	return rel && !rel.startsWith("..") ? rel : canonicalFile;
+	// `relativeInside` owns "is it inside": a bare `startsWith("..")` read a
+	// directory called `..foo` as outside the root (shape 32).
+	return relativeInside(canonicalCwd, canonicalFile) || canonicalFile;
 }
 
 /**

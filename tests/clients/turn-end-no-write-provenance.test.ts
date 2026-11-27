@@ -577,9 +577,11 @@ describe.each([false, true])(
 
 		/**
 		 * A Go CVE whose trace has no filename frame: the govulncheck lane renders
-		 * it as `(module)` and reports no file, so the section reaches the stamp
-		 * with an empty citation and no fileless declaration — the fail-closed
-		 * state the census keeps for a producer nobody registered.
+		 * it as `(module)` and cites the Go module files at the scan root. A cell
+		 * that writes no go.mod leaves the section with an empty citation and no
+		 * fileless declaration — the fail-closed state the census keeps for a
+		 * producer nobody registered (here: the declaration it is pinned by is
+		 * gone).
 		 */
 		const seedModuleOnlyGoCve = (h: {
 			scan: (store: string, result: Record<string, unknown>) => void;
@@ -646,9 +648,9 @@ describe.each([false, true])(
 		// no-write turn's stamp well-formed, so it spoke for the whole message.
 		// A part beside it that the stamp cannot speak for must not read current.
 		// #4617 moved the population: every file-bound producer now cites, so the
-		// unaccounted part left is the one NO producer can bind — a Go CVE with no
-		// traced filename, which the govulncheck lane renders as `(module)` and
-		// reports no file for. The rule still has to fail closed on it.
+		// unaccounted part left is one whose declaration is gone — a module-only
+		// Go CVE in a tree with no go.mod, which cites nothing. The rule still has
+		// to fail closed on it.
 		it("labels a message historical when one of its parts is accounted for by neither files nor a fileless subject", async () => {
 			await runTurnScenario({
 				id: `no-write-provenance-mixed-${guard}`,
@@ -1772,6 +1774,233 @@ describe.each([false, true])(
 				},
 			});
 		});
+
+		// #4617 remainder: a Go CVE whose trace has no filename frame (a module-
+		// or package-level finding) renders as `(module)` and names no call site,
+		// so the section reached the stamp with no subject and a LIVE finding
+		// read "Historical finding" on every bash-only turn. A Go CVE is pinned
+		// by go.mod (#1622 H1), so the lane cites the module files, as the trivy
+		// tiers cite their manifests.
+		it("keeps a module-only Go CVE advisory current, bound to go.mod", async () => {
+			await runTurnScenario({
+				id: `no-write-provenance-govulncheck-module-${guard}`,
+				incident:
+					"A module-level Go CVE advisory was labelled historical on a bash-only turn",
+				issue: "#4617",
+				async run(h) {
+					h.write("go.mod", "module example.com/app\n");
+					seedModuleOnlyGoCve(h);
+					h.runtime.appendCascadeRun(silentRun(h.pathOf("src/clean.ts")));
+					h.runtime.beginTurn();
+					const view = await h.turnEnd({ flags });
+					expect(view.text).toContain("Go CVEs reachable from this code");
+					expect(view.text).toContain("(example.com/module)");
+					expect(view.text).not.toContain(HISTORICAL);
+					expect(view.text).not.toContain(UNKNOWN_STAMP);
+				},
+			});
+		});
+
+		it("labels a module-only Go CVE advisory historical when go.mod changed after the turn end", async () => {
+			await runTurnScenario({
+				id: `no-write-provenance-govulncheck-module-older-${guard}`,
+				incident: "A go.mod edit must supersede the cached module-level CVE",
+				issue: "#4617",
+				async run(h) {
+					const goMod = h.write("go.mod", "module example.com/app\n");
+					seedModuleOnlyGoCve(h);
+					h.runtime.appendCascadeRun(silentRun(h.pathOf("src/clean.ts")));
+					h.runtime.beginTurn();
+					const view = await h.turnEnd({
+						flags,
+						beforeDelivery: () => {
+							fs.writeFileSync(
+								goMod,
+								"module example.com/app\n\nrequire example.com/module v1.2.0\n",
+							);
+						},
+					});
+					expect(view.text).toContain("Go CVEs reachable from this code");
+					expect(view.text).toContain(HISTORICAL);
+					expect(view.text).not.toContain(UNKNOWN_STAMP);
+				},
+			});
+		});
+
+		// A call-site CVE is pinned by go.mod too (#1622 H1): the bump that fixes
+		// the module supersedes the advisory even though no row is module-only.
+		it("labels a call-site Go CVE advisory historical when go.mod changed after the turn end", async () => {
+			await runTurnScenario({
+				id: `no-write-provenance-govulncheck-callsite-gomod-${guard}`,
+				incident: "A go.mod bump must supersede a call-site Go CVE advisory",
+				issue: "#4617",
+				async run(h) {
+					const goMod = h.write("go.mod", "module example.com/app\n");
+					const callSite = h.write(
+						"src/go/main.go",
+						"package main\n\nfunc main() {}\n",
+					);
+					h.scan("govulncheck", {
+						findings: [
+							{
+								osv: "GO-2024-1111",
+								module: "example.com/module",
+								trace: [{ filename: callSite, line: 3 }],
+							},
+						],
+					});
+					h.runtime.appendCascadeRun(silentRun(h.pathOf("src/clean.ts")));
+					h.runtime.beginTurn();
+					const view = await h.turnEnd({
+						flags,
+						beforeDelivery: () => {
+							fs.writeFileSync(
+								goMod,
+								"module example.com/app\n\nrequire example.com/module v1.2.0\n",
+							);
+						},
+					});
+					expect(view.text).toContain("GO-2024-1111");
+					expect(view.text).toContain(HISTORICAL);
+					expect(view.text).not.toContain(UNKNOWN_STAMP);
+				},
+			});
+		});
+
+		// The manifest list the lane reads covers every ecosystem; a Go CVE is
+		// pinned by the Go module files alone, so another ecosystem's manifest
+		// moving on must not supersede it.
+		it("keeps a module-only Go CVE advisory current when another ecosystem's manifest changed", async () => {
+			await runTurnScenario({
+				id: `no-write-provenance-govulncheck-module-other-${guard}`,
+				incident: "A package.json edit superseded a Go module CVE",
+				issue: "#4617",
+				async run(h) {
+					h.write("go.mod", "module example.com/app\n");
+					const packageJson = h.write("package.json", "{}\n");
+					seedModuleOnlyGoCve(h);
+					h.runtime.appendCascadeRun(silentRun(h.pathOf("src/clean.ts")));
+					h.runtime.beginTurn();
+					const view = await h.turnEnd({
+						flags,
+						beforeDelivery: () => {
+							fs.writeFileSync(packageJson, '{"name":"x"}\n');
+						},
+					});
+					expect(view.text).toContain("Go CVEs reachable from this code");
+					expect(view.text).not.toContain(HISTORICAL);
+					expect(view.text).not.toContain(UNKNOWN_STAMP);
+				},
+			});
+		});
+
+		// #4617 review F5 (CodeRabbit thread 2, Qodo B4): a go.sum with no go.mod
+		// is no module evidence. The checksum list pins nothing without the module
+		// file it sums, so the module-only advisory has no subject and fails closed:
+		// the stamp has no file to read, so it reads the unknown generation.
+		it("labels a module-only Go CVE advisory historical when only go.sum is present", async () => {
+			await runTurnScenario({
+				id: `no-write-provenance-govulncheck-sum-only-${guard}`,
+				incident:
+					"A go.sum with no go.mod kept a module-level CVE labelled current",
+				issue: "#4617",
+				async run(h) {
+					h.write("go.sum", "example.com/module v1.2.0 h1:abc=\n");
+					seedModuleOnlyGoCve(h);
+					h.runtime.appendCascadeRun(silentRun(h.pathOf("src/clean.ts")));
+					h.runtime.beginTurn();
+					const view = await h.turnEnd({ flags });
+					expect(view.text).toContain("Go CVEs reachable from this code");
+					expect(view.text).toContain(HISTORICAL);
+					expect(view.text).toContain(UNKNOWN_STAMP);
+				},
+			});
+		});
+
+		// #4617 review F1: go.sum is a pinned subject of a module-only advisory, as
+		// go.mod is. A lane that narrowed its citation to go.mod alone reads this
+		// cell current, so the cell names the go.sum citation.
+		it("labels a module-only Go CVE advisory historical when go.sum changed after the turn end", async () => {
+			await runTurnScenario({
+				id: `no-write-provenance-govulncheck-module-sum-older-${guard}`,
+				incident: "A go.sum edit must supersede the cached module-level CVE",
+				issue: "#4617",
+				async run(h) {
+					h.write("go.mod", "module example.com/app\n");
+					const goSum = h.write(
+						"go.sum",
+						"example.com/module v1.2.0 h1:abc=\n",
+					);
+					seedModuleOnlyGoCve(h);
+					h.runtime.appendCascadeRun(silentRun(h.pathOf("src/clean.ts")));
+					h.runtime.beginTurn();
+					const view = await h.turnEnd({
+						flags,
+						beforeDelivery: () => {
+							fs.writeFileSync(goSum, "example.com/module v1.2.0 h1:def=\n");
+						},
+					});
+					expect(view.text).toContain("Go CVEs reachable from this code");
+					expect(view.text).toContain(HISTORICAL);
+					expect(view.text).not.toContain(UNKNOWN_STAMP);
+				},
+			});
+		});
+
+		// A section that mixes a call-site CVE with a module-only one reports both
+		// subjects: either file moving on supersedes it.
+		describe.each([
+			["go.mod", "go.mod", "module example.com/app\n\nrequire x v1\n"],
+			[
+				"the call site",
+				"src/go/main.go",
+				"package main\n\nfunc main() { println(1) }\n",
+			],
+		])(
+			"a call-site and a module-only Go CVE, %s changed",
+			(_label, rel, next) => {
+				it("labels the advisory historical", async () => {
+					await runTurnScenario({
+						id: `no-write-provenance-govulncheck-mixed-${rel.replace(/\W/g, "-")}-${guard}`,
+						incident:
+							"A section citing only one of its two Go CVE subjects stayed current",
+						issue: "#4617",
+						async run(h) {
+							h.write("go.mod", "module example.com/app\n");
+							const callSite = h.write(
+								"src/go/main.go",
+								"package main\n\nfunc main() {}\n",
+							);
+							h.scan("govulncheck", {
+								findings: [
+									{
+										osv: "GO-2024-1111",
+										module: "example.com/module",
+										trace: [{ filename: callSite, line: 3 }],
+									},
+									{
+										osv: "GO-2024-9999",
+										module: "example.com/other",
+										trace: [],
+									},
+								],
+							});
+							h.runtime.appendCascadeRun(silentRun(h.pathOf("src/clean.ts")));
+							h.runtime.beginTurn();
+							const view = await h.turnEnd({
+								flags,
+								beforeDelivery: () => {
+									fs.writeFileSync(h.pathOf(rel), next);
+								},
+							});
+							expect(view.text).toContain("GO-2024-9999");
+							expect(view.text).toContain(HISTORICAL);
+							expect(view.text).not.toContain(UNKNOWN_STAMP);
+						},
+					});
+				});
+			},
+		);
 
 		// #4617 population B: a part with no file it could be stale against. The
 		// deferred runner's crash note names no file, so the message had no stamp

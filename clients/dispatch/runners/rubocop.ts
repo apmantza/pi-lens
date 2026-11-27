@@ -8,6 +8,11 @@
  * Supports bundle exec (preferred in Bundler projects).
  */
 
+import {
+	resolveRubocopCommand,
+	toolAbsentSkip,
+} from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -24,7 +29,6 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { resolveCommandArgsWithInstallFallback } from "./utils/runner-helpers.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
 
@@ -110,18 +114,10 @@ const rubocopRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "rubocop");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("rubocop")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
-		const resolved = await resolveCommandArgsWithInstallFallback(
-			getRubocopCommand(cwd),
-			"rubocop",
-			cwd,
-			["--version"],
-			10000,
-		);
-		if (!resolved) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
-		}
+		const resolved = await resolveRubocopCommand(getRubocopCommand(cwd), cwd);
+		if (!resolved) return toolAbsentSkip(cwd, { id: "rubocop" });
 		const { cmd, args } = resolved;
 
 		// Lint only — no auto-correct (formatter handles that)

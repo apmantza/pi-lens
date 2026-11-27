@@ -11,8 +11,9 @@ const LEDGER = path.join(process.cwd(), "clients/degradation-ledger.ts");
  * with the members whose doc block is empty, so a kind that gains a doc, loses
  * one, or leaves the union must move its own entry here: the list shrinks on
  * purpose, and the exact count in the assertion below moves with it in the same
- * change. `mode-suppression` and `grammar-blocked` are undocumented by design
- * (#5400); the other 34 predate #5401 and have no doc yet.
+ * change. `mode-suppression` and `grammar-blocked` gained their docs in the
+ * #5400 kind split, which is where each one's single meaning was settled; the
+ * other 34 predate #5401 and have no doc yet.
  */
 const UNDOCUMENTED_KINDS: readonly string[] = [
 	"ast-grep-napi-unavailable",
@@ -26,7 +27,6 @@ const UNDOCUMENTED_KINDS: readonly string[] = [
 	"diagnostic-retained-unreconciled",
 	"formatter-failure",
 	"formatter-skip",
-	"grammar-blocked",
 	"install-retry-exhausted",
 	"instance-registry-corrupt",
 	"lens-diagnostics-analysis-root-rejected",
@@ -39,7 +39,6 @@ const UNDOCUMENTED_KINDS: readonly string[] = [
 	"lsp-notify-inflight-stall",
 	"lsp-pull-unconfirmed",
 	"lsp-scanner-coverage-gap",
-	"mode-suppression",
 	"native-read-clipped",
 	"pip-install-strategy-succeeded",
 	"pip-pep668-strategy-refused",
@@ -128,7 +127,7 @@ describe("DegradationKind doc blocks name their own kind (#5401)", () => {
 		expect(
 			UNDOCUMENTED_KINDS.length,
 			"lower the count when a kind gains docs: remove its entry from UNDOCUMENTED_KINDS and set this number to the new length",
-		).toBe(36);
+		).toBe(34);
 		const members = readUnionMembers(fs.readFileSync(LEDGER, "utf8"));
 		// Floor: the union had 311 members when this pin landed. A parse that finds
 		// far fewer must fail rather than pass over an empty population.

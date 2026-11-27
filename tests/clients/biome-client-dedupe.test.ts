@@ -4,8 +4,16 @@ const safeSpawnAsync = vi.fn();
 const safeSpawn = vi.fn();
 const ensureTool = vi.fn();
 
-vi.mock("../../clients/safe-spawn.js", () => ({ safeSpawnAsync, safeSpawn }));
-vi.mock("../../clients/installer/index.js", () => ({
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
+	safeSpawnAsync,
+	safeSpawn,
+}));
+vi.mock("../../clients/installer/index.js", async (importOriginal) => ({
+	// #5410 D9: `shouldAutoInstallTool` reads the opt-in off the real `TOOLS`.
+	TOOLS: (
+		await importOriginal<typeof import("../../clients/installer/index.js")>()
+	).TOOLS,
 	ensureTool,
 	// #1500: the durable-absence arm reads the installer's own attempt record to
 	// tell an attempt that failed from one that never ran.

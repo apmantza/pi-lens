@@ -190,9 +190,11 @@ describe("parseTrivyReport", () => {
 		).toEqual([]);
 	});
 
-	it("is defensive against malformed / empty input (never throws)", () => {
+	it("reads empty or non-report JSON as no findings and throws on non-JSON (#5447)", () => {
 		expect(parseTrivyReport("")).toEqual([]);
-		expect(parseTrivyReport("not json")).toEqual([]);
+		expect(() => parseTrivyReport("not json")).toThrow(
+			/unreadable trivy report/,
+		);
 		expect(parseTrivyReport("{}")).toEqual([]);
 	});
 
@@ -261,7 +263,9 @@ describe("parseTrivySecrets", () => {
 			{ ruleId: "ok", file: "a.ts", line: 7, title: undefined },
 		]);
 		expect(parseTrivySecrets("")).toEqual([]);
-		expect(parseTrivySecrets("not json")).toEqual([]);
+		expect(() => parseTrivySecrets("not json")).toThrow(
+			/unreadable trivy report/,
+		);
 		expect(parseTrivySecrets("{}")).toEqual([]);
 	});
 
@@ -361,7 +365,9 @@ describe("parseTrivyLicenses", () => {
 		expect(licenses).toHaveLength(1);
 		expect(licenses[0].license).toBe("MIT");
 		expect(parseTrivyLicenses("")).toEqual([]);
-		expect(parseTrivyLicenses("not json")).toEqual([]);
+		expect(() => parseTrivyLicenses("not json")).toThrow(
+			/unreadable trivy report/,
+		);
 		expect(parseTrivyLicenses("{}")).toEqual([]);
 	});
 });

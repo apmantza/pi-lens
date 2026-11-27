@@ -11,6 +11,7 @@ import {
 	resetReviewGraphPersistWorkerForTests,
 	waitForReviewGraphPersistsForTests,
 } from "../../../clients/review-graph/builder.js";
+import { waitFor } from "../interleaving-kit.js";
 import { createTempFile, setupTestEnvironment } from "../test-utils.js";
 
 // #1206: sweepStaleStageFiles runs over the SHARED project cache dir. It used
@@ -49,12 +50,27 @@ function findDeadPid(): number {
 	throw new Error("could not find a dead pid to test with");
 }
 
-async function waitForGone(p: string, attempts = 40): Promise<boolean> {
-	for (let i = 0; i < attempts; i++) {
-		if (!fs.existsSync(p)) return true;
-		await new Promise((r) => setTimeout(r, 25));
+/**
+ * Wait for the sweep to remove a staged file. Shape 86 (#4865): this was a
+ * 40 x 25 ms turn count, which holds idle and runs out under CPU load; the same
+ * wall clock is now a `waitFor` deadline that follows
+ * `PI_LENS_TEST_TIMEOUT_SCALE`.
+ *
+ * It keeps the helper's boolean contract instead of letting `waitFor` throw:
+ * `waitFor` names its caller FRAME, and inside the `for` loop every stage file
+ * shares that frame, so an exhausted wait redacted the assertion's
+ * `expected swept: <name>` message -- the one line that says WHICH staging file
+ * the sweep left behind (#4865 r1 F6).
+ */
+async function waitForGone(p: string, timeoutMs = 1_000): Promise<boolean> {
+	try {
+		return await waitFor(() => !fs.existsSync(p), Boolean, {
+			timeoutMs,
+			intervalMs: 25,
+		});
+	} catch {
+		return false;
 	}
-	return !fs.existsSync(p);
 }
 
 describe("review-graph stale stage sweep scoping (#1206)", () => {

@@ -1,8 +1,11 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
+import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { logRunnerAdvisoryOnce, resolveRunnerCwd } from "../../tool-cwd.js";
-import { getLinterPolicyForCwd, hasSqlfluffConfig } from "../../tool-policy.js";
+import { getLinterPolicyForCwd } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -10,15 +13,10 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import {
-	createAvailabilityChecker,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
-
-const sqlfluff = createAvailabilityChecker("sqlfluff", ".exe");
 
 // sqlfluff exit codes (its CLI docs): 0 = clean, 1 = violations found, 2 = a
 // user error that stopped the lint (unknown dialect, unreadable config).
@@ -30,8 +28,6 @@ const sqlfluff = createAvailabilityChecker("sqlfluff", ".exe");
 // dialect prints the error there), so stdout is non-empty and the fallback
 // rule would read the failed run as a run that found nothing.
 const SQLFLUFF_EXIT_CODES: ToolExitCodes = { ran: [1] };
-
-export { hasSqlfluffConfig };
 
 type SqlfluffJson = Array<{
 	filepath?: string;
@@ -161,9 +157,9 @@ const sqlfluffRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "sqlfluff");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("sqlfluff")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
-		const hasConfig = hasSqlfluffConfig(cwd);
+		const hasConfig = hasToolConfig("sqlfluff", cwd);
 		if (!hasConfig) {
 			logRunnerAdvisoryOnce(
 				ctx,
@@ -173,14 +169,9 @@ const sqlfluffRunner: RunnerDefinition = {
 			);
 		}
 
-		let cmd: string | null = null;
-		if (await sqlfluff.isAvailableAsync(cwd)) {
-			cmd = sqlfluff.getCommand(cwd);
-		} else {
-			cmd = await resolveToolCommandWithInstallFallback(cwd, "sqlfluff");
-		}
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "sqlfluff");
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip(cwd, { id: "sqlfluff" });
 
 		// #1937: this used to be `args.splice(2, 0, "--dialect", "ansi")` on
 		// `["lint", "--format", "json", file]`, which inserts BETWEEN the flag

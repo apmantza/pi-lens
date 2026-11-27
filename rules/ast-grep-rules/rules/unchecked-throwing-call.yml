@@ -1,6 +1,6 @@
 id: unchecked-throwing-call
 language: TypeScript
-severity: error
+severity: warning
 message: "$CALL without try/catch — throws on invalid input"
 note: |
   These calls throw on malformed input and should always be wrapped.
@@ -8,6 +8,13 @@ note: |
   JSON.parse: throws SyntaxError on invalid JSON
   new URL():  throws TypeError on invalid URL string
   execSync(): throws on non-zero exit code
+
+  LIMIT (why this rule reports below `error`, #5466): The check is lexical. A
+  call counts as checked when any enclosing `try` statement contains it,
+  whatever the function boundary and whichever block (try, catch or finally).
+  A `try` or `safe(() => …)` wrapper in a caller of the function is invisible,
+  so a handled call can still be reported and an unhandled one can be missed.
+  Read a hit as a prompt to verify the handling.
 
   ✅ WRAP IN TRY/CATCH:
     try {

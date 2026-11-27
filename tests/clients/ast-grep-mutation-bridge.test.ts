@@ -31,15 +31,13 @@ type Recorded = {
 };
 
 const recorded: Recorded[] = [];
-/** Files the capture bridge declines, as the real one does for an out-of-scope path. */
-const refused = new Set<string>();
 
 Object.defineProperty(globalThis, MUTATION_BRIDGE_KEY, {
 	value: Object.freeze({
 		version: 1 as const,
 		recordMutation(entry: Recorded): boolean {
 			recorded.push(entry);
-			return !refused.has(entry.filePath);
+			return true;
 		},
 	}),
 	writable: false,
@@ -94,6 +92,7 @@ describe("#2423 ast_grep_replace records its applied rewrites", () => {
 			"typescript",
 			["src"],
 			true,
+			{ sessionRoot: process.cwd() },
 		);
 
 		expect(result.applied).toBe(true);
@@ -130,6 +129,7 @@ describe("#2423 ast_grep_replace records its applied rewrites", () => {
 			"typescript",
 			["src"],
 			true,
+			{ sessionRoot: process.cwd() },
 		);
 		expect(result.stalePreview).toBe(true);
 		expect(recorded).toHaveLength(0);
@@ -137,53 +137,22 @@ describe("#2423 ast_grep_replace records its applied rewrites", () => {
 });
 
 /**
- * #5239: the apply reports the files the bridge ACCEPTED, because the
- * `tool_result` handler dispatches exactly those.
+ * #5239: the apply records each file it rewrote through the bridge, which
+ * notes it under the call's id for the `tool_result` dispatch (#5551).
  *
  * RECURRENCE GUARDED: an applied rewrite reached the bridge's bookkeeping and
  * nothing named its files to the dispatcher, so a blocker it introduced
- * reached neither the turn-end check nor the commit gate. The list must also
- * not name a file the bridge refused, or the handler would dispatch a path
- * pi-lens declined to track.
+ * reached neither the turn-end check nor the commit gate. That a refused file
+ * stays out of the call's set is the bridge's own answer
+ * (`mutation-bridge.test.ts`).
  */
-describe("#5239 the apply names the files the bridge accepted", () => {
+describe("#5239 the apply records the files it rewrote", () => {
 	const RULE =
 		"id: agent-rule\nlanguage: typescript\nrule:\n  pattern: var $X\nfix: let $X\n";
 	const abs = (rel: string) => path.resolve(process.cwd(), rel);
 
-	it("lists every accepted file once, for the pattern apply", async () => {
+	it("records the rewritten files for the structural apply and none for a dry run", async () => {
 		recorded.length = 0;
-		refused.clear();
-		const client = clientWithExec(execFor(MATCHES));
-		const result = await client.replace(
-			"var $X",
-			"let $X",
-			"typescript",
-			["src"],
-			true,
-		);
-		expect(result.appliedFiles).toEqual([abs("src/a.ts"), abs("src/b.ts")]);
-	});
-
-	it("omits a file the bridge refused, for the pattern apply", async () => {
-		recorded.length = 0;
-		refused.clear();
-		refused.add(abs("src/b.ts"));
-		const client = clientWithExec(execFor(MATCHES));
-		const result = await client.replace(
-			"var $X",
-			"let $X",
-			"typescript",
-			["src"],
-			true,
-		);
-		refused.clear();
-		expect(result.appliedFiles).toEqual([abs("src/a.ts")]);
-	});
-
-	it("lists the accepted files for the structural apply and none for a dry run", async () => {
-		recorded.length = 0;
-		refused.clear();
 		const runner = {
 			tempScanDetailedAsync: vi.fn(async () => ({
 				matches: MATCHES,
@@ -193,16 +162,22 @@ describe("#5239 the apply names the files the bridge accepted", () => {
 		};
 		const client = new AstGrepClient();
 		(client as unknown as { runner: unknown }).runner = runner;
-		const applied = await client.replaceWithRule(RULE, ["src"], true);
-		expect(applied.appliedFiles).toEqual([abs("src/a.ts"), abs("src/b.ts")]);
-		const dry = await client.replaceWithRule(RULE, ["src"], false);
-		expect(dry.appliedFiles).toEqual([]);
+		const applied = await client.replaceWithRule(RULE, ["src"], true, {
+			sessionRoot: process.cwd(),
+		});
+		expect(applied.applied).toBe(true);
+		expect(recorded.map((r) => r.filePath)).toEqual([
+			abs("src/a.ts"),
+			abs("src/b.ts"),
+		]);
+		await client.replaceWithRule(RULE, ["src"], false);
+		expect(recorded).toHaveLength(2);
 	});
 
 	// Recurrence prevented (Greptile T3 on #5244 r3): the structural apply loop
-	// returned early on a later path's stale preview or CLI error with no
-	// `appliedFiles`, so files an earlier path had already rewritten never
-	// reached the tool's details and the `tool_result` dispatch.
+	// returned early on a later path's stale preview or CLI error, so files an
+	// earlier path had already rewritten never reached the `tool_result`
+	// dispatch. Each path now records as it is written.
 	describe("a later path stops the structural apply after an earlier one wrote", () => {
 		const A = MATCHES.filter((m) => m.file === "src/a.ts");
 		function runnerOver(second: {
@@ -228,41 +203,43 @@ describe("#5239 the apply names the files the bridge accepted", () => {
 		const RULE =
 			"id: agent-rule\nlanguage: typescript\nrule:\n  pattern: var $X\nfix: let $X\n";
 
-		it("names the earlier file when the later path is stale", async () => {
+		it("records the earlier file when the later path is stale", async () => {
 			recorded.length = 0;
-			refused.clear();
 			const result = await runnerOver({
 				detailed: { matches: [], status: 0 },
-			}).replaceWithRule(RULE, ["src/a.ts", "src/b.ts"], true);
+			}).replaceWithRule(RULE, ["src/a.ts", "src/b.ts"], true, {
+				sessionRoot: process.cwd(),
+			});
 			expect(result.stalePreview).toBe(true);
-			expect(result.appliedFiles).toEqual([abs("src/a.ts")]);
 			expect(recorded.map((r) => r.filePath)).toEqual([abs("src/a.ts")]);
 		});
 
-		it("names the earlier file when the later path's apply errors", async () => {
+		it("records the earlier file when the later path's apply errors", async () => {
 			recorded.length = 0;
-			refused.clear();
 			const result = await runnerOver({
 				detailed: { matches: MATCHES, status: 0 },
 				withFix: { matches: [], error: "boom" },
-			}).replaceWithRule(RULE, ["src/a.ts", "src/b.ts"], true);
+			}).replaceWithRule(RULE, ["src/a.ts", "src/b.ts"], true, {
+				sessionRoot: process.cwd(),
+			});
 			expect(result.error).toBe("boom");
-			expect(result.appliedFiles).toEqual([abs("src/a.ts")]);
+			expect(recorded.map((r) => r.filePath)).toEqual([abs("src/a.ts")]);
 		});
 
-		it("names the earlier file when the later path's preview fails", async () => {
+		it("records the earlier file when the later path's preview fails", async () => {
 			recorded.length = 0;
-			refused.clear();
 			const result = await runnerOver({
 				detailed: { matches: [], status: 2, error: "no such path" },
-			}).replaceWithRule(RULE, ["src/a.ts", "src/b.ts"], true);
+			}).replaceWithRule(RULE, ["src/a.ts", "src/b.ts"], true, {
+				sessionRoot: process.cwd(),
+			});
 			expect(result.error).toBe("no such path");
-			expect(result.appliedFiles).toEqual([abs("src/a.ts")]);
+			expect(recorded.map((r) => r.filePath)).toEqual([abs("src/a.ts")]);
 		});
 
-		// The tool is the only carrier from the client's result to the
-		// `tool_result` handler; a stale or error branch that drops the list
-		// dispatches nothing whatever the client returned.
+		// The tool's stale and error branches return after the earlier path was
+		// written; its record already reached the bridge, whatever the branch
+		// returns (#5551: no list rides the result).
 		it.each([
 			["stale", { matches: [], status: 0 }, undefined, { stalePreview: true }],
 			[
@@ -272,10 +249,9 @@ describe("#5239 the apply names the files the bridge accepted", () => {
 				{},
 			],
 		])(
-			"the tool's %s details carry the earlier file",
+			"the tool's %s result leaves the earlier file recorded",
 			async (_label, detailed, withFix, expected) => {
 				recorded.length = 0;
-				refused.clear();
 				const client = runnerOver({
 					detailed,
 					...(withFix && { withFix }),
@@ -297,37 +273,21 @@ describe("#5239 the apply names the files the bridge accepted", () => {
 					{ cwd: process.cwd() },
 				);
 				expect(result.isError).toBe(true);
-				expect(result.details).toEqual({
-					...expected,
-					appliedFiles: [abs("src/a.ts")],
-				});
+				expect(result.details).toEqual(expected);
+				expect(recorded.map((r) => r.filePath)).toEqual([abs("src/a.ts")]);
 			},
 		);
 
-		it("names nothing when the first path is the one that is stale", async () => {
+		it("records nothing when the first path is the one that is stale", async () => {
 			recorded.length = 0;
-			refused.clear();
 			const result = await runnerOver({
 				detailed: { matches: [], status: 0 },
-			}).replaceWithRule(RULE, ["src/b.ts", "src/a.ts"], true);
+			}).replaceWithRule(RULE, ["src/b.ts", "src/a.ts"], true, {
+				sessionRoot: process.cwd(),
+			});
 			expect(result.stalePreview).toBe(true);
-			expect(result.appliedFiles).toEqual([]);
 			expect(recorded).toEqual([]);
 		});
-	});
-
-	it("lists none for a dry run of the pattern replace", async () => {
-		recorded.length = 0;
-		refused.clear();
-		const client = clientWithExec(execFor(MATCHES));
-		const result = await client.replace(
-			"var $X",
-			"let $X",
-			"typescript",
-			["src"],
-			false,
-		);
-		expect(result.appliedFiles).toBeUndefined();
 	});
 });
 
@@ -358,7 +318,9 @@ describe("#4140 the structural ast_grep_replace apply records through the bridge
 	it("records one mutation per rewritten file with 1-based ranges, like the pattern apply", async () => {
 		recorded.length = 0;
 		const { client, runner } = clientWithRunner(MATCHES);
-		const result = await client.replaceWithRule(RULE, ["src"], true);
+		const result = await client.replaceWithRule(RULE, ["src"], true, {
+			sessionRoot: process.cwd(),
+		});
 		expect(result.applied).toBe(true);
 		expect(runner.tempScanWithFixAsync).toHaveBeenCalledWith(
 			"src",
@@ -400,6 +362,7 @@ describe("#4140 the structural ast_grep_replace apply records through the bridge
 		recorded.length = 0;
 		const { client } = clientWithRunner(MATCHES);
 		await client.replaceWithRule(RULE, ["src"], true, {
+			sessionRoot: process.cwd(),
 			sessionId: "session-sub",
 		});
 		expect(recorded.map((entry) => entry.sessionId)).toEqual([

@@ -121,6 +121,7 @@ pi --lens-compact-tool-line   # Render tool results as one compact, theme-aware 
 pi --lens-compact-lsp-status  # Collapse the footer LSP status to one state glyph instead of the server names (refs #3099)
 pi --lens-hide-lsp-status     # Publish no pi-lens-lsp footer status at all, so a status-rendering host stops showing the key (closes #3099)
 pi --lens-compact-widget      # Render the widget as one summary line (languages + totals, LSP↑ chip while servers spawn) with no file rows or blocker details (refs #3959)
+pi --lens-issues-status       # Publish a compact pi-lens-issues footer status from the widget summary (●<N>E, !<N>W, ⚠ <N> unchecked, ✓ clean)
 pi --no-lazy-tools       # Keep every pi-lens tool active instead of activating the situational ones on demand
 pi --lens-turn-end-madge # Run the madge circular-dependency check at every turn end, not just at session start
 pi --lens-fallow         # Run fallow-lsp beside the TypeScript server on JS/TS files (advisory unused-code, duplication and cycle findings; opt-in)
@@ -130,7 +131,7 @@ pi --no-madge            # Disable the madge session-start analyzer
 pi --no-gitleaks         # Disable the gitleaks session-start analyzer
 pi --no-govulncheck      # Disable the govulncheck session-start analyzer
 pi --no-dead-code        # Disable the dead-code session-start analyzer
-pi --no-complexity       # Disable the complexity session-start analyzer
+pi --no-complexity       # Disable the complexity analyzer and the per-edit complexity line
 
 # Actionable warnings (all default off)
 pi --lens-actionable-warnings          # Report fixable warnings at turn end
@@ -211,3 +212,53 @@ turn-end is skipped, not faked: one line on stderr and nothing on stdout.
   installing or spawning anything, that the resolvers find project-local tools in
   `.venv/bin`, `vendor/bin` and `node_modules/.bin` (it runs nightly in
   tool-smoke).
+
+### Install notes
+
+pi-lens delivers its four skills through the `pi.skills` package manifest, so
+install it as a package (`npm:`, `git:`, or a local path); a package install
+honours the host's `packages[].skills` filters (for example `[]`,
+`!skills/<name>/SKILL.md`, or `-skills/<name>/SKILL.md`). Loading the extension
+file directly (`pi --extension ./index.js`) does not read that manifest and
+loads no pi-lens skills. To install from git, run
+`pi install git:github.com/apmantza/pi-lens`.
+
+> **npm v12 users:** dependency lifecycle scripts (e.g. `@ast-grep/cli`'s
+> `postinstall`) now require explicit approval — if `npm install` warns about
+> unreviewed install scripts, review and allow them with
+> `npm approve-scripts` in pi's install root. The `allowScripts` entries in
+> pi-lens's own `package.json` do not apply when pi-lens is installed as a
+> dependency: copy them into the install root's `package.json` instead
+> (maintainers: see CONTRIBUTING.md "Lifecycle-script approvals"). Installing from a git source (`pi install
+> git:...` / `pi update --extension git:...`) may similarly prompt for
+> git-dependency approval; accept it to let the `prepare` build step run.
+
+#### Android and Termux fallback
+
+Try the normal install first. If it fails in `@ast-grep/cli`'s
+`postinstall.js` with `Failed to locate @ast-grep/cli native binary`, the
+fallback below has worked in one Termux environment:
+
+```bash
+pkg install rust clang
+cargo install ast-grep --locked
+ast-grep --version
+npm_config_ignore_scripts=true pi install npm:pi-lens
+```
+
+`npm_config_ignore_scripts=true` skips every dependency lifecycle script for
+that `pi install` command, not only the failing `@ast-grep/cli` script. Use it
+only for this fallback after installing and checking the Rust-built `ast-grep`
+binary separately. `pi update` runs the same postinstall, so set the variable
+for it too. `ast-grep --version` must succeed from a new shell, which means
+`~/.cargo/bin` is on your `PATH`.
+
+In the verified environment, `/lens-health` reported zero pipeline crashes and
+listed the `ast-grep` and `bash` LSP servers as available. This confirms startup
+and server discovery only; `ast_grep_search` was not tested end to end.
+
+pi-lens only looks for an `ast-grep` on `PATH` (such as Cargo's
+`~/.cargo/bin/ast-grep`) when pi trusts the project, so in an untrusted
+project this fallback leaves `ast_grep_search` unavailable. The in-process
+ast-grep rules (`@ast-grep/napi`) and Biome have no Android build, so they stay
+unavailable either way.

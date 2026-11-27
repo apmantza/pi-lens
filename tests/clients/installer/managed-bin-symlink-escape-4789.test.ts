@@ -61,11 +61,11 @@ const ORIGINAL = "ORIGINAL-VICTIM\n";
 
 /** Every opengrep asset name, so the case holds on any arch the suite runs on. */
 const ASSET_NAMES = [
-	"opengrep_manylinux_x86",
-	"opengrep_manylinux_aarch64",
+	"opengrep_linux_x86",
+	"opengrep_linux_aarch64",
 	"opengrep_osx_x86",
 	"opengrep_osx_arm64",
-	"opengrep_windows_x86.exe",
+	"opengrep_windows_x86.zip",
 ];
 
 httpsGetMock.mockImplementation(

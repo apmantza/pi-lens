@@ -19,6 +19,8 @@ describe("trivy-config appliesTo", () => {
 		const trivyConfigRunner = (
 			await import("../../../clients/dispatch/runners/trivy-config.js")
 		).default;
+		// #5547: dispatcher budget must cover the runner-owned 60s spawn.
+		expect(trivyConfigRunner.timeoutMs).toBe(60_000);
 		expect(trivyConfigRunner.appliesTo).toEqual([
 			"docker",
 			"yaml",
@@ -39,7 +41,8 @@ const { safeSpawnAsync, isTrivyEnabled, resolveSeverityFloor } = vi.hoisted(
 	}),
 );
 
-vi.mock("../../../clients/safe-spawn.js", () => ({
+vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../clients/safe-spawn.js")>()),
 	safeSpawnAsync,
 }));
 
@@ -54,10 +57,7 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: () => ({
-			isAvailableAsync: async () => true,
-			getCommand: () => "trivy",
-		}),
+		resolveToolCommandWithInstallFallback: async () => "trivy",
 	}),
 );
 

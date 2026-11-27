@@ -45,6 +45,7 @@ export interface McpHarnessOptions {
 export class McpHarness {
 	private child: ChildProcessWithoutNullStreams;
 	private buffer = "";
+	private stderr = "";
 	private readonly workspaceDir: string;
 	private readonly isolationDir: string;
 	/**
@@ -102,6 +103,10 @@ export class McpHarness {
 				env,
 			},
 		);
+		this.child.stderr.setEncoding("utf8");
+		this.child.stderr.on("data", (chunk: string) => {
+			this.stderr += chunk;
+		});
 		this.child.stdout.setEncoding("utf8");
 		this.child.stdout.on("data", (chunk: string) => {
 			this.buffer += chunk;
@@ -119,6 +124,40 @@ export class McpHarness {
 				}
 				nl = this.buffer.indexOf("\n");
 			}
+		});
+	}
+
+	/** Everything the server has written to stderr so far. */
+	stderrText(): string {
+		return this.stderr;
+	}
+
+	/** Resolve with the server's stderr once it contains `text`; reject at the
+	 *  deadline or when the server exits first. */
+	waitForStderr(
+		text: string,
+		timeoutMs = this.defaultTimeoutMs,
+	): Promise<string> {
+		return new Promise((resolve, reject) => {
+			const done = (error?: Error): void => {
+				clearTimeout(timer);
+				this.child.stderr.off("data", check);
+				this.child.off("exit", exited);
+				if (error) reject(error);
+				else resolve(this.stderr);
+			};
+			const check = (): void => {
+				if (this.stderr.includes(text)) done();
+			};
+			const exited = (): void =>
+				done(new Error(`server exited before stderr had: ${text}`));
+			const timer = setTimeout(
+				() => done(new Error(`timeout waiting for stderr: ${text}`)),
+				timeoutMs,
+			);
+			this.child.stderr.on("data", check);
+			this.child.once("exit", exited);
+			check();
 		});
 	}
 

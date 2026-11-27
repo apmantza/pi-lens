@@ -98,6 +98,43 @@ describe("runAutofix markdownlint config seam (#1247)", () => {
 		expect(args.indexOf("--config")).toBeLessThan(args.indexOf("--fix"));
 	});
 
+	// #5544 round 2: the autofix surface hands cli2 the same path string the lint
+	// runner does, and cli2 matches `ignores` against it. With an absolute target
+	// in a lane under `.claude/`, `--fix` reported `Linting: 0 files` and rewrote
+	// nothing, so a fixable finding stayed fixable forever with no signal.
+	it("hands --fix the project-relative target so the project's ignores can match it", async () => {
+		const project = path.join(tmpDir, ".claude/worktrees/lane1");
+		fs.mkdirSync(project, { recursive: true });
+		fs.writeFileSync(
+			path.join(project, ".markdownlint-cli2.jsonc"),
+			'{ "ignores": ["**/.claude/**"] }\n',
+		);
+		const file = path.join(project, "doc.md");
+		fs.writeFileSync(file, "# Title\n\n\n\nx\n");
+
+		await runAutofix(
+			file,
+			project,
+			() => false,
+			() => {},
+			{
+				biomeClient: {} as never,
+				ruffClient: {} as never,
+				fixedThisTurn: new Set<string>(),
+			},
+		);
+
+		const calls = vi
+			.mocked(detectFileChangedAfterCommand)
+			.mock.calls.filter(([, , args]) => args.includes("--fix"));
+		expect(calls.length).toBeGreaterThan(0);
+		const args = calls[0][2];
+		// The change-detection target stays absolute; only the CLI argument moves.
+		expect(calls[0][0]).toBe(file);
+		expect(args).toContain("doc.md");
+		expect(args).not.toContain(file);
+	});
+
 	it("does NOT pass --config when the project ships its own markdownlint config", async () => {
 		fs.writeFileSync(path.join(tmpDir, ".markdownlint.json"), "{}");
 		const file = path.join(tmpDir, "doc.md");

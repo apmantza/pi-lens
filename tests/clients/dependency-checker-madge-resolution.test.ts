@@ -44,14 +44,22 @@ const GLOBAL_BIN_2 =
 		? String.raw`C:\fake-global\bin\madge`
 		: "/usr/bin/madge";
 
-vi.mock("../../clients/safe-spawn.js", () => ({ safeSpawnAsync, safeSpawn }));
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
+	safeSpawnAsync,
+	safeSpawn,
+}));
 vi.mock("../../clients/package-manager.js", async (importOriginal) => ({
 	...(await importOriginal<
 		typeof import("../../clients/package-manager.js")
 	>()),
 	findNodeToolBinary,
 }));
-vi.mock("../../clients/installer/index.js", () => ({
+vi.mock("../../clients/installer/index.js", async (importOriginal) => ({
+	// #5410 D9: `shouldAutoInstallTool` reads the opt-in off the real `TOOLS`.
+	TOOLS: (
+		await importOriginal<typeof import("../../clients/installer/index.js")>()
+	).TOOLS,
 	// #2140: the probe resolver asks the installer for a release-managed
 	// binary (`~/.pi-lens/bin`) before falling back to PATH. Undefined is
 	// "no managed install", which is what these tests already assumed.
@@ -67,6 +75,7 @@ vi.mock("../../clients/installer/index.js", () => ({
 	getLastEnsureResolutionSource: vi.fn(() => undefined),
 	getToolInstallStrategy: vi.fn(() => undefined),
 	isSpawnableCommand,
+	resetPathWalkMemo: vi.fn(),
 }));
 
 describe("DependencyChecker madge resolution (#766)", () => {
@@ -214,9 +223,17 @@ describe("DependencyChecker madge resolution (#766)", () => {
 		ensureTool.mockResolvedValue(managed);
 		// Exercise the off-PATH auto-install path: ensureAvailable's bare-name
 		// probe fails, then resolution must reuse the installed absolute path.
+		// A real absent binary carries a typed `tool-not-found` failure; the
+		// registry ladder reads that, not a bare non-zero exit, as installable.
 		safeSpawnAsync.mockImplementation(async (_cmd: string, args: string[]) =>
 			args[0] === "--version"
-				? { status: 1, error: new Error("not found"), stdout: "", stderr: "" }
+				? {
+						status: null,
+						error: new Error("not found"),
+						spawnFailure: { kind: "tool-not-found" },
+						stdout: "",
+						stderr: "",
+					}
 				: { status: 0, error: undefined, stdout: "[]", stderr: "" },
 		);
 

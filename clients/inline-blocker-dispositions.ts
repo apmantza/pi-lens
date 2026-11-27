@@ -67,6 +67,12 @@ export interface InlineBlockerPolicyOutcome {
 	candidates: number;
 	/** Survivors — what `body` renders. */
 	kept: number;
+	/**
+	 * The surviving rows themselves, for a reader that words them rather than
+	 * rendering `body` (the session read's all-clear, #5788 review N1). Empty
+	 * for an unstructured record, which has no rows.
+	 */
+	keptDiagnostics: readonly Diagnostic[];
 	/** `candidates - kept`. */
 	suppressed: number;
 	/**
@@ -131,6 +137,7 @@ export function applyInlineBlockerPolicy(
 			body: record.summary,
 			candidates: 0,
 			kept: 0,
+			keptDiagnostics: [],
 			suppressed: 0,
 			unstructured: true,
 		};
@@ -166,9 +173,13 @@ export function applyInlineBlockerPolicy(
 		body:
 			kept.length === 0
 				? undefined
-				: formatDiagnostics(kept, "blocking").trim(),
+				: formatDiagnostics(kept, "blocking", undefined, {
+						editedFile: filePath,
+						root: cwd,
+					}).trim(),
 		candidates: diagnostics.length,
 		kept: kept.length,
+		keptDiagnostics: kept,
 		suppressed: dropped,
 		unstructured: false,
 	};

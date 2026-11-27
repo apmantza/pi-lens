@@ -204,7 +204,7 @@ describe("context injection appends to last user message (#3693)", () => {
 
 			new CacheManager(false).writeCache(
 				"session-start-guidance",
-				{ content: "Guidance text" },
+				{ content: "Guidance text", sessionId: "sess-2" },
 				tmpDir,
 			);
 
@@ -389,7 +389,7 @@ describe("context injection appends to last user message (#3693)", () => {
 
 			new CacheManager(false).writeCache(
 				"session-start-guidance",
-				{ content: "Rule check." },
+				{ content: "Rule check.", sessionId: "sess-4" },
 				tmpDir,
 			);
 
@@ -471,7 +471,9 @@ describe("context injection appends to last user message (#3693)", () => {
 			// tool's own answer only.
 			const toolResultText = JSON.stringify(second[3]);
 			expect(toolResultText).not.toContain(MID_RUN);
-			expect(toolResultText).toContain("No issues in the current turn delta.");
+			expect(toolResultText).toContain(
+				"No new findings in the current turn delta.",
+			);
 
 			// The injection is the trailing message, prefixed with the delimiter.
 			expect(second[4].content).toBe(`${INJECTION_DELIMITER}\n\n${MID_RUN}`);
@@ -487,7 +489,7 @@ describe("context injection appends to last user message (#3693)", () => {
 
 			new CacheManager(false).writeCache(
 				"session-start-guidance",
-				{ content: "Empty transcript check." },
+				{ content: "Empty transcript check.", sessionId: "sess-6" },
 				tmpDir,
 			);
 
@@ -515,7 +517,7 @@ describe("context injection appends to last user message (#3693)", () => {
 
 			new CacheManager(false).writeCache(
 				"session-start-guidance",
-				{ content: "Uncoerced test guidance." },
+				{ content: "Uncoerced test guidance.", sessionId: "sess-7" },
 				tmpDir,
 			);
 

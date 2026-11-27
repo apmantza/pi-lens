@@ -21,24 +21,49 @@
  * `process.kill` is mocked in every case that could reach it, so a regression
  * here can never deliver a real signal to the runner.
  */
+// flake-shape: ungoverned-wait-for — where /proc is absent the owned-child row's start read is a process-table query on the child_process double, and its settle exposes no awaitable; the wait ends on the degradation row the case asserts, bounded by vi.waitFor's timeout (#5745 r4)
 // flake-shape: real-process-spawn — the kill-ownership cases need a real live child of this process: the ownership guard reads its /proc ppid, which no double carries; the mock beside it on the same module would otherwise hide that spawn (#5064)
 import { EventEmitter } from "node:events";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
+import {
+	_resetProcessSingletonsForTests,
+	_seedProcessSingletonCellForTests,
+	getProcessSingleton,
+	getProcessSingletonResets,
+} from "../../clients/process-singletons.js";
+import { _settleRegistryMutationsForTests } from "../../clients/instance-registry-tail.js";
 import { isOwnLiveChild } from "../../clients/safe-spawn.js";
+import { removeTempDirSync } from "./test-utils.js";
 
 /** The registry `clients/safe-spawn.ts` shares across module instances. */
-const LIFETIME_STATE_KEY = Symbol.for("pi-lens.safe-spawn.lifetime-state");
+function lifetimeState(): { pids: Set<number>; installed: boolean } {
+	return getProcessSingleton("safe-spawn-lifetime", 1, () => ({
+		pids: new Set<number>(),
+		installed: false,
+	}));
+}
 
 function lifetimePids(): Set<number> {
-	const host = process as typeof process & {
-		[LIFETIME_STATE_KEY]?: { pids: Set<number>; installed: boolean };
-	};
-	return host[LIFETIME_STATE_KEY]?.pids ?? new Set<number>();
+	return lifetimeState().pids;
+}
+
+/** A real live child of this process (the ownership guard reads its /proc ppid). */
+async function spawnOwnedFixtureChild() {
+	const { spawn: realSpawn } =
+		await vi.importActual<typeof import("node:child_process")>(
+			"node:child_process",
+		);
+	return realSpawn(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], {
+		stdio: "ignore",
+	});
 }
 
 class FakeStream extends EventEmitter {
@@ -78,24 +103,11 @@ describe("lifetime signal cleanup (#3239)", () => {
 		const listenersBefore = new Map(
 			signalNames.map((signal) => [signal, process.listeners(signal)]),
 		);
-		const lifetimeState = process as typeof process & {
-			[LIFETIME_STATE_KEY]?: { pids: Set<number>; installed: boolean };
-		};
-		const state = lifetimeState[LIFETIME_STATE_KEY];
-		state?.pids.clear();
-		if (state) state.installed = false;
+		const state = lifetimeState();
+		state.pids.clear();
+		state.installed = false;
 		vi.resetModules();
-		const { spawn: realSpawn } =
-			await vi.importActual<typeof import("node:child_process")>(
-				"node:child_process",
-			);
-		const ownedChild = realSpawn(
-			process.execPath,
-			["-e", "setTimeout(() => {}, 5000)"],
-			{
-				stdio: "ignore",
-			},
-		);
+		const ownedChild = await spawnOwnedFixtureChild();
 		const ownedPid = ownedChild.pid;
 		if (ownedPid === undefined)
 			throw new Error("fixture child did not get a pid");
@@ -290,6 +302,98 @@ describe("kill-by-pid ownership (#2042)", () => {
 		vi.resetModules();
 	});
 
+	/**
+	 * Shape 25 (#2146): the lifetime registry lives in a process singleton, so a
+	 * second module evaluation shares the first one's pids and exit listeners and
+	 * a cell an older build shaped differently is discarded with one record,
+	 * where the hand-rolled `Symbol.for` slot it replaced threw `reading 'add'`
+	 * on the first lifetime-coupled spawn. The child is real (the ownership guard
+	 * reads its /proc ppid); the `child_process` double carries only its handle.
+	 */
+	describe("the lifetime registry is a process singleton (shape 25)", () => {
+		async function spawnCoupled(
+			ownedPid: number,
+		): Promise<() => Promise<void>> {
+			const child = new FakeChild(ownedPid);
+			let spawned!: () => void;
+			const hasSpawned = new Promise<void>((resolve) => {
+				spawned = resolve;
+			});
+			vi.doMock("node:child_process", () => ({
+				spawn: vi.fn(() => {
+					queueMicrotask(spawned);
+					return child;
+				}),
+				spawnSync: vi.fn(() => ({ status: 0, stdout: "", stderr: "" })),
+				execSync: vi.fn(() => ""),
+				execFileSync: vi.fn(() => ""),
+			}));
+			vi.resetModules();
+			const { safeSpawnAsync } = await import("../../clients/safe-spawn.js");
+			const pending = safeSpawnAsync("which", ["node"], {
+				lifetimeCoupled: true,
+				timeout: 50_000,
+			});
+			await hasSpawned;
+			return async () => {
+				child.emit("close", 0, null);
+				await pending;
+			};
+		}
+
+		async function withOwnedChild(
+			run: (ownedPid: number) => Promise<void>,
+		): Promise<void> {
+			const owned = await spawnOwnedFixtureChild();
+			if (owned.pid === undefined)
+				throw new Error("fixture child did not get a pid");
+			try {
+				await run(owned.pid);
+			} finally {
+				owned.kill("SIGKILL");
+				lifetimeState().pids.clear();
+				// The owned child's registry row (#5703) is written and removed on
+				// the shared mutation tail. Join it before the reset drops the
+				// tail, or a fresh tail's write meets the old one's lock in a later
+				// case and probes the holder with `process.kill(pid, 0)` while that
+				// case's spy is watching (#5745 r4, F4).
+				await _settleRegistryMutationsForTests();
+				_resetProcessSingletonsForTests();
+			}
+		}
+
+		it("a second module evaluation shares the pids and the one exit listener", async () => {
+			await withOwnedChild(async (ownedPid) => {
+				const settleFirst = await spawnCoupled(ownedPid);
+				expect([...lifetimePids()]).toContain(ownedPid);
+				const listenersAfterFirst = process.listeners("exit").length;
+				const settleSecond = await spawnCoupled(ownedPid);
+				expect(process.listeners("exit")).toHaveLength(listenersAfterFirst);
+				expect(lifetimeState().installed).toBe(true);
+				await settleSecond();
+				await settleFirst();
+			});
+		});
+
+		it("discards a cell of an older version and registers the pid in a fresh one", async () => {
+			await withOwnedChild(async (ownedPid) => {
+				_seedProcessSingletonCellForTests("safe-spawn-lifetime", {
+					schema: "pi-lens.process-singletons",
+					version: 0,
+					value: { shapedByAnOlderBuild: true },
+				});
+				const settle = await spawnCoupled(ownedPid);
+				expect([...lifetimePids()]).toContain(ownedPid);
+				expect(
+					getProcessSingletonResets().filter(
+						(entry) => entry.family === "safe-spawn-lifetime",
+					),
+				).toHaveLength(1);
+				await settle();
+			});
+		});
+	});
+
 	it("refuses a malformed pid at every site", () => {
 		expect(isOwnLiveChild(0, "test")).toBe(false);
 		expect(isOwnLiveChild(-1, "test")).toBe(false);
@@ -341,6 +445,324 @@ describe("kill-by-pid ownership (#2042)", () => {
 			if (real) Object.defineProperty(process, "platform", real);
 		}
 	});
+
+	// #5745 r3 F1: a rejected ledger write once escaped as an unhandled
+	// rejection and killed the host. Both rejections now land in one
+	// degradation row per session, and the spawn still settles.
+	it("a rejecting owned-child ledger records one degradation and the spawn settles", async () => {
+		const owned = await spawnOwnedFixtureChild();
+		if (owned.pid === undefined)
+			throw new Error("fixture child did not get a pid");
+		const child = new FakeChild(owned.pid);
+		vi.doMock("node:child_process", () => ({
+			spawn: vi.fn(() => child),
+			spawnSync: vi.fn(() => ({ status: 0, stdout: "", stderr: "" })),
+			execSync: vi.fn(() => ""),
+			execFileSync: vi.fn(() => ""),
+		}));
+		const held = await import("../../clients/held-children.js");
+		const registry = await import("../../clients/instance-registry.js");
+		const { safeSpawnAsync } = await import("../../clients/safe-spawn.js");
+		const { getDegradationSummary: freshSummary } =
+			await import("../../clients/degradation-ledger.js");
+		held.provideOwnedChildLedger({
+			write: async () => {
+				throw new Error("REGISTRY_WRITE_FAILED");
+			},
+			remove: async () => {
+				throw new Error("REGISTRY_REMOVE_FAILED");
+			},
+		});
+		try {
+			const pending = safeSpawnAsync(process.execPath, ["-e", "0"], {
+				timeout: 50_000,
+			});
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			child.emit("close", 0, null);
+			await pending;
+			// Where `/proc` is absent the start read is a process-table query on
+			// the same double, which the close above also settles.
+			const group = await vi.waitFor(() => {
+				const found = freshSummary().find((entry) =>
+					entry.latestReasons.some(
+						(reason) => reason.subject === "owned-child-registry",
+					),
+				);
+				if (!found) throw new Error("no owned-child registry record yet");
+				return found;
+			});
+			expect(group?.kind).toBe("safe-spawn-owned-child-registry-failed");
+			expect(group?.count).toBe(1);
+			expect(group?.latestReasons.map((entry) => entry.reason)).toEqual([
+				"record failed: Error: REGISTRY_WRITE_FAILED",
+			]);
+		} finally {
+			held.provideOwnedChildLedger({
+				write: registry.recordLspChild,
+				remove: registry.removeLspChild,
+			});
+			owned.kill("SIGKILL");
+			lifetimeState().pids.clear();
+		}
+	});
+
+	// #5745 r6 (CodeRabbit): `close` queued the row's removal while the row's
+	// record was still pending behind the start read (a `ps` query on macOS).
+	// The removal found nothing, the record then wrote the finished child's
+	// row, and the spent removal never ran again. Probed on the old head with
+	// the start read held until after `close`: the row stayed in instances.json.
+	it("removes an owned child's row only after its record settles", async () => {
+		const owned = await spawnOwnedFixtureChild();
+		if (owned.pid === undefined)
+			throw new Error("fixture child did not get a pid");
+		const child = new FakeChild(owned.pid);
+		vi.resetModules();
+		vi.doMock("node:child_process", () => ({
+			spawn: vi.fn(() => child),
+			spawnSync: vi.fn(() => ({ status: 0, stdout: "", stderr: "" })),
+			execSync: vi.fn(() => ""),
+			execFileSync: vi.fn(() => ""),
+		}));
+		const held = await import("../../clients/held-children.js");
+		const { safeSpawnAsync } = await import("../../clients/safe-spawn.js");
+		const events: string[] = [];
+		let releaseWrite: () => void = () => {};
+		let writeCalled: () => void = () => {};
+		const writeStarted = new Promise<void>((resolve) => {
+			writeCalled = resolve;
+		});
+		held.provideOwnedChildLedger({
+			write: (entry) => {
+				events.push(`write ${entry.pid}`);
+				writeCalled();
+				return new Promise<void>((resolve) => {
+					releaseWrite = () => {
+						events.push(`write landed ${entry.pid}`);
+						resolve();
+					};
+				});
+			},
+			remove: async (pid) => {
+				events.push(`remove ${pid}`);
+			},
+		});
+		try {
+			const pending = safeSpawnAsync(process.execPath, ["-e", "0"], {
+				timeout: 50_000,
+			});
+			await writeStarted;
+			child.emit("close", 0, null);
+			await pending;
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(events).toEqual([`write ${owned.pid}`]);
+
+			releaseWrite();
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(events).toEqual([
+				`write ${owned.pid}`,
+				`write landed ${owned.pid}`,
+				`remove ${owned.pid}`,
+			]);
+		} finally {
+			releaseWrite();
+			// The ledger cell is a process singleton: a fresh registry module
+			// provides the production ledger again.
+			vi.resetModules();
+			await import("../../clients/instance-registry.js");
+			owned.kill("SIGKILL");
+			lifetimeState().pids.clear();
+		}
+	});
+
+	// #5745 r7 (CI shard 5, pi-session-teardown): a row write still waiting on
+	// its child's start read was in no drain. It landed after the session's
+	// teardown removed the fixture root, and its registration-missing ledger
+	// row re-created the root. The harness's drain pass must wait for it.
+	it("the background-write drain waits for an owned child's ledger work", async () => {
+		const owned = await spawnOwnedFixtureChild();
+		if (owned.pid === undefined)
+			throw new Error("fixture child did not get a pid");
+		const child = new FakeChild(owned.pid);
+		vi.resetModules();
+		vi.doMock("node:child_process", () => ({
+			spawn: vi.fn(() => child),
+			spawnSync: vi.fn(() => ({ status: 0, stdout: "", stderr: "" })),
+			execSync: vi.fn(() => ""),
+			execFileSync: vi.fn(() => ""),
+		}));
+		const held = await import("../../clients/held-children.js");
+		const { safeSpawnAsync } = await import("../../clients/safe-spawn.js");
+		const { drainRegisteredBackgroundWritesForTests } =
+			await import("../support/background-write-drains.js");
+		const events: string[] = [];
+		let releaseWrite: () => void = () => {};
+		let releaseRemove: () => void = () => {};
+		let writeCalled: () => void = () => {};
+		const writeStarted = new Promise<void>((resolve) => {
+			writeCalled = resolve;
+		});
+		held.provideOwnedChildLedger({
+			write: () => {
+				events.push("write");
+				writeCalled();
+				return new Promise<void>((resolve) => {
+					releaseWrite = () => {
+						events.push("write landed");
+						resolve();
+					};
+				});
+			},
+			remove: () => {
+				events.push("remove");
+				return new Promise<void>((resolve) => {
+					releaseRemove = () => {
+						events.push("remove landed");
+						resolve();
+					};
+				});
+			},
+		});
+		try {
+			const pending = safeSpawnAsync(process.execPath, ["-e", "0"], {
+				timeout: 50_000,
+			});
+			await writeStarted;
+			child.emit("close", 0, null);
+			await pending;
+
+			let drained = false;
+			const drain = drainRegisteredBackgroundWritesForTests().then(() => {
+				drained = true;
+			});
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(drained).toBe(false);
+
+			// The write landed; the removal chained after it is still in flight.
+			releaseWrite();
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(events).toEqual(["write", "write landed", "remove"]);
+			expect(drained).toBe(false);
+
+			releaseRemove();
+			await drain;
+			expect(events).toEqual([
+				"write",
+				"write landed",
+				"remove",
+				"remove landed",
+			]);
+		} finally {
+			releaseWrite();
+			releaseRemove();
+			// The ledger cell is a process singleton: a fresh registry module
+			// provides the production ledger again.
+			vi.resetModules();
+			await import("../../clients/instance-registry.js");
+			owned.kill("SIGKILL");
+			lifetimeState().pids.clear();
+		}
+	});
+
+	// #5745 r10: the ledger drain is one call per pass of the runner. While it
+	// waited on one child's row write, a second spawn added another; a drain
+	// that returned after the first write (`while` read as `if`) left the second
+	// to land after it, and a row write kept out of the tracked set was not
+	// waited for at all. Linux: the start read is a /proc read of the real
+	// fixture children, not a process-table query on the spawn double.
+	it.skipIf(process.platform !== "linux")(
+		"the ledger drain joins a row write added while it waits on another",
+		async () => {
+			const firstOwned = await spawnOwnedFixtureChild();
+			const secondOwned = await spawnOwnedFixtureChild();
+			if (firstOwned.pid === undefined || secondOwned.pid === undefined)
+				throw new Error("fixture child did not get a pid");
+			const children = [
+				new FakeChild(firstOwned.pid),
+				new FakeChild(secondOwned.pid),
+			];
+			const spawned = [...children];
+			vi.resetModules();
+			vi.doMock("node:child_process", () => ({
+				spawn: vi.fn(() => children.shift()),
+				spawnSync: vi.fn(() => ({ status: 0, stdout: "", stderr: "" })),
+				execSync: vi.fn(() => ""),
+				execFileSync: vi.fn(() => ""),
+			}));
+			const held = await import("../../clients/held-children.js");
+			const { safeSpawnAsync } = await import("../../clients/safe-spawn.js");
+			const { registeredBackgroundWriteDrainsForTests } =
+				await import("../../clients/background-write-drains.js");
+			const writes = new Map<
+				number,
+				{ called: Promise<void>; markCalled: () => void; release: () => void }
+			>();
+			const writeFor = (pid: number) => {
+				let entry = writes.get(pid);
+				if (!entry) {
+					let markCalled: () => void = () => {};
+					const called = new Promise<void>((resolve) => {
+						markCalled = resolve;
+					});
+					entry = { called, markCalled, release: () => {} };
+					writes.set(pid, entry);
+				}
+				return entry;
+			};
+			held.provideOwnedChildLedger({
+				write: (row) =>
+					new Promise<void>((resolve) => {
+						const entry = writeFor(row.pid);
+						entry.release = resolve;
+						entry.markCalled();
+					}),
+				remove: async () => {},
+			});
+			const pendingWrites: Promise<unknown>[] = [];
+			try {
+				pendingWrites.push(
+					safeSpawnAsync(process.execPath, ["-e", "0"], { timeout: 50_000 }),
+				);
+				await writeFor(firstOwned.pid).called;
+				// This copy's drain: the last one of that name registered.
+				const ledger = registeredBackgroundWriteDrainsForTests()
+					.filter(
+						({ drain }) => drain.name === "settleOwnedChildLedgerForTests",
+					)
+					.at(-1);
+				if (!ledger) throw new Error("safe-spawn registers no ledger drain");
+				let drained = false;
+				const drain = ledger.drain().then(() => {
+					drained = true;
+				});
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				expect(drained).toBe(false);
+
+				pendingWrites.push(
+					safeSpawnAsync(process.execPath, ["-e", "0"], { timeout: 50_000 }),
+				);
+				await writeFor(secondOwned.pid).called;
+				writeFor(firstOwned.pid).release();
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				expect(drained).toBe(false);
+				expect(ledger.pending()).toBe(true);
+
+				writeFor(secondOwned.pid).release();
+				await drain;
+				expect(ledger.pending()).toBe(false);
+			} finally {
+				for (const entry of writes.values()) entry.release();
+				for (const child of spawned) child.emit("close", 0, null);
+				await Promise.all(pendingWrites);
+				// The ledger cell is a process singleton: a fresh registry module
+				// provides the production ledger again.
+				vi.resetModules();
+				await import("../../clients/instance-registry.js");
+				firstOwned.kill("SIGKILL");
+				secondOwned.kill("SIGKILL");
+				lifetimeState().pids.clear();
+			}
+		},
+	);
 
 	// Everything below reads `/proc`, which only Linux has. The Windows and
 	// macOS arms of the same predicate are covered above WITHOUT a lane, by the
@@ -414,6 +836,53 @@ describe("kill-by-pid ownership (#2042)", () => {
 				);
 				expect(after?.count).toBe(2);
 				expect(after?.latestReasons).toHaveLength(1);
+			});
+
+			// #5745 r4: the owned-child row is what the next session's reaper kills
+			// by. A fabricated pid that got one would hand the reaper a live
+			// foreign process (here the vitest parent) with its real start bound.
+			it("a fabricated child pid gets no owned-child row in instances.json", async () => {
+				const foreignPid = process.ppid;
+				const child = new FakeChild(foreignPid);
+				vi.doMock("node:child_process", () => ({
+					spawn: vi.fn(() => child),
+					spawnSync: vi.fn(() => ({ status: 0, stdout: "", stderr: "" })),
+					execSync: vi.fn(() => ""),
+					execFileSync: vi.fn(() => ""),
+				}));
+				// This case writes the real registry: pin it to its own home.
+				const home = fs.mkdtempSync(
+					path.join(os.tmpdir(), "pi-lens-owned-child-row-"),
+				);
+				const previousHome = process.env.PI_LENS_HOME;
+				process.env.PI_LENS_HOME = home;
+				const registry = await import("../../clients/instance-registry.js");
+				const { safeSpawnAsync } = await import("../../clients/safe-spawn.js");
+				try {
+					await registry.registerInstance(process.cwd());
+					const pending = safeSpawnAsync("which", ["node"], {
+						timeout: 50_000,
+					});
+					// The row write is queued behind the spawn-time start read; one
+					// macrotask drains it onto the registry tail, which the settle joins.
+					await new Promise<void>((resolve) => setImmediate(resolve));
+					await _settleRegistryMutationsForTests();
+					const own = (await registry.readInstanceRegistry()).find(
+						(entry) => entry.pid === process.pid,
+					);
+					expect(own).toBeDefined();
+					expect(own?.lspChildren.map((row) => row.pid)).not.toContain(
+						foreignPid,
+					);
+					child.emit("close", 0, null);
+					await pending;
+				} finally {
+					registry.deregisterInstance();
+					await _settleRegistryMutationsForTests();
+					if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+					else process.env.PI_LENS_HOME = previousHome;
+					removeTempDirSync(home);
+				}
 			});
 
 			it("a fabricated child pid never enters the lifetime registry, so host exit never signals it", async () => {

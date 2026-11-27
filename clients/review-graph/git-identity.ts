@@ -20,6 +20,7 @@ import {
 	isUnderDir,
 	normalizeFilePath,
 	pathsEqual,
+	realpathOrResolve,
 	walkUpDirs,
 } from "../path-utils.js";
 
@@ -134,20 +135,6 @@ function getResolvedGitDir(cwd: string): ResolvedGitDir | null {
 	return resolved;
 }
 
-/**
- * `dir` with its symlinks followed (#3872); the input spelling when it cannot
- * be resolved. Checkout identity is compared by real location: a session whose
- * cwd is a link to the repository is the same checkout as the real path git
- * wrote into every linked worktree's `.git` file.
- */
-export function canonicalDirectory(dir: string): string {
-	try {
-		return fs.realpathSync.native(dir);
-	} catch {
-		return dir;
-	}
-}
-
 export interface GitCheckout {
 	/** The checkout's top-level directory (parent of its `.git` entry), real path: its identity. */
 	root: string;
@@ -172,9 +159,9 @@ export function resolveGitCheckout(startPath: string): GitCheckout | null {
 	const resolved = getResolvedGitDir(startPath);
 	return resolved
 		? {
-				root: canonicalDirectory(resolved.worktreeRoot),
+				root: realpathOrResolve(resolved.worktreeRoot),
 				spelledRoot: resolved.worktreeRoot,
-				commonDir: canonicalDirectory(resolved.commonDir),
+				commonDir: realpathOrResolve(resolved.commonDir),
 			}
 		: null;
 }
@@ -234,7 +221,7 @@ export function listLinkedWorktreeRoots(commonDir: string): string[] {
 			const entryDir = join(commonDir, "worktrees", name);
 			const gitFile = fs.readFileSync(join(entryDir, "gitdir"), "utf-8").trim();
 			if (gitFile) {
-				const root = canonicalDirectory(dirname(resolve(entryDir, gitFile)));
+				const root = realpathOrResolve(dirname(resolve(entryDir, gitFile)));
 				// A prunable registration can outlive its checkout. Do not let that
 				// stale identity hide a later plain directory from scanners (#4132).
 				if (fs.existsSync(join(root, ".git"))) roots.push(root);
@@ -256,7 +243,7 @@ export function listLinkedWorktreeRoots(commonDir: string): string[] {
 export function listNestedLinkedWorktreeRoots(scanRoot: string): string[] {
 	const checkout = resolveGitCheckout(scanRoot);
 	if (!checkout) return [];
-	const base = canonicalDirectory(scanRoot);
+	const base = realpathOrResolve(scanRoot);
 	const nested: string[] = [];
 	for (const root of listLinkedWorktreeRoots(checkout.commonDir)) {
 		if (!pathsEqual(root, base) && isUnderDir(root, base)) nested.push(root);

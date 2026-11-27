@@ -20,9 +20,10 @@
  * Refs: #131 (Mode 3), #130
  */
 
+import { isAbsolute } from "node:path";
 import type { ActionableWarningRecord } from "./actionable-warnings.js";
 import type { GitleaksFinding } from "./gitleaks-client.js";
-import { normalizeFilePath } from "./path-utils.js";
+import { normalizeHostToolPath, normalizeMapKey } from "./path-utils.js";
 
 /** The scanners that can flag a secret, in display/priority order. */
 type SecretSource = "gitleaks" | "trivy" | "ast-grep";
@@ -62,9 +63,20 @@ export function isSecretWarning(warning: ActionableWarningRecord): boolean {
 	return SECRET_RULE_PATTERN.test(id);
 }
 
-/** Location key used to collapse the same secret across sources. */
-export function secretLocationKey(file: string, line: number): string {
-	return `${normalizeFilePath(file)}:${line}`;
+/**
+ * Location key used to collapse the same secret across sources. gitleaks
+ * reports an absolute path and trivy one relative to its scan root (#5459), so
+ * a relative file is joined to the scan cwd before its identity is taken. The
+ * cwd's basename and its ancestors never re-anchor it (#5459 review F1).
+ */
+export function secretLocationKey(
+	file: string,
+	line: number,
+	cwd: string,
+): string {
+	const spelled = normalizeHostToolPath(file);
+	const identity = isAbsolute(spelled) ? spelled : `${cwd}/${spelled}`;
+	return `${normalizeMapKey(identity)}:${line}`;
 }
 
 export function fromGitleaks(findings: GitleaksFinding[]): SecretFinding[] {
@@ -121,8 +133,8 @@ function sortSources(sources: SecretSource[]): SecretSource[] {
 }
 
 /**
- * Collapse secret findings that share a location (normalized file + line) into
- * one, merging their `sources` and keeping the highest-priority source's rule.
+ * Collapse findings that share a cwd-resolved file and line into one, merging
+ * their `sources` and keeping the highest-priority source's rule.
  * Output preserves first-appearance order so surfacing is stable across turns.
  *
  * This is THE cross-source collapse the #131 Mode 3 acceptance gate verifies:
@@ -131,10 +143,11 @@ function sortSources(sources: SecretSource[]): SecretSource[] {
  */
 export function dedupeSecretFindings(
 	findings: SecretFinding[],
+	cwd: string,
 ): SecretFinding[] {
 	const byKey = new Map<string, SecretFinding>();
 	for (const f of findings) {
-		const key = secretLocationKey(f.file, f.line);
+		const key = secretLocationKey(f.file, f.line, cwd);
 		const incoming = sortSources(f.sources);
 		const existed = byKey.get(key);
 		if (!existed) {

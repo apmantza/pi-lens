@@ -89,6 +89,7 @@ import {
 	setupTestEnvironment,
 } from "./clients/test-utils.js";
 import { waitFor } from "./clients/interleaving-kit.js";
+import { drainRegisteredBackgroundWritesForTests } from "./support/background-write-drains.js";
 import { scaledTestTimeout } from "./support/test-timeout-scale.js";
 
 const FLAGS = new Map<string, boolean>([
@@ -153,6 +154,12 @@ afterEach(async () => {
 	try {
 		for (const runtime of runtimes.splice(0)) await runtime.dispose();
 		await drainBackgroundWritesForTests();
+		// Every session_start primes the global-bin-dir lookup without waiting
+		// for it (#5261): `npm config get prefix`, a spawn that outlives the
+		// session. Its settle is a `package-manager-global-bin` write into the
+		// process-wide fence tally, so a lookup this case left running landed in
+		// the next case's rollup (the O5 cap case read guardedTotal 21, not 20).
+		await drainRegisteredBackgroundWritesForTests();
 		expect(extensionErrors.splice(0)).toEqual([]);
 	} finally {
 		vi.restoreAllMocks();
@@ -1185,39 +1192,52 @@ describe("#3873 F1: a formatter give-up leaves a per-file row at chain time", ()
 	// on settlement, and an Escape or a formatter that never settles left no
 	// per-file record that the pipeline had given up.
 	for (const which of ["inband", "deferred"] as const) {
-		it(`${which}: one row at chain time, before the formatter settles`, async () => {
-			let settle!: () => void;
-			const settled = new Promise<void>((resolve) => {
-				settle = resolve;
-			});
-			const late = `${which}_format_late_resync`;
+		it(
+			`${which}: one row at chain time, before the formatter settles`,
+			async () => {
+				let settle!: () => void;
+				const settled = new Promise<void>((resolve) => {
+					settle = resolve;
+				});
+				const late = `${which}_format_late_resync`;
 
-			void chainLateFormatResync(
-				settled,
-				which,
-				{ toolName: "write", filePath: "/repo/f.ts", startedAt: Date.now() },
-				() => {},
-			);
+				void chainLateFormatResync(
+					settled,
+					which,
+					{ toolName: "write", filePath: "/repo/f.ts", startedAt: Date.now() },
+					() => {},
+				);
 
-			// The give-up is on record while the formatter is still running.
-			expect(await rows("format_late_resync_chained")).toEqual([{ which }]);
-			expect(await rows(late)).toEqual([]);
-			// Let the chain finish (yielding the loop, no timer) so nothing outlives the case.
-			settle();
-			for (let i = 0; i < 5000 && (await rows(late)).length === 0; i += 1)
-				await new Promise<void>((resolve) => setImmediate(resolve));
-			expect(await rows(late)).toHaveLength(1);
-			// #5379: both values are the formatter's AGE since the write row began
-			// (it overlaps the formatter phase already recorded), so neither row may
-			// carry a `durationMs` the performance report would rank.
-			for (const row of [
-				...(await wholeRows("format_late_resync_chained")),
-				...(await wholeRows(late)),
-			]) {
-				expect(row, row.phase).toHaveProperty("ageMs", expect.any(Number));
-				expect(row, row.phase).not.toHaveProperty("durationMs");
-			}
-		});
+				// The give-up is on record while the formatter is still running.
+				expect(await rows("format_late_resync_chained")).toEqual([{ which }]);
+				expect(await rows(late)).toEqual([]);
+				// Let the chain finish (yielding the loop, no timer) so nothing outlives the case.
+				settle();
+				// Shape 86 (#4865): the ceiling was `i < 5000` setImmediate turns. The
+				// read is async (flush, then read the sink), so the wait stays a loop but
+				// ends on the row or on a real-clock deadline -- the same 4,000 ms budget
+				// `sidecarSettled` uses, scaled by the lane. The test's own timeout sits
+				// above it so a row that never lands reports the assertion below, not a
+				// bare `Test timed out` (#4983).
+				const lateRowDeadlineAt = Date.now() + scaledTestTimeout(4_000);
+				while (Date.now() < lateRowDeadlineAt) {
+					if ((await rows(late)).length > 0) break;
+					await new Promise<void>((resolve) => setImmediate(resolve));
+				}
+				expect(await rows(late)).toHaveLength(1);
+				// #5379: both values are the formatter's AGE since the write row began
+				// (it overlaps the formatter phase already recorded), so neither row may
+				// carry a `durationMs` the performance report would rank.
+				for (const row of [
+					...(await wholeRows("format_late_resync_chained")),
+					...(await wholeRows(late)),
+				]) {
+					expect(row, row.phase).toHaveProperty("ageMs", expect.any(Number));
+					expect(row, row.phase).not.toHaveProperty("durationMs");
+				}
+			},
+			scaledTestTimeout(20_000),
+		);
 	}
 
 	it("swallows a rejected late resync without an unhandled rejection", async () => {

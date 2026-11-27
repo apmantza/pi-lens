@@ -106,7 +106,12 @@ import { Lang, parse } from "@ast-grep/napi";
 
 import { bareIdentifier } from "./lsp-double-gate.js";
 import { unwrapParens } from "./spawn-cwd-scan.js";
-import { isViMockCall, mockSpecifier, unquote } from "./vi-mock-export-gate.js";
+import {
+	isViMockCall,
+	MOCK_REGISTRATION_NAMES,
+	mockSpecifier,
+	unquote,
+} from "./vi-mock-export-gate.js";
 import {
 	createCallSiteScanner,
 	codeMatches,
@@ -445,6 +450,8 @@ export const AST_GREP_SPAWN_EXEMPTIONS: Readonly<Record<string, string>> = {
 		"safeSpawn and safeSpawnAsync are mocked at the process boundary.",
 	"clients/runtime-tool-call.test.ts":
 		"The AstGrepClient runner is replaced before mutation-bridge tool execution.",
+	"clients/write-source-file-5417.test.ts":
+		"Every client replaces its runner with an exec or scan stub at the sg process boundary before the tool executes.",
 };
 
 /**
@@ -872,12 +879,12 @@ export function scanUngovernedWaitFor(
  * A `new Promise(...)` whose executor body is empty, outside a
  * `vi.useFakeTimers()` scope (#2885). Such a promise can never settle, so
  * anything that awaits it ends only when a REAL timer fires somewhere: a
- * production helper's budget (`withTimeout`, `withBudget`, `withDeadline` in
+ * production helper's budget (`withBudget`, `withDeadline`, `bounded` in
  * clients/deadline-utils.ts), a harness deadline, or the test's own timeout.
  * Detector 3 reads timer calls in test and support source only, so a wait
  * whose `setTimeout` lives in production code was invisible: #2866's
  * `fails a session_start handler that never settles` waited a real 5 000 ms
- * through `pi-mock.ts`'s `withTimeout` with the ratchet green. This matches
+ * through `pi-mock.ts`'s budget race with the ratchet green. This matches
  * the hang itself rather than a list of helper names, so a new wrapper
  * around a timer is covered the day it lands.
  *
@@ -991,7 +998,8 @@ export function scanInProcessMock(
 	for (const call of syntaxRoot(scan).findAll({
 		rule: { kind: "call_expression" },
 	})) {
-		if (!isViMockCall(call.field("function"), ["mock", "doMock"])) continue;
+		if (!isViMockCall(call.field("function"), MOCK_REGISTRATION_NAMES))
+			continue;
 		const specifier = mockSpecifier(
 			call.field("arguments")?.namedChildren()[0],
 		);

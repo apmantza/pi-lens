@@ -14,8 +14,12 @@ import * as path from "node:path";
 import { delimiter, resolve as resolveCommandPath } from "node:path";
 import { logSessionStart } from "../../../sessionstart-logger.js";
 import { incrementDegradationCount } from "../../../degradation-ledger.js";
+import { isToolInstallDisabled } from "../../../env-utils.js";
 import { getGlobalPiLensDir } from "../../../file-utils.js";
-import { getProjectTrustState } from "../../../project-trust.js";
+import {
+	getProjectTrustGeneration,
+	getProjectTrustState,
+} from "../../../project-trust.js";
 import {
 	createGenerationSource,
 	type GenerationHandle,
@@ -48,7 +52,11 @@ import {
 	findGlobalBinary,
 	findLocalBinAt,
 	findLocalBinUpwards,
+	isLocalBinTrustRefusal,
+	type LocalBinLookup,
 	localBinPath,
+	NODE_MODULES_BIN_DIRS,
+	PROJECT_BIN_DIR_WINDOWS_EXT,
 	VENDOR_BIN_DIRS,
 	VENV_BIN_DIRS,
 } from "../../../package-manager.js";
@@ -62,9 +70,13 @@ import {
 	getToolCommandSpec,
 	shouldAutoInstallTool,
 } from "../../../tool-policy.js";
-import type { DispatchContext, RunnerClaimSource } from "../../types.js";
+import {
+	skipped,
+	type DispatchContext,
+	type RunnerClaimSource,
+	type RunnerResult,
+} from "../../types.js";
 import { isInSpawnTimeoutCooldown } from "../../../spawn-timeout-cooldown.js";
-import { resolveToolCwd } from "../../../tool-cwd.js";
 import { createAvailabilityProbeFlight } from "../../../availability-probe-flight.js";
 import {
 	type AvailabilityCause,
@@ -79,7 +91,6 @@ import {
 	isLatchingOutcome,
 	logAvailabilityDecision,
 	startHostStallSampler,
-	transientRetryDelayMs,
 } from "./availability-policy.js";
 
 export type {
@@ -97,6 +108,103 @@ export {
 	logAvailabilityDecision,
 	startHostStallSampler,
 } from "./availability-policy.js";
+
+/** The part of a verdict a tool-unusable skip reads (#5258). */
+export type ToolVerdict = Pick<AvailabilityVerdict, "outcome" | "cause">;
+
+/** What a runner's resolution of its tool decided, for its skip (#5258). */
+export interface ToolVerdictSource {
+	getVerdict(cwd: string): AvailabilityVerdict;
+	/**
+	 * Whether pi project trust refused the project-local binary this checker's
+	 * own ladder looks up at `cwd` (its command, extension and bin dirs). Only a
+	 * checker with a project rung has one.
+	 */
+	projectBinaryRefused?(cwd: string): boolean;
+}
+
+/**
+ * What a runner read to learn its tool was unusable (#5258). The skip reads
+ * only the resolution the runner used: a checker it did not probe says nothing
+ * about why its own lookup failed.
+ */
+export interface ToolSkipSource {
+	/**
+	 * The registry tool id. It names the managed install, so `install-disabled`
+	 * is said only of a tool the installer could have supplied. Omit it for a
+	 * PATH-only toolchain.
+	 */
+	id?: string;
+	/**
+	 * The checker or cwd probe the runner resolved its tool through. With `id`
+	 * alone it is the registry ladder, so `{ id }` means the runner called
+	 * `resolveToolCommandWithInstallFallback(cwd, id)`. Omit both for a finder
+	 * that returns only a path: its null is a plain absence.
+	 */
+	checker?: ToolVerdictSource;
+	/**
+	 * The verdict of a resolution made outside any checker (rubocop's own
+	 * `--version` spawn, the PowerShell module probe), `null` when it reached
+	 * none. When present it is the only verdict read, never a checker's.
+	 */
+	verdict?: ToolVerdict | null;
+	/**
+	 * A project-binary lookup the runner made outside its checker (taplo's
+	 * upward walk, phpstan's `vendor/bin` walk) was refused by trust.
+	 */
+	trustRefused?: boolean;
+	/**
+	 * The checker probes a runtime the tool needs (Java for SpotBugs), so its
+	 * absence reads `runtime-missing`, never as the tool's own.
+	 */
+	runtime?: boolean;
+}
+
+/**
+ * The skip a runner returns when its tool could not be used (#5258), worded
+ * by the typed verdict of the resolution the runner used, so the cause the
+ * notice and the `runner-skip-cause` record state is the one the probe found,
+ * never "not installed" for a tool that merely timed out or was refused:
+ *
+ * | verdict | reason |
+ * | --- | --- |
+ * | transient (probe timeout, host stall, unspawnable finder, retries spent), or a bad workspace | `probe-incomplete` |
+ * | non-installable (found, rejected its version probe) | `probe-rejected` |
+ * | cause `policy-denied`, or trust refused the project binary the runner's own lookup found | `trust-refused` |
+ * | missing otherwise, or no verdict, for a runtime the tool needs | `runtime-missing` |
+ * | missing otherwise, or no verdict, the managed install is off and the installer would install the tool | `install-disabled` |
+ * | missing otherwise, or no verdict (a finder) | `not-installed` |
+ */
+export function toolAbsentSkip(
+	cwd: string,
+	tool: ToolSkipSource = {},
+): RunnerResult {
+	const ownVerdict = "verdict" in tool;
+	const checker = ownVerdict
+		? undefined
+		: (tool.checker ??
+			(tool.id
+				? (toolBinaryChecker(tool.id, "managed-first") ?? undefined)
+				: undefined));
+	const verdict = ownVerdict ? tool.verdict : checker?.getVerdict(cwd);
+	if (verdict?.outcome === "transient" || verdict?.cause === "bad-cwd")
+		return skipped("probe-incomplete");
+	if (verdict?.outcome === "non-installable") return skipped("probe-rejected");
+	if (
+		verdict?.cause === "policy-denied" ||
+		tool.trustRefused === true ||
+		checker?.projectBinaryRefused?.(cwd) === true
+	)
+		return skipped("trust-refused");
+	if (tool.runtime === true) return skipped("runtime-missing");
+	return skipped(
+		isToolInstallDisabled() &&
+			tool.id !== undefined &&
+			shouldAutoInstallTool(tool.id)
+			? "install-disabled"
+			: "not-installed",
+	);
+}
 
 /**
  * The covering lane a runner should defer to: the file's SELECTED PRIMARY
@@ -435,7 +543,7 @@ export async function findManagedNodeToolBinary(
  * `fs.access`, and an on-disk binary that cannot run must not shadow a working
  * PATH binary — it falls through instead.
  */
-async function findManagedReleaseBinary(
+export async function findManagedReleaseBinary(
 	tool: string,
 	verificationArgs: string[] = ["--version"],
 ): Promise<string | null> {
@@ -535,9 +643,9 @@ export function resolveAdoptedRootCommand(
  * a literal filename that ENOENTs on every platform (#1508).
  *
  * The venv directory list is `VENV_BIN_DIRS` (`package-manager.ts`), shared
- * with `formatters.ts`'s `findInVenv` and `dead-code-client.ts`'s vulture
- * candidates — three independent spellings of the same four directories before
- * #2544 review F1.
+ * with `dead-code-client.ts`'s vulture candidates and, through
+ * `resolveInstalledToolCommand`, every formatter — three independent spellings
+ * of the same four directories before #2544 review F1.
  *
  * Resolution is a fixed lookup at `cwd` ONLY (`findLocalBinAt`, no ancestor
  * walk). #2544 review round 3 folded this onto the shared ANCESTOR walker,
@@ -559,40 +667,63 @@ export function createVenvFinder(
 	 * The default (`true`) preserves every session-root caller unchanged.
 	 */
 	allowProjectLocal = true,
+	/**
+	 * The project-local bin dirs looked up at exactly `cwd`, in order (#5410).
+	 * The registry-driven resolver passes the venv dirs then
+	 * `node_modules/.bin`, so an npm-strategy tool's project shim is found
+	 * without the memo-less second probe that used to look for it.
+	 */
+	projectBinDirs: readonly string[] = VENV_BIN_DIRS,
+	/** Each project bin dir's own Windows launcher extension (#5410 S1 F2). */
+	projectBinDirWindowsExt?: Readonly<Record<string, string>>,
 ): (cwd: string) => Promise<VenvResolution> {
 	return async (cwd: string): Promise<VenvResolution> => {
 		if (allowProjectLocal) {
 			const venvBin = localBinPath(
 				findLocalBinAt(command, cwd, {
 					windowsExt,
-					binDirs: VENV_BIN_DIRS,
+					binDirs: projectBinDirs,
+					binDirWindowsExt: projectBinDirWindowsExt,
 				}),
 			);
 			if (venvBin) return { path: venvBin, rung: "venv" };
 		}
 
-		// Managed-dir install (~/.pi-lens/tools/node_modules/.bin/<command>) — the
-		// same shim `ensureTool()` installs npm-strategy tools into. Checked BEFORE
-		// the bare-name PATH fallback (#1638): without this, a tool that only
-		// exists in the managed dir never resolves here, so `resolveAvailableOrInstall`
-		// clears the checker's cache on every install recovery for nothing — the
-		// very next probe misses PATH again, spawns a doomed `--version` process,
-		// and only THEN falls through to `ensureTool`'s own cache. One managed-dir
-		// check settles it without a spawn — after one verification per shim per
-		// session, so a shim that cannot run falls through to PATH instead of
-		// shadowing a working binary (#1657).
-		const managed = await findManagedNodeToolBinary(command, verificationArgs);
-		if (managed) return { path: managed, rung: "managed-dir" };
-
-		// Release-managed install (`~/.pi-lens/bin/<command>`) — where `ensureTool`
-		// puts every github/maven/archive-strategy tool. Same rung, same reason as
-		// the npm shim above, for the other half of the managed families (#2140).
-		const release = await findManagedReleaseBinary(command, verificationArgs);
-		if (release) return { path: release, rung: "managed-release" };
+		const managed = await findManagedRung(command, verificationArgs);
+		if (managed) return managed;
 
 		// Fall back to global
 		return { path: command, rung: "path" };
 	};
+}
+
+/**
+ * The managed rungs of the ladder: the npm shim, then the release binary.
+ *
+ * Managed-dir install (~/.pi-lens/tools/node_modules/.bin/<command>) — the
+ * same shim `ensureTool()` installs npm-strategy tools into. Checked BEFORE
+ * the bare-name PATH fallback (#1638): without this, a tool that only
+ * exists in the managed dir never resolves here, so `resolveAvailableOrInstall`
+ * clears the checker's cache on every install recovery for nothing — the
+ * very next probe misses PATH again, spawns a doomed `--version` process,
+ * and only THEN falls through to `ensureTool`'s own cache. One managed-dir
+ * check settles it without a spawn — after one verification per shim per
+ * session, so a shim that cannot run falls through to PATH instead of
+ * shadowing a working binary (#1657).
+ *
+ * Release-managed install (`~/.pi-lens/bin/<command>`) — where `ensureTool`
+ * puts every github/maven/archive-strategy tool. Same rung, same reason as
+ * the npm shim above, for the other half of the managed families (#2140).
+ */
+async function findManagedRung(
+	command: string,
+	verificationArgs: string[],
+): Promise<VenvResolution | null> {
+	const managed = await findManagedNodeToolBinary(command, verificationArgs);
+	if (managed) return { path: managed, rung: "managed-dir" };
+	const release = await findManagedReleaseBinary(command, verificationArgs);
+	if (release) return { path: release, rung: "managed-release" };
+	return null;
 }
 
 // =============================================================================
@@ -629,22 +760,49 @@ export async function resolveManagedToolClient<T>(options: {
 	return { outcome: "success", value };
 }
 
+/**
+ * One cwd's verdict (#5410). The verdict, its cooldown ladder and its trust
+ * stamp live in the shared latch (#4530), so a trust change drops it at the
+ * next read; the checker keeps only the command the verdict resolved and the
+ * probe's elapsed time for the unavailable message.
+ */
+/** A verdict a probe flight hands `noteDecision` (#1500, #5595). */
+type AvailabilityVerdictNote = {
+	available: boolean;
+	/** The command that answered, written to the entry on an available verdict. */
+	command?: string;
+	outcome: AvailabilityOutcome;
+	cause: AvailabilityCause;
+	elapsedMs: number;
+	hostStallMs?: number;
+	/** How the outcome was reached, and the facts behind it (#1500). */
+	classifiedBy?: "probe" | "caller" | "joined";
+	evidence?: ProbeEvidence;
+	/** Probe output of a present binary that failed its version check. */
+	rejectedOutput?: string;
+};
+
 type AvailabilityCache = {
-	available: boolean | null;
+	latch: AvailabilityLatch;
 	command: string | null;
-	outcome: AvailabilityOutcome | null;
-	cause: AvailabilityCause | null;
 	/** How long the last probe took, ms — surfaced in the unavailable message. */
 	elapsedMs: number;
-	/** Epoch ms after which a transient `false` may be re-probed; 0 = latched. */
-	retryAtMs: number;
-	/** Consecutive transient failures, for the bounded exponential cooldown. */
-	transientAttempts: number;
+	/**
+	 * Bounded output of the probe that rejected a present binary (cause
+	 * `probe-rejected`), so a consumer can say the tool is present but failed
+	 * its version check, with the evidence; unset for any other verdict.
+	 */
+	rejectedOutput?: string | undefined;
 };
+
+/** Longest probe output kept for a rejected binary, chars from the end. */
+const REJECTED_OUTPUT_CHARS = 2000;
 
 export interface AvailabilityCheckerOptions {
 	probeTimeout?: number;
-	fastPath?: () => string | null | Promise<string | null>;
+	fastPath?: (cwd: string) => string | null | Promise<string | null>;
+	/** Presence-only lookup: its miss is final, without a version probe. */
+	fastPathOnly?: boolean;
 	/** Environment used by both the availability probe and later client spawns. */
 	environment?: (cwd: string) => Promise<NodeJS.ProcessEnv>;
 	/** Compatibility for legacy probes whose test doubles carry no failure kind. */
@@ -654,6 +812,28 @@ export interface AvailabilityCheckerOptions {
 	 * never a project-local `.venv` one. Omitted keeps the session default.
 	 */
 	allowProjectLocal?: boolean;
+	/** Project-local bin dirs at exactly `cwd`; see `createVenvFinder`. */
+	projectBinDirs?: readonly string[];
+	/**
+	 * The Windows launcher extension of each of those dirs, so one spec
+	 * `windowsExt` need not serve a venv `.exe` and a `node_modules` `.cmd`
+	 * (#5410 S1 F2). A dir it does not name keeps `windowsExt`.
+	 */
+	projectBinDirWindowsExt?: Readonly<Record<string, string>>;
+	/**
+	 * Resolve the bare command on PATH only, for a caller that spawns it by
+	 * that bare name (`DispatchContext.hasTool`, #5410): a managed or venv
+	 * answer would pass a binary the caller then cannot find.
+	 */
+	pathOnly?: boolean;
+	/**
+	 * Rung order after the project (#5492 r2). `managed-first` (the default,
+	 * every runner): managed installs, then PATH. `path-first` (formatters): the
+	 * version of a formatter decides the bytes it writes, so a PATH binary that
+	 * passes its version check outranks the managed copy; one that fails falls
+	 * through to managed.
+	 */
+	order?: "managed-first" | "path-first";
 }
 
 /**
@@ -722,21 +902,9 @@ const resolveInstallInFlightByCwd = new PathKeyedMap<
 // "available", even though only the first call actually ran an install.
 //
 // A correction is genuine only when a latched `unavailable` row for the same
-// pair stood before it. `verifyOrInstallCommand` also emits through this seam
-// with NO prior latch behind it (biome-check and oxlint reach it with no
-// checker probe at all), and burning this memo on such a row silences the
-// LATER genuine latch-then-recover for the same pair — the #1606 defect back
-// through the #1612 seam (#1657). Those rows dedupe against
-// `uncorrectedEmissionsByCwd` instead, so repeats stay suppressed without
-// pre-empting the real correction.
+// pair stood before it, and `resolveAvailableOrInstallUnshared` writes that
+// latch before it emits, so every emission through this seam is one (#1657).
 const correctedAvailabilityByCwd = new PathKeyedMap<Set<string>>(
-	normalizeMapKey,
-);
-// Which (cwd, toolId) pairs already emitted an `available` row that corrected
-// nothing (no latched `unavailable` stood before it). Same one-row-per-session
-// bound as the memo above, kept in a SEPARATE scope so it cannot answer for a
-// correction that has not happened yet (#1657).
-const uncorrectedEmissionsByCwd = new PathKeyedMap<Set<string>>(
 	normalizeMapKey,
 );
 // Which (cwd, tool) pairs currently stand latched `unavailable` in the durable
@@ -980,9 +1148,8 @@ function resolvedTagForAttempt(
 /**
  * Emit the ONE compensating `available` row for a (cwd, toolId) correction,
  * after a latched unavailable probe recovers via `ensureTool`. This is the
- * SINGLE row constructor for every caller behind this seam —
- * `resolveAvailableOrInstallUnshared` (#1612) and `verifyOrInstallCommand`
- * (#1636) both call it rather than each hand-rolling their own, which is
+ * SINGLE row constructor behind this seam: `resolveAvailableOrInstallUnshared`
+ * (#1612) calls it rather than each caller hand-rolling its own, which is
  * exactly the drift #1610's own review caught the first time this shape
  * shipped twice.
  *
@@ -993,10 +1160,10 @@ function resolvedTagForAttempt(
  * every time.
  *
  * `latchKeys` are every name a latched `unavailable` row for this pair could
- * carry. A row that clears one of them is a genuine correction and burns the
- * correction memo; a row with nothing to correct dedupes in its own scope, so
- * it cannot silence the genuine latch-then-recover that follows it for the
- * same pair (#1657).
+ * carry. The one caller (`resolveAvailableOrInstallUnshared`) records that
+ * latched row for the pair just before it calls, so the row is a genuine
+ * correction: it burns the correction memo and clears every key (#1657). The
+ * `correctsLatchedRow` evidence still reads the ledger rather than assuming it.
  */
 function emitCompensatingAvailableRow(
 	cwd: string,
@@ -1013,9 +1180,6 @@ function emitCompensatingAvailableRow(
 		// checker records the row under its COMMAND, and a leftover entry would
 		// later back a "correction" with nothing behind it (#1674 review F3).
 		clearLatchedUnavailable(cwd, ...latchKeys);
-	} else {
-		if (hasId(uncorrectedEmissionsByCwd, cwd, toolId)) return;
-		addId(uncorrectedEmissionsByCwd, cwd, toolId);
 	}
 	// `installed`/`installedPath` can come back truthy WITHOUT ensureTool
 	// running an install this call — its in-memory cache, its on-disk probe
@@ -1070,7 +1234,6 @@ export function resetDispatchAvailabilityState(): void {
 	installAttemptsByCwd.clear();
 	resolveInstallInFlightByCwd.clear();
 	correctedAvailabilityByCwd.clear();
-	uncorrectedEmissionsByCwd.clear();
 	latchedUnavailableByCwd.clear();
 	managedBinaryVerdicts.clear();
 	managedVerifyInFlight.clear();
@@ -1078,7 +1241,6 @@ export function resetDispatchAvailabilityState(): void {
 	availabilityGeneration.bump();
 	checkerProbeFlights.clear();
 	cwdProbeFlights.clear();
-	// The generation bump invalidates dispatcherProbeFlights in its owner module.
 }
 
 /** What the last probe for a cwd decided, for messaging and telemetry (#1467). */
@@ -1090,6 +1252,8 @@ export interface AvailabilityVerdict {
 	latched: boolean;
 	/** Epoch ms after which a transient verdict may be re-probed; 0 = latched. */
 	retryAtMs: number;
+	/** Probe output of a present binary that rejected its version check. */
+	rejectedOutput?: string;
 }
 
 /**
@@ -1119,23 +1283,70 @@ export function createAvailabilityChecker(
 	getCommand: (cwd?: string) => string | null;
 	getOutcome: (cwd?: string) => AvailabilityOutcome | null;
 	getVerdict: (cwd?: string) => AvailabilityVerdict;
+	projectBinaryRefused: (cwd: string) => boolean;
 	reset: () => void;
 } {
 	const cacheByCwd = new PathKeyedMap<AvailabilityCache>(
 		normalizeEphemeralMapKey,
 	);
-	const inFlightByCwd = new PathKeyedMap<Promise<boolean>>(
-		normalizeEphemeralMapKey,
-	);
+	// The trust the probe started under rides with it: a caller that arrives
+	// after pi's trust answer changed starts its own probe instead of joining
+	// one whose search path was scoped for the old answer (#4776).
+	const inFlightByCwd = new PathKeyedMap<{
+		trustGeneration: number;
+		promise: Promise<boolean>;
+	}>(normalizeEphemeralMapKey);
 	let checkerGeneration = availabilityGeneration.current();
 	let checkerFlightGeneration = 0;
 
-	const findCommand = createVenvFinder(
+	const pathFirst = options.order === "path-first";
+	const allowProjectLocal = options.allowProjectLocal !== false;
+	const pathRung = (): VenvResolution => ({ path: command, rung: "path" });
+	// The project rung at exactly `cwd`, the same lookup `createVenvFinder` makes.
+	const projectRung = (cwd: string) =>
+		findLocalBinAt(command, cwd, {
+			windowsExt,
+			binDirs: options.projectBinDirs ?? VENV_BIN_DIRS,
+			binDirWindowsExt: options.projectBinDirWindowsExt,
+		});
+	const findCommand = options.pathOnly
+		? async (): Promise<VenvResolution> => pathRung()
+		: pathFirst
+			? async (cwd: string): Promise<VenvResolution> => {
+					const project = allowProjectLocal
+						? localBinPath(projectRung(cwd))
+						: undefined;
+					return project ? { path: project, rung: "venv" } : pathRung();
+				}
+			: createVenvFinder(
+					command,
+					windowsExt,
+					versionArgs,
+					allowProjectLocal,
+					options.projectBinDirs,
+					options.projectBinDirWindowsExt,
+				);
+	// The rungs beyond the project: where a broken project shim falls through.
+	const findBeyondProject = createVenvFinder(
 		command,
 		windowsExt,
 		versionArgs,
-		options.allowProjectLocal !== false,
+		false,
 	);
+	/**
+	 * Where a rung that failed for good falls through to, or `null` when the
+	 * ladder is spent. Managed-first: a project shim falls to managed then PATH.
+	 * Path-first: project, then PATH, then managed.
+	 */
+	async function nextRung(
+		from: VenvResolution["rung"],
+		cwd: string,
+	): Promise<VenvResolution | null> {
+		if (!pathFirst) return from === "venv" ? findBeyondProject(cwd) : null;
+		if (from === "venv") return pathRung();
+		if (from === "path") return findManagedRung(command, versionArgs);
+		return null;
+	}
 
 	function ensureCurrentGeneration(): void {
 		if (checkerGeneration === availabilityGeneration.current()) return;
@@ -1158,64 +1369,65 @@ export function createAvailabilityChecker(
 		const existing = cacheByCwd.get(key);
 		if (existing) return existing;
 		const created: AvailabilityCache = {
-			available: null,
+			latch: createAvailabilityLatch(),
 			command: null,
-			outcome: null,
-			cause: null,
 			elapsedMs: 0,
-			retryAtMs: 0,
-			transientAttempts: 0,
 		};
 		cacheByCwd.set(key, created);
 		return created;
 	}
 
-	/** Record a verdict on the cache and emit exactly one decision record. */
+	/**
+	 * Record a verdict on the cache and emit exactly one decision record.
+	 *
+	 * `publishes` is whether the flight that reached the verdict is still the
+	 * current one for its key. A trust change starts a second flight for the
+	 * same cwd while the first is in flight (#4776), and both write the one
+	 * entry: the older, settling after the newer, would overwrite a newer
+	 * success with an older failure (or the reverse), leaving `getCommand` and
+	 * the latch disagreeing (#5595 B1). A superseded flight still writes its
+	 * row, but as not latched, and touches neither the entry, the latch nor the
+	 * latched-row memo.
+	 */
 	function noteDecision(
 		cache: AvailabilityCache,
 		resolvedCwd: string,
-		verdict: {
-			available: boolean;
-			outcome: AvailabilityOutcome;
-			cause: AvailabilityCause;
-			elapsedMs: number;
-			hostStallMs?: number;
-			/** How the outcome was reached, and the facts behind it (#1500). */
-			classifiedBy?: "probe" | "caller" | "joined";
-			evidence?: ProbeEvidence;
-		},
+		verdict: AvailabilityVerdictNote,
+		publishes: boolean,
 	): void {
-		cache.available = verdict.available;
-		cache.outcome = verdict.outcome;
-		cache.cause = verdict.cause;
-		cache.elapsedMs = verdict.elapsedMs;
 		let retryAfterMs: number | undefined;
-		if (verdict.available) {
-			cache.retryAtMs = 0;
-			cache.transientAttempts = 0;
-		} else if (isLatchingOutcome(verdict.outcome)) {
-			cache.retryAtMs = 0;
-			cache.transientAttempts = 0;
-		} else {
-			cache.transientAttempts += 1;
-			retryAfterMs = transientRetryDelayMs(
-				cache.transientAttempts,
-				verdict.cause,
-			);
-			cache.retryAtMs = Date.now() + retryAfterMs;
+		if (publishes) {
+			cache.elapsedMs = verdict.elapsedMs;
+			cache.rejectedOutput = verdict.available
+				? undefined
+				: verdict.rejectedOutput;
+			if (verdict.available) {
+				if (verdict.command !== undefined) cache.command = verdict.command;
+				cache.latch.noteAvailable(verdict.cause);
+			} else {
+				cache.command = null;
+				const delay = cache.latch.noteUnavailable(
+					verdict.outcome,
+					verdict.cause,
+				);
+				if (delay > 0) retryAfterMs = delay;
+			}
 		}
-		const latched = verdict.available || isLatchingOutcome(verdict.outcome);
+		const latched =
+			publishes && (verdict.available || isLatchingOutcome(verdict.outcome));
 		// Remember the pair whose durable row now says "unavailable and staying
 		// that way" — that is the row a later compensating `available` row
 		// corrects, and the only thing that makes such a row a correction
 		// (#1657).
-		if (!verdict.available && latched) {
-			noteLatchedUnavailable(resolvedCwd, command);
-		} else if (verdict.available) {
-			// The latched row this pair carried no longer stands: THIS row says
-			// the tool is back. Dropping the record here keeps a stale latch from
-			// backing a later "correction" that corrects nothing (#1674 F3).
-			clearLatchedUnavailable(resolvedCwd, ...latchKeysFor(command));
+		if (publishes) {
+			if (!verdict.available && latched) {
+				noteLatchedUnavailable(resolvedCwd, command);
+			} else if (verdict.available) {
+				// The latched row this pair carried no longer stands: THIS row says
+				// the tool is back. Dropping the record here keeps a stale latch from
+				// backing a later "correction" that corrects nothing (#1674 F3).
+				clearLatchedUnavailable(resolvedCwd, ...latchKeysFor(command));
+			}
 		}
 		logAvailabilityDecision(
 			{
@@ -1243,37 +1455,56 @@ export function createAvailabilityChecker(
 		ensureCurrentGeneration();
 		const resolvedCwd = cwd || process.cwd();
 		const cache = getCache(resolvedCwd);
-		if (cache.available === false) {
-			// A durable "this machine does not have the tool" stays cached; a
-			// transient probe failure only holds until its cooldown expires, so an
-			// installed tool cannot be disabled for the life of the process by one
-			// slow second at warm-up (#1467).
-			if (cache.outcome !== "transient") return false;
-			if (Date.now() < cache.retryAtMs) return false;
-			cache.available = null;
-		}
-		if (cache.available === true && cache.command) {
-			if (await isSpawnableCommand(cache.command)) return true;
+		// A durable "this machine does not have the tool" stays cached; a
+		// transient probe failure only holds until its cooldown expires, so an
+		// installed tool cannot be disabled for the life of the process by one
+		// slow second at warm-up (#1467). A verdict written under another pi
+		// trust answer reads as `null` and is probed again (#4530, #5410): the
+		// project venv rung is refused or admitted by trust.
+		const answer = cache.latch.read();
+		// A presence-only miss goes to the fresh flight below, which re-runs the
+		// fast path: a shim an install put in place after the miss (`npm install`
+		// mid-session, #5783 verify r5) is found on the next resolve. A repeated
+		// miss still ends at npx.
+		if (answer === false && !options.fastPathOnly) return false;
+		if (answer === true) {
+			if (cache.command && (await isSpawnableCommand(cache.command))) {
+				return true;
+			}
 			// Cached-positive spawn feedback: a removed absolute path or vanished
 			// PATH command must fall through to a fresh probe immediately.
-			cache.available = null;
+			cache.latch.reset();
 			cache.command = null;
-			cache.outcome = null;
-			cache.cause = null;
 		}
 
 		const key = path.resolve(resolvedCwd);
+		const trustGeneration = getProjectTrustGeneration();
 		const existing = inFlightByCwd.get(key);
-		if (existing) return existing;
+		if (existing?.trustGeneration === trustGeneration) return existing.promise;
+		// A flight for another trust is still out. Its read left the latch owing a
+		// verdict stamped with that trust, so this flight's note would take the
+		// old stamp and read as stale at the next read (#5595 B1). It stops
+		// publishing once this flight replaces it below.
+		if (existing) cache.latch.reset();
 
 		const promiseGeneration = checkerGeneration;
 		let promise: Promise<boolean>;
+		// Whether this flight is still the current one for its key. A trust
+		// change replaces it in the table with a newer flight (#4776); once
+		// replaced, nothing it settles may reach the shared entry (#5595 B1).
+		const note = (verdict: AvailabilityVerdictNote): void =>
+			noteDecision(
+				cache,
+				resolvedCwd,
+				verdict,
+				inFlightByCwd.get(key)?.promise === promise,
+			);
 		promise = (async () => {
-			const fastPath = await options.fastPath?.();
+			const fastPath = await options.fastPath?.(resolvedCwd);
 			if (fastPath) {
-				cache.command = fastPath;
-				noteDecision(cache, resolvedCwd, {
+				note({
 					available: true,
+					command: fastPath,
 					outcome: "success",
 					cause: "fast-path",
 					elapsedMs: 0,
@@ -1284,13 +1515,29 @@ export function createAvailabilityChecker(
 				return true;
 			}
 
+			if (options.fastPathOnly) {
+				// A repeat miss changes nothing: the latch already holds this verdict, so
+				// it writes no second decision row. One row per distinct event, as the
+				// remembered miss did before the re-ask.
+				if (getOutcome(resolvedCwd) !== "missing") {
+					note({
+						available: false,
+						outcome: "missing",
+						cause: "not-found",
+						elapsedMs: 0,
+						classifiedBy: "caller",
+					});
+				}
+				return false;
+			}
+
 			// A bad/removed workspace must not be mistaken for a missing tool and
 			// trigger an install. This async probe stays off the synchronous dispatch
 			// burst and makes the failure taxonomy explicit at the seam.
 			try {
 				const cwdStat = await fs.promises.stat(resolvedCwd);
 				if (!cwdStat.isDirectory()) {
-					noteDecision(cache, resolvedCwd, {
+					note({
 						available: false,
 						outcome: "non-installable",
 						cause: "bad-cwd",
@@ -1302,7 +1549,7 @@ export function createAvailabilityChecker(
 					return false;
 				}
 			} catch {
-				noteDecision(cache, resolvedCwd, {
+				note({
 					available: false,
 					outcome: "non-installable",
 					cause: "bad-cwd",
@@ -1320,112 +1567,144 @@ export function createAvailabilityChecker(
 			// `durationMs` would instead charge the probe budget for work that
 			// budget does not govern, so the two spans are reported side by side.
 			const resolveStartedAt = Date.now();
-			const resolution = await findCommand(resolvedCwd);
-			const cmd = resolution.path;
-			const resolveMs = Date.now() - resolveStartedAt;
-			// #1995: a command cooling down after a RUNTIME timeout (lint or
-			// autofix lane blew its real budget) must not re-probe on every
-			// edit - the positive verdict is effectively cooled. Consult-only:
-			// probe timeouts do NOT arm the cooldown here, because a single
-			// slow --version under host stall (#1467) is transient evidence,
-			// and session-long suppression from it would contradict the
-			// #1494 retry ladder this classification exists for.
-			if (isInSpawnTimeoutCooldown(cmd)) {
-				noteDecision(cache, resolvedCwd, {
-					available: false,
-					outcome: "transient",
-					cause: "probe-timeout",
-					elapsedMs: 0,
-					classifiedBy: "caller",
-					evidence: {
-						command: cmd,
-						status: null,
-					},
-				});
-				return false;
-			}
-			const env = await options.environment?.(resolvedCwd);
-			// The probe budget is enforced by a HOST-side timer, so host event-loop
-			// stalls are charged to the child. Measure the stall that overlapped the
-			// window and hand it to the classifier (#1467).
-			const stallSampler = startHostStallSampler();
-			const startedAt = Date.now();
-			let result: Awaited<ReturnType<typeof safeSpawnAsync>>;
-			let hostStallMs: number;
-			let probeJoined = false;
-			try {
-				const shared = checkerProbeFlights.run(
-					`checker:${command}|${versionArgs.join("|")}|${key}|${checkerFlightGeneration}|${windowsExt}|${cmd}|${JSON.stringify(Object.entries(env ?? {}).sort(([a], [b]) => compareOrdinal(a, b)))}`,
-					() =>
-						safeSpawnAsync(cmd, versionArgs, {
-							timeout: options.probeTimeout ?? 5000,
-							cwd: resolvedCwd,
-							env,
-							input: "",
-						}),
+			let resolution = await findCommand(resolvedCwd);
+			let resolveMs = Date.now() - resolveStartedAt;
+			// A rung whose probe says it is broken for good (missing or
+			// non-installable: a stale venv interpreter, a PATH tool whose
+			// interpreter is gone) falls through to the next rung, as a managed
+			// shim does (#1657, #5437 F1): managed-first, a project shim goes to
+			// managed then PATH; path-first, project to PATH to managed. A
+			// transient answer stays on its rung and retries. No rung is
+			// revisited, so the loop is bounded by the ladder and still writes
+			// one verdict and one row.
+			for (;;) {
+				const cmd = resolution.path;
+				// #1995: a command cooling down after a RUNTIME timeout (lint or
+				// autofix lane blew its real budget) must not re-probe on every
+				// edit - the positive verdict is effectively cooled. Consult-only:
+				// probe timeouts do NOT arm the cooldown here, because a single
+				// slow --version under host stall (#1467) is transient evidence,
+				// and session-long suppression from it would contradict the
+				// #1494 retry ladder this classification exists for.
+				if (isInSpawnTimeoutCooldown(cmd)) {
+					note({
+						available: false,
+						outcome: "transient",
+						cause: "probe-timeout",
+						elapsedMs: 0,
+						classifiedBy: "caller",
+						evidence: {
+							command: cmd,
+							status: null,
+						},
+					});
+					return false;
+				}
+				const env = await options.environment?.(resolvedCwd);
+				// The probe budget is enforced by a HOST-side timer, so host event-loop
+				// stalls are charged to the child. Measure the stall that overlapped the
+				// window and hand it to the classifier (#1467).
+				const stallSampler = startHostStallSampler();
+				const startedAt = Date.now();
+				let result: Awaited<ReturnType<typeof safeSpawnAsync>>;
+				let hostStallMs: number;
+				let probeJoined = false;
+				try {
+					const shared = checkerProbeFlights.run(
+						`checker:${command}|${versionArgs.join("|")}|${key}|${trustGeneration}|${checkerFlightGeneration}|${windowsExt}|${cmd}|${JSON.stringify(Object.entries(env ?? {}).sort(([a], [b]) => compareOrdinal(a, b)))}`,
+						() =>
+							// A bare PATH-only probe goes through the cwd-less probe seam
+							// (#2894): nothing it answers is read out of a project.
+							options.pathOnly
+								? probeToolAsync(cmd, versionArgs, {
+										timeout: options.probeTimeout ?? 5000,
+										...(env !== undefined && { env }),
+										input: "",
+									})
+								: safeSpawnAsync(cmd, versionArgs, {
+										timeout: options.probeTimeout ?? 5000,
+										cwd: resolvedCwd,
+										env,
+										input: "",
+									}),
+					);
+					probeJoined = shared.joined;
+					result = await shared.promise;
+				} finally {
+					hostStallMs = stallSampler.stop();
+				}
+				const elapsedMs = Date.now() - startedAt;
+				recordAvailabilityProbeOverrun(
+					command,
+					resolvedCwd,
+					elapsedMs,
+					options.probeTimeout ?? 5000,
+					result.failure,
 				);
-				probeJoined = shared.joined;
-				result = await shared.promise;
-			} finally {
-				hostStallMs = stallSampler.stop();
-			}
-			const elapsedMs = Date.now() - startedAt;
-			recordAvailabilityProbeOverrun(
-				command,
-				resolvedCwd,
-				elapsedMs,
-				options.probeTimeout ?? 5000,
-				result.failure,
-			);
 
-			if (!result.error && result.status === 0) {
-				cache.command = cmd;
-				noteDecision(cache, resolvedCwd, {
-					available: true,
-					outcome: "success",
-					cause: "ok",
+				if (!result.error && result.status === 0) {
+					note({
+						available: true,
+						command: cmd,
+						outcome: "success",
+						cause: "ok",
+						elapsedMs,
+						hostStallMs,
+						classifiedBy: probeJoined ? "joined" : "probe",
+						evidence: {
+							...describeProbeEvidence(result),
+							...describeManagedResolution(command, resolution),
+							resolveMs,
+						},
+					});
+					return true;
+				}
+
+				const { outcome, cause, evidence } = classifyProbeFailure(result, {
+					hostStallMs,
+					unclassifiedFailureOutcome: options.unclassifiedFailureOutcome,
+				});
+				if (isLatchingOutcome(outcome)) {
+					const fallStartedAt = Date.now();
+					const next = await nextRung(resolution.rung, resolvedCwd);
+					resolveMs += Date.now() - fallStartedAt;
+					if (next) {
+						resolution = next;
+						continue;
+					}
+				}
+				// Only a TYPED tool-not-found invalidates the PATH walk memo; an
+				// `unclassifiedFailureOutcome: "missing"` compatibility verdict is a
+				// guess, not evidence that PATH changed.
+				if (result.spawnFailure?.kind === "tool-not-found") resetPathWalkMemo();
+				note({
+					available: false,
+					outcome,
+					cause,
 					elapsedMs,
 					hostStallMs,
 					classifiedBy: probeJoined ? "joined" : "probe",
-					evidence: {
-						...describeProbeEvidence(result),
-						...describeManagedResolution(command, resolution),
-						resolveMs,
-					},
+					evidence,
+					...(cause === "probe-rejected" && {
+						rejectedOutput: (result.stderr || result.stdout || "").slice(
+							-REJECTED_OUTPUT_CHARS,
+						),
+					}),
 				});
-				return true;
+				return false;
 			}
-
-			const { outcome, cause, evidence } = classifyProbeFailure(result, {
-				hostStallMs,
-				unclassifiedFailureOutcome: options.unclassifiedFailureOutcome,
-			});
-			// Only a TYPED tool-not-found invalidates the PATH walk memo; an
-			// `unclassifiedFailureOutcome: "missing"` compatibility verdict is a
-			// guess, not evidence that PATH changed.
-			if (result.spawnFailure?.kind === "tool-not-found") resetPathWalkMemo();
-			noteDecision(cache, resolvedCwd, {
-				available: false,
-				outcome,
-				cause,
-				elapsedMs,
-				hostStallMs,
-				classifiedBy: probeJoined ? "joined" : "probe",
-				evidence,
-			});
-			return false;
 		})().finally(() => {
 			// A session reset clears this map and a caller may immediately start a
 			// replacement probe for the same cwd. The old promise must not delete
 			// that newer-generation entry when it settles.
 			if (
 				checkerGeneration === promiseGeneration &&
-				inFlightByCwd.get(key) === promise
+				inFlightByCwd.get(key)?.promise === promise
 			) {
 				inFlightByCwd.delete(key);
 			}
 		});
-		inFlightByCwd.set(key, promise);
+		inFlightByCwd.set(key, { trustGeneration, promise });
 		return promise;
 	}
 
@@ -1437,24 +1716,44 @@ export function createAvailabilityChecker(
 
 	function getOutcome(cwd?: string): AvailabilityOutcome | null {
 		ensureCurrentGeneration();
-		return getCache(cwd || process.cwd()).outcome;
+		return getCache(cwd || process.cwd()).latch.getOutcome();
 	}
 
 	function getVerdict(cwd?: string): AvailabilityVerdict {
 		ensureCurrentGeneration();
-		const cache = getCache(cwd || process.cwd());
+		const { latch, elapsedMs, rejectedOutput } = getCache(cwd || process.cwd());
+		const outcome = latch.getOutcome();
 		return {
-			outcome: cache.outcome,
-			cause: cache.cause,
-			elapsedMs: cache.elapsedMs,
-			latched:
-				cache.available !== false ||
-				isLatchingOutcome(cache.outcome ?? "missing"),
-			retryAtMs: cache.retryAtMs,
+			outcome,
+			cause: latch.getCause(),
+			elapsedMs,
+			latched: outcome === null || isLatchingOutcome(outcome),
+			retryAtMs: latch.getRetryAtMs(),
+			...(rejectedOutput !== undefined && { rejectedOutput }),
 		};
 	}
 
-	return { isAvailableAsync, getCommand, getOutcome, getVerdict, reset };
+	/**
+	 * #5258: whether trust refused the project binary this ladder's own project
+	 * rung looks up, so a skip states the refusal and not an absence. A ladder
+	 * without that rung (PATH only, or no project rung) refused nothing.
+	 */
+	function projectBinaryRefused(cwd: string): boolean {
+		return (
+			!options.pathOnly &&
+			allowProjectLocal &&
+			isLocalBinTrustRefusal(projectRung(cwd))
+		);
+	}
+
+	return {
+		isAvailableAsync,
+		getCommand,
+		getOutcome,
+		getVerdict,
+		projectBinaryRefused,
+		reset,
+	};
 }
 
 /** What a `createCwdCachedProbe` probe hands back for classification (#1494). */
@@ -1725,131 +2024,246 @@ export function resolveToolCommand(cwd: string, toolId: string): string | null {
  * private copy of that climb, unceilinged, so a `vendor/bin` at or above
  * `$HOME` — which can never be this project's own Composer install — was
  * resolved as the project's tool (#2514, same class as `findInVendorBin`,
- * which had already been folded).
+ * which had already been folded). Returns the lookup, so a trust refusal
+ * stays distinct from an absence (#5258).
  */
 export function resolveVendorToolCommand(
 	cwd: string,
 	toolName: string,
 	windowsExt = ".bat",
-): string | null {
+): LocalBinLookup | null {
 	return (
-		localBinPath(
-			findLocalBinUpwards(toolName, cwd, {
-				windowsExt,
-				binDirs: VENDOR_BIN_DIRS,
-			}),
-		) ?? null
+		findLocalBinUpwards(toolName, cwd, {
+			windowsExt,
+			binDirs: VENDOR_BIN_DIRS,
+		}) ?? null
 	);
 }
 
+type AvailabilityChecker = ReturnType<typeof createAvailabilityChecker>;
+
+/**
+ * One checker per registry tool id (#5410), shared by every runner and
+ * autofix lane that resolves the tool by id. It holds only per-cwd latches,
+ * which the session generation and the trust generation clear.
+ */
+const toolBinaryCheckers = new Map<string, AvailabilityChecker>();
+
+/**
+ * `path-only` is not a ladder order: the bare command on PATH and nothing
+ * else, for a caller whose child spawns it by that name (`toolOnPath`).
+ */
+type ToolBinaryOrder =
+	| NonNullable<AvailabilityCheckerOptions["order"]>
+	| "path-only"
+	| "biome-installed";
+
+/**
+ * One checker per (tool id, order): a runner (managed before PATH) and a
+ * formatter (PATH before managed) can reach different answers for the same
+ * tool, so they must not share a cached one (#5492 r2).
+ */
+function toolBinaryChecker(
+	toolId: string,
+	order: ToolBinaryOrder,
+): AvailabilityChecker | null {
+	const key = `${toolId}|${order}`;
+	const existing = toolBinaryCheckers.get(key);
+	if (existing) return existing;
+	const spec = getToolCommandSpec(toolId);
+	if (!spec) return null;
+	const checker = createAvailabilityChecker(
+		spec.command,
+		spec.windowsExt ?? "",
+		spec.versionArgs ?? ["--version"],
+		{
+			projectBinDirs: [...VENV_BIN_DIRS, ...NODE_MODULES_BIN_DIRS],
+			projectBinDirWindowsExt: PROJECT_BIN_DIR_WINDOWS_EXT,
+			...(spec.probeTimeoutMs !== undefined && {
+				probeTimeout: spec.probeTimeoutMs,
+			}),
+			...(order === "biome-installed"
+				? {
+						fastPathOnly: true,
+						fastPath: async (cwd: string) => {
+							const local = localBinPath(
+								findLocalBinAt(spec.command, cwd, {
+									windowsExt: ".cmd",
+								}),
+							);
+							if (local) return local;
+							const base = path.join(
+								getGlobalPiLensDir(),
+								"tools",
+								"node_modules",
+								".bin",
+							);
+							const managed =
+								process.platform === "win32"
+									? [path.join(base, "biome.cmd"), path.join(base, "biome")]
+									: [path.join(base, "biome")];
+							// The scan root is `cwd`, not the process cwd: a global link whose
+							// target sits in it is refused under unknown trust (#5782 V3).
+							return (
+								managed.find((candidate) => fs.existsSync(candidate)) ??
+								(await findGlobalBinary(spec.command, ".cmd", cwd)) ??
+								null
+							);
+						},
+					}
+				: order === "path-only"
+					? { pathOnly: true }
+					: { order }),
+		},
+	);
+	toolBinaryCheckers.set(key, checker);
+	return checker;
+}
+
+/**
+ * THE tool-binary resolver for a registry tool id (#5410): the project's own
+ * venv or `node_modules/.bin` at exactly `cwd` (trust-gated, never an
+ * ancestor, #2544 r4 F2), then the managed installs, then PATH, each answer
+ * proven by a version probe, the verdict held in the shared latch (#4530), and
+ * an install only for a typed `missing` verdict. Runners and autofix lanes
+ * call this once; a second probe of their own is the double probe #5410
+ * removed.
+ */
 export async function resolveToolCommandWithInstallFallback(
 	cwd: string,
 	toolId: string,
-	timeout = 5000,
 ): Promise<string | null> {
-	const spec = getToolCommandSpec(toolId);
-	if (!spec) return null;
-	return resolveCommandWithInstallFallback(
-		resolveToolCommand(cwd, toolId) ?? spec.command,
-		spec.managedToolId ?? toolId,
+	const checker = toolBinaryChecker(toolId, "managed-first");
+	if (!checker) return null;
+	return resolveAvailableOrInstall(
+		checker,
+		getToolCommandSpec(toolId)?.managedToolId ?? toolId,
 		cwd,
-		spec.versionArgs ?? ["--version"],
-		timeout,
 	);
 }
 
-async function verifyOrInstallCommand(
-	command: string,
+/**
+ * Does `toolId`'s bare command run on PATH right now (#5410)? For a caller
+ * that hands the name to a child it does not control, where a project or
+ * managed binary is no answer: the LSP launcher starting jdtls asks this of
+ * `java`. `true` and `false` are durable (the version probe passed, or the
+ * command is absent or rejects it); `undefined` is a probe that never got a
+ * fair hearing (timeout, abort, host stall), so the caller must not treat the
+ * call as proof the tool is absent; so is a call across a trust change, whose
+ * answer is not the trust it asked under. The verdict, its cooldown and the
+ * trust stamp are the shared checker's.
+ */
+export async function toolOnPath(toolId: string): Promise<boolean | undefined> {
+	const checker = toolBinaryChecker(toolId, "path-only");
+	if (!checker) return false;
+	const trustGeneration = getProjectTrustGeneration();
+	const onPath = await checker.isAvailableAsync();
+	// The flight resolves its rung, then spawns, and the spawn scopes the search
+	// path by the trust answer of that moment: a flip while it resolved makes
+	// the answer the NEW trust's, which is not what this caller asked (#4776).
+	if (getProjectTrustGeneration() !== trustGeneration) return undefined;
+	if (onPath) return true;
+	return checker.getOutcome() === "transient" ? undefined : false;
+}
+
+/** What a ladder that never probed (or an id with no spec) reports. */
+const UNPROBED_VERDICT: AvailabilityVerdict = {
+	outcome: null,
+	cause: null,
+	elapsedMs: 0,
+	latched: false,
+	retryAtMs: 0,
+};
+
+/**
+ * What the registry ladder last decided for `toolId` at `cwd`, for a runner
+ * that words its own failure from the typed verdict (the helm and trivy
+ * passes) instead of returning `toolAbsentSkip`. Reads the checker
+ * `resolveToolCommandWithInstallFallback` probed through, so it never triggers
+ * a probe of its own; an id with no spec reads as never probed (#5410).
+ */
+export function toolBinaryVerdict(
 	toolId: string,
 	cwd: string,
-	versionArgs: string[] = ["--version"],
-	timeout = 5000,
-): Promise<string | null> {
-	// Skip the --version spawn when the command isn't even on disk — the ~μs
-	// stat/PATH walk beats a guaranteed-to-fail spawn round-trip.
-	const spawnable = await isSpawnableCommand(command);
-	if (spawnable) {
-		const versionCheck = await safeSpawnAsync(command, versionArgs, {
-			timeout,
-			cwd,
-			input: "",
-		});
-		if (!versionCheck.error && versionCheck.status === 0) {
-			return command;
-		}
-		// A command that was found but rejected its probe is not fixed by a
-		// reinstall. This also covers permissions and malformed shims.
-		return null;
-	}
-	if (!shouldAutoInstallTool(toolId)) return null;
+): AvailabilityVerdict {
+	return (
+		toolBinaryChecker(toolId, "managed-first")?.getVerdict(cwd) ??
+		UNPROBED_VERDICT
+	);
+}
 
-	const state = installStateFor(cwd, toolId);
-	if (state.suppressed) return null;
-	const installStartedAt = Date.now();
-	const installed = await ensureTool(toolId);
-	if (installed) {
-		noteInstallSuccess(toolId, cwd);
-		// A latched `unavailable` row MAY stand here, written by whatever probe
-		// the caller ran first — but not always. The on-disk pre-check above
-		// logs nothing, and two runners reach this seam with no checker probe at
-		// all (biome-check and oxlint call
-		// `resolveToolCommandWithInstallFallback` directly, #1657). So the row is
-		// emitted either way, and only a call that really clears a latched row is
-		// recorded as a correction. Without the row, the durable log keeps saying
-		// the tool is off after the installer just brought it back — the third
-		// seam of #1606/#1610/#1612 (#1636).
-		emitCompensatingAvailableRow(
-			cwd,
-			toolId,
-			installStartedAt,
-			installed,
-			latchKeysFor(toolId, command),
+/**
+ * What a formatter's lookup of a tool found: the binary, or `null`. When the
+ * tool is present but failed its version check and no later rung replaced it,
+ * `rejected` carries the probe's bounded output (possibly empty), so the
+ * caller can report "present but failed" with its evidence instead of "not
+ * found".
+ */
+export interface InstalledToolResolution {
+	command: string | null;
+	rejected?: string;
+}
+
+/**
+ * The formatter ladder without the install (#5410, #5492 r2): the project's
+ * own venv or `node_modules/.bin` at exactly `cwd`, then PATH with a version
+ * check, then the managed installs. The formatter's version decides the bytes
+ * it writes, so a working PATH binary outranks the managed copy; the runners
+ * keep managed before PATH in `resolveToolCommandWithInstallFallback`. A
+ * formatter calls this where `shouldAutoInstallTool` decides the install
+ * separately. BiomeClient supplies its auto-installed command (or null) to
+ * select its historical presence-only ladder: exact-cwd project, install
+ * result, managed Node shim, package-manager global bins. An omitted third
+ * argument retains the formatter's version-checked PATH-first ladder.
+ */
+export async function resolveInstalledToolCommand(
+	cwd: string,
+	toolId: string,
+	autoInstalledCommand?: string | null,
+): Promise<InstalledToolResolution> {
+	// Biome's established presence ladder differs from the version-checked
+	// formatter ladder. An install result is its second rung, after the
+	// project's own exact-cwd shim, and must not be memoized above trust.
+	if (toolId === "biome" && autoInstalledCommand) {
+		const project = localBinPath(
+			findLocalBinAt("biome", cwd, { windowsExt: ".cmd" }),
 		);
-		return installed;
+		return { command: project ?? autoInstalledCommand };
 	}
-	noteInstallFailure(toolId, cwd);
-	return null;
-}
-
-export async function resolveCommandArgsWithInstallFallback(
-	command: { cmd: string; args: string[] },
-	toolId: string,
-	cwd: string,
-	versionArgs: string[] = ["--version"],
-	timeout = 5000,
-): Promise<{ cmd: string; args: string[] } | null> {
-	const versionCheck = await safeSpawnAsync(
-		command.cmd,
-		[...command.args, ...versionArgs],
-		{ timeout, cwd, input: "" },
-	);
-	if (!versionCheck.error && versionCheck.status === 0) {
-		return command;
-	}
-	const installed = await verifyOrInstallCommand(
-		command.cmd,
+	const checker = toolBinaryChecker(
 		toolId,
-		cwd,
-		versionArgs,
-		timeout,
+		toolId === "biome" && autoInstalledCommand !== undefined
+			? "biome-installed"
+			: "path-first",
 	);
-	if (!installed) {
-		return null;
+	if (!checker) return { command: null };
+	if (await checker.isAvailableAsync(cwd)) {
+		return { command: checker.getCommand(cwd) };
 	}
-	if (installed === command.cmd) {
-		return command;
-	}
-	return { cmd: installed, args: [] };
+	const { cause, rejectedOutput } = checker.getVerdict(cwd);
+	return cause === "probe-rejected"
+		? { command: null, rejected: rejectedOutput ?? "" }
+		: { command: null };
 }
 
-export async function resolveCommandWithInstallFallback(
-	command: string,
-	toolId: string,
+/**
+ * The command that runs rubocop in `cwd` (#5410). `form` is the project's
+ * choice (`getRubocopCommand`): the bundler form (`bundle exec rubocop`) is
+ * used when the registry's `bundle` ladder answers, else the plain `rubocop`
+ * ladder, so a Gemfile on a host without bundler still reaches a working
+ * rubocop. One memoized verdict per binary; a caller reads why it got `null`
+ * from `toolBinaryVerdict`.
+ */
+export async function resolveRubocopCommand(
+	form: { cmd: string; args: string[] },
 	cwd: string,
-	versionArgs: string[] = ["--version"],
-	timeout = 5000,
-): Promise<string | null> {
-	return verifyOrInstallCommand(command, toolId, cwd, versionArgs, timeout);
+): Promise<{ cmd: string; args: string[] } | null> {
+	if (form.cmd === "bundle") {
+		const bundle = await resolveToolCommandWithInstallFallback(cwd, "bundle");
+		if (bundle) return { cmd: bundle, args: form.args };
+	}
+	const cmd = await resolveToolCommandWithInstallFallback(cwd, "rubocop");
+	return cmd ? { cmd, args: [] } : null;
 }
 
 async function resolveAvailableOrInstallUnshared(
@@ -1885,8 +2299,7 @@ async function resolveAvailableOrInstallUnshared(
 		// `checker.isAvailableAsync`. Without a compensating row here, the durable
 		// log keeps saying the tool is off after the installer just brought it
 		// back — the shape #1606/PR #1610 fixed in `ensureViaInstaller`, shared
-		// here by ~16 runners behind this helper (#1612), and by
-		// `verifyOrInstallCommand` for the third seam (#1636).
+		// here by ~16 runners behind this helper (#1612).
 		//
 		// `checker.reset()` above clears the checker's cache, so the NEXT call
 		// re-probes PATH from scratch — and for a managed-dir-only install that
@@ -1957,60 +2370,4 @@ export function resolveAvailableOrInstall(
 	});
 	byTool.set(toolId, promise);
 	return promise;
-}
-
-// =============================================================================
-// LOCAL-FIRST BINARY RESOLUTION
-// =============================================================================
-
-/**
- * Find a tool binary preferring local node_modules/.bin, then any installed
- * package manager's global bin dir (npm/pnpm/yarn/bun), then global PATH. Only
- * falls back to `npx --no` as a last resort — the universal cache-only exec
- * (npx ships with node and never silently downloads), so this stays
- * manager-agnostic without risking a surprise `dlx` fetch on pnpm/yarn/bun.
- *
- * Returns: { cmd, args } where args may include the `["--no", toolName]` npx
- * preamble.
- */
-export async function resolveLocalFirstAsync(
-	toolName: string,
-	cwd: string,
-	windowsExt = ".cmd",
-): Promise<{ cmd: string; args: string[] }> {
-	// 1. Local node_modules/.bin (project-installed) — through the trust-gated
-	//    shared lookup, never a private join (#4268 HIGH-1).
-	const local = localBinPath(findLocalBinAt(toolName, cwd, { windowsExt }));
-	if (local) return { cmd: local, args: [] };
-
-	// 2. Global bin dir of ANY installed manager (npm/pnpm/yarn/bun) — direct
-	//    file lookup, so it finds tools installed via `pnpm add -g` / `bun add -g`
-	//    (whose bin dirs are often off PATH) and survives PATH staleness after an
-	//    `install -g`. No spawn.
-	const globalBin = await findGlobalBinary(toolName, windowsExt);
-	if (globalBin) return { cmd: globalBin, args: [] };
-
-	// 3. Global PATH (already installed system-wide, on PATH)
-	const globalCheck = await probeToolAsync(toolName, ["--version"], {
-		timeout: 3000,
-	});
-	if (!globalCheck.error && globalCheck.status === 0) {
-		return { cmd: toolName, args: [] };
-	}
-
-	// 4. npx --no fallback — universal cache-only exec (no silent download)
-	return { cmd: "npx", args: ["--no", toolName] };
-}
-
-// =============================================================================
-// PRE-BUILT CHECKERS FOR COMMON TOOLS
-// =============================================================================
-
-export const pyright = createAvailabilityChecker("pyright", ".exe");
-export const ruff = createAvailabilityChecker("ruff", ".exe");
-export const biome = createAvailabilityChecker("biome");
-
-/** Shared cwd seam for runner probes and analysis children (#2777). */
-export function resolveRunnerCwd(ctx: DispatchContext, tool: string): string {
-	return resolveToolCwd("runner", tool, ctx.filePath, ctx).cwd;
 }

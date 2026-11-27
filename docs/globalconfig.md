@@ -40,6 +40,7 @@ Each runtime toggle is settable from the CLI *and* from `config.json`. The two a
 | `--lens-compact-lsp-status` | `ui.compactLspStatus` | `false` |
 | `--lens-hide-lsp-status` | `ui.hideLspStatus` | `false` |
 | `--lens-compact-widget` | `ui.compactWidget` | `false` |
+| `--lens-issues-status` | `ui.issuesStatus` | `false` |
 | `--no-lazy-tools` | `tools.lazy` | `true` |
 | `--lens-turn-end-madge` | `turnEnd.madge.enabled` | `false` |
 | `--lens-fallow` | `fallow.enabled` | `false` |
@@ -140,6 +141,22 @@ Hide the diagnostics widget by default, run formatting immediately after write/e
 ```
 
 `format.mode` can be `"deferred"` (default) or `"immediate"`. Set `format.enabled` to `false` to match `--no-autoformat`. `/lens-widget-toggle` still works as a session-only override.
+
+### Widget position and hiding
+
+`widget.position` (default `"belowEditor"`) sets where the diagnostics widget draws relative to the input editor. Use `"aboveEditor"` or `"belowEditor"`.
+
+`widget.hideWhenClean` (default `false`) hides the widget while the project is clean. The widget hides 5 seconds after it first shows `✓ clean`.
+
+Clean means no error, warning, or unchecked file, at least one completed check, no analysis running, no suppressed findings, and no language server still starting.
+
+The widget also stays hidden from session start until a first edit gives it something to show. A language server that is up, or a file no check can cover, does not draw a bare header.
+
+The widget returns on any finding, unchecked file, or starting server. It also returns on an edit whose analysis is running, so each edit shows the widget briefly. This feedback is by design.
+
+`/lens-widget-toggle` does not override the hide. A widget toggled visible can draw nothing while the project is clean. A resumed session whose restored state is clean shows `✓ clean` for 5 seconds, then hides.
+
+Both keys are global-only. Neither has a CLI flag, and a project `.pi-lens.json` cannot set them. The delay is not configurable.
 
 `autofix.enabled` (default `true`) is the global-config counterpart to the project `.pi-lens.json` `autofix.enabled` below — set it to `false` to match `--no-autofix` for every project that doesn't set its own `autofix.enabled`. As with `format.enabled` and `actionableWarnings.autoFix.enabled`, a project's own `.pi-lens.json` value overrides this global default in either direction (see "Mutation controls" below).
 
@@ -273,7 +290,14 @@ Note: `maxProjectFiles` (below) is discovered differently — via an upward walk
 
 Per-rule threshold overrides and policy filters. Currently honored:
 
-- `high-complexity.threshold` — cyclomatic complexity (default `15`)
+- `high-complexity.threshold` — cyclomatic complexity (default `15`). The
+  same number judges the per-edit complexity line (`⚠ complexity vs main: …`),
+  which names a function an edit made worse than the default branch has it,
+  and `disable`/`select`/`ignorePaths` of `high-complexity` switch the line off
+  too. The line uses the JS/TS thresholds (cyclomatic `15`, nesting `6`) for
+  every language it covers (Python, Go and Rust included) until #5089 sets
+  per-language ones. It never names an anonymous function, and a file over
+  256 KiB is not judged.
 - `high-fan-out.threshold` — distinct function calls (default `20`)
 - `<id>.disable` — disable diagnostics for the listed rule ids (output-only
   filter). Same rule-id normalization as `pi-lens-ignore`: a user lists

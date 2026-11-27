@@ -159,19 +159,53 @@ function argumentsOf(call: SgNode): SgNode[] {
 	return args ? named(args) : [];
 }
 
-/** Names this file binds to `relative`: `import { relative as rel }`, `const rel = path.relative`. */
-function relativeNames(root: SgNode): Set<string> {
-	const names = new Set<string>(["relative"]);
-	for (const specifier of root.findAll({
-		rule: { kind: "import_specifier" },
+/** The binding forms both readings of a file need, found in ONE tree walk. */
+interface Bindings {
+	specifiers: SgNode[];
+	pairPatterns: SgNode[];
+	declarators: SgNode[];
+}
+
+/**
+ * A `findAll` is a full tree traversal however few nodes it returns, and the
+ * two readings below asked for `variable_declarator` twice and the import and
+ * destructuring forms once each. One walk collects all three, each kind in its
+ * own tree order.
+ */
+function bindingsOf(root: SgNode): Bindings {
+	const bindings: Bindings = {
+		specifiers: [],
+		pairPatterns: [],
+		declarators: [],
+	};
+	for (const node of root.findAll({
+		rule: {
+			any: [
+				{ kind: "import_specifier" },
+				{ kind: "pair_pattern" },
+				{ kind: "variable_declarator" },
+			],
+		},
 	})) {
+		const kind = node.kind();
+		if (kind === "import_specifier") bindings.specifiers.push(node);
+		else if (kind === "pair_pattern") bindings.pairPatterns.push(node);
+		else bindings.declarators.push(node);
+	}
+	return bindings;
+}
+
+/** Names this file binds to `relative`: `import { relative as rel }`, `const rel = path.relative`. */
+function relativeNames(bindings: Bindings): Set<string> {
+	const names = new Set<string>(["relative"]);
+	for (const specifier of bindings.specifiers) {
 		const parts = named(specifier);
 		const imported = parts[0];
 		const local = parts[1] ?? parts[0];
 		if (imported && local && cookedIdentifier(imported.text()) === "relative")
 			names.add(cookedIdentifier(local.text()));
 	}
-	for (const pair of root.findAll({ rule: { kind: "pair_pattern" } })) {
+	for (const pair of bindings.pairPatterns) {
 		const key = pair.field("key");
 		const value = pair.field("value");
 		if (
@@ -182,9 +216,7 @@ function relativeNames(root: SgNode): Set<string> {
 		)
 			names.add(cookedIdentifier(value.text()));
 	}
-	for (const declarator of root.findAll({
-		rule: { kind: "variable_declarator" },
-	})) {
+	for (const declarator of bindings.declarators) {
 		const name = declarator.field("name");
 		const value = declarator.field("value");
 		if (!name || !value || name.kind() !== "identifier") continue;
@@ -196,11 +228,9 @@ function relativeNames(root: SgNode): Set<string> {
 }
 
 /** Every declarator initializer in the file, by bound name, for the fixed point. */
-function declaratorsByName(root: SgNode): Map<string, SgNode[]> {
+function declaratorsByName(bindings: Bindings): Map<string, SgNode[]> {
 	const byName = new Map<string, SgNode[]>();
-	for (const declarator of root.findAll({
-		rule: { kind: "variable_declarator" },
-	})) {
+	for (const declarator of bindings.declarators) {
 		const name = declarator.field("name");
 		const value = declarator.field("value");
 		if (!name || !value || name.kind() !== "identifier") continue;
@@ -285,8 +315,9 @@ function derivesFromRelative(
 		}
 		case "identifier": {
 			const name = cookedIdentifier(value.text());
-			if (isEnclosingParameter(value, name)) return false;
-			return derived.has(name);
+			// Both tests are pure, so the cheap set lookup goes first: the parent
+			// climb is only worth making for a name that could be derived at all.
+			return derived.has(name) && !isEnclosingParameter(value, name);
 		}
 		case "binary_expression": {
 			const left = value.field("left");
@@ -544,9 +575,10 @@ export function scanPathContainmentSites(
 	source: string,
 ): PathContainmentSite[] {
 	const root = parse(Lang.TypeScript, source).root();
+	const bindings = bindingsOf(root);
 	const reading: Reading = {
-		relativeNames: relativeNames(root),
-		declarators: declaratorsByName(root),
+		relativeNames: relativeNames(bindings),
+		declarators: declaratorsByName(bindings),
 	};
 	const derived = closedOver(reading.declarators, (node, names) =>
 		derivesFromRelative(node, reading, names),
@@ -634,13 +666,27 @@ function predicatePositions(
 	literals: ReadonlySet<string>,
 ): SgNode[] {
 	const positions = new Set<SgNode>();
-	const literalNodes = [
-		...root.findAll({ rule: { kind: "string", regex: "\\.\\." } }),
-		...root.findAll({ rule: { kind: "template_string", regex: "\\.\\." } }),
-		...root
-			.findAll({ rule: { kind: "regex" } })
-			.filter((node) => PARENT_SEGMENT_REGEX_SOURCE.test(node.text())),
-	];
+	// One walk for the three literal kinds, kept in the order the separate
+	// walks produced (strings, templates, regexes): a tie between two hits on
+	// one line keeps whichever was added first.
+	const strings: SgNode[] = [];
+	const templates: SgNode[] = [];
+	const regexes: SgNode[] = [];
+	for (const node of root.findAll({
+		rule: {
+			any: [
+				{ kind: "string", regex: "\\.\\." },
+				{ kind: "template_string", regex: "\\.\\." },
+				{ kind: "regex" },
+			],
+		},
+	})) {
+		const kind = node.kind();
+		if (kind === "string") strings.push(node);
+		else if (kind === "template_string") templates.push(node);
+		else if (PARENT_SEGMENT_REGEX_SOURCE.test(node.text())) regexes.push(node);
+	}
+	const literalNodes = [...strings, ...templates, ...regexes];
 	for (const literalNode of literalNodes) {
 		const own = predicatePositionOf(literalNode);
 		if (own) positions.add(own);

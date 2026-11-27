@@ -8,7 +8,11 @@ import {
 	type LineCountCache,
 } from "./diagnostic-line-freshness.js";
 import { visibleWidth } from "./deps/pi-tui.js";
-import { normalizeEphemeralMapKey, normalizeMapKey } from "./path-utils.js";
+import {
+	normalizeEphemeralMapKey,
+	normalizeMapKey,
+	splitPathSegments,
+} from "./path-utils.js";
 import { fitLine } from "./tui-fit.js";
 import { WriteOrderingGuard } from "./write-ordering-guard.js";
 import { collectForwardImportMtimes } from "./blocker-freshness.js";
@@ -266,6 +270,17 @@ export interface WidgetDiagnostic {
 	 * fact about what the row cites, not a verdict about one session's disk.
 	 */
 	citedFile?: string;
+	/**
+	 * #5788 review F1: the carry's marker (`Diagnostic.unconfirmedBy`,
+	 * `recheckRunning`) and the row's language server, so the session read
+	 * words this row through the delivery gate as the per-write lines do, and
+	 * a row a check found fresh gets no "not re-checked" note. Additive and
+	 * optional like `citedFile`: a row persisted by an older build has none and
+	 * reads as a row with a verdict, so it gets no note.
+	 */
+	unconfirmedBy?: string;
+	recheckRunning?: true;
+	serverId?: string;
 }
 
 /**
@@ -357,6 +372,15 @@ interface LspRecord {
 const files = new Map<string, FileRecord>();
 let sessionLanguages: string[] = [];
 let requestRenderFn: (() => void) | null = null;
+/**
+ * Activation-scoped listener beside {@link requestRenderFn}. The render
+ * callback is session state (the TUI mount sets it and `clearWidgetState`
+ * drops it); a consumer that projects the store outside the TUI, such as the
+ * `pi-lens-issues` status, needs a feed that survives a session reset. This
+ * one is wired once per activation and deliberately NOT cleared with the
+ * store.
+ */
+let widgetChangeFn: (() => void) | null = null;
 
 /**
  * Guards `recordDiagnostics` writes against the same race class fixed for
@@ -428,6 +452,24 @@ function maybePruneInactiveFileRecords(): void {
 
 export function setRenderCallback(fn: () => void): void {
 	requestRenderFn = fn;
+}
+
+/**
+ * Register the activation-scoped store-change listener. Unlike
+ * {@link setRenderCallback}, {@link clearWidgetState} keeps it: it is
+ * activation wiring, not session state, and a reset still has to notify the
+ * projection that the old session's data is gone.
+ */
+export function setWidgetChangeCallback(fn: () => void): void {
+	widgetChangeFn = fn;
+}
+
+/**
+ * Release the activation-scoped store-change listener, but only when `fn` still
+ * holds the slot. A departed activation must not clear a successor's listener.
+ */
+export function clearWidgetChangeCallback(fn: () => void): void {
+	if (widgetChangeFn === fn) widgetChangeFn = null;
 }
 
 /** Reconcile a mark through the same apply/count/commit path as dispatch. */
@@ -707,9 +749,14 @@ export function clearWidgetState(): void {
 	lspServers.clear();
 	sessionLanguages = [];
 	requestRenderFn = null;
+	resetClearHide();
 	diagnosticsWriteGuard.clear();
 	runnerWriteGuard.clear();
 	nextInactivePruneSize = MAX_INACTIVE_FILE_RECORDS + 1;
+	// `widgetChangeFn` survives the reset: it is activation wiring, and the
+	// reset's emptiness is itself a change the projection has to publish. The
+	// render callback is null by now, so only that listener fires.
+	requestRender();
 }
 
 // v1 → v2 (#1186): per-entry `WidgetDiagnostic.observedAt`. v2 is a SUPERSET of
@@ -909,7 +956,7 @@ export function importWidgetState(
 	}
 	pruneInactiveFileRecords();
 	sessionLanguages = state.sessionLanguages ?? [];
-	requestRenderFn?.();
+	requestRender();
 	return true;
 }
 
@@ -1017,6 +1064,10 @@ export function recordFormatter(
 	outcome?: FormatterOutcomeKind,
 ): void {
 	const rec = getOrCreate(filePath);
+	// #5549: a skipped run (a cooled formatter) did not look at the bytes, so
+	// it never clears that formatter's failure marker.
+	if (outcome === "skipped" && rec.formatters.get(formatter)?.success === false)
+		return;
 	rec.formatters.set(formatter, { changed, success, outcome });
 	rec.touchedAt = Date.now();
 	files.set(fileMapKey(filePath), rec);
@@ -1116,13 +1167,10 @@ export function recordDiagnostics(
 	// `observedAt`) is observed now.
 	const observedTs = observedAt ?? Date.now();
 	const rec = getOrCreate(filePath, key);
-	commitDiagnostics(
-		rec,
-		filePath,
-		normalizeDiagnostics(filePath, diagnostics, observedTs),
-		observedTs,
-		key,
-	);
+	// Update the unchecked fields BEFORE `commitDiagnostics` notifies listeners:
+	// the store-change listener reads this record, and an empty snapshot with an
+	// unchecked reason must publish `⚠ N unchecked`, never the intermediate
+	// `✓ clean` the pre-update record would draw.
 	if (unchecked === undefined) {
 		delete rec.uncheckedReason;
 		delete rec.uncheckedInapplicable;
@@ -1131,6 +1179,13 @@ export function recordDiagnostics(
 		if (unchecked.inapplicable) rec.uncheckedInapplicable = true;
 		else delete rec.uncheckedInapplicable;
 	}
+	commitDiagnostics(
+		rec,
+		filePath,
+		normalizeDiagnostics(filePath, diagnostics, observedTs),
+		observedTs,
+		key,
+	);
 	return true;
 }
 
@@ -1146,6 +1201,9 @@ interface RawWidgetDiagnostic {
 	semantic?: string;
 	/** The file the row cites (`Diagnostic.filePath`); see `citedFile`. */
 	filePath?: string;
+	unconfirmedBy?: string;
+	recheckRunning?: true;
+	serverId?: string;
 }
 
 /** Map the raw diagnostic shape callers pass into stored {@link WidgetDiagnostic}s.
@@ -1172,6 +1230,12 @@ function normalizeDiagnostics(
 			...(d.filePath !== undefined && isCrossFileBlocker(d, filePath)
 				? { citedFile: d.filePath }
 				: {}),
+			// #5788 review F1: only a carried row has the marker.
+			...(d.unconfirmedBy !== undefined && {
+				unconfirmedBy: d.unconfirmedBy,
+				...(d.recheckRunning === true && { recheckRunning: true as const }),
+				...(d.serverId !== undefined && { serverId: d.serverId }),
+			}),
 		} satisfies WidgetDiagnostic;
 	});
 }
@@ -1801,7 +1865,7 @@ export async function reconcileStaleWidgetFiles(
 		rec.hasFinalDiagnosticsSnapshot = false;
 		rec.touchedAt = Math.max(Date.now(), v.mtimeMs);
 	}
-	if (changed > 0) requestRenderFn?.();
+	if (changed > 0) requestRender();
 	return changed;
 }
 
@@ -1901,7 +1965,7 @@ export async function reconcileStaleWidgetDependencyBlockers(
 			rec.diagnostics = capStoredDiagnostics(rec.allDiagnostics);
 		}
 	}
-	if (demoted > 0) requestRenderFn?.();
+	if (demoted > 0) requestRender();
 	return { demoted, truncatedImports };
 }
 
@@ -1986,7 +2050,7 @@ export function markWidgetFileBlockersStale(
 	if (changed) {
 		rec.diagnosticCounts = countDiagnostics(rec.allDiagnostics);
 		rec.diagnostics = capStoredDiagnostics(rec.allDiagnostics);
-		requestRenderFn?.();
+		requestRender();
 	}
 	return changed;
 }
@@ -2088,7 +2152,7 @@ export function retireWidgetDependencyDriftBlockers(filePath: string): boolean {
 	// drain — either way, defensive: it keeps a just-retired file from being
 	// double-drained (and double-charged) on the next pass.
 	renderedDependencyDriftFiles.delete(rec.filePath);
-	requestRenderFn?.();
+	requestRender();
 	return true;
 }
 
@@ -2379,6 +2443,154 @@ function fitCompactHeader(
 	return fitLine(` ${label}${langs}${tail}`, width);
 }
 
+/**
+ * The widget header's tallies, and the issue-status projection's only source.
+ * One store, one tally: the status line must never recount independently
+ * (#1892). `hasRenderableCheckedFile` mirrors the header's `✓ clean` gate —
+ * a drawn row for a file no check can cover is not a completed check (#5287).
+ */
+export interface WidgetSummary {
+	totalBlocking: number;
+	totalErrors: number;
+	totalWarnings: number;
+	totalSuppressed: number;
+	hasPendingAnalysis: boolean;
+	uncheckedCount: number;
+	hasRenderableCheckedFile: boolean;
+	hasFiles: boolean;
+}
+
+function summarizeWidget(
+	records: readonly FileRecord[],
+	renderable: readonly FileRecord[],
+	unchecked: readonly FileRecord[],
+): WidgetSummary {
+	return {
+		totalBlocking: countBlockingIn(records),
+		totalErrors: countTotalIn("error", records),
+		totalWarnings: countTotalIn("warning", records),
+		totalSuppressed: countSuppressedIn(records),
+		hasPendingAnalysis: records.some(isPendingAnalysis),
+		uncheckedCount: unchecked.length,
+		hasRenderableCheckedFile: renderable.some(
+			(rec) => rec.uncheckedInapplicable !== true,
+		),
+		hasFiles: records.length > 0,
+	};
+}
+
+/**
+ * The header's `✓ clean` verdict: no error, warning or unchecked file, at
+ * least one completed check (#5287), and no analysis still running.
+ */
+function isHeaderClean(facts: WidgetSummary): boolean {
+	return (
+		facts.totalErrors === 0 &&
+		facts.totalWarnings === 0 &&
+		facts.uncheckedCount === 0 &&
+		facts.hasRenderableCheckedFile &&
+		!facts.hasPendingAnalysis
+	);
+}
+
+/**
+ * widget.hideWhenClean's gate: the header shows `✓ clean` and the frame draws
+ * nothing else a user needs (no suppressed count, no starting server, no
+ * failed-formatter row: `✓ clean` counts diagnostics, and a failed formatter
+ * leaves none).
+ */
+function isWidgetClean(
+	facts: WidgetSummary,
+	spawningCount: number,
+	records: readonly FileRecord[],
+): boolean {
+	return (
+		isHeaderClean(facts) &&
+		facts.totalSuppressed === 0 &&
+		spawningCount === 0 &&
+		!records.some(hasFailedFormatter)
+	);
+}
+
+/**
+ * widget.hideWhenClean's other gate: the frame has nothing to report and
+ * `✓ clean` cannot show, because no completed check exists. An LSP server that
+ * is up with no edit yet, or only files no check can cover, leaves a bare
+ * header; without this gate `isWidgetClean` is never true and it never hides.
+ */
+function isWidgetIdle(
+	facts: WidgetSummary,
+	renderableCount: number,
+	spawningCount: number,
+): boolean {
+	return (
+		renderableCount === 0 &&
+		facts.totalErrors === 0 &&
+		facts.totalWarnings === 0 &&
+		facts.totalSuppressed === 0 &&
+		facts.uncheckedCount === 0 &&
+		!facts.hasPendingAnalysis &&
+		spawningCount === 0
+	);
+}
+
+/**
+ * widget.hideWhenClean: how long the widget shows `✓ clean` before it hides.
+ * The first clean render starts the delay; any render that is not clean
+ * cancels it, so the next clean state waits the full delay again. The timer
+ * only asks for a repaint; the repaint re-reads the store and decides.
+ */
+export const WIDGET_CLEAR_HIDE_DELAY_MS = 5000;
+let clearSinceMs: number | null = null;
+let clearHideTimer: ReturnType<typeof setTimeout> | null = null;
+
+function resetClearHide(): void {
+	if (clearHideTimer !== null) clearTimeout(clearHideTimer);
+	clearHideTimer = null;
+	clearSinceMs = null;
+}
+
+/** Track the clean state and answer whether the hide delay has passed. */
+function clearHideElapsed(clean: boolean): boolean {
+	if (!clean) {
+		resetClearHide();
+		return false;
+	}
+	const now = Date.now();
+	if (clearSinceMs === null) {
+		clearSinceMs = now;
+		clearHideTimer = setTimeout(() => {
+			clearHideTimer = null;
+			// A detached callback has no caller to contain a host throw; same
+			// bounded record as the store-change listener in `requestRender`.
+			try {
+				requestRenderFn?.();
+			} catch (err) {
+				recordDegradationOnce({
+					kind: "widget-change-listener-failed",
+					subject: "widget-hide-timer",
+					reason: `hide-timer repaint threw: ${err instanceof Error ? err.message : String(err)}`,
+				});
+			}
+		}, WIDGET_CLEAR_HIDE_DELAY_MS);
+		// Don't keep the process alive solely for this repaint.
+		clearHideTimer?.unref?.();
+	}
+	return now - clearSinceMs >= WIDGET_CLEAR_HIDE_DELAY_MS;
+}
+
+/** The current store's tallies, without rendering a widget frame. */
+export function getWidgetSummary(): WidgetSummary {
+	const records = [...files.values()];
+	const renderable: FileRecord[] = [];
+	const unchecked: FileRecord[] = [];
+	for (const rec of records) {
+		if (shouldRenderFile(rec)) renderable.push(rec);
+		if (isUncheckedClean(rec)) unchecked.push(rec);
+	}
+	return summarizeWidget(records, renderable, unchecked);
+}
+
 export function renderWidget(
 	width: number,
 	theme: {
@@ -2386,7 +2598,9 @@ export function renderWidget(
 	},
 	// #3959: one-line summary switch (ui.compactWidget / --lens-compact-widget).
 	// An options object instead of a boolean flag parameter, per no-flag-argument.
-	opts?: { compact?: boolean },
+	// `hideWhenClean` (widget.hideWhenClean): draw nothing while no error,
+	// warning or unchecked file is outstanding.
+	opts?: { compact?: boolean; hideWhenClean?: boolean },
 ): string[] {
 	const dim = (s: string) => theme.fg("dim", s);
 	const red = (s: string) => theme.fg("error", s);
@@ -2396,43 +2610,47 @@ export function renderWidget(
 	const w = Math.max(1, width || 80);
 	const useHorizontal = w >= HORIZONTAL_MIN_WIDTH;
 
-	if (files.size === 0 && lspServers.size === 0) return [];
+	if (files.size === 0 && lspServers.size === 0) {
+		resetClearHide();
+		return [];
+	}
 
 	const lines: string[] = [];
 
-	// Header — counts from deduplicated files only
-	const deduped = dedupeByBasename([...files.values()]);
+	// #5460: `files` is one record per path key, and the counts read all of them.
+	// A display-name dedupe let a clean same-named file hide a blocking one.
+	const records = [...files.values()];
 	// The five row slots go to the highest tiers first (#4625 round 3): a retained
 	// record's `touchedAt` is its sweep time, so capping by recency alone let it
 	// take a slot from a blocking file and the header counted a row the frame
 	// never drew. The chosen rows are then drawn in the recency order both
 	// layouts showed before the cap.
-	const renderable = deduped.filter(shouldRenderFile);
+	const renderable = records.filter(shouldRenderFile);
 	const recencySorted = sortByTierThenRecency(renderable)
 		.slice(0, 5)
 		.sort((a, b) => b.touchedAt - a.touchedAt);
 	const langStr = sessionLanguages.slice(0, 6).join(" ");
-	const totalBlocking = countBlockingIn(deduped);
-	const totalErrors = countTotalIn("error", deduped);
-	const totalWarnings = countTotalIn("warning", deduped);
-	const totalSuppressed = countSuppressedIn(deduped);
-	const hasPendingAnalysis = deduped.some(isPendingAnalysis);
-	const uncheckedFiles = deduped.filter(isUncheckedClean);
+	const uncheckedFiles = records.filter(isUncheckedClean);
+	const summaryFacts = summarizeWidget(records, renderable, uncheckedFiles);
 	const errorChunk =
-		totalErrors > 0
-			? (totalBlocking > 0 ? red : yellow)(`●${totalErrors}E`)
+		summaryFacts.totalErrors > 0
+			? (summaryFacts.totalBlocking > 0 ? red : yellow)(
+					`●${summaryFacts.totalErrors}E`,
+				)
 			: "";
-	const warningChunk = totalWarnings > 0 ? yellow(`!${totalWarnings}W`) : "";
+	const warningChunk =
+		summaryFacts.totalWarnings > 0
+			? yellow(`!${summaryFacts.totalWarnings}W`)
+			: "";
 	const summary = errorChunk
 		? errorChunk + (warningChunk ? " " + warningChunk : "")
 		: warningChunk
 			? warningChunk
-			: uncheckedFiles.length > 0
-				? yellow(`⚠ ${uncheckedFiles.length} unchecked`)
+			: summaryFacts.uncheckedCount > 0
+				? yellow(`⚠ ${summaryFacts.uncheckedCount} unchecked`)
 				: // #5287: a formatter row for a file no check can cover (a generated
 					// file) is not a completed check; `✓ clean` needs one that is.
-					renderable.some((rec) => rec.uncheckedInapplicable !== true) &&
-					  !hasPendingAnalysis
+					isHeaderClean(summaryFacts)
 					? green("✓ clean")
 					: "";
 
@@ -2446,6 +2664,23 @@ export function renderWidget(
 		(useHorizontal || opts?.compact) && spawning.length > 0
 			? "  " + dim("LSP↑")
 			: "";
+
+	// widget.hideWhenClean: nothing to report and no `✓ clean` to wait for.
+	if (
+		opts?.hideWhenClean &&
+		isWidgetIdle(summaryFacts, renderable.length, spawning.length)
+	) {
+		resetClearHide();
+		return [];
+	}
+
+	// widget.hideWhenClean: hide once `✓ clean` has shown for the delay.
+	if (
+		opts?.hideWhenClean &&
+		clearHideElapsed(isWidgetClean(summaryFacts, spawning.length, records))
+	) {
+		return [];
+	}
 
 	// #3959: compact mode stops at the summary header. File rows, the
 	// suppressed count and blocker details stay reachable via lens_diagnostics.
@@ -2464,18 +2699,22 @@ export function renderWidget(
 
 	const header = ` ${cyan("pi-lens")}${langStr ? "  " + dim(langStr) : ""}${lspChip}${summary ? "  " + summary : ""}`;
 	lines.push(fitLine(header, w));
-	if (totalSuppressed > 0) {
-		lines.push(fitLine(` ${dim(`suppressed: ${totalSuppressed}`)}`, w));
+	if (summaryFacts.totalSuppressed > 0) {
+		lines.push(
+			fitLine(` ${dim(`suppressed: ${summaryFacts.totalSuppressed}`)}`, w),
+		);
 	}
+
+	const labelOf = (rec: FileRecord) => rowLabel(rec, records);
 
 	// File list — display order varies by mode
 	if (useHorizontal) {
 		const displayOrder = sortByTierThenRecency(recencySorted);
-		const rowLine = packHorizontalRow(displayOrder, w, theme);
+		const rowLine = packHorizontalRow(displayOrder, labelOf, w, theme);
 		if (rowLine.length > 0) lines.push(rowLine);
 	} else {
 		for (const rec of recencySorted) {
-			lines.push(fitLine(formatFileRowVertical(rec, theme), w));
+			lines.push(fitLine(formatFileRowVertical(rec, labelOf(rec), theme), w));
 		}
 	}
 
@@ -2487,7 +2726,7 @@ export function renderWidget(
 	if (lastUnchecked?.uncheckedReason !== undefined) {
 		lines.push(
 			fitLine(
-				` ${yellow("⚠")} ${dim(`${path.basename(lastUnchecked.filePath)}: ${lastUnchecked.uncheckedReason}`)}`,
+				` ${yellow("⚠")} ${dim(`${labelOf(lastUnchecked)}: ${lastUnchecked.uncheckedReason}`)}`,
 				w,
 			),
 		);
@@ -2517,7 +2756,7 @@ export function renderWidget(
 	if (withBlocking.length > 0) {
 		const rec = withBlocking[0];
 		// #1641: gate only the ONE record whose line numbers are about to be
-		// rendered, not the whole (potentially session-long) `deduped` list the
+		// rendered, not the whole (potentially session-long) `records` list the
 		// header counts read — one memoized stat per redraw, never a per-file
 		// scan of every file pi-lens has touched this session. A past-EOF
 		// citation demoted here can leave the header's aggregate blocking count
@@ -2527,7 +2766,7 @@ export function renderWidget(
 		applyPastEofGate(rec);
 		if (!useHorizontal) {
 			lines.push(fitLine(dim("─".repeat(Math.min(w, 60))), w));
-			lines.push(fitLine(` ${dim(path.basename(rec.filePath))}`, w));
+			lines.push(fitLine(` ${dim(labelOf(rec))}`, w));
 		}
 		const blockers = rec.diagnostics.filter(isBlockingOrDemoted).slice(0, 5);
 		// #2275 review F1: THIS is the point where a demoted row is delivered to
@@ -2602,6 +2841,7 @@ function sortByTierThenRecency(recs: FileRecord[]): FileRecord[] {
 
 function formatFileRowVertical(
 	rec: FileRecord,
+	label: string,
 	theme: { fg: (color: string, s: string) => string },
 ): string {
 	const dim = (s: string) => theme.fg("dim", s);
@@ -2609,7 +2849,6 @@ function formatFileRowVertical(
 	const yellow = (s: string) => theme.fg("warning", s);
 	const green = (s: string) => theme.fg("success", s);
 
-	const base = path.basename(rec.filePath);
 	const blocking = rec.diagnosticCounts.blocking;
 	const errors = rec.diagnosticCounts.errors;
 	const warnings = rec.diagnosticCounts.warnings;
@@ -2657,11 +2896,12 @@ function formatFileRowVertical(
 		(changedFormatters.length > 0
 			? dim(` fmt:${changedFormatters.join(",")}`)
 			: "");
-	return ` ${dot} ${base}  ${dim(runnerNames)}${formatMark}${counts}`;
+	return ` ${dot} ${label}  ${dim(runnerNames)}${formatMark}${counts}`;
 }
 
 function packHorizontalRow(
 	recs: FileRecord[],
+	labelOf: (rec: FileRecord) => string,
 	totalWidth: number,
 	theme: { fg: (color: string, s: string) => string },
 ): string {
@@ -2685,7 +2925,7 @@ function packHorizontalRow(
 			droppedAt = i;
 			break;
 		}
-		const token = formatFileTokenHorizontal(recs[i], remaining, theme);
+		const token = formatFileTokenHorizontal(recs[i], labelOf, remaining, theme);
 		const tokenWidth = visibleWidth(token);
 		if (token.length === 0 || used + sepWidth + tokenWidth > totalWidth) {
 			droppedAt = i;
@@ -2724,6 +2964,7 @@ function packHorizontalRow(
 
 function formatFileTokenHorizontal(
 	rec: FileRecord,
+	labelOf: (rec: FileRecord) => string,
 	remainingWidth: number,
 	theme: { fg: (color: string, s: string) => string },
 ): string {
@@ -2759,11 +3000,10 @@ function formatFileTokenHorizontal(
 		countsStyled = " " + yellow(`${warnings}W`);
 	}
 
-	const fullBasename = path.basename(rec.filePath);
 	const fixedWidth = visibleWidth(dotChar) + 1 + visibleWidth(countsStyled);
 	const basenameBudget = remainingWidth - fixedWidth;
 	if (basenameBudget < 3) return "";
-	const truncated = truncateBasename(fullBasename, basenameBudget);
+	const truncated = truncateBasename(labelOf(rec), basenameBudget);
 	const linked = osc8(pathToFileURL(rec.filePath).href, truncated);
 	return `${dotChar} ${linked}${countsStyled}`;
 }
@@ -2773,12 +3013,12 @@ function truncateBasename(name: string, maxWidth: number): string {
 	if (maxWidth < 2) return "…";
 	const ext = path.extname(name);
 	const stem = name.slice(0, name.length - ext.length);
-	const keep = maxWidth - ext.length - 1;
+	const keep = maxWidth - visibleWidth(ext) - 1;
 	if (keep < 1) {
 		// Extension alone wouldn't fit; truncate the whole name.
-		return name.slice(0, maxWidth - 1) + "…";
+		return fitLine(name, maxWidth - 1, "") + "…";
 	}
-	return stem.slice(0, keep) + "…" + ext;
+	return fitLine(stem, keep, "") + "…" + ext;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -2878,7 +3118,7 @@ function capStoredDiagnostics(
 
 function countTotalIn(
 	severity: "error" | "warning",
-	recs: FileRecord[],
+	recs: readonly FileRecord[],
 ): number {
 	let n = 0;
 	for (const rec of recs) {
@@ -2888,7 +3128,7 @@ function countTotalIn(
 	return n;
 }
 
-function countSuppressedIn(recs: FileRecord[]): number {
+function countSuppressedIn(recs: readonly FileRecord[]): number {
 	let n = 0;
 	for (const rec of recs) {
 		for (const diagnostic of rec.allDiagnostics) {
@@ -2898,7 +3138,7 @@ function countSuppressedIn(recs: FileRecord[]): number {
 	return n;
 }
 
-function countBlockingIn(recs: FileRecord[]): number {
+function countBlockingIn(recs: readonly FileRecord[]): number {
 	let n = 0;
 	for (const rec of recs) n += rec.diagnosticCounts.blocking;
 	return n;
@@ -2906,6 +3146,17 @@ function countBlockingIn(recs: FileRecord[]): number {
 
 function requestRender(): void {
 	requestRenderFn?.();
+	// A projection listener is a consumer of the store, never part of the
+	// write. A throw here must not escape the writer that already committed.
+	try {
+		widgetChangeFn?.();
+	} catch (err) {
+		recordDegradationOnce({
+			kind: "widget-change-listener-failed",
+			subject: "widget-store",
+			reason: `store-change listener threw: ${err instanceof Error ? err.message : String(err)}`,
+		});
+	}
 }
 
 function osc8(uri: string, label: string): string {
@@ -2917,10 +3168,26 @@ function osc8(uri: string, label: string): string {
 // turn-summary message renderer, which learned the hard way that pi-tui crashes
 // the host on over-width lines — #513).
 
-function dedupeByBasename(recs: FileRecord[]): FileRecord[] {
-	const seen = new Map<string, FileRecord>();
-	for (const r of [...recs].sort((a, b) => a.touchedAt - b.touchedAt)) {
-		seen.set(path.basename(r.filePath), r);
+/**
+ * #5460: a drawn row's label. The basename, or, when another record shares it,
+ * the fewest trailing path segments that no same-named record also ends in.
+ * Only drawn rows are labelled, and each scans the store once for peers.
+ */
+function rowLabel(rec: FileRecord, records: readonly FileRecord[]): string {
+	const base = path.basename(rec.filePath);
+	const peers = records
+		.filter((r) => r !== rec && path.basename(r.filePath) === base)
+		.map((r) => splitPathSegments(r.filePath));
+	if (peers.length === 0) return base;
+	const segments = splitPathSegments(rec.filePath);
+	const tail = (parts: string[], depth: number) =>
+		parts.slice(-(depth + 1)).join("/");
+	let depth = 1;
+	while (
+		depth < segments.length - 1 &&
+		peers.some((peer) => tail(peer, depth) === tail(segments, depth))
+	) {
+		depth++;
 	}
-	return [...seen.values()].sort((a, b) => b.touchedAt - a.touchedAt);
+	return tail(segments, depth);
 }

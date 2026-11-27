@@ -20,6 +20,10 @@ import { LSPService } from "../../clients/lsp/index.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import { CacheManager } from "../../clients/cache-manager.js";
 import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
+import {
 	_resetDeferredForTests,
 	_resetStateCacheForTests,
 } from "../../clients/diagnostic-dispositions.js";
@@ -522,6 +526,31 @@ describe("lsp_navigation tool", () => {
 			tool: "lsp_navigation:executeCommand",
 			source: "lsp-execute-command",
 		});
+	});
+
+	it("executeCommand preserves object-valued LSPAny arguments", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		const commandArguments = [
+			{ uri: "file:///x.ts", options: { organizeImports: true } },
+		];
+
+		await tool.execute(
+			"exec-object-args",
+			{
+				operation: "executeCommand",
+				command: "_typescript.organizeImports",
+				commandArguments,
+				apply: true,
+			},
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+
+		const executeCall = (
+			mocked.service as { executeCommand: ReturnType<typeof vi.fn> }
+		).executeCommand.mock.calls[0];
+		expect(executeCall?.[2]).toEqual(commandArguments);
 	});
 
 	// #2450 fix round 5 (F1): pin the PRODUCTION `isRecordable` closure built
@@ -1628,8 +1657,8 @@ describe("lsp_navigation tool", () => {
 	});
 
 	it("#2450: a two-file rename leaves both files in turn-state.json with LSP-rename provenance", async () => {
-		const tmpDir = fs.mkdtempSync(
-			path.join(os.tmpdir(), "pi-lens-lsp-nav-2450-"),
+		const tmpDir = fs.realpathSync.native(
+			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-2450-")),
 		);
 		const fileA = path.join(tmpDir, "a.ts");
 		const fileB = path.join(tmpDir, "b.ts");
@@ -1739,13 +1768,15 @@ describe("lsp_navigation tool", () => {
 		}
 	});
 
-	// #2450 review round 2 (F4). Before this round, the direct (deps-threaded)
-	// path had NO recordability gate at all — only the mutation-bridge
-	// fallback applied `no-read-guard`/ignored/vendor filtering internally.
-	// Reconciled: the SAME gate (`isRecordableProjectPath`, shared with
-	// `index.ts`'s bridge registrations) now applies to the direct path too,
-	// via `LspMutationContext.isRecordable`, threaded here.
-	it("#2450 review round 2 (F4): a rename touching a vendor-directory file records only the non-vendor file", async () => {
+	// #2450 review round 2 (F4), superseded by #5417. The direct path's
+	// recordability gate used to drop a vendor-directory file from the receipts
+	// while the edit still wrote it to disk. A vendor path is outside the
+	// session's writable roots (`resolveAnalysisRoot` -> "none"), so the same
+	// edit is now refused whole before its first write: nothing is half-applied
+	// and nothing reaches the receipts. Recurrence: a rename of a symbol that a
+	// vendored copy also declares rewrote `node_modules` unrecorded.
+	it("#5417: a rename touching a vendor-directory file is refused whole and recorded", async () => {
+		resetDegradationLedger();
 		const tmpDir = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-lsp-nav-2450-vendor-"),
 		);
@@ -1811,25 +1842,25 @@ describe("lsp_navigation tool", () => {
 				{ cwd: tmpDir },
 			);
 
-			expect(result.isError).toBeUndefined();
-			// The write itself still lands on disk for both files — the gate is a
-			// BOOKKEEPING filter, not an edit-application one.
+			expect(result.isError).toBe(true);
+			expect(JSON.stringify(result.content)).toContain("writable roots");
+			// Neither file was written: the refusal precedes the first write.
 			expect(fs.readFileSync(fileA, "utf-8")).toBe(
-				`${filler}const newName = 1;\n`,
+				`${filler}const oldName = 1;\n`,
 			);
 			expect(fs.readFileSync(fileVendor, "utf-8")).toBe(
-				`${filler}const newName = 2;\n`,
+				`${filler}const oldName = 2;\n`,
 			);
-
-			const turnFiles = cacheManager.readTurnState(tmpDir).files ?? {};
-			const keys = Object.keys(turnFiles);
-			expect(keys).toHaveLength(1);
-			expect(keys[0]).toContain("a.ts");
-			expect(keys.some((k) => k.includes("vendored.ts"))).toBe(false);
-
-			const changes = readChangesSince(tmpDir, 0);
-			expect(changes).toHaveLength(1);
-			expect(changes[0].filePath).toBe(path.resolve(fileA));
+			expect(
+				getDegradationSummary()
+					.filter((group) => group.kind === "adopted-root-writer-skipped")
+					.flatMap((group) => group.latestReasons)
+					.map((row) => row.subject),
+			).toEqual([`${fileVendor}:lsp-edit`]);
+			expect(
+				Object.keys(cacheManager.readTurnState(tmpDir).files ?? {}),
+			).toEqual([]);
+			expect(readChangesSince(tmpDir, 0)).toEqual([]);
 		} finally {
 			removeTempDirSync(tmpDir);
 		}
@@ -2264,7 +2295,9 @@ describe("lsp_navigation workspaceDiagnostics delivery gate (#1634)", () => {
 	];
 
 	beforeEach(async () => {
-		cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-1634-nav-"));
+		cwd = fs.realpathSync.native(
+			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-1634-nav-")),
+		);
 		filePath = path.join(cwd, "app.ts");
 		fs.writeFileSync(
 			filePath,
@@ -2389,6 +2422,44 @@ describe("lsp_navigation workspaceDiagnostics delivery gate (#1634)", () => {
 				phase: "lsp_probe_disposition_filter",
 				toolName: "lsp_navigation",
 			}),
+		);
+	});
+
+	// #5700: a document the open-document cap closed keeps its last findings in
+	// the client's cache, but its server no longer re-checks it. The snapshot
+	// row says so; without the mark it read like any re-published file.
+	it("marks a snapshot row whose document the open-document cap closed (#5700)", async () => {
+		(mocked.service as { getAllDiagnostics: unknown }).getAllDiagnostics = vi
+			.fn()
+			.mockResolvedValue(
+				new Map([
+					[
+						filePath,
+						{
+							diags: serverDiagnostics(),
+							ts: Date.now() - 60_000,
+							closed: true,
+						},
+					],
+				]),
+			);
+
+		const result = await createLspNavigationTool(
+			(flag) => flag === "lens-lsp",
+		).execute(
+			"nav-5700-closed",
+			{ operation: "workspaceDiagnostics" },
+			new AbortController().signal,
+			null,
+			{ cwd },
+		);
+		const envelope = parseToolJson(result);
+		const [entry] = envelope.result as Array<{ closed?: boolean }>;
+		expect(entry?.closed).toBe(true);
+		expect(envelope.notes).toContainEqual(
+			expect.stringContaining(
+				"1 file(s) with closed: true were closed on their server by the open-document cap",
+			),
 		);
 	});
 
@@ -2820,6 +2891,73 @@ describe("lsp_navigation default text view", () => {
 		expect(text.startsWith("{")).toBe(false);
 	});
 
+	it.each(["hierarchical", "range-only", "flat"] as const)(
+		"definition fallback uses the name location and read credit for %s symbols (#5482 F1)",
+		async (shape) => {
+			// F1: a hierarchical body must not become name-only search coverage.
+			const dir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-nav-fallback-"),
+			);
+			const file = path.join(dir, "symbols.py");
+			fs.writeFileSync(file, "foo()\n" + "\n".repeat(220));
+			const nameRange = span(12, 4);
+			const bodyRange = {
+				start: { line: 9, character: 0 },
+				end: { line: 209, character: 1 },
+			};
+			const range = shape === "range-only" ? bodyRange : nameRange;
+			const symbol =
+				shape === "flat"
+					? {
+							name: "foo",
+							kind: 6,
+							location: { uri: pathToFileURL(file).href, range: nameRange },
+						}
+					: {
+							name: "foo",
+							kind: 6,
+							range: bodyRange,
+							...(shape === "hierarchical"
+								? { selectionRange: nameRange }
+								: {}),
+						};
+			Object.assign(mocked.service as object, {
+				definition: vi.fn().mockResolvedValue([]),
+				documentSymbol: vi.fn().mockResolvedValue([symbol]),
+			});
+			try {
+				const tool = createRawLspNavigationTool((flag) => flag === "lens-lsp");
+				const result = await tool.execute(
+					"fallback-name",
+					{
+						operation: "definition",
+						path: file,
+						line: 1,
+						character: 1,
+					},
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				);
+				expect(result.details?.failureKind).toBe("fallback_success");
+				expect
+					.soft(String(result.content[0]?.text))
+					.toContain(
+						`${file}:${range.start.line + 1}:${range.start.character + 1}`,
+					);
+				expect(result.details?.searchReads).toEqual([
+					{
+						file,
+						startLine: range.start.line + 1,
+						endLine: range.end.line + 1,
+					},
+				]);
+			} finally {
+				removeTempDirSync(dir);
+			}
+		},
+	);
+
 	it("prints a location inside the project relative to it", async () => {
 		// The Neovim shape is a project-relative path; only a hit under the cwd
 		// can show that the display resolver runs at all (a tmp fixture is
@@ -3190,8 +3328,8 @@ describe("lsp_navigation default text view", () => {
 	});
 
 	it("keeps the line:col for a flat SymbolInformation findSymbol answer", async () => {
-		// Recurrence: #5224 review F1. pi-lens never declares
-		// hierarchicalDocumentSymbolSupport, so servers answer flat
+		// Recurrence: #5224 review F1. Even with hierarchical support
+		// declared, servers may still answer flat
 		// SymbolInformation (position only in `location.range`) and the text
 		// printed `path  function helper` with no line:col. The hierarchical
 		// fixture above never saw that shape.

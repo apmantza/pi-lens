@@ -252,10 +252,10 @@ describe("the fallow profile", () => {
 
 	it("keeps fallow's HINT-severity unused-code finding visible as an advisory warning", () => {
 		// fallow publishes unused-export as LSP HINT (4). The generic conversion
-		// gives a hint no semantic; the profile must raise it to "warning".
+		// keeps it advisory; the profile must preserve that warning tier.
 		const raw = [diag({ severity: 4 })];
 		const converted = convertLspDiagnostics(raw, "/proj/src/a.ts");
-		expect(converted[0].semantic).toBe("none");
+		expect(converted[0].semantic).toBe("warning");
 		const retagged = retagAuxiliaryDiagnostics(converted, raw, "x", {
 			cwd: "/proj",
 			fileRole: "source",

@@ -53,6 +53,12 @@ interface Row {
 	guard: boolean;
 }
 
+/** `body` inside `levels` nested `bash -c`, each level single-quoted. */
+const nestedBashC = (levels: number, body: string): string =>
+	levels === 0
+		? body
+		: nestedBashC(levels - 1, `bash -c '${body.replace(/'/g, "'\\''")}'`);
+
 /** The acceptance spellings, and the fail-closed rows, one per rule clause. */
 const ROWS: readonly Row[] = [
 	{ row: "plain", command: "git push", bash: "push", guard: true },
@@ -146,6 +152,176 @@ const ROWS: readonly Row[] = [
 		guard: true,
 	},
 	{
+		// #5649 F3. The `$IFS` pass tracked quotes but not backslashes: the
+		// escaped quote flipped it into "quoted", and `git${IFS}commit` after
+		// it was never folded, while bash ran the commit.
+		row: "escaped single quote, then git${IFS}commit",
+		command: "echo \\'; git${IFS}commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "escaped double quote, then git${IFS}commit",
+		command: 'echo \\"; git${IFS}commit -m x',
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "escaped single quote, then git$IFS$9commit",
+		command: "echo \\'; git$IFS$9commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		// An escaped backslash does not escape the quote after it: the quote
+		// opens a string, so the `$IFS` inside it is literal text.
+		row: "escaped backslash, then a quote opens a string",
+		command: "echo \\\\'; git${IFS}commit -m x'",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "escaped backslash, then git${IFS}commit",
+		command: "echo \\\\; git${IFS}commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		// #5649 F4. Bash's blanks are space, tab and newline. The lexer also
+		// split on NBSP, U+FEFF, U+2003 and U+2028, so a `#` after one began a
+		// comment for the gate, and the `$(…)` after it ran in bash unseen.
+		row: "NBSP before a hash is no comment",
+		command: "echo x #$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "U+FEFF before a hash is no comment",
+		command: "echo x﻿#$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "U+2003 before a hash is no comment",
+		command: "echo x #$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "U+2028 before a hash is no comment",
+		command: "echo x #$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "a tab before a hash is a comment",
+		command: "echo x\t#$(git commit -m y)",
+		bash: null,
+		guard: false,
+	},
+	{
+		// Same family as F4, found by the fuzz comparison: the `#` after an
+		// escaped blank or operator is a word character, not a comment.
+		row: "escaped blank before a hash is no comment",
+		command: "echo \\ #$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "escaped semicolon before a hash is no comment",
+		command: "echo a\\;#$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "escaped backslash, then a blank, then a hash is a comment",
+		command: "echo \\\\ #$(git commit -m y)",
+		bash: null,
+		guard: false,
+	},
+	{
+		// Same family: bash reads `$IFS#` as one word, so the `#` starts no
+		// comment, but the fold wrote a blank there and made it one.
+		row: "$IFS before a hash is no comment",
+		command: "echo a$IFS#$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "${IFS} before a hash is no comment",
+		command: "echo a${IFS}#$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		// Review r1 F5: bash removes `\<newline>` before it reads the comment
+		// boundary, so the `#` after `${IFS}\<newline>` is still a word
+		// character. The lookahead read the raw `\` and wrote a plain blank.
+		row: "${IFS} then a line continuation, then a hash is no comment",
+		command: "echo a${IFS}\\\n#$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "$IFS then a line continuation, then a hash is no comment",
+		command: "echo a$IFS\\\n#$(git commit -m y)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "${IFS} then a line continuation, then a blank hash is a comment",
+		command: "echo a${IFS}\\\n #$(git commit -m y)",
+		bash: null,
+		guard: false,
+	},
+	// Review r1 F1 (regression, fail-open): CR is a word character, so the
+	// here-doc delimiter keeps it and the closing line `EOF\r` matches it
+	// exactly. The body scan stripped the CR from candidate lines, so a CRLF
+	// here-doc never closed and the commit after it was read as body text.
+	{
+		row: "CRLF here-doc, then a hidden commit",
+		command: "cat <<EOF\r\nbody\r\nEOF\r\ngit $'\\x63ommit' -m x\r\n",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "CRLF quoted here-doc, then a hidden commit",
+		command: "cat <<'EOF'\r\nbody\r\nEOF\r\ngit $'\\x63ommit' -m x\r\n",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		// The closing line is not tab-indented: the canonical collapse turns a
+		// leading tab into a blank, a miss on the base too that #5648 removes.
+		row: "CRLF `<<-` here-doc, then a hidden commit",
+		command: "cat <<-EOF\r\n\tbody\r\nEOF\r\ngit $'\\x63ommit' -m x\r\n",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "git commit text inside a CRLF here-doc body is no commit",
+		command: "cat <<EOF\r\ngit commit -m x\r\nEOF\r\n",
+		bash: null,
+		guard: false,
+	},
+	{
+		// The here-doc delimiter is `EOF<NBSP>x`, one word, so the body runs to
+		// the line that holds all of it and the commit in it is text. The lexer
+		// ended the delimiter at the NBSP and ran the line after `EOF`.
+		row: "NBSP inside a here-doc delimiter",
+		command: "cat <<EOF x >/dev/null\nEOF\ngit commit -m y\nEOF x\n",
+		bash: null,
+		guard: false,
+	},
+	{
+		// The gate read `git<NBSP>commit` as two words; bash runs the one
+		// command `git<NBSP>commit`, which is not git.
+		row: "NBSP between git and commit is one word",
+		command: "git commit -m x",
+		bash: null,
+		guard: false,
+	},
+	{
 		// bash removes the backslash; the path reading kept it (#4739).
 		row: "escaped letter in the executable",
 		command: "g\\it push",
@@ -158,6 +334,23 @@ const ROWS: readonly Row[] = [
 		row: "trailing line continuation",
 		command: "git push\\\n",
 		bash: "push",
+		guard: true,
+	},
+	{
+		// Recurrence prevented (#5648 review F1): the removed blank-collapse
+		// pass turned `\ ` before a newline into a line continuation, so the
+		// gate read the commit as echo's word. Bash ends the command at the
+		// newline and runs the commit.
+		row: "escaped blank, then a newline, then git commit",
+		command: "echo a \\ \ngit commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		// The same shape with a carriage return in place of the blank.
+		row: "escaped CR, then a newline, then git commit",
+		command: "echo a \\\r\ngit commit -m x",
+		bash: "commit",
 		guard: true,
 	},
 	{
@@ -717,6 +910,329 @@ const ROWS: readonly Row[] = [
 		bash: null,
 		guard: false,
 	},
+	// #5652: the gate read a `bash -c` or `eval` string as words and never scanned
+	// it for command substitutions, so `bash -c 'echo $(git commit -m x)'` ran a
+	// commit the gate did not see. #5652 (comment, #5651 verify V1): the `)` that
+	// closes a substitution is part of its word, so a `#` after it is no comment.
+	{
+		row: "bash -c body with a $() commit",
+		command: "bash -c 'echo $(git commit -m x)'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "sh -c body with a $() push",
+		command: "sh -c 'echo $(git push)'",
+		bash: "push",
+		guard: true,
+	},
+	{
+		row: "bash -c body with a backtick commit",
+		command: "bash -c 'echo `git commit -m x`'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "bash -c body with a double-quoted $() commit",
+		command: "bash -c 'echo \"$(git commit -m x)\"'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "bash -c body with a process substitution commit",
+		command: "bash -c 'cat <(git commit -m x)'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "bash -c body with an unquoted here-doc substitution",
+		command: "bash -c 'cat <<EOF\n$(git commit -m x)\nEOF'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "eval body with a $() commit",
+		command: "eval 'echo $(git commit -m x)'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "eval body with a backtick commit",
+		command: "eval 'echo `git commit -m x`'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "eval of two words joins them, the substitution runs",
+		command: "eval echo '$(git commit -m x)'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "bash -c inside bash -c, substitution in the inner body",
+		command: "bash -c 'bash -c \"echo \\$(git commit -m x)\"'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "bash -c inside a $(), a substitution in its body",
+		command: 'echo $(bash -c "echo \\$(git push)")',
+		bash: "push",
+		guard: true,
+	},
+	{
+		row: "bash -c body holds a hidden-verb commit in a substitution",
+		command: "bash -c 'echo $(git $'\"'\"'\\x63ommit'\"'\"' -m x)'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "bash -c body, substitution in single quotes is text",
+		command: "bash -c \"echo '\\$(git commit -m x)'\"",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "bash -c body, escaped substitution is text",
+		command: "bash -c 'echo \\$(git commit -m x)'",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "bash -c body, substitution after a comment is text",
+		command: "bash -c 'echo a #$(git commit -m x)'",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "bash -c body with a harmless substitution",
+		command: "bash -c 'echo $(git status)'",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "eval body, substitution in single quotes is text",
+		command: "eval \"echo '\\$(git commit -m x)'\"",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "a $() close is no comment boundary before a hash",
+		command: "echo $(true)#$(git commit -m x)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "a backtick close is no comment boundary before a hash",
+		command: "echo `true`#$(git commit -m x)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "a process substitution close is no comment boundary before a hash",
+		command: "cat <(true)#$(git commit -m x)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "a $(( )) close is no comment boundary before a hash",
+		command: "echo $((1))#$(git commit -m x)",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "two $() before a hash, push then commit",
+		command: "echo $(git push)#$(git commit -m x)",
+		bash: "push",
+		guard: true,
+	},
+	// The word tokenizer read the same `)` as a comment boundary and dropped the
+	// rest of the line, a plain commit after `;` included.
+	{
+		row: "a $() close before a hash, then a plain commit after a semicolon",
+		command: "echo $(true)#;git commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "a $(( )) close before a hash, then a plain commit after a semicolon",
+		command: "echo $((1))#;git commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "a process substitution close before a hash, then a plain commit",
+		command: "echo <(true)#;git commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "a nested $() close before a hash, then a plain commit",
+		command: "echo $(echo $(true))#;git commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "a subshell close before a hash is a comment, a commit after it is text",
+		command: "(true)#;git commit -m x",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "a $() close before a hash, then a commit in a bash -c body",
+		command: "echo $(true)#;sh -c 'git commit -m x'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "a $() close, a blank, then a hash is a comment",
+		command: "echo $(true) #$(git commit -m x)",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "a subshell close is a comment boundary before a hash",
+		command: "(true)#$(git commit -m x)",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "a $() close before a hash inside a bash -c body",
+		command: "bash -c 'echo $(true)#$(git commit -m x)'",
+		bash: "commit",
+		guard: true,
+	},
+	// #5652 r2 F4 (CodeRabbit): a POSIX `-c` lexes its one body word; the words
+	// after it are `$0` and the positional parameters, whose text never runs as
+	// a substitution. Round 1 scanned them joined to the body.
+	{
+		row: "bash -c, a substitution in a positional parameter is text",
+		command: "bash -c 'echo ok' '$(git commit -m x)'",
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "bash -c, an apostrophe in a positional parameter is text",
+		command: 'bash -c \'echo "$1"\' _ "don\'t commit this"',
+		bash: null,
+		guard: false,
+	},
+	// The body reads its parameters through `"$@"` and `eval "$1"`: the word walk
+	// still reads the words after the body (CodeRabbit's one-word slice of the
+	// whole string misses these).
+	{
+		row: "bash -c runs its parameters as a command",
+		command: "bash -c '\"$@\"' _ git commit -m x",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "bash -c evals a parameter holding a substitution",
+		command: "bash -c 'eval \"$1\"' _ 'echo $(git commit -m x)'",
+		bash: "commit",
+		guard: true,
+	},
+	// An option word after `-c` leaves the body word unknown: the rest is read.
+	{
+		row: "bash -c, then an option and its value before the body",
+		command: "bash -c -o pipefail 'echo \"$(git commit -m x)\"'",
+		bash: "commit",
+		guard: true,
+	},
+	// #5652 r2: the incomplete-read refusal stays where bash reads the string. A
+	// here-doc ending at `EOF)` leaves the read incomplete, and bash commits.
+	{
+		row: "bash -c body, a here-doc closing its $() leaves the read incomplete",
+		command:
+			"bash -c 'echo $(cat <<EOF\nbody git commit\nEOF)#;git commit -m z'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "eval body, a here-doc closing its $() leaves the read incomplete",
+		command: "eval 'echo $(cat <<EOF\nbody git commit\nEOF)#;git commit -m z'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "nix-shell --run body, a here-doc closing its $() leaves the read incomplete",
+		command:
+			"nix-shell --run 'echo $(cat <<EOF\nbody git commit\nEOF)#;git commit -m z'",
+		bash: "commit",
+		guard: true,
+	},
+	// #5652 r2 F2 (Qodo): past depth 3 the gate read nothing and passed. It now
+	// answers as for an incomplete read. Round 1 turned the `)#` row into a miss:
+	// base caught it only through the `)#` misread.
+	{
+		row: "four nested bash -c levels",
+		command: nestedBashC(4, "git commit -m x"),
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "five nested bash -c levels",
+		command: nestedBashC(5, "git commit -m x"),
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "five nested bash -c levels, a harmless git",
+		command: nestedBashC(5, "git status"),
+		bash: null,
+		guard: false,
+	},
+	{
+		row: "eval inside two $() levels, then sh -c",
+		command: 'echo $(echo $(eval "sh -c \\"git commit -m x\\""))',
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "eval inside two $() levels, then sh -c, a hash after the inner close",
+		command: 'echo $(echo $(eval "sh -c \\"git commit -m x\\"")#)',
+		bash: "commit",
+		guard: true,
+	},
+	// #5652 r3 V2: a POSIX shell takes `-c` anywhere in a flag cluster. The
+	// switch match wanted a final `c`, so `bash -ce 'git push'` read as no
+	// command string (base and round 2 missed these).
+	{
+		row: "a -c flag cluster, bash -ce",
+		command: "bash -ce 'git push'",
+		bash: "push",
+		guard: true,
+	},
+	{
+		row: "a -c flag cluster, bash -cx",
+		command: "bash -cx 'git push'",
+		bash: "push",
+		guard: true,
+	},
+	{
+		row: "a -c flag cluster, sh -ce",
+		command: "sh -ce 'git commit -m x'",
+		bash: "commit",
+		guard: true,
+	},
+	{
+		row: "a -c flag cluster, bash -eci",
+		command: "bash -eci 'git push'",
+		bash: "push",
+		guard: true,
+	},
+	{
+		row: "a -c flag cluster, bash -ceu",
+		command: "bash -ceu 'git push'",
+		bash: "push",
+		guard: true,
+	},
+	{
+		row: "a -c flag cluster, bash -ce, a harmless git",
+		command: "bash -ce 'git status'",
+		bash: null,
+		guard: false,
+	},
 ];
 
 /**
@@ -902,11 +1418,11 @@ beforeAll(() => {
 	fs.chmodSync(stub, 0o755);
 	// Command-string launchers the gate knows by name, as stand-ins that do
 	// what the real ones do with `-c`, `--run` and `--command`: run the string
-	// in a shell.
+	// in a shell (nix-shell's is bash, #5652 r2).
 	for (const [name, script] of [
 		[
 			"nix-shell",
-			'#!/bin/sh\ncase "$1" in --run | --command) exec sh -c "$2" ;; esac\n',
+			'#!/bin/sh\ncase "$1" in --run | --command) exec bash -c "$2" ;; esac\n',
 		],
 		["launcher", '#!/bin/sh\n[ "$1" = -c ] && exec sh -c "$2"\n'],
 	] as const) {
@@ -979,6 +1495,27 @@ describe.skipIf(process.platform === "win32")(
 			}
 			expect(failures).toEqual([]);
 		}, 60_000);
+
+		// Review r1 F6 (CodeRabbit): a PowerShell command string is read by
+		// PowerShell, whose whitespace is Char.IsWhiteSpace (NBSP, U+0085, the
+		// Unicode spaces, CR, VT, FF; CharTraits.IsWhitespace in the PowerShell
+		// parser). Only the bash path takes bash's blanks. pwsh is not run
+		// here: the rows are string-level, and the bash row is the oracle.
+		it("reads a PowerShell or cmd command string with its own whitespace", () => {
+			const nbsp = "\u00a0";
+			const failures: string[] = [];
+			for (const [command, want] of [
+				[`pwsh -NoProfile -Command "git${nbsp}commit -m x"`, true],
+				[`powershell.exe -c 'git${nbsp}push'`, true],
+				[`cmd /c "git${nbsp}commit -m x"`, true],
+				[`pwsh -Command "git\u2003commit -m x"`, true],
+				[`bash -c "git${nbsp}commit -m x"`, false],
+				[`git${nbsp}commit -m x`, false],
+			] as const)
+				if (guarded(command) !== want)
+					failures.push(`${JSON.stringify(command)}: want ${want}`);
+			expect(failures).toEqual([]);
+		});
 
 		it("guards every generated spelling bash runs as commit or push", () => {
 			const failures: string[] = [];
@@ -1070,6 +1607,149 @@ describe.skipIf(process.platform === "win32")(
 		}, 60_000);
 	},
 );
+
+/**
+ * #5652 r2 F1: ordinary commands whose text is no command bash runs. Round 1
+ * refused each of the first eleven: an apostrophe or a PowerShell backtick left
+ * the bash read of a switch value, a word after an unread word, a later `eval`
+ * or a PowerShell or cmd string incomplete, and the incomplete-read refusal
+ * fired on `push` or `commit` anywhere in it. The rest are the review's
+ * ordinary agent commands. String-level: `gh`, `npm` and `rg` must not run here,
+ * and the rows run on Windows too.
+ */
+const ORDINARY: readonly string[] = [
+	'gh pr comment 12 --body "Don\'t push yet"',
+	'gh pr comment 12 --body "can\'t merge yet"',
+	'gh pr comment 12 --body "won\'t pull"',
+	'gh pr comment 12 --body "don\'t checkout main"',
+	'npm run foo -- --msg "can\'t push"',
+	'rg --glob "*.ts" "don\'t commit"',
+	'notify-send $T "Don\'t forget to push"',
+	'sudo -u me gh pr comment 3 -b "can\'t push"',
+	'npm run eval -- --note "it\'s a push"',
+	"pwsh -Command 'Write-Output \"a`nb commit\"'",
+	'cmd /c "echo it\'s push day"',
+	'bash -c \'echo "$1"\' _ "don\'t commit this"',
+	'sh -c \'echo "$1"\' sh "it\'s push day"',
+	"bash -c 'cd repo && npm test'",
+	"bash -c 'for f in *.ts; do echo \"$f\"; done'",
+	"bash -c 'echo $(date)'",
+	"bash -c 'echo $(pwd) && ls'",
+	"bash -c 'cat <<EOF\nhello $(whoami)\nEOF'",
+	"bash -c 'case \"$1\" in a) echo a;; b) echo b;; esac' _ a",
+	"sh -c 'while read l; do echo \"$l\"; done < f'",
+	'eval "$(ssh-agent -s)"',
+	"eval $(ssh-agent)",
+	"bash -c 'echo \"commit message\"'",
+	"bash -c \"echo 'push'\"",
+	"bash -c 'grep -r \"git commit\" docs/'",
+	"bash -c 'git log --oneline | head'",
+	"bash -c 'git status && echo $(git rev-parse HEAD)'",
+	"bash -c 'git diff $(git merge-base HEAD main)'",
+	"bash -lc 'echo $(git branch --show-current)'",
+	"bash -c 'echo \"$(git log -1 --format=%s)\" | grep -i push'",
+	"bash -c 'echo \"$(git log -1 --format=%s)\" | grep -i commit'",
+	"sh -c 'echo ${HOME}/x # commit'",
+	"bash -c 'x=$(echo a) # commit this'",
+	'bash -c \'tr "(" ")" < f # push\'',
+	"bash -c 'echo \"(\" commit'",
+	"bash -c \"echo ')' push\"",
+	"bash -c 'echo $((1+2)) push'",
+	"bash -c 'if [ -f x ]; then echo commit; fi'",
+	"bash -c 'echo hello ( world'",
+	"powershell -Command \"Write-Host 'commit'; Get-Date\"",
+	"powershell -Command \"Get-ChildItem | Where-Object { $_.Name -like 'push*' }\"",
+	'pwsh -Command "echo $(Get-Date)"',
+	'cmd /c "echo it\'s commit time"',
+	'cmd /c "dir & echo push"',
+	"bash -c 'echo $(echo \"unclosed' commit",
+	"ssh host 'bash -c \"echo $(date) commit\"'",
+	"nix-shell --run 'echo $(date) commit' ",
+	"docker exec c sh -c 'echo $(date)'",
+	"echo $(true)#commit",
+	"(cd x && make)#commit",
+	"case x in a) echo hi;; esac # commit",
+	'x=(a b c); echo "${x[@]}" # commit',
+	"echo $((1+2))#commit",
+	"diff <(sort a) <(sort b) # commit",
+	"cat <(echo a)#x\ngit status",
+	'echo "a (b) c" && (cd x && ls)#',
+];
+
+describe("reads a command string with the grammar that runs it (#5652 r2)", () => {
+	it("refuses none of the ordinary commands", () => {
+		const refused = ORDINARY.filter(
+			(command) =>
+				guarded(command) || isWorktreeMutatingGitAttempt("bash", { command }),
+		);
+		expect(refused).toEqual([]);
+		expect(ORDINARY.length).toBe(56);
+	});
+
+	it("still reads the substitutions such a string runs", () => {
+		// A PowerShell `$()` is a subexpression that runs; an unknown launcher's
+		// switch value and a word after an unread word may be command strings.
+		for (const command of [
+			"pwsh -Command 'echo $(git commit -m x)'",
+			"myprog -c 'echo $(git push)'",
+			"$e 'echo $(git push)'",
+		])
+			expect(guarded(command), command).toBe(true);
+	});
+
+	// #5652 r3 V1: round 2 spent a whole level on each launcher with a switch,
+	// so these ordinary ops chains reached the depth cap and refused for naming
+	// `commit` or `push`. Base reads each as false.
+	it("reads an ordinary launcher chain as base does", () => {
+		const refused = [
+			'ssh -t host sudo -u deploy docker exec -ti c sh -c "grep -r commit /var/log"',
+			"kubectl exec -it pod -n ns -- sh -c \"psql -c 'select 1 from push'\"",
+			"timeout 60 nice -n 5 ionice -c 3 xargs -n 1 -P 4 sh -c 'echo commit message'",
+			'kubectl exec -n prod deploy/api -c app -- sh -c "tail -n 50 /var/log/push.log"',
+			"sudo -u ci env -i PATH=/usr/bin nice -n 10 timeout -s KILL 300 sh -c 'make release-notes TOPIC=push'",
+			"ssh -t h sudo -u d docker exec -ti c sh -c 'kubectl exec -it p -- sh -c \"echo push\"'",
+			'docker compose -f x.yml exec -T app sh -c "npm run build && echo pushed"',
+			"docker run --rm -e MODE=push -v $PWD:/w -w /w node:22 sh -c 'npm ci && npm test -- --grep commit'",
+		].filter(
+			(command) =>
+				guarded(command) || isWorktreeMutatingGitAttempt("bash", { command }),
+		);
+		expect(refused).toEqual([]);
+	});
+
+	it("ends the read of a long launcher chain", () => {
+		// A launcher's value costs an eighth of a level: none at all read this
+		// 3000-term `find` 3000 levels deep, past the stack.
+		const find = `find . -name a${" -o -name a".repeat(3000)}`;
+		expect(guarded(find)).toBe(false);
+	});
+
+	it("keeps the PowerShell switch a cluster ending in c", () => {
+		// `-NonInteractive` holds a `c`: read as the switch, it would make
+		// `-File`'s arguments a command string.
+		expect(
+			guarded('pwsh -NonInteractive -File deploy.ps1 -Message "git push"'),
+		).toBe(false);
+		expect(guarded('pwsh -NonInteractive -Command "git commit -m x"')).toBe(
+			true,
+		);
+	});
+
+	it("refuses past depth 3 in both guards", () => {
+		// The shared-checkout guard reads the cap as the commit gate does: as an
+		// incomplete read, which refuses a word naming its verb.
+		expect(
+			isWorktreeMutatingGitAttempt("bash", {
+				command: nestedBashC(4, "git checkout main"),
+			}),
+		).toBe(true);
+		expect(
+			isWorktreeMutatingGitAttempt("bash", {
+				command: nestedBashC(4, "git status"),
+			}),
+		).toBe(false);
+	});
+});
 
 describe("the word model the gate reads (#4739)", () => {
 	const words = (command: string) =>

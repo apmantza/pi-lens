@@ -27,6 +27,7 @@ import { describe, expect, it } from "vitest";
 import { CacheManager } from "../clients/cache-manager.js";
 import {
 	AUTOMATION_FRAMING,
+	BLOCKER_CAPPED_MARK,
 	BLOCKER_REPEAT_HEADING,
 } from "../clients/runtime-context.js";
 import {
@@ -85,16 +86,26 @@ function listen(): PiFauxReply[] {
  * The requests that carry an injected pi-lens message naming `needle`. A
  * repeat of an already-delivered blocker (#5240, the first request of a later
  * prompt) is not a delivery: `tests/index-5240-blocker-repeat.test.ts` counts it.
+ * Neither is the one-line pointer to a blocker already delivered in full 3
+ * times (#5532).
  */
 function injected(handle: PiSession, needle: string): number {
 	return handle.requests.filter((request) =>
 		request.some((message) =>
-			textBlocks(message).some(
-				(text) =>
+			textBlocks(message).some((text) => {
+				// A pointer line is not a delivery: read the message without them.
+				const delivered = text
+					.split("\n\n")
+					.flatMap((paragraph) =>
+						paragraph.includes(BLOCKER_CAPPED_MARK) ? [] : [paragraph],
+					)
+					.join("\n\n");
+				return (
 					text.startsWith(AUTOMATION_FRAMING) &&
-					text.includes(needle) &&
-					!text.includes(BLOCKER_REPEAT_HEADING),
-			),
+					delivered.includes(needle) &&
+					!text.includes(BLOCKER_REPEAT_HEADING)
+				);
+			}),
 		),
 	).length;
 }
@@ -232,8 +243,25 @@ describe.each([
 			]);
 			await run(handle, 6);
 			expect(sections(handle, "second.ts")).toBe(1);
-			// The joined set is delivered whole, once: the first blocker rides it.
-			expect(sections(handle, "bad.ts")).toBe(2);
+			// The joined set is delivered whole, once: the first blocker rides it. It
+			// was delivered in full 3 times by then (the original and two repeats), so
+			// it rides as its pointer line and the joiner is in full (#5532: a joiner
+			// does not restart a capped blocker).
+			expect(sections(handle, "bad.ts")).toBe(1);
+			const joined = handle.requests.flatMap((request) =>
+				request.flatMap((message) =>
+					textBlocks(message).flatMap((text) =>
+						text.includes(`${SECTION}${path.join("src", "second.ts")}`) &&
+						!text.includes(BLOCKER_REPEAT_HEADING)
+							? [text]
+							: [],
+					),
+				),
+			);
+			expect(joined).toHaveLength(1);
+			expect(joined[0]).toContain(
+				`${path.join("src", "bad.ts")}: ${BLOCKER_CAPPED_MARK}`,
+			);
 			expect(handle.errors).toEqual([]);
 		},
 		LONG_SESSION_TIMEOUT_MS,

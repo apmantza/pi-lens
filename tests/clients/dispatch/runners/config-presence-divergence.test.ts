@@ -324,10 +324,10 @@ describe("#5408 config presence: policy and runner agree", () => {
 				write(path.join(home, ".tflint.hcl"), "");
 				vi.stubEnv("TFLINT_CONFIG_FILE", "");
 
-				const { hasTflintConfig } = await load<
-					typeof import("../../../../clients/tool-policy.js")
-				>("../../../../clients/tool-policy.js");
-				expect(hasTflintConfig(path.dirname(tf))).toBe(true);
+				const { hasToolConfig } = await load<
+					typeof import("../../../../clients/tool-config-presence.js")
+				>("../../../../clients/tool-config-presence.js");
+				expect(hasToolConfig("tflint", path.dirname(tf))).toBe(true);
 
 				await runRunner("tflint", tf, path.dirname(tf), "terraform");
 
@@ -344,11 +344,11 @@ describe("#5408 config presence: policy and runner agree", () => {
 			try {
 				vi.stubEnv("TFLINT_CONFIG_FILE", "");
 
-				const { hasTflintConfig } = await load<
-					typeof import("../../../../clients/tool-policy.js")
-				>("../../../../clients/tool-policy.js");
+				const { hasToolConfig } = await load<
+					typeof import("../../../../clients/tool-config-presence.js")
+				>("../../../../clients/tool-config-presence.js");
 				// Red on master: the policy walk is unbounded.
-				expect(hasTflintConfig(path.dirname(tf))).toBe(false);
+				expect(hasToolConfig("tflint", path.dirname(tf))).toBe(false);
 
 				await runRunner("tflint", tf, path.dirname(tf), "terraform");
 				const argv = spawnedArgs()[0] ?? [];
@@ -418,17 +418,17 @@ describe("#5408 config presence: policy and runner agree", () => {
 
 	describe("divergence 2: Python gates read structure, not substrings", () => {
 		it("a pyproject with [tool.ruff] only in a comment is not ruff config", async () => {
-			const policy = await load<
-				typeof import("../../../../clients/tool-policy.js")
-			>("../../../../clients/tool-policy.js");
+			const seam = await load<
+				typeof import("../../../../clients/tool-config-presence.js")
+			>("../../../../clients/tool-config-presence.js");
 			await withDirP((dir) => {
 				write(
 					path.join(dir, "pyproject.toml"),
 					"# [tool.ruff]\n# line-length = 100\n[tool.black]\nline-length = 88\n",
 				);
 				// Red on master: `content.includes("[tool.ruff]")` matched the comment.
-				expect(policy.hasRuffConfig(dir)).toBe(false);
-				expect(policy.hasBlackConfig(dir)).toBe(true);
+				expect(seam.hasToolConfig("ruff", dir)).toBe(false);
+				expect(seam.hasToolConfig("black", dir)).toBe(true);
 			});
 		});
 
@@ -462,6 +462,106 @@ describe("#5408 config presence: policy and runner agree", () => {
 			});
 			// Red on master: `.includes("black")` made black the explicit formatter.
 			expect(names).toEqual(["ruff"]);
+		});
+	});
+	describe("vale and shellcheck ask the seam for their config (#5408 slice 2)", () => {
+		// Recurrence: both runners wrapped `findLocalToolConfig`, an UNBOUNDED climb,
+		// so a `.vale.ini` / `.shellcheckrc` above $HOME counted as project config
+		// (the tflint shape, divergence 3); shellcheck also started the climb at
+		// `ctx.cwd`, so a `.shellcheckrc` beside the script (below the cwd) was
+		// never seen and the runner forced `--severity info` over the project's own.
+		function homeLayout(slug: string) {
+			const { home } = pinFixtureHome(slug);
+			return { home, proj: path.join(home, "proj"), above: path.dirname(home) };
+		}
+		const valeRan = () => spawnedArgs().some((argv) => argv.includes("JSON"));
+
+		it("vale: a .vale.ini above $HOME does not run vale", async () => {
+			const { proj, above } = homeLayout("5408-vale-above");
+			const stray = write(path.join(above, ".vale.ini"), "");
+			try {
+				const md = write(path.join(proj, "a.md"), "# t\n");
+				const mod = await load<{
+					default: Runner & { requiresConfig?: (cwd: string) => boolean };
+				}>("../../../../clients/dispatch/runners/vale.js");
+				expect(mod.default.requiresConfig?.(proj)).toBe(false);
+				const { dispatchLintDetailed } = await load<
+					typeof import("../../../../clients/dispatch/integration.js")
+				>("../../../../clients/dispatch/integration.js");
+				await dispatchLintDetailed(
+					md,
+					proj,
+					{
+						getFlag: (flag: string) =>
+							flag === "no-lsp" || flag === "no-ast-grep",
+					} as never,
+					{ blockingOnly: false },
+				);
+				expect(valeRan()).toBe(false);
+			} finally {
+				fs.rmSync(stray, { force: true });
+			}
+		});
+
+		it("vale: a .vale.ini in $HOME itself runs vale", async () => {
+			const { home, proj } = homeLayout("5408-vale-home");
+			write(path.join(home, ".vale.ini"), "");
+			const md = write(path.join(proj, "a.md"), "# t\n");
+			await runRunner("vale", md, proj, "markdown");
+			expect(valeRan()).toBe(true);
+		});
+
+		const severityFlag = () =>
+			spawnedArgs()
+				.find((argv) => argv.includes("--format"))
+				?.includes("--severity");
+		// The bash LSP is absent, so the CLI lane is not covered-by-primary.
+		async function runShellcheck(file: string, cwd: string) {
+			const mod = await load<{ default: Runner }>(
+				"../../../../clients/dispatch/runners/shellcheck.js",
+			);
+			return mod.default.run(
+				makeRunnerCtx(file, cwd, {
+					kind: "shell",
+					hasTool: async (t: string) => t !== "bash-language-server",
+				} as never) as never,
+			);
+		}
+
+		it("shellcheck: a .shellcheckrc beside the script, below the cwd, is the project's config", async () => {
+			const { proj } = homeLayout("5408-shellcheck-below");
+			write(path.join(proj, "scripts", ".shellcheckrc"), "severity=style\n");
+			const sh = write(
+				path.join(proj, "scripts", "a.sh"),
+				"#!/bin/sh\necho $x\n",
+			);
+			await runShellcheck(sh, proj);
+			// Red on master: the climb started at ctx.cwd and missed the file's directory.
+			expect(severityFlag()).toBe(false);
+		});
+
+		it("shellcheck: a .shellcheckrc above $HOME is not project config", async () => {
+			const { proj, above } = homeLayout("5408-shellcheck-above");
+			const stray = write(
+				path.join(above, ".shellcheckrc"),
+				"severity=style\n",
+			);
+			try {
+				const sh = write(path.join(proj, "a.sh"), "#!/bin/sh\necho $x\n");
+				await runShellcheck(sh, proj);
+				// Red on master: the unbounded climb found the stray file.
+				expect(severityFlag()).toBe(true);
+			} finally {
+				fs.rmSync(stray, { force: true });
+			}
+		});
+
+		it("shellcheck: a .shellcheckrc in the project root still suppresses the info floor", async () => {
+			const { proj } = homeLayout("5408-shellcheck-root");
+			write(path.join(proj, ".shellcheckrc"), "severity=style\n");
+			const sh = write(path.join(proj, "a.sh"), "#!/bin/sh\necho $x\n");
+			await runShellcheck(sh, proj);
+			expect(severityFlag()).toBe(false);
 		});
 	});
 });

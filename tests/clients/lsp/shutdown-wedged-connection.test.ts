@@ -5,7 +5,7 @@
  * draining. clientShutdown then handed that same stdin a synchronous
  * obligation: `await safeSendNotification(connection, "exit", {})` with no
  * timeout. The write never settled and never rejected, so disposal, the
- * lsp_client_shutdown record, removeLspChild, and killProcessTree never ran —
+ * lsp_client_shutdown record, and killProcessTree never ran —
  * every demoted server leaked.
  *
  * These tests drive clientShutdown against a connection double whose
@@ -31,7 +31,10 @@ vi.mock("../../../clients/latency-logger.js", async (importActual) => ({
 	>()),
 	logLatency: vi.fn(),
 }));
-vi.mock("../../../clients/instance-registry.js", () => ({
+vi.mock("../../../clients/instance-registry.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../clients/instance-registry.js")
+	>()),
 	recordLspChild: vi.fn().mockResolvedValue(undefined),
 	removeLspChild: vi.fn().mockResolvedValue(undefined),
 }));
@@ -89,13 +92,20 @@ function createWedgedState(kill: ReturnType<typeof vi.fn>) {
 	});
 }
 
+/** How many `lsp_client_shutdown` records the teardowns so far wrote. */
+function shutdownRecords(): number {
+	return vi
+		.mocked(logLatency)
+		.mock.calls.filter(([e]) => e?.phase === "lsp_client_shutdown").length;
+}
+
 describe("clientShutdown with a fully wedged connection (#1620)", () => {
 	beforeEach(() => {
 		vi.mocked(logLatency).mockReset();
 		vi.mocked(removeLspChild).mockClear();
 	});
 
-	it("resolves, disposes, deregisters, and kills when both writes hang", async () => {
+	it("resolves, disposes, and kills when both writes hang", async () => {
 		const mod: ClientModule = await import("../../../clients/lsp/client.js");
 		const kill = vi.fn(() => true);
 		const state = createWedgedState(kill);
@@ -103,7 +113,10 @@ describe("clientShutdown with a fully wedged connection (#1620)", () => {
 		await mod.clientShutdown(state);
 
 		expect(state.connection.dispose).toHaveBeenCalledTimes(1);
-		expect(removeLspChild).toHaveBeenCalledWith(0, undefined);
+		// #5699: the shutdown leaves the child's registry entry for the observed
+		// exit (createLSPClient's listener). Removed here, before the kill, a
+		// host killed in between kept no record of a server still running.
+		expect(removeLspChild).not.toHaveBeenCalled();
 		expect(kill).toHaveBeenCalled();
 	}, 5_000);
 
@@ -162,7 +175,6 @@ describe("clientShutdown with a fully wedged connection (#1620)", () => {
 
 		expect(settled, "clientShutdown must settle within 1000ms").toBe(true);
 		expect(kill).toHaveBeenCalled();
-		expect(removeLspChild).toHaveBeenCalledWith(0, undefined);
 	}, 5_000);
 
 	// #1620 residual 1: a rejection that is NOT the timer winning (a genuine
@@ -237,8 +249,7 @@ describe("clientShutdown with a fully wedged connection (#1620)", () => {
 	// race the same client — see LSPClientState.shutdownPromise) must not each
 	// run the RPC handshake and emit their own record. Mutation-proof: if the
 	// `state.shutdownPromise` guard in clientShutdown() is removed, this test
-	// goes red — TWO lsp_client_shutdown records and TWO removeLspChild calls
-	// instead of one.
+	// goes red — TWO lsp_client_shutdown records and TWO kills instead of one.
 	it("is idempotent: a second concurrent call awaits the first instead of re-running teardown", async () => {
 		const mod: ClientModule = await import("../../../clients/lsp/client.js");
 		const kill = vi.fn(() => true);
@@ -252,7 +263,7 @@ describe("clientShutdown with a fully wedged connection (#1620)", () => {
 			.mocked(logLatency)
 			.mock.calls.filter(([e]) => e?.phase === "lsp_client_shutdown");
 		expect(hits).toHaveLength(1);
-		expect(removeLspChild).toHaveBeenCalledTimes(1);
+		expect(kill).toHaveBeenCalledTimes(1);
 
 		// A THIRD, sequential call after settlement also reuses the same
 		// promise rather than starting a fresh teardown.
@@ -316,8 +327,8 @@ describe("clientShutdown with a fully wedged connection (#1620)", () => {
 	// attempt (a silent leak). Forces a rejection via `killProcessTree`'s
 	// uncaught `proc.unref()` call on the already-exited early-return path
 	// (`exitCode` pre-set, `processExiting` unset). Mutation-proof: removing
-	// the `attempt.catch(...)` clearing block turns this red — the retry's
-	// `kill`/`removeLspChild` never fire a second time.
+	// the `attempt.catch(...)` clearing block turns this red — the retry never
+	// records a second shutdown.
 	it("F3: clears shutdownPromise on rejection so a retry actually retries", async () => {
 		const mod: ClientModule = await import("../../../clients/lsp/client.js");
 		const kill = vi.fn(() => true);
@@ -341,7 +352,7 @@ describe("clientShutdown with a fully wedged connection (#1620)", () => {
 		// above, so per promise reaction ordering it has already run by the
 		// time that `await` resolves — `shutdownPromise` is cleared here.
 		expect(kill).not.toHaveBeenCalled(); // never reached kill — rejected before it
-		expect(removeLspChild).toHaveBeenCalledTimes(1); // ran once, in the finally, before the throw
+		expect(shutdownRecords()).toBe(1); // recorded once, before the throw
 
 		// Fix the transient problem and retry — a cleared latch must start a
 		// FRESH teardown, not return the same dead (or absent) promise.
@@ -349,6 +360,6 @@ describe("clientShutdown with a fully wedged connection (#1620)", () => {
 		const secondAttempt = mod.clientShutdown(state);
 		expect(secondAttempt).not.toBe(firstAttempt);
 		await secondAttempt;
-		expect(removeLspChild).toHaveBeenCalledTimes(2);
+		expect(shutdownRecords()).toBe(2);
 	}, 5_000);
 });

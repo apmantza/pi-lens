@@ -30,7 +30,9 @@ let tmpDir: string;
 let previousDataDir: string | undefined;
 
 beforeEach(() => {
-	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-mark-tool-"));
+	tmpDir = fs.realpathSync.native(
+		fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-mark-tool-")),
+	);
 	previousDataDir = process.env.PILENS_DATA_DIR;
 	process.env.PILENS_DATA_DIR = path.join(tmpDir, "data");
 	_resetDeferredForTests();
@@ -103,6 +105,45 @@ describe("lens_diagnostic_mark tool (#690)", () => {
 		const anchor = (result.details as { anchor: string }).anchor;
 		expect(anchor.startsWith("ddw:")).toBe(true);
 		expect(getDisposition(tmpDir, anchor)?.disposition).toBe("suppress");
+	});
+
+	it("disposition=suppress keeps CRLF line endings (#5686)", async () => {
+		writeFile("crlf.ts", "const a = 1;\r\nconst target = bad();\r\n");
+		const result = await run({
+			filePath: "crlf.ts",
+			line: 2,
+			message: "bad call",
+			rule: "no-bad",
+			tool: "eslint",
+			disposition: "suppress",
+		});
+
+		expect(result.isError).toBeFalsy();
+		const updated = fs.readFileSync(path.join(tmpDir, "crlf.ts"), "utf-8");
+		expect(updated).toBe(
+			"const a = 1;\r\n// pi-lens-ignore: no-bad\r\nconst target = bad();\r\n",
+		);
+	});
+
+	it("disposition=suppress keeps mixed endings; the new line takes the flagged line's (#5686)", async () => {
+		writeFile(
+			"mixed.ts",
+			"const a = 1;\nconst b = 2;\r\nconst target = bad();\r\n",
+		);
+		const result = await run({
+			filePath: "mixed.ts",
+			line: 4,
+			message: "bad call",
+			rule: "no-bad",
+			tool: "eslint",
+			disposition: "suppress",
+		});
+
+		expect(result.isError).toBeFalsy();
+		const updated = fs.readFileSync(path.join(tmpDir, "mixed.ts"), "utf-8");
+		expect(updated).toBe(
+			"const a = 1;\nconst b = 2;\r\n// pi-lens-ignore: no-bad\r\nconst target = bad();\r\n",
+		);
 	});
 
 	it("disposition=suppress without a rule errors", async () => {
@@ -604,14 +645,26 @@ describe("lens_diagnostic_mark path resolution (#4577 M2)", () => {
 		fs.writeFileSync(homeFile, "const a = 1;\nconst target = bad();\n");
 		try {
 			expect(os.homedir()).toBe(home);
-			const result = await run({
-				filePath: "~/proj/tilde.ts",
-				line: 2,
-				message: "bad call",
-				rule: "no-bad",
-				tool: "eslint",
-				disposition: "suppress",
-			});
+			// #5417: a suppress is a source write, so the HOME project is the
+			// session here (the call's cwd stays the fixture root, which `~` must
+			// not resolve under).
+			const homeTool = createLensDiagnosticMarkTool(() =>
+				path.dirname(homeFile),
+			);
+			const result = await homeTool.execute(
+				"call-1",
+				{
+					filePath: "~/proj/tilde.ts",
+					line: 2,
+					message: "bad call",
+					rule: "no-bad",
+					tool: "eslint",
+					disposition: "suppress",
+				},
+				undefined,
+				() => {},
+				{ cwd: tmpDir },
+			);
 			expect(result.isError).toBeFalsy();
 			// The comment landed in the HOME file the agent named: the pre-fix
 			// join edited `<cwd>/~/proj/tilde.ts`, which does not exist, so the

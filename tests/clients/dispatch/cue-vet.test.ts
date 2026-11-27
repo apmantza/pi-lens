@@ -284,7 +284,10 @@ const { safeSpawnAsync, readFileSync } = vi.hoisted(() => ({
 	}),
 }));
 
-vi.mock("../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
+vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../clients/safe-spawn.js")>()),
+	safeSpawnAsync,
+}));
 
 vi.mock("node:fs", async () => {
 	const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
@@ -297,11 +300,10 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: () => ({
-			isAvailableAsync: async () => true,
-			getCommand: () => "cue",
-		}),
-		resolveAvailableOrInstall: async () => "cue",
+		// The runner resolves through the registry resolver, which binds the real
+		// checker inside runner-helpers, so a checker double never reaches it
+		// (#5410 S2). Same answer, at the seam the runner now calls.
+		resolveToolCommandWithInstallFallback: async () => "cue",
 	}),
 );
 

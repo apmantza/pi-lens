@@ -2,40 +2,41 @@
 
 Auto-install behavior depends on gate type:
 
-- **Config-gated**: installs only when project config/deps indicate usage
+- **Config-gated**: installs only when project config/deps indicate usage (a `config-first` row in `TOOL_EXECUTION_POLICY`; `tests/config/gate-table-derived.test.ts` pins this)
 - **Flow/language-gated**: installs when the runtime path needs it for the current file/session flow
 - **Operational prewarm**: installs during session warm scans / turn-end analysis paths
 - **GitHub release**: platform-specific binary downloaded from GitHub releases to `~/.pi-lens/bin/`
 
 | Tool                                | Purpose                          | Auto-installed | Gate                               |
 | ----------------------------------- | -------------------------------- | -------------- | ---------------------------------- |
-| `@biomejs/biome`                    | JS/TS lint/format/autofix        | Yes            | Config-gated                       |
-| `prettier`                          | Formatting fallback              | Yes            | Config-gated                       |
-| `yamllint`                          | YAML linting                     | Yes            | Config-gated                       |
+| `@biomejs/biome`                    | JS/TS lint/format/autofix        | Yes            | Language-default                                         |
+| `prettier`                          | Formatting fallback              | Yes            | Language-default for `.less`, `.graphql`, `.gql`; other types need prettier config |
+| `yamllint`                          | YAML linting                     | Yes            | Language-default                                         |
 | `actionlint`                        | GitHub Actions workflow linting  | Yes            | GitHub release                     |
-| `sqlfluff`                          | SQL linting/formatting           | Yes            | Config-gated                       |
+| `sqlfluff`                          | SQL linting/formatting           | Yes            | Language-default                                         |
 | `ruff`                              | Python lint/format/autofix       | Yes            | Language-default + flow-gated      |
 | `typescript-language-server`        | Unified LSP diagnostics          | Yes            | Language-default                   |
 | `typescript`                        | TypeScript compiler              | Yes            | Language-default                   |
 | `pyright`                           | Python type diagnostics fallback | Yes            | Flow/language-gated                |
 | `@ast-grep/cli` (sg)                | AST scans/search/replace         | Yes            | Operational prewarm                |
-| `knip`                              | Dead code analysis               | Yes            | Operational prewarm + config-gated |
-| `jscpd`                             | Duplicate code detection         | Yes            | Operational prewarm + config-gated |
+| `knip`                              | Dead code analysis               | Yes            | Operational prewarm                |
+| `jscpd`                             | Duplicate code detection         | Yes            | Operational prewarm                |
 | `madge`                             | Circular dependency analysis     | Yes            | Turn-end analysis flow             |
 | `mypy`                              | Python type checking             | Yes            | Flow-gated                         |
-| `stylelint`                         | CSS/SCSS/Less linting            | Yes            | Config-gated                       |
-| `markdownlint-cli2`                 | Markdown linting                 | Yes            | Config-gated                       |
+| `stylelint`                         | CSS/SCSS/Less linting            | Yes            | Language-default                                         |
+| `markdownlint-cli2`                 | Markdown linting                 | Yes            | Language-default                                         |
 | `shellcheck`                        | Shell script linting             | Yes            | GitHub release                     |
 | `shfmt`                             | Shell script formatting          | Yes            | GitHub release                     |
 | `rust-analyzer`                     | Rust LSP                         | Yes            | GitHub release                     |
 | `lake serve`                        | Lean 4 LSP                       | No             | `lake` must be on PATH; uses the project's Lean toolchain |
 | `golangci-lint`                     | Go linting                       | Yes            | GitHub release                     |
 | `hadolint`                          | Dockerfile linting               | Yes            | GitHub release                     |
+| `helm`                              | Helm chart linting and rendering | Yes            | GitHub release (the archive comes from `get.helm.sh`) |
 | `ktlint`                            | Kotlin linting                   | Yes            | GitHub release                     |
 | `tflint`                            | Terraform linting                | Yes            | GitHub release                     |
 | `taplo`                             | TOML linting/formatting          | Yes            | GitHub release                     |
 | `terraform-ls`                      | Terraform LSP                    | Yes            | GitHub release                     |
-| `htmlhint`                          | HTML linting                     | Yes            | Config-gated                       |
+| `htmlhint`                          | HTML linting                     | Yes            | Language-default                                         |
 | `@prisma/language-server`           | Prisma LSP                       | Yes            | Flow-gated                         |
 | `dockerfile-language-server-nodejs` | Dockerfile LSP                   | Yes            | Flow-gated                         |
 | `intelephense`                      | PHP LSP                          | Yes            | Flow-gated                         |
@@ -52,10 +53,17 @@ Auto-install behavior depends on gate type:
 | `trivy`                             | Dependency-CVE session scan      | Auto-install   | Explicit opt-in (`trivy.enabled`)  |
 | `fallow-lsp`                        | JS/TS unused-code, duplication and cycle advisories | Auto-install | Explicit opt-in (`fallow.enabled`, pinned GitHub release) |
 | `psscriptanalyzer`                  | PowerShell linting               | Manual         | —                                  |
+| `rubocop`                           | Ruby linting/autofix             | No             | Install it yourself. The runner reports `not-installed` when it is absent, and the formatter skips silently |
+| `rust-clippy`                       | Rust linting/autofix             | No             | A component of your Rust toolchain (`rustup component add clippy`). The runner skips when the probe finds no clippy |
+| `rustfmt`                           | Rust formatting                  | No             | A component of your Rust toolchain (`rustup component add rustfmt`). The formatter skips silently when it is absent |
 
 Lean LSP is launched as `lake serve` from the detected Lake project root, so elan selects the toolchain from that project's `lean-toolchain` file and Lake supplies its project environment. pi-lens does not install or manage Lean/elan; install Lean and Lake separately and ensure `lake` is on `PATH`.
 
 Additional language servers (gopls, ruby-lsp, solargraph, etc.) are auto-detected from PATH or installed via native package managers (`go install`, `gem install`) when their language is detected.
+
+Pi-lens keeps that lookup from running project code. When pi has not admitted the project for project code and a PATH entry reaches the project (a relative entry such as `bin` or `.` included), the language-server lookup reads only the pi-lens tool store. It probes nothing on PATH and installs nothing, and it records one `lsp-registry-decision` degradation per tool.
+
+Pi-lens does not install rubocop, rustfmt or rust-clippy. `gem install` changes your whole gem root and `rustup component add` changes your whole toolchain, so you install them. They still run when they are present.
 
 ## Pip tool installation order
 

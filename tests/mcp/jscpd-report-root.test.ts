@@ -13,7 +13,10 @@
  * gitleaks is the round-3 fold onto the same seam.
  *
  * The wait is `fs.watchFile` on the marker the fake writes — a poll on the
- * real condition, not a raw `setTimeout`.
+ * real condition, not a raw `setTimeout`. #5105: the poll settles the wait on
+ * the marker's CONTENT, never bare existence. An empty marker can release an
+ * exists-only waiter, which then reads `""` as the report directory and fails
+ * the witness's first report-dir assert.
  */
 
 import * as fs from "node:fs";
@@ -45,13 +48,13 @@ function writeFakeScanner(binDir: string, name: string): void {
 }
 
 /**
- * Resolve once `file` exists, or reject after `timeoutMs`. `fs.watchFile`
- * polls the real stat; the synchronous first call covers a file created
- * between the caller's check and the watcher's registration, and later
- * callbacks cover creation after it.
+ * Resolve once `file` carries nonempty content, or reject after
+ * `timeoutMs`. `fs.watchFile` polls the real stat; the synchronous first call
+ * covers a file created between the caller's check and the watcher's
+ * registration, and later callbacks cover creation after it.
  *
- * The watcher is released on EVERY settle path — success, timeout, and a
- * callback that finds the file absent — through one `finish`. The round-3
+ * The watcher is released on success or timeout through one `finish`.
+ * An absent file keeps polling; any other read error rejects. The round-3
  * helper unwatched only in the success branch, so a marker that never appears
  * (the jscpd case after #4268) left a `persistent` StatWatcher holding the
  * worker until the whole 90 s test budget elapsed. The deadline is an
@@ -73,7 +76,15 @@ function waitForFile(file: string, timeoutMs: number): Promise<void> {
 		const onTimeout = (): void =>
 			finish(new Error(`waitForFile timed out after ${timeoutMs}ms: ${file}`));
 		const listener = (): void => {
-			if (fs.existsSync(file)) finish();
+			try {
+				// Creation can precede the marker's content.
+				if (fs.existsSync(file) && fs.readFileSync(file, "utf8").length > 0)
+					finish();
+			} catch (err) {
+				// Removed between the exists-check and the read; keep polling.
+				if ((err as NodeJS.ErrnoException).code !== "ENOENT")
+					finish(err as Error);
+			}
 		};
 		deadline.addEventListener("abort", onTimeout);
 		fs.watchFile(file, { interval: 50, persistent: true }, listener);
@@ -139,41 +150,85 @@ const CASES: readonly ScannerCase[] = [
 ];
 
 describe("mcp harness scanner report root (#4133)", () => {
+	/** The witness's real flow, extracted verbatim from the loop body so the
+	 *  #5105 boundary case REUSES the table's setup (production entry point;
+	 *  no parallel helper path). `beforeRequest` runs after initialize, before
+	 *  the request, with the marker's own-path spelling. */
+	async function driveScannerWitness(
+		spec: ScannerCase,
+		beforeRequest: ((marker: string) => void) | undefined,
+		run: (harness: McpHarness, marker: string) => Promise<void>,
+	): Promise<void> {
+		const { tmpDir } = setupTestEnvironment(`pi-lens-${spec.name}-mcp-`);
+		const fixture = path.join(tmpDir, "project");
+		const home = path.join(tmpDir, "home");
+		const binDir = path.join(fixture, "node_modules", ".bin");
+		fs.mkdirSync(fixture, { recursive: true });
+		fs.writeFileSync(path.join(fixture, "src.ts"), "export const a = 1;\n");
+		spec.prepareProject(fixture);
+		spec.placeFake({ fixture, home });
+		const marker = path.join(tmpDir, `${spec.name}-output.txt`);
+
+		const harness = new McpHarness({
+			cwd: fixture,
+			env: {
+				SCANNER_FAKE_MARKER: marker,
+				PI_LENS_TEST_MODE: "0",
+				PI_LENS_TEST_SCANNER_HARNESS: "0",
+				PI_LENS_TEST_SCANNER_TMPDIR: tmpDir,
+				PI_LENS_HOME: home,
+				PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+			},
+		});
+		try {
+			await harness.request(1, "initialize", {
+				protocolVersion: "2025-06-18",
+				capabilities: {},
+				clientInfo: { name: `${spec.name}-report-root`, version: "0" },
+			});
+			beforeRequest?.(marker);
+			// Fire-and-forget: the parked scan cannot resolve before dispose().
+			fireFullDiagnostics(harness);
+			// A short deadline keeps a wiring break from hanging the whole 90 s
+			// budget: the parked fake writes the marker in well under a second,
+			// and the helper releases its watcher either way.
+			await waitForFile(marker, 30_000);
+			await run(harness, marker);
+		} finally {
+			harness.dispose();
+		}
+	}
+
+	// #5105: one deterministic boundary case over the red row's real flow. The
+	// master red sat at this witness's first report-dir assert with the scan
+	// parked. This case replays the shape the trace supports — the wait
+	// settling on a marker that exists but carries no content yet — without
+	// claiming it is the historical CI run's state.
+	it("does not settle its fs.watchFile wait on a marker that exists but is still empty", async () => {
+		expect(CASES[1].name).toBe("gitleaks");
+		await driveScannerWitness(
+			CASES[1],
+			(marker) => {
+				fs.writeFileSync(marker, "");
+			},
+			async (harness, marker) => {
+				const reportDir = fs.readFileSync(marker, "utf8").trim();
+				// The wait resolved on the fake's content, never on the plant.
+				expect(reportDir.length).toBeGreaterThan(0);
+				expect(fs.existsSync(reportDir)).toBe(true);
+				expect(path.basename(reportDir).startsWith(CASES[1].prefix)).toBe(true);
+				expect(path.dirname(reportDir)).toBe(harness.scannerReportRoot());
+				harness.dispose();
+				// dispose() kills the child mid-scan, so the scan's `finally` never
+				// runs; the directory is gone only because the harness owned its root.
+				expect(fs.existsSync(reportDir)).toBe(false);
+			},
+		);
+	}, 90_000);
+
 	for (const spec of CASES) {
 		it(`sweeps a killed ${spec.name} scan's report directory from the harness-owned root`, async () => {
-			const { tmpDir } = setupTestEnvironment(`pi-lens-${spec.name}-mcp-`);
-			const fixture = path.join(tmpDir, "project");
-			const home = path.join(tmpDir, "home");
-			const binDir = path.join(fixture, "node_modules", ".bin");
-			fs.mkdirSync(fixture, { recursive: true });
-			fs.writeFileSync(path.join(fixture, "src.ts"), "export const a = 1;\n");
-			spec.prepareProject(fixture);
-			spec.placeFake({ fixture, home });
-			const marker = path.join(tmpDir, `${spec.name}-output.txt`);
-
-			const harness = new McpHarness({
-				cwd: fixture,
-				env: {
-					SCANNER_FAKE_MARKER: marker,
-					PI_LENS_TEST_MODE: "0",
-					PI_LENS_TEST_SCANNER_HARNESS: "0",
-					PI_LENS_TEST_SCANNER_TMPDIR: tmpDir,
-					PI_LENS_HOME: home,
-					PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-				},
-			});
-			try {
-				await harness.request(1, "initialize", {
-					protocolVersion: "2025-06-18",
-					capabilities: {},
-					clientInfo: { name: `${spec.name}-report-root`, version: "0" },
-				});
-				// Fire-and-forget: the parked scan cannot resolve before dispose().
-				fireFullDiagnostics(harness);
-				// A short deadline keeps a wiring break from hanging the whole 90 s
-				// budget: the parked fake writes the marker in well under a second,
-				// and the helper releases its watcher either way.
-				await waitForFile(marker, 30_000);
+			await driveScannerWitness(spec, undefined, async (harness, marker) => {
 				const reportDir = fs.readFileSync(marker, "utf8").trim();
 				// The child really did create the report directory this test kills.
 				expect(fs.existsSync(reportDir)).toBe(true);
@@ -186,9 +241,7 @@ describe("mcp harness scanner report root (#4133)", () => {
 				// dispose() kills the child mid-scan, so the scan's `finally` never
 				// runs; the directory is gone only because the harness owned its root.
 				expect(fs.existsSync(reportDir)).toBe(false);
-			} finally {
-				harness.dispose();
-			}
+			});
 		}, 90_000);
 	}
 
@@ -205,5 +258,15 @@ describe("mcp harness scanner report root (#4133)", () => {
 		expect(statWatchers()).toBe(before + 1);
 		await expect(pending).rejects.toThrow(/timed out after 150ms/);
 		expect(statWatchers()).toBe(before);
+	});
+
+	// #5105 review F1: a read error other than ENOENT must reject with its own
+	// cause. A directory at the marker path reads as EISDIR on every poll; a
+	// helper that swallowed it would keep polling into a bare timeout.
+	it("rejects a marker path it cannot read as a file instead of polling", async () => {
+		const { tmpDir } = setupTestEnvironment("pi-lens-wait-for-file-dir-");
+		const dirMarker = path.join(tmpDir, "marker-is-a-directory");
+		fs.mkdirSync(dirMarker);
+		await expect(waitForFile(dirMarker, 150)).rejects.toThrow(/EISDIR/);
 	});
 });

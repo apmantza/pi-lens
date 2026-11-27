@@ -25,6 +25,7 @@ import {
 	flushReviewGraphPersistsForExitForTests,
 } from "../../clients/review-graph/builder.js";
 import { getProjectDataDir } from "../../clients/file-utils.js";
+import { scaledTestTimeout } from "../support/test-timeout-scale.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 
 // module_report consumes the cached review graph read-only (#256) — it never
@@ -155,7 +156,11 @@ describe("moduleReport — outline + structure", () => {
 
 		expect(report.available).toBe(true);
 		expect(report.language).toBe("python");
-		const names = [...report.api, ...report.internal].map((e) => e.name);
+		const names = [
+			...report.api,
+			...report.internal,
+			...(report.unclassified ?? []),
+		].map((e) => e.name);
 		expect(names).toContain("greet");
 		expect(names).toContain("Greeter");
 	});
@@ -468,7 +473,9 @@ describe("moduleReport — outline + structure", () => {
 			]);
 		const find = async (file: string, name: string) => {
 			const r = await moduleReport(file, env.tmpDir);
-			return flatten([...r.api, ...r.internal]).find((s) => s.name === name);
+			return flatten([...r.api, ...r.internal, ...(r.unclassified ?? [])]).find(
+				(s) => s.name === name,
+			);
 		};
 
 		// Python: multiple decorators as preceding siblings of a decorated_definition.
@@ -520,7 +527,7 @@ describe("moduleReport — outline + structure", () => {
 			]);
 		const isAsync = async (file: string, name: string) => {
 			const r = await moduleReport(file, env.tmpDir);
-			return flatten([...r.api, ...r.internal])
+			return flatten([...r.api, ...r.internal, ...(r.unclassified ?? [])])
 				.find((s) => s.name === name)
 				?.flags?.includes("async");
 		};
@@ -696,9 +703,11 @@ describe("moduleReport — doc-comment first line (#512)", () => {
 			].join("\n"),
 		);
 		const report = await moduleReport(file, env.tmpDir);
-		const greet = [...report.api, ...report.internal].find(
-			(e) => e.name === "greet",
-		);
+		const greet = [
+			...report.api,
+			...report.internal,
+			...(report.unclassified ?? []),
+		].find((e) => e.name === "greet");
 		expect(greet?.doc).toBe("Greets a person by name.");
 	});
 });
@@ -1039,7 +1048,12 @@ describe("moduleReport — review-graph who-uses-this", () => {
 		// elsewhere with an empty in-memory cache). persistGraph writes async, so
 		// clear in-memory and poll until the disk snapshot lands.
 		let foo: { usedBy?: Array<{ file: string }> } | undefined;
-		for (let attempt = 0; attempt < 20; attempt++) {
+		// Shape 86 (#4865): the bound was `attempt < 20` of 50 ms sleeps. The
+		// re-read is async, so this stays a loop, but the ceiling is the clock and
+		// it scales with the lane like `waitFor` does; the assertion below still
+		// decides the case when the disk snapshot never lands.
+		const deadlineAt = Date.now() + scaledTestTimeout(1_000);
+		while (Date.now() < deadlineAt) {
 			clearReviewGraphWorkspaceCache(); // force the disk (Tier 3) path
 			const report = await moduleReport("a.ts", env.tmpDir);
 			foo = report.api.find((e) => e.name === "foo");

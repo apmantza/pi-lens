@@ -205,7 +205,6 @@ describe("#4833 — every LSPServerInfo trait has an override-copy decision", ()
 		expect(kept("typos").publishesOnClose).toBe(true);
 		expect(kept("php").emptyFirstPublish).toBe("indexing");
 		expect(kept("php").diagnosticsFence).toBe("reply-first");
-		expect(kept("rust-analyzer").expectSemanticSecondPush).toBe(true);
 		expect(kept("csharp").aggregateWaitMs).toBeGreaterThanOrEqual(6000);
 		expect(kept("typescript").silentOnClean).toBeUndefined();
 		expect(kept("marksman").silentOnClean).toBeUndefined();

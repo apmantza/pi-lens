@@ -61,10 +61,11 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 			if (isError || details?.available === false) {
 				return `module_report ${base} — unavailable`;
 			}
-			const parts = [
-				`${details?.symbols ?? 0} symbols`,
-				`${details?.exports ?? 0} exports`,
-			];
+			// No `exports` means no top-level symbol has a visibility answer (#5599):
+			// say nothing rather than "0 exports".
+			const parts = [`${details?.symbols ?? 0} symbols`];
+			if (details?.exports !== undefined)
+				parts.push(`${details.exports} exports`);
 			if (details?.callbacks) parts.push(`${details.callbacks} callbacks`);
 			const view =
 				details?.view && details.view !== "summary-text"

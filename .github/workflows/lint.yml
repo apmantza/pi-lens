@@ -26,6 +26,13 @@ concurrency:
 
 permissions: {}
 
+# #5420: one transient registry 5xx must not red npm ci or npx; npm's default
+# is 2 retries. The gate (workflow-level, literal, floored) is
+# tests/config/release-download-helper-workflow.test.ts.
+env:
+  npm_config_fetch_retries: 5
+  npm_config_fetch_retry_maxtimeout: 120000
+
 jobs:
   # #5002: one gating row for the two install-free linters. Every step after the
   # checkout runs even when the other tool went red, so the row reports both.
@@ -76,6 +83,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: ${{ !cancelled() }}
         with:
+          package-manager-cache: false
           node-version: "22"
 
       # SonarCloud S6505 (#1917 review, deferred; fixed here): `npx` can
@@ -110,6 +118,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: false
           node-version: "22"
 
       # The version comes from the `oxfmt` devDependency, which package.json
@@ -161,6 +170,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: false
           node-version: "22"
 
       # Same pattern as the oxfmt/markdownlint jobs above: install just the
@@ -212,6 +222,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: true
           node-version: "22"
 
       # `npm ci` (not `npm install`) + `--ignore-scripts` (SonarCloud S6505 /
@@ -294,7 +305,7 @@ jobs:
       # crate-ci/typos walks the checkout and exits non-zero on any finding or
       # error; the population is the repo itself and cannot be empty. The row is
       # the reader.
-      - uses: crate-ci/typos@4c8b7f51ca60df14e3c5ca82770dfbbe6c3dae85 # v1.52.0
+      - uses: crate-ci/typos@276087d9a4f06398b3e04825487805e2d7375888 # v1.52.2
         if: ${{ !cancelled() }}
         with:
           args: --force-exclude
@@ -361,6 +372,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: ${{ !cancelled() }}
         with:
+          package-manager-cache: true
           node-version: "22"
           cache: npm
       - name: Install dependencies

@@ -200,7 +200,8 @@ vi.mock("node:child_process", () => ({
 // installed binary reporting a drifted or matching version; everything else
 // resolves success with no output, so the reinstall path exercised by the
 // drift tests doesn't need a real npm.
-vi.mock("../../../clients/safe-spawn.js", () => ({
+vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal()),
 	safeSpawn: vi.fn(() => ({ stdout: "", stderr: "", status: 0 })),
 	safeSpawnAsync: async (command: string, args: string[]) => {
 		const cmd = String(command);

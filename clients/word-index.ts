@@ -22,6 +22,7 @@ import {
 	forEachCooperatively,
 	yieldIfOverBudget,
 } from "./cooperative-budget.js";
+import { nonNegativeIntEnv } from "./env-utils.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
 import { isTestFileName } from "./file-role.js";
 import { resolveLanguageScope } from "./language-registry.js";
@@ -2789,11 +2790,11 @@ export function triggerBackgroundWordIndexBuild(
 
 const WORD_INDEX_PERSIST_DEBOUNCE_MS_DEFAULT = 1500;
 
-function wordIndexPersistDebounceMs(): number {
-	const raw = Number(process.env.PI_LENS_WORD_INDEX_PERSIST_DEBOUNCE_MS);
-	return Number.isFinite(raw) && raw >= 0
-		? raw
-		: WORD_INDEX_PERSIST_DEBOUNCE_MS_DEFAULT;
+export function wordIndexPersistDebounceMs(): number {
+	return nonNegativeIntEnv(
+		"PI_LENS_WORD_INDEX_PERSIST_DEBOUNCE_MS",
+		WORD_INDEX_PERSIST_DEBOUNCE_MS_DEFAULT,
+	);
 }
 
 interface PendingWordIndexPersist {

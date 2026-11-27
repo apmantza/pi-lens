@@ -14,7 +14,10 @@ vi.mock("../../../clients/extension-log.js", async (importOriginal) => ({
 const launchLSP = vi.fn(async () => ({}));
 vi.mock("../../../clients/lsp/launch.js", () => ({
 	launchLSP,
+	launchViaNode: vi.fn(),
 	admitProjectSuppliedTsserver: (tsserverPath: string) => tsserverPath,
+	// The launcher double admits project code, as its tsserver admission does.
+	isLspProjectCodeAdmitted: () => true,
 }));
 
 const dirs: string[] = [];

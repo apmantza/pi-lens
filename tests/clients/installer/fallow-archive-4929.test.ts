@@ -24,6 +24,7 @@ import {
 	vi,
 } from "vitest";
 import { createArchivePinScope } from "../../support/archive-pin.js";
+import { drainRegisteredBackgroundWritesForTests } from "../../support/background-write-drains.js";
 import { removeTempDirSync } from "../test-utils.js";
 
 const HOME = vi.hoisted(() => {
@@ -74,6 +75,7 @@ vi.mock("node:https", () => ({
 vi.unmock("../../../clients/installer/index.js");
 import {
 	ensureTool,
+	flushProbeCache,
 	resolveArchiveKind,
 	resolveArchiveUrl,
 	TOOLS,
@@ -93,10 +95,23 @@ beforeEach(() => {
 afterEach(() => {
 	pins.restoreAll();
 });
-afterAll(() => {
-	removeTempDirSync(HOME);
-	delete process.env.PI_LENS_TEST_PLATFORM;
-	vi.unstubAllEnvs();
+afterAll(async () => {
+	try {
+		// #5657: a successful `ensureTool` leaves a dirty probe-cache entry whose
+		// 300 ms debounced flush writes `probe-cache.json` and its `.locks`
+		// directory under HOME. Removed first, the flush re-created the root, and
+		// the serialized tmp-fixture hygiene owner redded shard 5 on master run
+		// 43798942706 (`pi-lens-4929-*`, present-at-sweep(held)). Settle the
+		// writer through the registry the hygiene-clean files already join
+		// (#5024), then prove nothing is left pending: `flushProbeCache` is idle
+		// only when the drain landed the write.
+		await drainRegisteredBackgroundWritesForTests();
+		expect(await flushProbeCache()).toBe("idle");
+	} finally {
+		removeTempDirSync(HOME);
+		delete process.env.PI_LENS_TEST_PLATFORM;
+		vi.unstubAllEnvs();
+	}
 });
 
 describe("fallow-lsp archive row (#4929)", () => {

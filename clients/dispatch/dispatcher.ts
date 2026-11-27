@@ -44,29 +44,27 @@ import {
 } from "../path-utils.js";
 import { loadPiLensProjectConfig } from "../project-lens-config.js";
 import { withBudget } from "../deadline-utils.js";
+import { spawnCooldownScope } from "../spawn-abort-scope.js";
+import { isInSpawnTimeoutCooldown } from "../spawn-timeout-cooldown.js";
 import { RUNTIME_CONFIG, getRunnerTimeoutFloorMs } from "../runtime-config.js";
-import { probeToolAsync } from "../tool-probe.js";
 import { classifyDiagnostic } from "./diagnostic-taxonomy.js";
-import {
-	classifyProbeFailure,
-	logAvailabilityDecision,
-	startHostStallSampler,
-	transientRetryDelayMs,
-} from "./runners/utils/availability-policy.js";
-import {
-	recordAvailabilityProbeOverrun,
-	getDispatchAvailabilityGeneration,
-} from "./runners/utils/runner-helpers.js";
-import { createAvailabilityProbeFlight } from "../availability-probe-flight.js";
+import { createAvailabilityChecker } from "./runners/utils/runner-helpers.js";
 import type { FactStore } from "./fact-store.js";
 import { linesOfRanges, rangesOfLines } from "../line-alignment.js";
-import { applyFindingPolicyByOwner } from "./finding-policy.js";
+import {
+	applyFindingPolicyByOwner,
+	inlineBlockerIdentities,
+} from "./finding-policy.js";
 import { getToolPlan } from "./plan.js";
 import { resolveRunnerPath } from "./runner-context.js";
 import {
 	classifyObservedRunner,
+	holdFlight,
+	runnerFlightKey,
 	COLLECT_LATER_THRESHOLD_MS,
 	observeRunnerLatency,
+	runCollectLater,
+	type CollectLaterTier,
 } from "./collect-later-tier.js";
 import { deferRunnerFindings } from "./pending-runner-findings.js";
 import {
@@ -75,7 +73,11 @@ import {
 } from "./adopted-root-runners.js";
 
 import { laneCopyStandsFor, semanticRank } from "./lane-copies.js";
-import { normalizeRuleId } from "./rule-id-normalize.js";
+import {
+	findingClassKey,
+	normalizeRuleId,
+	withClassSeverity,
+} from "./rule-id-normalize.js";
 import {
 	applyRulePolicy,
 	projectRulePolicy,
@@ -100,12 +102,11 @@ import {
 	NO_SERVER_REASON,
 	noPrimaryCheckerReason,
 	reachedNoVerdict,
+	SKIP_REASON_PHRASE,
+	TOOL_UNUSABLE_SKIP_REASONS,
 	unchecked,
 } from "./types.js";
 
-const dispatcherProbeFlights = createAvailabilityProbeFlight<
-	Awaited<ReturnType<typeof probeToolAsync>>
->({ generation: () => getDispatchAvailabilityGeneration() });
 import type {
 	Diagnostic,
 	DispatchContext,
@@ -127,6 +128,7 @@ import { registerRunnerId } from "./known-runner-ids.js";
 import {
 	combinePrimaryUnavailableCauses,
 	PRIMARY_UNAVAILABLE_CAUSE,
+	TOUCH_INCONCLUSIVE_REASON_PHRASE,
 	type PrimaryUnavailableCause,
 } from "../lsp/diagnostic-binding.js";
 
@@ -198,140 +200,37 @@ export function normalizeCacheKey(cmd: string): string {
 const TOOL_PROBE_TIMEOUT_MS = 5000;
 
 /**
- * Session fact holding the epoch ms after which a TRANSIENT verdict for a
- * command may be re-probed. Kept beside the boolean fact so both share the
- * session's lifetime — no second global to reset (#1476).
+ * One PATH-only checker per command (#5410), keyed like the session fact key
+ * it replaces, so `ruff` and `ruff.exe` share one verdict.
  */
-function transientRetryKey(command: string): string {
-	return `${normalizeCacheKey(command)}.retryAt`;
-}
+const commandCheckers = new Map<
+	string,
+	ReturnType<typeof createAvailabilityChecker>
+>();
 
 /**
- * Consecutive transient verdicts for a command, so the cooldown ESCALATES the
- * way the policy documents (30 s, 60 s, 120 s … capped at 5 min) instead of
- * sitting flat at 30 s.
- *
- * This is the highest-traffic availability consumer in the product. A flat
- * cooldown here means a permanently sick host is re-probed every 30 s per
- * command for the whole session — ten times the storm the policy claims to
- * bound, and the one place the bound matters most. `createAvailabilityChecker`
- * tracks the same counter; this keeps the two seams telling one story.
+ * Is `command` usable on PATH right now? The verdict, its transient cooldown
+ * ladder (#1467/#1476), the trust stamp and the decision row are the shared
+ * checker's (#5410); this keeps only the PATH-only contract of `hasTool`,
+ * whose callers spawn the bare name. A command not on disk is refused without
+ * a spawn, and a probe that throws latches nothing: the throw reaches the
+ * caller and the next call asks again.
  */
-function transientAttemptsKey(command: string): string {
-	return `${normalizeCacheKey(command)}.transientAttempts`;
-}
-
-/**
- * Is `command` usable right now? Cached per session.
- *
- * Latch policy (#1467/#1476): a `false` from a genuine absence is durable and
- * is remembered for the session. A `false` from a TIMED-OUT probe is not — this
- * is the highest-traffic availability consumer in the codebase, and caching a
- * host stall here silently disabled a healthy tool for every later dispatch in
- * the session. A transient verdict instead holds only for a bounded cooldown,
- * which also stops a sick host from being re-probed on every dispatch.
- */
-export async function checkToolAvailability(
-	command: string,
-	facts: FactStore,
-): Promise<boolean> {
+export async function checkToolAvailability(command: string): Promise<boolean> {
+	if (!(await isSpawnableCommand(command))) return false;
 	const key = normalizeCacheKey(command);
-	const cached = facts.getSessionFact<boolean>(key);
-	if (cached !== undefined) {
-		return cached;
-	}
-	const retryAt = facts.getSessionFact<number>(transientRetryKey(command));
-	if (retryAt !== undefined && Date.now() < retryAt) return false;
-	// A command that isn't even on disk can't pass a --version probe; the ~μs
-	// stat/PATH walk saves a guaranteed-to-fail spawn round-trip per cold tool.
-	if (!(await isSpawnableCommand(command))) {
-		facts.setSessionFact(key, false);
-		return false;
-	}
-	try {
-		// The budget is enforced by a HOST-side timer, so measure the loop stall
-		// that overlapped the window and let the shared classifier read it.
-		const sampler = startHostStallSampler();
-		const startedAt = Date.now();
-		let result: Awaited<ReturnType<typeof probeToolAsync>>;
-		let hostStallMs: number;
-		let probeJoined = false;
-		try {
-			const shared = dispatcherProbeFlights.run(`dispatcher:${key}`, () =>
-				probeToolAsync(command, ["--version"], {
-					timeout: TOOL_PROBE_TIMEOUT_MS,
-				}),
-			);
-			probeJoined = shared.joined;
-			result = await shared.promise;
-		} finally {
-			hostStallMs = sampler.stop();
-		}
-		const elapsedMs = Date.now() - startedAt;
-		recordAvailabilityProbeOverrun(
-			command,
-			key,
-			elapsedMs,
-			TOOL_PROBE_TIMEOUT_MS,
-			result.failure,
-		);
-		if (result.status === 0) {
-			facts.setSessionFact(key, true);
-			// The tool answered: retire the cooldown facts rather than leaving a
-			// stale retry deadline behind a `true`.
-			facts.setSessionFact(transientRetryKey(command), 0);
-			facts.setSessionFact(transientAttemptsKey(command), 0);
-			logAvailabilityDecision({
-				tool: command,
-				verdict: "available",
-				outcome: "success",
-				cause: "ok",
-				elapsedMs,
-				latched: true,
-				classifiedBy: probeJoined ? "joined" : "probe",
-				hostStallMs,
-				budgetMs: TOOL_PROBE_TIMEOUT_MS,
-			});
-			return true;
-		}
-		// `missing` for anything unclassified preserves the pre-#1476 meaning of
-		// a non-zero exit: durable, cached for the session.
-		const { outcome, cause, evidence } = classifyProbeFailure(result, {
-			hostStallMs,
+	let checker = commandCheckers.get(key);
+	if (!checker) {
+		checker = createAvailabilityChecker(command, "", ["--version"], {
+			pathOnly: true,
+			probeTimeout: TOOL_PROBE_TIMEOUT_MS,
+			// A non-zero exit with no typed failure keeps its pre-#1476 meaning:
+			// durable, cached for the session.
 			unclassifiedFailureOutcome: "missing",
 		});
-		let retryAfterMs: number | undefined;
-		if (outcome === "transient") {
-			const attempts =
-				(facts.getSessionFact<number>(transientAttemptsKey(command)) ?? 0) + 1;
-			facts.setSessionFact(transientAttemptsKey(command), attempts);
-			retryAfterMs = transientRetryDelayMs(attempts, cause);
-			facts.setSessionFact(
-				transientRetryKey(command),
-				Date.now() + retryAfterMs,
-			);
-		} else {
-			facts.setSessionFact(key, false);
-			facts.setSessionFact(transientAttemptsKey(command), 0);
-		}
-		logAvailabilityDecision({
-			tool: command,
-			verdict: "unavailable",
-			outcome,
-			cause,
-			elapsedMs,
-			latched: outcome !== "transient",
-			hostStallMs,
-			...(retryAfterMs !== undefined && { retryAfterMs }),
-			budgetMs: TOOL_PROBE_TIMEOUT_MS,
-			classifiedBy: probeJoined ? "joined" : "probe",
-			evidence,
-		});
-		return false;
-	} catch {
-		facts.setSessionFact(key, false);
-		return false;
+		commandCheckers.set(key, checker);
 	}
+	return checker.isAvailableAsync();
 }
 
 // --- Dispatch Context Factory ---
@@ -451,7 +350,7 @@ export function createDispatchContext(
 		toolCwdMemo: {},
 
 		async hasTool(command: string): Promise<boolean> {
-			return checkToolAvailability(command, facts);
+			return checkToolAvailability(command);
 		},
 
 		log(message: string, level?: ExtensionLogLevel): void {
@@ -565,6 +464,48 @@ function dedupeOverlappingDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
 	}
 
 	return [...byKey.values()];
+}
+
+/** #5416: a class member the class's blocking tier raises (`withClassSeverity`). */
+function blocksAsClassMember(d: Diagnostic): boolean {
+	return d.semantic !== "blocking" && withClassSeverity(d) !== d;
+}
+
+/**
+ * #5416: one verdict and one copy per cross-tool finding class at a place.
+ * It runs on what the per-copy filters, the delta and the pre-edit seed left,
+ * so each of them read every tool's copy apart. A class the seed held a copy
+ * of keeps its other copies as their tools rated them: the finding is listed
+ * as pre-existing, and the seed's scope stays linters only. Every other
+ * member is raised to the class tier, then the copy the overlap dedupe would
+ * prefer stands. It only raises or collapses survivors, so it never lowers a
+ * verdict.
+ */
+function mergeFindingClasses(
+	visible: Diagnostic[],
+	held: readonly Diagnostic[],
+): Diagnostic[] {
+	const heldKeys = new Set(held.map(findingClassKey));
+	const score = (d: Diagnostic) =>
+		semanticRank(d.semantic) * 100 +
+		toolPriority(d.tool, d.defectClass ?? classifyDiagnostic(d));
+	const slotByKey = new Map<string, number>();
+	const merged: Diagnostic[] = [];
+	for (const d of visible) {
+		const key = findingClassKey(d);
+		if (key === undefined || heldKeys.has(key)) {
+			merged.push(d);
+			continue;
+		}
+		const raised = withClassSeverity(d);
+		const slot = slotByKey.get(key);
+		if (slot === undefined) {
+			slotByKey.set(key, merged.push(raised) - 1);
+		} else if (score(raised) > score(merged[slot] as Diagnostic)) {
+			merged[slot] = raised;
+		}
+	}
+	return merged;
 }
 
 function suppressLintOverlapsWithLsp(diagnostics: Diagnostic[]): Diagnostic[] {
@@ -698,6 +639,7 @@ export interface RunnerLatency {
 	/** #5285 r3: the run read part of the file (`RunnerResult.inconclusive`). */
 	inconclusive?: true;
 	skipReason?: RunnerSkipReason;
+	inconclusiveReason?: import("../lsp/diagnostic-binding.js").TouchInconclusiveReason;
 	/** WHO supplied the `covered-by-primary` claim (#3968 F2). */
 	claimSource?: RunnerClaimSource;
 	unconfirmedServerIds?: readonly string[];
@@ -773,6 +715,21 @@ function buildCoverageNotice(
 	const unconfirmedServerIds = [
 		...new Set(relevant.flatMap((r) => r.unconfirmedServerIds ?? [])),
 	];
+	const inconclusiveDetails = [
+		...new Set(
+			relevant.flatMap((r) => {
+				if (
+					r.inconclusiveReason === undefined ||
+					r.inconclusiveReason === "primary-unavailable"
+				)
+					return [];
+				const ids = r.unconfirmedServerIds ?? [];
+				const subject = ids.length > 0 ? `${ids.join(", ")}: ` : "";
+				const cause = TOUCH_INCONCLUSIVE_REASON_PHRASE[r.inconclusiveReason];
+				return [`${subject}${cause}`];
+			}),
+		),
+	];
 	if (unconfirmedServerIds.length > 0) {
 		const deferredIds = new Set(
 			relevant.flatMap((r) => r.deferredServerIds ?? []),
@@ -843,6 +800,9 @@ function buildCoverageNotice(
 			coverageParts.push(
 				`coverage: ${markerFor(silentServerIds)} silent — diagnostics are incomplete (not a clean result).`,
 			);
+		}
+		if (inconclusiveDetails.length > 0) {
+			coverageParts.push(`cause: ${inconclusiveDetails.join("; ")}.`);
 		}
 		return {
 			notice: {
@@ -972,15 +932,49 @@ function buildCoverageNotice(
 			r.primaryUnavailableCause === "disabled" ||
 			r.primaryUnavailableCause === "disabledFallback",
 	);
-	const verdict = unchecked(
-		cause
-			? `no primary language server answered (${PRIMARY_UNAVAILABLE_CAUSE[cause]})${deniedRunnerIds.length > 0 ? `; ${deniedNote}` : ""}`
-			: deniedRunnerIds.length > 0
-				? onlySwitchedOff
-					? `not checked (${deniedNote})`
-					: `not fully checked (a language tool is missing, timed out, or failed to run; ${deniedNote})`
-				: "not fully checked (a language tool is missing, timed out, or failed to run)",
+	// #5258: the cause each primary runner stated when it skipped. A file whose
+	// every primary row states one reads "not checked (<runner>: <cause>)"; a
+	// mix with a bare skip, a timeout or a failure keeps the generic sentence
+	// and adds the stated causes beside it.
+	const statedRows = relevant.filter(
+		(r) => r.status === "skipped" && r.skipReason !== undefined,
 	);
+	// One cause per runner and reason: a runner in two of the kind's groups
+	// (rubocop is ruby's primary and its fallback) skips once per group.
+	const causesOf = (rows: typeof relevant): string[] => [
+		...new Set(
+			rows.map(
+				(r) =>
+					`${r.runnerId}: ${SKIP_REASON_PHRASE[r.skipReason as RunnerSkipReason]}`,
+			),
+		),
+	];
+	const statedCauses = causesOf(statedRows);
+	const everyRowStated = statedRows.length === relevant.length;
+	// Beside a bare skip the notice adds only the causes that explain the gap: a
+	// runner that had nothing to check (an opt-in left off, no config) is not
+	// why the file went unchecked, and listing it grew every edit's status line.
+	const unexplainedCauses = causesOf(
+		statedRows.filter((r) => !isNotApplicableSkipReason(r.skipReason)),
+	);
+	const carriedInconclusiveReason =
+		inconclusiveDetails.length > 0 ? `; ${inconclusiveDetails.join("; ")}` : "";
+	const unavailableReason = cause
+		? `no primary language server answered (${PRIMARY_UNAVAILABLE_CAUSE[cause]})${deniedRunnerIds.length > 0 ? `; ${deniedNote}` : ""}`
+		: deniedRunnerIds.length > 0
+			? onlySwitchedOff
+				? `not checked (${deniedNote})`
+				: `not fully checked (a language tool is missing, timed out, or failed to run; ${deniedNote})`
+			: everyRowStated
+				? `not checked (${statedCauses.join("; ")})`
+				: `not fully checked (a language tool is missing, timed out, or failed to run${unexplainedCauses.length > 0 ? `; ${unexplainedCauses.join("; ")}` : ""}${carriedInconclusiveReason})`;
+
+	const verdict = unchecked(unavailableReason);
+	// #5469: no checker answered this adopted edit; keep its unanswered status
+	// visible on every edit instead of hiding it behind a deduplicated notice.
+	if (ctx.analysisRootMode === "adopted") {
+		return { verdict: unchecked(`not analyzed (${unavailableReason})`) };
+	}
 
 	if (
 		onlySwitchedOff &&
@@ -1034,7 +1028,10 @@ function buildCoverageNotice(
 	return {
 		notice: {
 			id: `coverage-unavailable:${ctx.kind}:${path.basename(ctx.filePath)}`,
-			message: `Pi-lens ${ctx.kind} analysis unavailable — a language tool is missing, timed out, or failed to run, or the LSP server isn't ready yet, so this file was not fully checked (not a clean result).${deniedRunnerIds.length > 0 ? ` Runner (${deniedRunnerIds.join(", ")}) is also disabled in config by dispatch.disabledRunners.` : ""}`,
+			message:
+				everyRowStated && deniedRunnerIds.length === 0
+					? `Pi-lens ${ctx.kind} analysis unavailable — ${statedCauses.join("; ")}, so this file was not checked (not a clean result).`
+					: `Pi-lens ${ctx.kind} analysis unavailable — a language tool is missing, timed out, or failed to run, or the LSP server isn't ready yet, so this file was not fully checked (not a clean result).${unexplainedCauses.length > 0 ? ` Stated: ${unexplainedCauses.join("; ")}.` : ""}${inconclusiveDetails.length > 0 ? ` Stated: ${inconclusiveDetails.join("; ")}.` : ""}${deniedRunnerIds.length > 0 ? ` Runner (${deniedRunnerIds.join(", ")}) is also disabled in config by dispatch.disabledRunners.` : ""}`,
 			filePath: ctx.filePath,
 			severity: "warning",
 			semantic: "warning",
@@ -1127,6 +1124,8 @@ interface GroupResult {
 	/** #4484 r2: runners and servers that reached no verdict in this group. */
 	inconclusiveRunnerIds: string[];
 	inconclusiveServerIds: string[];
+	/** #5727: per runner, the servers that answered although it had no verdict. */
+	answeredServerIds: [string, readonly string[]][];
 	/** #4484 round 3: the inconclusive runners still in flight (collect-later). */
 	collectLaterRunnerIds: string[];
 	/** #4484 round 6: runners whose verdict covers only the edit's ranges. */
@@ -1184,6 +1183,7 @@ async function runGroup(
 	const outOfEditScope: Diagnostic[] = [];
 	const inconclusiveRunnerIds: string[] = [];
 	const inconclusiveServerIds: string[] = [];
+	const answeredServerIds: GroupResult["answeredServerIds"] = [];
 	const collectLaterRunnerIds: string[] = [];
 	const editScopedRunnerIds: string[] = [];
 	const answeredRunnerIds: string[] = [];
@@ -1353,43 +1353,31 @@ async function runGroup(
 		const observedTier =
 			ctx.writeIndex === undefined
 				? "inline"
-				: classifyObservedRunner(projectRoot, runner.id);
+				: classifyObservedRunner(projectRoot, runner.id, ctx);
 		if (observedTier === "collect-later") {
 			const markedAtMs = Date.now();
-			const deferred = runRunner(runnerCtx, runner, semantic).then((result) => {
-				const durationMs = Date.now() - markedAtMs;
-				const tier = observeRunnerLatency({
+			// #5413: at most one run of this runner in flight per project; a
+			// write meanwhile owes one rerun for its file. The run's latency is
+			// measured from its own start, never from a queued write's mark.
+			const run = async (): Promise<RunnerResult> => {
+				const startedAtMs = Date.now();
+				const result = await runRunner(runnerCtx, runner, semantic, {
+					holdFlightUntilSettled: true,
+				});
+				const durationMs = Date.now() - startedAtMs;
+				observeRunnerTier({
+					filePath: ctx.filePath,
 					projectRoot,
 					runnerId: runner.id,
+					observedTier,
 					durationMs,
-					timedOut: result.failureKind === "timeout",
+					result,
 				});
-				if (tier !== observedTier) {
-					logLatency({
-						type: "phase",
-						filePath: ctx.filePath,
-						phase: "runner_collect_later_tier_flip",
-						durationMs: 0,
-						metadata: {
-							runnerId: runner.id,
-							from: observedTier,
-							to: tier,
-							projectRoot,
-						},
-					});
-				}
-				if (tier === "collect-later") {
-					incrementDegradationCount({
-						kind: "runner-collect-later",
-						subject: `${projectRoot}:${runner.id}`,
-						reason: `observed ${durationMs}ms, threshold ${COLLECT_LATER_THRESHOLD_MS}ms`,
-					});
-				}
 				logLatency({
 					type: "runner",
 					filePath: ctx.filePath,
 					runnerId: runner.id,
-					startedAt: new Date(markedAtMs).toISOString(),
+					startedAt: new Date(startedAtMs).toISOString(),
 					durationMs,
 					status: result.status,
 					diagnosticCount: result.diagnostics.length,
@@ -1401,6 +1389,12 @@ async function runGroup(
 					},
 				});
 				return result;
+			};
+			const { promise: deferred, coalesced } = runCollectLater({
+				projectRoot,
+				runnerId: runner.id,
+				filePath: ctx.filePath,
+				start: run,
 			});
 			deferRunnerFindings({
 				filePath: ctx.filePath,
@@ -1437,43 +1431,31 @@ async function runGroup(
 				status: "pending",
 				diagnosticCount: 0,
 				semantic,
-				metadata: { tier: "collect-later", delivered: "turn_end" },
+				metadata: {
+					tier: "collect-later",
+					delivered: "turn_end",
+					...(coalesced && { coalesced: true }),
+				},
 			});
 			continue;
 		}
 
-		const result = await runRunner(runnerCtx, runner, semantic);
+		const result = await runRunner(runnerCtx, runner, semantic, {
+			dispatch: ctx,
+		});
 		onRunnerResult?.(runnerId, result);
 		const runnerEnd = Date.now();
 		const duration = runnerEnd - runnerStart;
-		const tier =
-			ctx.writeIndex === undefined
-				? "inline"
-				: observeRunnerLatency({
-						projectRoot,
-						runnerId: runner.id,
-						durationMs: duration,
-						timedOut: result.failureKind === "timeout",
-					});
-		if (tier !== observedTier) {
-			logLatency({
-				type: "phase",
+		// Only post-write dispatches observe: a project scan or direct API call
+		// has no tier to flip (`observedTier` is "inline" for it).
+		if (ctx.writeIndex !== undefined) {
+			observeRunnerTier({
 				filePath: ctx.filePath,
-				phase: "runner_collect_later_tier_flip",
-				durationMs: 0,
-				metadata: {
-					runnerId: runner.id,
-					from: observedTier,
-					to: tier,
-					projectRoot,
-				},
-			});
-		}
-		if (tier === "collect-later") {
-			incrementDegradationCount({
-				kind: "runner-collect-later",
-				subject: `${projectRoot}:${runner.id}`,
-				reason: `observed ${duration}ms, threshold ${COLLECT_LATER_THRESHOLD_MS}ms`,
+				projectRoot,
+				runnerId: runner.id,
+				observedTier,
+				durationMs: duration,
+				result,
 			});
 		}
 		// Runner definitions are a typed API, but embedders/plugins can still
@@ -1491,6 +1473,20 @@ async function runGroup(
 				? result.claimSource
 				: undefined;
 
+		// #5258: a tool that could not be found is a degradation the session
+		// states once per (runner, cause), not once per edit. A missing config or a
+		// project policy is the project's own choice and rides the per-run latency
+		// row's `skipReason` instead.
+		if (
+			skipReason !== undefined &&
+			TOOL_UNUSABLE_SKIP_REASONS.some((reason) => reason === skipReason)
+		)
+			recordDegradationOnce({
+				kind: "runner-skip-cause",
+				subject: `${runnerId}:${skipReason}`,
+				reason: `${runnerId} did not run: ${SKIP_REASON_PHRASE[skipReason]}`,
+			});
+
 		latencies.push({
 			runnerId,
 			startTime: runnerStart,
@@ -1503,6 +1499,9 @@ async function runGroup(
 				failureKind: result.failureKind,
 			}),
 			...(result.inconclusive === true && { inconclusive: true as const }),
+			...(result.inconclusiveReason !== undefined && {
+				inconclusiveReason: result.inconclusiveReason,
+			}),
 			...(skipReason !== undefined && {
 				skipReason,
 			}),
@@ -1545,8 +1544,14 @@ async function runGroup(
 					: undefined,
 			metadata:
 				failureRowMetadata(result) ??
-				(skipReason
-					? { skipReason, ...(claimSource !== undefined && { claimSource }) }
+				(skipReason !== undefined || result.inconclusiveReason !== undefined
+					? {
+							...(skipReason !== undefined && { skipReason }),
+							...(result.inconclusiveReason !== undefined && {
+								inconclusiveReason: result.inconclusiveReason,
+							}),
+							...(claimSource !== undefined && { claimSource }),
+						}
 					: undefined),
 		});
 		// #4483: a pre-edit capture reads bytes the host is about to replace,
@@ -1568,8 +1573,11 @@ async function runGroup(
 			d.runnerId ??= runnerId;
 			outOfEditScope.push(d);
 		}
-		if (reachedNoVerdict(result)) inconclusiveRunnerIds.push(runnerId);
-		else {
+		if (reachedNoVerdict(result)) {
+			inconclusiveRunnerIds.push(runnerId);
+			if (result.answeredServerIds?.length)
+				answeredServerIds.push([runnerId, result.answeredServerIds]);
+		} else {
 			answeredRunnerIds.push(runnerId);
 			if (result.coveredBy)
 				coveredRunners.push({
@@ -1606,6 +1614,7 @@ async function runGroup(
 		outOfEditScope,
 		inconclusiveRunnerIds,
 		inconclusiveServerIds,
+		answeredServerIds,
 		collectLaterRunnerIds,
 		editScopedRunnerIds,
 		answeredRunnerIds,
@@ -1673,7 +1682,8 @@ export async function dispatchForFile(
 	if (generated) return generated;
 	if (ctx.analysisRootMode === "adopted") {
 		// #4242 phase A (per-file linters): an adopted root runs ONLY the explicit
-		// admission list of config-free, code-free runners, and only from global or
+		// admission list. LSP delegates execution trust to the client registry;
+		// CLI runners are config-free and code-free, and only use global or
 		// pi-lens-managed binaries. The default is refused, so a newly registered
 		// runner stays off an adopted root until `ADOPTED_ROOT_RUNNER_ALLOWLIST`
 		// admits it. Whole-project scanners and test runners are not in the plan
@@ -1787,6 +1797,7 @@ export async function dispatchForFile(
 	const outOfEditScope: Diagnostic[] = [];
 	const inconclusiveRunnerIds = new Set<string>();
 	const inconclusiveServerIds = new Set<string>();
+	const answeredServerIds = new Map<string, readonly string[]>();
 	const collectLaterRunnerIds = new Set<string>();
 	const editScopedRunnerIds: string[] = [];
 	const answeredRunnerIds = new Set<string>();
@@ -1798,6 +1809,7 @@ export async function dispatchForFile(
 		outOfEditScope: groupOutOfScope,
 		inconclusiveRunnerIds: groupRunnerIds,
 		inconclusiveServerIds: groupServerIds,
+		answeredServerIds: groupAnsweredServers,
 		collectLaterRunnerIds: groupCollectLater,
 		editScopedRunnerIds: groupEditScoped,
 		answeredRunnerIds: groupAnswered,
@@ -1807,6 +1819,10 @@ export async function dispatchForFile(
 		outOfEditScope.push(...groupOutOfScope);
 		for (const id of groupRunnerIds) inconclusiveRunnerIds.add(id);
 		for (const id of groupServerIds) inconclusiveServerIds.add(id);
+		for (const [runnerId, ids] of groupAnsweredServers)
+			answeredServerIds.set(runnerId, [
+				...new Set([...(answeredServerIds.get(runnerId) ?? []), ...ids]),
+			]);
 		for (const id of groupCollectLater) collectLaterRunnerIds.add(id);
 		editScopedRunnerIds.push(...groupEditScoped);
 		for (const id of groupAnswered) answeredRunnerIds.add(id);
@@ -1906,11 +1922,23 @@ export async function dispatchForFile(
 		const overlap = suppressLintOverlapsWithLsp(dockerOverlap);
 		// #5044: inline comments and dispositions belong to the file a finding
 		// NAMES, not the edited one (see `applyFindingPolicyByOwner`).
+		// The STOP block renders `L<n>: <message>` with no tool (and often the
+		// rule folded into the message), so a mark made from it carries no tool
+		// and may carry no rule: accept the same spellings the turn-end re-serve
+		// of that block accepts (#3246), or the live block re-reports a finding
+		// the agent already marked. The block shows blockers only, so only a
+		// blocker takes those spellings; any other finding keeps its own
+		// identity, or a tool-less weak mark would hide it at any line (#5711
+		// review r1 F1).
 		const { disposed: disposition } = applyFindingPolicyByOwner(overlap, {
 			cwd: rulePolicyRoot,
 			filePath: ctx.filePath,
 			content: fileContent,
 			policyMap: undefined,
+			identities: (d) =>
+				d.semantic === "blocking"
+					? inlineBlockerIdentities(d)
+					: [{ tool: d.tool, ...(d.rule !== undefined && { rule: d.rule }) }],
 		});
 		return applyRulePolicy(disposition, rulePolicy, {
 			root: rulePolicyRoot,
@@ -1962,17 +1990,18 @@ export async function dispatchForFile(
 		);
 		// #4484 r2: an unused value is a blocker only while the delta calls it
 		// new. Held back as already seen, it is still observed, promoted as it
-		// was when it was recorded, so the record keeps it pending.
+		// was when it was recorded, so the record keeps it pending. #5416: so is
+		// a class member the merge below raised.
 		stillObserved.push(
 			...promoteDeltaUnusedToBlockers(
 				visibleDiagnostics.flatMap((d) =>
 					!isNew.has(d) &&
 					d.semantic !== "blocking" &&
-					isUnusedValueDiagnostic(d)
+					(isUnusedValueDiagnostic(d) || blocksAsClassMember(d))
 						? [d]
 						: [],
 				),
-			),
+			).map(withClassSeverity),
 		);
 		visibleDiagnostics = promoteDeltaUnusedToBlockers(filtered.new);
 		resolvedCount = filtered.fixed.length;
@@ -1997,13 +2026,18 @@ export async function dispatchForFile(
 		const classified = classifyPreExisting(
 			preEditSeed,
 			[
-				...visibleDiagnostics.filter((d) => d.semantic === "blocking"),
+				// #5416: and a class member the merge below would raise, so the
+				// seed holds it before the raise can block on it.
+				...visibleDiagnostics.filter(
+					(d) => d.semantic === "blocking" || blocksAsClassMember(d),
+				),
 				...heldBackBlockers,
 			],
 			seedContent,
 			new Set(
 				[...answeredRunnerIds].filter((id) => !inconclusiveRunnerIds.has(id)),
 			),
+			ctx.modifiedRanges,
 		);
 		if (classified.preExisting.length > 0) {
 			const held = new Set(classified.preExisting);
@@ -2013,6 +2047,7 @@ export async function dispatchForFile(
 		}
 		ctx.facts.setBoundedSessionFact(seedKey, classified.nextSeed);
 	}
+	visibleDiagnostics = mergeFindingClasses(visibleDiagnostics, preExisting);
 
 	// Persist full current snapshot for next run (not delta-filtered subset).
 	// Gated on `baselinePathSafe` too: a non-absolute `ctx.filePath` already
@@ -2066,7 +2101,12 @@ export async function dispatchForFile(
 
 	// Format output — only blocking issues shown inline
 	// Warnings tracked but not shown (noise) — surfaced via lens_diagnostics
-	const blockerOutput = formatDiagnostics(inlineBlockers, "blocking");
+	const blockerOutput = formatDiagnostics(
+		inlineBlockers,
+		"blocking",
+		undefined,
+		{ editedFile: ctx.filePath, root: ctx.projectRoot ?? ctx.cwd },
+	);
 	let output = blockerOutput;
 	output += formatDiagnostics(inlineFixed, "fixed");
 	// #4638 r3 (N2): findings a runner withheld on purpose are named on the same
@@ -2130,6 +2170,25 @@ export async function dispatchForFile(
 	// Log summary to latency log only (not console - avoid noise)
 	const sumMs = runnerLatencies.reduce((s, r) => s + r.durationMs, 0);
 	const wallClockMs = latencyReport.totalDurationMs;
+	const runnerMetadata = runnerLatencies.map((r) => {
+		const row: {
+			id: string;
+			startedAt: string;
+			duration: number;
+			status: RunnerLatency["status"];
+			skipReason?: RunnerSkipReason;
+			inconclusiveReason?: RunnerLatency["inconclusiveReason"];
+		} = {
+			id: r.runnerId,
+			startedAt: new Date(r.startTime).toISOString(),
+			duration: r.durationMs,
+			status: r.status,
+		};
+		if (r.skipReason !== undefined) row.skipReason = r.skipReason;
+		if (r.inconclusiveReason !== undefined)
+			row.inconclusiveReason = r.inconclusiveReason;
+		return row;
+	});
 	logLatency({
 		type: "tool_result",
 		filePath: ctx.filePath,
@@ -2139,12 +2198,7 @@ export async function dispatchForFile(
 		parallelGainMs: Math.max(0, sumMs - wallClockMs),
 		result: "dispatch_complete",
 		metadata: {
-			runners: runnerLatencies.map((r) => ({
-				id: r.runnerId,
-				startedAt: new Date(r.startTime).toISOString(),
-				duration: r.durationMs,
-				status: r.status,
-			})),
+			runners: runnerMetadata,
 			totalDiagnostics: visibleDiagnostics.length,
 			blockers: blockers.length,
 			// #2489 round 2: distinguishes a delta baseline HIT (a prior snapshot
@@ -2193,6 +2247,7 @@ export async function dispatchForFile(
 				runnerIds: [...inconclusiveRunnerIds],
 				serverIds: [...inconclusiveServerIds],
 				collectLaterRunnerIds: [...collectLaterRunnerIds],
+				...(answeredServerIds.size > 0 && { answeredServerIds }),
 			},
 		}),
 		verdict,
@@ -2264,11 +2319,66 @@ function failureRowMetadata(result: RunnerResult):
 	return result.inconclusive === true ? inconclusive : undefined;
 }
 
+/**
+ * Record one finished runner run against the observed tier: the latency
+ * observation itself, one `runner_collect_later_tier_flip` row when it moved
+ * the runner's tier, and one `runner-collect-later` count while it is (still)
+ * slow. Shared by the collect-later run and the inline run.
+ */
+function observeRunnerTier(options: {
+	filePath: string;
+	projectRoot: string;
+	runnerId: string;
+	observedTier: CollectLaterTier;
+	durationMs: number;
+	result: RunnerResult;
+}): void {
+	const { filePath, projectRoot, runnerId, observedTier, durationMs } = options;
+	const tier = observeRunnerLatency({
+		projectRoot,
+		runnerId,
+		durationMs,
+		timedOut: options.result.failureKind === "timeout",
+	});
+	if (tier !== observedTier) {
+		logLatency({
+			type: "phase",
+			filePath,
+			phase: "runner_collect_later_tier_flip",
+			durationMs: 0,
+			metadata: { runnerId, from: observedTier, to: tier, projectRoot },
+		});
+	}
+	if (tier === "collect-later") {
+		incrementDegradationCount({
+			kind: "runner-collect-later",
+			subject: `${projectRoot}:${runnerId}`,
+			reason: `observed ${durationMs}ms, threshold ${COLLECT_LATER_THRESHOLD_MS}ms`,
+		});
+	}
+}
+
 async function runRunner(
 	ctx: DispatchContext,
 	runner: RunnerDefinition,
 	defaultSemantic: OutputSemantic,
+	options: {
+		holdFlightUntilSettled?: boolean;
+		/** The dispatch an inline claim belongs to (#5547 F7). */
+		dispatch?: DispatchContext;
+	} = {},
 ): Promise<RunnerResult> {
+	// #5413: a runner whose own spawn timed out this session is not run again,
+	// not even for its availability probe: a wedged binary does not heal between
+	// edits. "Not checked", never clean; the skip is recorded once per session.
+	if (isInSpawnTimeoutCooldown(runner.id)) {
+		recordDegradationOnce({
+			kind: "runner-spawn-timeout-cooldown",
+			subject: runner.id,
+			reason: "skipped: its spawn timed out earlier this session",
+		});
+		return { status: "skipped", diagnostics: [], semantic: "none" };
+	}
 	const timeoutMs = Math.max(
 		runner.timeoutMs ?? RUNNER_TIMEOUT_MS,
 		getRunnerTimeoutFloorMs(),
@@ -2287,11 +2397,30 @@ async function runRunner(
 		// `withBudget` settles `undefined` when the budget lapses; boxing the
 		// runner's value tells that apart from a runner that resolved nothing.
 		// The message keeps the words `failureKind` is classified from below.
-		const outcome = await withBudget(
-			runner.run(ctx).then((value) => ({ value })),
-			timeoutMs,
-		);
+		// #5413: every spawn the runner reaches arms ITS cooldown on a timeout.
+		const runnerPromise = spawnCooldownScope
+			.run({ tool: runner.id, subject: runner.id, phase: "lint" }, () =>
+				runner.run(ctx),
+			)
+			.then((value) => ({ value }));
+		// Claim before the first await: concurrent first writes must see this run,
+		// even before its budget observation promotes it to collect-later (#5547).
+		if (ctx.writeIndex !== undefined && !options.holdFlightUntilSettled) {
+			holdFlight(
+				runnerFlightKey(ctx.projectRoot ?? ctx.cwd, runner.id),
+				runnerPromise,
+				options.dispatch,
+			);
+		}
+		const outcome = await withBudget(runnerPromise, timeoutMs);
 		if (outcome === undefined) {
+			// A collect-later flight must remain occupied while its child is still
+			// alive. The budget still determines the timeout result, but releasing
+			// the flight at that point starts a second child on the next write
+			// (#5547). Runner-owned spawn timeouts bound this wait and settle the
+			// same cooldown transition as a successful runner.
+			if (options.holdFlightUntilSettled)
+				await Promise.allSettled([runnerPromise]);
 			throw new Error(`Runner ${runner.id} timed out after ${timeoutMs}ms`);
 		}
 		const result = outcome.value;

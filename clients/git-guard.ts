@@ -19,7 +19,14 @@ import {
 	sameCheckoutOtherRoot,
 	type GitCheckout,
 } from "./review-graph/git-identity.js";
-import { decodeShellWords, type DecodedShellWord } from "./bash-file-access.js";
+import {
+	decodeShellCommand,
+	decodeShellWords,
+	type DecodedShellWord,
+	type DecodedSimpleCommand,
+	type ShellSubstitution,
+	shellSubstitutions,
+} from "./bash-file-access.js";
 import {
 	incrementDegradationCount,
 	recordDegradationOnce,
@@ -63,6 +70,25 @@ export interface TurnEndFindingsCache {
 	 * leaves it staged. Absent on every record released before #5240.
 	 */
 	repeat?: boolean | undefined;
+	/**
+	 * #5532: each blocker section behind a repeat, in full, for the retained-
+	 * injection check, whatever the repeat renders (a collapsed blocker is a
+	 * pointer line, not its text). Absent on every record released before #5532.
+	 */
+	repeatBodies?: string[] | undefined;
+	/**
+	 * #5532: how `content` renders each inline blocker it carries within the
+	 * turn-end cap, written by a pi turn end only. The request that takes the
+	 * message counts these (`consumeTurnEndFindings`), the one count site.
+	 * Absent on every record released before #5532: such a record counts nothing.
+	 */
+	blockerDeliveries?:
+		| Array<{
+				filePath: string;
+				displayPath: string;
+				shown: "full" | "collapsed";
+		  }>
+		| undefined;
 	testFailures?: boolean;
 	testFailureContent?: string;
 	testFailureFiles?: string[];
@@ -104,7 +130,7 @@ export interface BlockerPartition {
 	blockerWrittenAt?: number | undefined;
 }
 
-type GuardDecision = {
+export type GuardDecision = {
 	block: boolean;
 	unknown?: boolean;
 	reason?: string;
@@ -407,47 +433,36 @@ function canonicalizeGuardCommand(command: string): string {
 			result += ch;
 			continue;
 		}
+		if (ch === "\\") {
+			// Outside quotes a backslash escapes the next character, a quote or
+			// a `$` included: `echo \'; git${IFS}commit` still folds the second
+			// word, and `\$IFS` is literal text (#5649).
+			result += ch + (command[i + 1] ?? "");
+			i += 1;
+			continue;
+		}
 		const parameter = command.slice(i).match(/^\$\{IFS[^}]*\}/)?.[0];
 		const positional = command.slice(i).match(/^\$IFS(?:\$[0-9]+)?/)?.[0];
 		if (parameter || positional) {
-			result += " ";
-			i += (parameter ?? positional ?? "").length - 1;
+			const length = (parameter ?? positional ?? "").length;
+			// Bash removes each `\<newline>` before it reads words, so
+			// `$IFS\<newline>#` is `$IFS#`: one word, no comment. The blank this
+			// fold writes would make a comment; escape that `#` and drop the
+			// pairs before it (#5649).
+			let next = i + length;
+			while (command[next] === "\\" && command[next + 1] === "\n") next += 2;
+			if (command[next] === "#") {
+				result += " \\";
+				i = next - 1;
+			} else {
+				result += " ";
+				i += length - 1;
+			}
 			continue;
 		}
 		result += ch;
 	}
-	let collapsed = "";
-	let pendingSpace = false;
-	quote = undefined;
-	// This pass does not know ANSI-C strings (#4739): on `$'\''` its quote state
-	// flips, and only which blanks it collapses changes. The lexer splits on
-	// every blank either way, and no decision reads the collapsed blanks.
-	for (const ch of result) {
-		if (!quote && ch === "\n") {
-			collapsed += ch;
-			pendingSpace = false;
-			continue;
-		}
-		if (!quote && /\s/.test(ch)) {
-			pendingSpace = collapsed.length > 0;
-			continue;
-		}
-		if (pendingSpace) collapsed += " ";
-		pendingSpace = false;
-		collapsed += ch;
-		if (!quote && (ch === "'" || ch === '"')) {
-			quote = ch === "'" ? "single" : "double";
-		} else if (
-			(quote === "single" && ch === "'") ||
-			(quote === "double" && ch === '"')
-		) {
-			quote = undefined;
-		}
-	}
-	// Not the trailing end: a backslash-newline there is a line continuation
-	// that joins the last word to nothing, and `git push\<newline>` is
-	// `git push` (#4739).
-	return collapsed.trimStart();
+	return result;
 }
 
 /** Normalize only a command-position token; never apply this to path args. */
@@ -459,53 +474,9 @@ function normalizeGuardVerbToken(value: string): string {
 }
 
 function expandGuardVerbToken(value: string): string[] {
-	return normalizeGuardVerbToken(value).trim().split(/\s+/).filter(Boolean);
-}
-
-function delimitedSubstitutionBody(
-	command: string,
-	start: number,
-	opener: string,
-	closer: string,
-): { body: string; end: number } | undefined {
-	let depth = 1;
-	let quote: "single" | "double" | undefined;
-	let ansiC = false;
-	let escaped = false;
-	for (let i = start + opener.length; i < command.length; i++) {
-		const ch = command[i];
-		if (quote === "single") {
-			if (ansiC && ch === "\\") i += 1;
-			else if (ch === "'") quote = undefined;
-			continue;
-		}
-		if (quote === "double" && ch === '"') {
-			quote = undefined;
-			continue;
-		}
-		if (escaped) {
-			escaped = false;
-			continue;
-		}
-		if (ch === "\\") {
-			escaped = true;
-			continue;
-		}
-		if (ch === "'" || ch === '"') {
-			quote = ch === "'" ? "single" : "double";
-			ansiC = ch === "'" && opensAnsiC(command, i);
-			continue;
-		}
-		if (command.startsWith(opener, i)) {
-			depth += 1;
-			i += opener.length - 1;
-			continue;
-		}
-		if (command.startsWith(closer, i) && --depth === 0) {
-			return { body: command.slice(start + opener.length, i), end: i };
-		}
-	}
-	return undefined;
+	return normalizeGuardVerbToken(value)
+		.split(/[ \t\n]+/)
+		.filter(Boolean);
 }
 
 /**
@@ -559,65 +530,52 @@ const COMMIT_PUSH_MATCHER: GitVerbMatcher = {
 	suppressPostVerbHelp: false,
 };
 
+/**
+ * Every command substitution `command` runs, each body put through the same
+ * canonical pass as the command (the one parser: `shellSubstitutions`).
+ */
+function guardSubstitutions(command: string): {
+	bodies: ShellSubstitution[];
+	complete: boolean;
+} {
+	const found = shellSubstitutions(command);
+	return {
+		bodies: found.bodies.map(({ body, depth }) => ({
+			body: canonicalizeGuardCommand(body),
+			depth,
+		})),
+		complete: found.complete,
+	};
+}
+
+/**
+ * Whether a command substitution of `command` runs a verb `matcher` governs.
+ * A read that does not finish (see `shellSubstitutions`) answers yes when the
+ * text names such a verb anywhere: the part it could not read may run it, and
+ * a here-doc misread swallowed a whole commit that way (#5553 R4-2). That
+ * holds only where bash reads `command` (`lexer` "bash"): in other text a `'`
+ * or a backtick is a character, and `--body "Don't push yet"` is no command
+ * (#5652 r2).
+ */
 function containsGuardedSubstitution(
 	command: string,
-	depth: number,
 	matcher: GitVerbMatcher,
+	lexer: "bash" | "text",
 ): boolean {
-	if (depth > 3) return false;
-	let quote: "single" | "double" | undefined;
-	let ansiC = false;
-	let escaped = false;
-	for (let i = 0; i < command.length; i++) {
-		const ch = command[i];
-		if (quote === "single") {
-			if (ansiC && ch === "\\") i += 1;
-			else if (ch === "'") quote = undefined;
-			continue;
-		}
-		if (quote === "double" && ch === '"') {
-			quote = undefined;
-			continue;
-		}
-		if (escaped) {
-			escaped = false;
-			continue;
-		}
-		if (ch === "\\") {
-			escaped = true;
-			continue;
-		}
-		if (ch === '"' || ch === "'") {
-			quote = ch === "'" ? "single" : "double";
-			ansiC = ch === "'" && opensAnsiC(command, i);
-			continue;
-		}
-		const substitution = command.startsWith("$(", i)
-			? delimitedSubstitutionBody(command, i, "$(", ")")
-			: command.startsWith("<(", i)
-				? delimitedSubstitutionBody(command, i, "<(", ")")
-				: command.startsWith(">(", i)
-					? delimitedSubstitutionBody(command, i, ">(", ")")
-					: ch === "`"
-						? {
-								body: command.slice(i + 1, command.indexOf("`", i + 1)),
-								end: command.indexOf("`", i + 1),
-							}
-						: undefined;
-		if (substitution && substitution.end >= 0) {
-			const nested = canonicalizeGuardCommand(substitution.body);
-			if (
-				containsGuardedSubstitution(nested, depth + 1, matcher) ||
-				decodeShellWords(nested).some((segment) =>
-					containsGuardedGitVerb(segment.words, depth + 1, matcher),
-				)
-			) {
-				return true;
-			}
-			i = substitution.end;
-		}
-	}
-	return false;
+	const read = guardSubstitutions(command);
+	if (lexer === "bash" && !read.complete && namesGuardedVerb(command, matcher))
+		return true;
+	return read.bodies.some((substitution) =>
+		decodeShellWords(substitution.body).some((segment) =>
+			containsGuardedGitVerb(segment.words, substitution.depth, matcher),
+		),
+	);
+}
+
+/** A word of `command`, quotes and backslashes dropped, that `matcher` governs. */
+function namesGuardedVerb(command: string, matcher: GitVerbMatcher): boolean {
+	const words = command.replace(/['"\\]/g, "").split(/[^\w-]+/);
+	return words.some((word) => matcher.matchesVerb(word, words));
 }
 
 /** Git global options that consume the following token as their value. */
@@ -648,6 +606,23 @@ const GIT_GLOBAL_OPTIONS_WITH_INLINE_VALUE = [
  * Shared by the direct and indirect paths so both ask the same question about
  * the same position (#2007).
  */
+/** #5553: the commit half of {@link COMMIT_PUSH_MATCHER}, for the staged-delta read. */
+const COMMIT_ONLY_MATCHER: GitVerbMatcher = {
+	id: "commit",
+	matchesVerb: (verb) => verb === "commit",
+	indirectAlwaysMatches: true,
+	suppressPostVerbHelp: false,
+};
+
+/**
+ * #5553: whether the command may run `git commit`, in any form the gate's
+ * matcher reads (indirect launchers included). A push alone stages and
+ * commits nothing.
+ */
+export function mayRunGitCommit(toolName: string, input: unknown): boolean {
+	return detectGuardedGitVerb(toolName, input, COMMIT_ONLY_MATCHER);
+}
+
 function gitVerbIndex(gitTokens: string[]): number | undefined {
 	let i = 1;
 	while (i < gitTokens.length && gitTokens[i].startsWith("-")) {
@@ -809,18 +784,67 @@ export function collectGitInvocations(
 }
 
 /**
+ * Who reads a command string (#5652 r2). `bash`: bash lexes all of it
+ * (`eval`, `nix-shell --run`). `posix-c`: a POSIX shell's `-c`, which lexes
+ * its first word; the words after it are its `$0` and positional parameters.
+ * `text`: no grammar the gate knows (an unknown launcher's switch value, a
+ * word after one the model cannot read). `windows-shell`: PowerShell or cmd.
+ */
+type CommandStringReader = "bash" | "posix-c" | "text" | "windows-shell";
+
+/**
+ * What a `text` command string costs of the depth a shell's string spends
+ * whole (#5652 r3). A chain of launchers (`ssh -t h sudo -u u docker exec -ti
+ * c sh -c '…'`) is ordinary and reads one `text` level per switch, so a whole
+ * level each would end the read at the fourth launcher and refuse it. None at
+ * all would read `find` with a thousand `-o` terms a thousand levels deep:
+ * quadratic, and past the stack. An eighth ends the read after 24 launchers.
+ */
+const TEXT_LEVEL = 1 / 8;
+
+/**
  * A command string is a shell's, so its words are lexed again as one (the
  * decoded text of each word, joined): `bash -c $'git\x20push'` reads
- * `git push` (#4739 round 5).
+ * `git push` (#4739 round 5). `callerDepth` is the caller's level; the string
+ * is read one shell level deeper, or {@link TEXT_LEVEL} deeper as `text`.
  */
 function commandStringHasGuardedVerb(
 	words: readonly DecodedShellWord[],
-	depth: number,
+	callerDepth: number,
 	matcher: GitVerbMatcher,
+	reader: CommandStringReader,
 ): boolean {
-	return decodeShellWords(
-		canonicalizeGuardCommand(words.map((word) => word.text).join(" ")),
-	).some((segment) => containsGuardedGitVerb(segment.words, depth, matcher));
+	const depth = callerDepth + (reader === "text" ? TEXT_LEVEL : 1);
+	// PowerShell and cmd read their own whitespace: Char.IsWhiteSpace, which
+	// holds NBSP, U+0085, the Unicode spaces, CR, VT and FF
+	// (CharTraits.IsWhitespace in the PowerShell parser). Bash's blanks apply
+	// to the bash path only; `pwsh -Command "git<NBSP>commit"` is a commit (#5649).
+	const canonical = (part: readonly DecodedShellWord[]) => {
+		const joined = part.map((word) => word.text).join(" ");
+		return canonicalizeGuardCommand(
+			reader === "windows-shell" ? joined.replace(/[^\S\n]/g, " ") : joined,
+		);
+	};
+	const command = canonical(words);
+	// A substitution in the string runs, whatever the word before it
+	// (`bash -c 'echo $(git commit)'`, #5652). In a `-c` only its body word is
+	// lexed: `bash -c 'echo ok' '$(git commit)'` commits nothing, and a body
+	// that reads its parameters (`"$@"`, `eval "$1"`) is the word walk's. An
+	// option word after `-c` (`bash -c -e '…'`) leaves the body unknown.
+	const lexed =
+		reader === "posix-c" && !/^[-+]/.test(words[0]?.text ?? "")
+			? canonical(words.slice(0, 1))
+			: command;
+	return (
+		containsGuardedSubstitution(
+			lexed,
+			matcher,
+			reader === "bash" || reader === "posix-c" ? "bash" : "text",
+		) ||
+		decodeShellWords(command).some((segment) =>
+			containsGuardedGitVerb(segment.words, depth, matcher),
+		)
+	);
 }
 
 /**
@@ -857,7 +881,7 @@ function hidesGuardedVerb(
 				(word) =>
 					(firstHidden === 0 && word.hidden) ||
 					matcher.matchesVerb(word.text, []) ||
-					commandStringHasGuardedVerb([word], depth + 1, matcher),
+					commandStringHasGuardedVerb([word], depth, matcher, "text"),
 			)
 	);
 }
@@ -867,7 +891,12 @@ function containsGuardedGitVerb(
 	depth: number,
 	matcher: GitVerbMatcher,
 ): boolean {
-	if (depth > 3 || words.length === 0) return false;
+	if (words.length === 0) return false;
+	// Past three levels the gate reads no further, so it answers as a read
+	// that does not finish does: a word naming a governed verb may run it
+	// (`echo $(echo $(eval "sh -c \"git commit\""))`, #5652 r2).
+	if (depth > 3)
+		return namesGuardedVerb(words.map((word) => word.text).join(" "), matcher);
 	let commandWords = words;
 	while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(commandWords[0]?.text ?? "")) {
 		commandWords = commandWords.slice(1);
@@ -890,8 +919,9 @@ function containsGuardedGitVerb(
 		if (runIndex >= 0 && runIndex + 1 < commandTokens.length) {
 			return commandStringHasGuardedVerb(
 				commandWords.slice(runIndex + 2),
-				depth + 1,
+				depth,
 				matcher,
+				"bash",
 			);
 		}
 	}
@@ -909,7 +939,9 @@ function containsGuardedGitVerb(
 	// `eval "git push"` is the `git push` it runs (#4739 round 3). Like a
 	// non-leading git, an `eval` after the first word is read too: `builtin eval`,
 	// `command eval` and `if eval` run it (round 4). A string built by data flow
-	// (`eval "$CMD"`) stays out of reach: it exists only at run time.
+	// (`eval "$CMD"`) stays out of reach: it exists only at run time. Only a
+	// leading `eval` is surely bash's; a later one may be an argument
+	// (`npm run eval -- --note "it's a push"`), so its text is read as text.
 	const evalIndex = commandTokens.findIndex(
 		(token) => executableName(token) === "eval",
 	);
@@ -917,8 +949,9 @@ function containsGuardedGitVerb(
 		evalIndex >= 0 &&
 		commandStringHasGuardedVerb(
 			commandWords.slice(evalIndex + 1),
-			depth + 1,
+			depth,
 			matcher,
+			evalIndex === 0 ? "bash" : "text",
 		)
 	) {
 		return true;
@@ -966,17 +999,25 @@ function containsGuardedGitVerb(
 		if (commandIndex >= commandTokens.length) return false;
 		return commandStringHasGuardedVerb(
 			commandWords.slice(commandIndex),
-			depth + 1,
+			depth,
 			matcher,
+			"text",
 		);
 	}
+	const windowsShell = ["pwsh", "powershell", "cmd"].includes(
+		executableName(leadingExecutable),
+	);
+	// A POSIX shell takes `-c` anywhere in a flag cluster (`bash -ce`, `-eci`,
+	// #5652 r3). PowerShell options hold a `c` too (`-noninteractive`), so
+	// there only a cluster ending in `c` is the switch.
+	const commandCluster = windowsShell ? /^-[^-]*c$/ : /^-[^-]*c[^-]*$/;
 	const lower = commandTokens.slice(1).map((token) => token.toLowerCase());
 	const switchIndex = lower.findIndex(
 		(token) =>
 			token === "-c" ||
 			token === "--run" ||
 			token === "-lc" ||
-			(/^-[^-]*c$/.test(token) && !token.startsWith("--")) ||
+			(commandCluster.test(token) && !token.startsWith("--")) ||
 			token === "/c" ||
 			token === "-command" ||
 			token === "-command:" ||
@@ -994,8 +1035,9 @@ function containsGuardedGitVerb(
 	if (commandTokens[commandIndex] === "--") commandIndex += 1;
 	return commandStringHasGuardedVerb(
 		commandWords.slice(commandIndex),
-		depth + 1,
+		depth,
 		matcher,
+		windowsShell ? "windows-shell" : "posix-c",
 	);
 }
 
@@ -1016,7 +1058,7 @@ export function detectGuardedGitVerb(
 	const command = getShellCommand(input);
 	if (!command) return false;
 	const canonical = canonicalizeGuardCommand(command);
-	if (containsGuardedSubstitution(canonical, 0, matcher)) return true;
+	if (containsGuardedSubstitution(canonical, matcher, "bash")) return true;
 	return decodeShellWords(canonical).some((segment) =>
 		containsGuardedGitVerb(segment.words, 0, matcher),
 	);
@@ -1120,7 +1162,7 @@ export function resolveCommitScope(
 	const command = getShellCommand(input);
 	if (!command) return undefined;
 	const canonical = canonicalizeGuardCommand(command);
-	if (containsGuardedSubstitution(canonical, 0, COMMIT_PUSH_MATCHER)) {
+	if (containsGuardedSubstitution(canonical, COMMIT_PUSH_MATCHER, "bash")) {
 		return undefined;
 	}
 	const trees: GitCheckout[] = [];
@@ -1170,6 +1212,455 @@ export function resolveCommitScope(
 			);
 		},
 	};
+}
+
+/**
+ * #5553: one `git` command the staged-delta read replays, as bash would run
+ * it: the directory, the variables git reads that the command sets (an
+ * `export` before it, an assignment or `env` before `git`), the words between
+ * `git` and its verb, and the words after the verb.
+ */
+export interface ReplayedGit {
+	cwd: string;
+	env: Readonly<Record<string, string>>;
+	globals: readonly string[];
+	args: readonly string[];
+}
+
+/** #5553: a `git add`, `git rm` or `git mv` the read replays before the commit. */
+export interface ReplayedStep extends ReplayedGit {
+	verb: "add" | "rm" | "mv";
+}
+
+/**
+ * #5553: what the staged-delta read replays for a command that may commit:
+ * the index steps that run before the commit, then the commit, or why the
+ * command is not one it can replay.
+ */
+export type StagedCommitPlan =
+	| { steps: readonly ReplayedStep[]; commit: ReplayedGit }
+	| { unresolved: string };
+
+/** Git verbs that read and never write the index or the working files. */
+const READ_ONLY_GIT_VERBS: readonly string[] = [
+	"status",
+	"diff",
+	"log",
+	"show",
+	"rev-parse",
+	"ls-files",
+];
+
+/**
+ * Variables git reads to find its repository, index, config or identity that
+ * a replay carries with their value: git's own repository, index and identity
+ * variables.
+ */
+const REPLAYED_ASSIGNMENTS: readonly string[] = [
+	"GIT_INDEX_FILE",
+	"GIT_DIR",
+	"GIT_WORK_TREE",
+	"GIT_AUTHOR_NAME",
+	"GIT_AUTHOR_EMAIL",
+	"GIT_AUTHOR_DATE",
+	"GIT_COMMITTER_NAME",
+	"GIT_COMMITTER_EMAIL",
+	"GIT_COMMITTER_DATE",
+];
+
+/** Git variables that change how git talks, never what a commit carries. */
+const UNREPLAYED_GIT_VARIABLES: readonly string[] = [
+	"GIT_PAGER",
+	"GIT_EDITOR",
+	"GIT_TERMINAL_PROMPT",
+];
+
+/**
+ * Variables outside `GIT_*` that git reads to find its binary or its config
+ * (git(1), ENVIRONMENT VARIABLES and FILES): a command that sets one is not
+ * replayed.
+ */
+const GIT_LOCATING_VARIABLES: readonly string[] = [
+	"PATH",
+	"HOME",
+	"XDG_CONFIG_HOME",
+];
+
+/**
+ * What a literal assignment does to a replayed git: `carried` into its env,
+ * `ignored` because git does not read the name, or a reason it is not
+ * replayed.
+ */
+function assignmentEffect(
+	word: DecodedSimpleCommand["words"][number],
+): { name: string; value: string; effect: "carried" | "ignored" } | string {
+	const name = word.text.slice(0, word.text.indexOf("="));
+	if (word.hidden || word.tildeExpands)
+		return `the assignment ${name}= the shell expands`;
+	const value = word.text.slice(name.length + 1);
+	if (REPLAYED_ASSIGNMENTS.includes(name))
+		return { name, value, effect: "carried" };
+	if (
+		UNREPLAYED_GIT_VARIABLES.includes(name) ||
+		(!name.startsWith("GIT_") && !GIT_LOCATING_VARIABLES.includes(name))
+	)
+		return { name, value, effect: "ignored" };
+	return `the assignment ${name}=, a variable git reads`;
+}
+
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+/** `timeout` options before its duration, and whether each takes a value. */
+const TIMEOUT_OPTIONS: ReadonlyMap<string, boolean> = new Map([
+	["--preserve-status", false],
+	["--foreground", false],
+	["-k", true],
+	["-s", true],
+]);
+const TIMEOUT_DURATION = /^\d+(\.\d+)?[smhd]?$/;
+
+/**
+ * The index of the first word past the wrappers that run their command
+ * unchanged (`time [-p]`, `timeout [option] DURATION`, `env [NAME=value]`),
+ * applying `env`'s assignments to `env`, or why a wrapper is not replayed.
+ */
+function skipWrappers(
+	words: DecodedSimpleCommand["words"],
+	start: number,
+	env: Record<string, string>,
+): number | { unresolved: string } {
+	let at = start;
+	for (;;) {
+		const head = words[at];
+		if (!head || head.hidden) return at;
+		if (head.text === "time") {
+			at += words[at + 1]?.text === "-p" ? 2 : 1;
+			continue;
+		}
+		if (head.text === "timeout") {
+			at += 1;
+			for (;;) {
+				const word = words[at];
+				if (!word || word.hidden)
+					return { unresolved: "`timeout` with a duration the shell expands" };
+				const takesValue = TIMEOUT_OPTIONS.get(word.text);
+				if (takesValue === undefined) break;
+				const value = words[at + 1];
+				if (takesValue && (!value || value.hidden))
+					return { unresolved: `\`timeout ${word.text}\` with no value` };
+				at += takesValue ? 2 : 1;
+			}
+			const duration = words[at];
+			if (!duration || !TIMEOUT_DURATION.test(duration.text))
+				return { unresolved: `\`timeout ${duration?.text ?? ""}\`` };
+			at += 1;
+			continue;
+		}
+		if (head.text === "env") {
+			at += 1;
+			for (; ; at++) {
+				const word = words[at];
+				if (!word) break;
+				if (word.text.startsWith("-") && !word.hidden)
+					return { unresolved: `\`env ${word.text}\`` };
+				if (!ASSIGNMENT.test(word.text)) break;
+				const assignment = assignmentEffect(word);
+				if (typeof assignment === "string") return { unresolved: assignment };
+				if (assignment.effect === "carried")
+					env[assignment.name] = assignment.value;
+			}
+			continue;
+		}
+		return at;
+	}
+}
+
+/** The commit options whose next word is the message. */
+const MESSAGE_OPTIONS: readonly string[] = ["-m", "--message", "-am"];
+
+/**
+ * The literal a replay passes for a message the shell expands. If it is
+ * really a pathspec (`--author -m "$x"`), git finds no file of that name and
+ * the dry run fails, which refuses.
+ */
+export const REPLAYED_MESSAGE = "pi-lens staged-delta dry run";
+
+/**
+ * A simple command's `git` invocation, or `undefined` when it is not one.
+ * `exported` holds the variables an earlier `export` carried.
+ */
+function readGitCommand(
+	simple: DecodedSimpleCommand,
+	cwd: string,
+	expandedMessage: boolean,
+	exported: Readonly<Record<string, string>> = {},
+): { verb: string; replay: ReplayedGit } | { unresolved: string } | undefined {
+	const words = simple.words;
+	const env: Record<string, string> = { ...exported };
+	let at = 0;
+	for (; ASSIGNMENT.test(words[at]?.text ?? ""); at++) {
+		const word = words[at];
+		if (!word) break;
+		const assignment = assignmentEffect(word);
+		if (typeof assignment === "string") return { unresolved: assignment };
+		if (assignment.effect === "carried")
+			env[assignment.name] = assignment.value;
+	}
+	const past = skipWrappers(words, at, env);
+	if (typeof past !== "number") return past;
+	const head = words[past];
+	if (!head || head.hidden || !SCOPE_GIT_HEADS.includes(head.text))
+		return undefined;
+	const command = words.slice(past);
+	const verbAt = gitVerbIndex(command.map((word) => word.text));
+	const verb = verbAt === undefined ? undefined : command[verbAt];
+	if (verbAt === undefined || !verb || verb.hidden)
+		return { unresolved: "a git command whose verb pi-lens cannot read" };
+	const globals = command.slice(1, verbAt);
+	if (globals.some((word) => word.hidden || word.tildeExpands))
+		return { unresolved: "a git option the shell expands" };
+	const args: string[] = [];
+	for (const word of command.slice(verbAt + 1)) {
+		if (!word.hidden && !word.tildeExpands) args.push(word.text);
+		else if (
+			expandedMessage &&
+			word.singleField &&
+			MESSAGE_OPTIONS.includes(args.at(-1) ?? "")
+		)
+			args.push(REPLAYED_MESSAGE);
+		else return { unresolved: `the word ${word.text} the shell expands` };
+	}
+	return {
+		verb: verb.text,
+		replay: { cwd, env, globals: globals.map((word) => word.text), args },
+	};
+}
+
+/** Why a command a substitution runs may write, or `undefined` when it only reads. */
+function substitutionWrites(simple: DecodedSimpleCommand): string | undefined {
+	const head = simple.words[0];
+	if (!head) return undefined;
+	// An input (a here-doc message) only reads; an output may write a file.
+	if (simple.output) return `\`${head.text}\` with an output redirection`;
+	if (!head.hidden && READ_ONLY_COMMANDS.includes(head.text)) return undefined;
+	const git = readGitCommand(simple, "", false);
+	if (git && "verb" in git && READ_ONLY_GIT_VERBS.includes(git.verb))
+		return undefined;
+	return `\`${head.text}\``;
+}
+
+/** Commands that only read: {@link SCOPE_NEUTRAL_COMMANDS}, `ls` and `pwd`. */
+const READ_ONLY_COMMANDS: readonly string[] = [
+	...SCOPE_NEUTRAL_COMMANDS,
+	"ls",
+	"pwd",
+];
+
+/**
+ * Build, lint and test steps a replay skips: they do not stage (the
+ * maintainer, 2026-11-14). `make` with any literal words; `npm` with one of
+ * these verbs.
+ */
+const NPM_STEP_VERBS: readonly string[] = ["test", "t", "run", "run-script"];
+
+function isBuildStep(words: DecodedSimpleCommand["words"]): boolean {
+	const head = words[0]?.text;
+	if (head === "make") return true;
+	return head === "npm" && NPM_STEP_VERBS.includes(words[1]?.text ?? "");
+}
+
+/** `set` flags and `-o` names that only change when the shell stops. */
+const SET_FLAGS = /^[-+][euxv]*o?$/;
+const SET_OPTIONS: readonly string[] = [
+	"errexit",
+	"nounset",
+	"pipefail",
+	"xtrace",
+	"verbose",
+];
+
+/** Why a `set` changes more than when the shell stops, or `undefined`. */
+function setChanges(words: DecodedSimpleCommand["words"]): string | undefined {
+	for (let at = 1; at < words.length; at++) {
+		const word = words[at];
+		if (
+			!word ||
+			word.hidden ||
+			word.text.length < 2 ||
+			!SET_FLAGS.test(word.text)
+		)
+			return `\`set ${word?.text ?? ""}\``;
+		if (!word.text.endsWith("o")) continue;
+		const option = words[++at];
+		if (!option || !SET_OPTIONS.includes(option.text))
+			return `\`set ${word.text} ${option?.text ?? ""}\``;
+	}
+	return undefined;
+}
+
+/**
+ * Applies an `export` to `exported`, or says why it is not replayed: each
+ * word a literal `NAME=value` (see {@link assignmentEffect}).
+ */
+function exportChanges(
+	words: DecodedSimpleCommand["words"],
+	exported: Record<string, string>,
+): string | undefined {
+	for (const word of words.slice(1)) {
+		if (word.hidden || word.tildeExpands)
+			return "`export` with a word the shell expands";
+		if (!ASSIGNMENT.test(word.text)) return `\`export ${word.text}\``;
+		const assignment = assignmentEffect(word);
+		if (typeof assignment === "string")
+			return `\`export ${word.text.slice(0, word.text.indexOf("="))}\`, a variable git reads`;
+		if (assignment.effect === "carried")
+			exported[assignment.name] = assignment.value;
+	}
+	return undefined;
+}
+
+/** The commit reads its message, and nothing else, from its standard input. */
+function readsMessageFromInput(args: readonly string[]): boolean {
+	return args.some(
+		(arg, at) =>
+			arg === "-F-" ||
+			arg === "--file=-" ||
+			(arg === "-" && (args[at - 1] === "-F" || args[at - 1] === "--file")),
+	);
+}
+
+/**
+ * #5553: the commit a bash command runs, as the staged-delta read replays it
+ * with `git commit --dry-run`. Admitted, and nothing else (gates fail closed):
+ * exactly one command that may commit, a plain `git commit` with literal words
+ * (a double-quoted `-m` value is replaced by {@link REPLAYED_MESSAGE}), behind
+ * `time`, `timeout` or `env` at most (see {@link skipWrappers}), reading a
+ * redirection only as its `-F -` message. Before it, each finishing before the
+ * next starts (`&&` or `;`) with no redirection or group: `cd <existing dir>`,
+ * `export NAME=value`, a `set` of stop flags, a {@link READ_ONLY_COMMANDS}
+ * word, a build step ({@link isBuildStep}), a read-only git verb, a `git add`,
+ * and, before `&&` only, a `git rm` or `git mv`. Every command substitution,
+ * here-doc ones included, runs only reading commands. Anything else is
+ * `unresolved`, which the read refuses: an earlier command (a script,
+ * `git reset`) may change what the commit carries after pi-lens looked.
+ */
+export function planStagedCommit(
+	toolName: string,
+	input: unknown,
+	cwd: string,
+): StagedCommitPlan {
+	if (toolName !== "bash") return { unresolved: `the ${toolName} tool` };
+	const canonical = canonicalizeGuardCommand(getShellCommand(input));
+	const substitutions = guardSubstitutions(canonical);
+	if (!substitutions.complete)
+		return {
+			unresolved:
+				"a quote or command substitution that does not close, or substitutions nested past three levels",
+		};
+	// Every substitution, an unquoted here-doc's included, comes from the one
+	// parser; the decoder's own here-doc commands are not steps of the chain.
+	const commands: DecodedSimpleCommand[] = [];
+	for (const simple of decodeShellCommand(canonical))
+		if (!simple.heredocSubstitution) commands.push(simple);
+	const substituted = substitutions.bodies.flatMap(({ body }) =>
+		decodeShellCommand(body),
+	);
+	for (const simple of substituted) {
+		const writes = substitutionWrites(simple);
+		if (writes) return { unresolved: `a command substitution runs ${writes}` };
+	}
+	const mayCommit = decodeShellWords(canonical).filter((segment) =>
+		containsGuardedGitVerb(segment.words, 0, COMMIT_ONLY_MATCHER),
+	);
+	if (mayCommit.length > 1)
+		return { unresolved: "more than one command that may commit" };
+	const commitAt = commands.findIndex((simple) =>
+		containsGuardedGitVerb(simple.words, 0, COMMIT_ONLY_MATCHER),
+	);
+	if (commitAt < 0)
+		return { unresolved: "git commit run through another command" };
+	let dir = cwd;
+	const exported: Record<string, string> = {};
+	const steps: ReplayedStep[] = [];
+	for (const simple of commands.slice(0, commitAt)) {
+		const words = simple.words;
+		const head = words[0];
+		const name =
+			head?.text === "npm" || head?.text === "export" || head?.text === "set"
+				? words
+						.slice(0, 2)
+						.map((word) => word.text)
+						.join(" ")
+				: (head?.text ?? "");
+		if (simple.exit !== "and" && simple.exit !== "seq")
+			return { unresolved: `\`${name}\` running alongside the commit` };
+		if (simple.grouping || simple.redirected)
+			return { unresolved: `\`${name}\` with a group or a redirection` };
+		if (!head || head.hidden) return { unresolved: `\`${name}\`` };
+		if (head.text === "cd") {
+			const target = words[1];
+			const next =
+				words.length === 2 &&
+				target &&
+				!target.hidden &&
+				!target.tildeExpands &&
+				!target.text.startsWith("-")
+					? path.resolve(dir, target.text)
+					: undefined;
+			if (!next || !isExistingDirectory(next))
+				return { unresolved: "a `cd` pi-lens cannot follow" };
+			dir = next;
+			continue;
+		}
+		if (head.text === "export") {
+			const why = exportChanges(words, exported);
+			if (why) return { unresolved: why };
+			continue;
+		}
+		if (head.text === "set") {
+			const why = setChanges(words);
+			if (why) return { unresolved: why };
+			continue;
+		}
+		if (READ_ONLY_COMMANDS.includes(head.text)) continue;
+		if (isBuildStep(words)) {
+			if (words.some((word) => word.hidden))
+				return { unresolved: `\`${name}\` with a word the shell expands` };
+			continue;
+		}
+		const git = readGitCommand(simple, dir, false, exported);
+		if (git === undefined)
+			return { unresolved: `\`${name}\`, which runs before the commit` };
+		if ("unresolved" in git) return git;
+		if (READ_ONLY_GIT_VERBS.includes(git.verb)) continue;
+		if (git.verb === "add") {
+			steps.push({ verb: "add", ...git.replay });
+			continue;
+		}
+		// A failed `git rm` or `git mv` must stop the commit: the replay of
+		// `git rm` checks less than the real one.
+		if ((git.verb === "rm" || git.verb === "mv") && simple.exit === "and") {
+			steps.push({ verb: git.verb, ...git.replay });
+			continue;
+		}
+		return { unresolved: `git ${git.verb}, which runs before the commit` };
+	}
+	const simple = commands[commitAt];
+	if (!simple || simple.grouping || simple.exit === "background")
+		return { unresolved: "a commit in a group or the background" };
+	const commit = readGitCommand(simple, dir, true, exported);
+	if (!commit) return { unresolved: "git commit run through another command" };
+	if ("unresolved" in commit) return commit;
+	// The one command that may commit is a plain git of another verb
+	// (`git $verb` reads as one that may): nothing to replay it as.
+	if (commit.verb !== "commit")
+		return { unresolved: `git ${commit.verb} that may commit` };
+	// The dry run reads its own input. A redirection that feeds the commit
+	// its message changes nothing it carries; one that feeds anything else
+	// (an answer to `--interactive`, a path list) is not replayed.
+	if (simple.input && !readsMessageFromInput(commit.replay.args))
+		return { unresolved: "a commit that reads a redirection as input" };
+	return { steps, commit: commit.replay };
 }
 
 function isTurnEndFindingsCache(value: unknown): value is TurnEndFindingsCache {
@@ -1849,7 +2340,7 @@ export function writeGitGuardRecord(
 	}
 }
 
-function logDecision(
+export function logDecision(
 	cwd: string,
 	decision: "blocked" | "allowed" | "unknown",
 	reasonCategory: string,
@@ -1983,7 +2474,7 @@ function unconfirmedRecordRemedy(
 	return parts.length > 0 ? `${parts.join(" ")} Then retry.` : undefined;
 }
 
-function unknown(
+export function unknown(
 	cwd: string,
 	reasonCategory: string,
 	metadata = {},

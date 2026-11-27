@@ -199,8 +199,10 @@ it.each([
 				expect(envelope.notes).toContain(
 					"served from documentSymbol fallback; definition timed out.",
 				);
+				// #5482 F1: the fallback points at the symbol's name
+				// (selectionRange), not the start of its body (range).
 				expect(envelope.locations).toMatchObject([
-					{ filePath, range: { start: { line: 1, character: 1 } } },
+					{ filePath, range: { start: { line: 1, character: 10 } } },
 				]);
 				expect(text).toContain("definition timed out");
 				expect(text).toContain("definition.ts");

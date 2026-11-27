@@ -147,7 +147,15 @@ const POPULATION_FILES = [
  * when the files git keeps cannot answer) and the `git diff` in
  * listGitHeadDelta (opaque-mutation-scan.ts, already counted).
  */
-const EXPECTED_FILES = 79;
+// #5087: 79 -> 80, clients/metrics/complexity-baseline.ts (two git reads).
+// #5410: 80 -> 79, clients/lsp/jvm-runtime.ts stopped spawning `which java`:
+// the registry's PATH-only checker probes it.
+// #5553: 79 -> 80, clients/staged-delta.ts (the commit gate's git replay).
+// #5621: 80 -> 81, clients/dispatch/integration.ts (the `git rev-parse` that
+// finds the exclude file for a seed copy).
+// #5410 D9: 81 -> 80, clients/dispatch/runners/utils/lazy-installer.ts deleted
+// (its lazy-install spawns went with it; one direct site, see 127 -> 126 below).
+const EXPECTED_FILES = 80;
 // 135 -> 134 (#4532 round 3): `findBinaryOnPath` stopped spawning
 // `which`/`where` — the bare-command probe resolved its own binary through the
 // path and cwd it was asked to judge, so a project-supplied `which` ran. It is
@@ -162,7 +170,27 @@ const EXPECTED_FILES = 79;
 // caller; each held one direct spawn site, and both are deleted.
 // 129 -> 128 (#5345): the unused module-level ast-grep sweep is deleted; its
 // `probeAstGrepCommandAsync` direct `safeSpawnAsync` site goes with it.
-const EXPECTED_DIRECT_SITES = 128;
+// 128 -> 130 (#5087): the complexity baseline's `git for-each-ref` and
+// `git show` reads of the default branch.
+// 130 -> 127 (#5410): `runJavaProbe`, `verifyOrInstallCommand` and
+// `resolveCommandArgsWithInstallFallback` each held a private spawn; the
+// checker's one probe answers for all three now.
+// 127 -> 128 (#5594): `phpstan dump-parameters --json`, the one spawn that reads
+// the `excludePaths` phpstan resolved, so the runner can anchor them at the
+// project root; its cwd is the runner's `resolveRunnerCwd` binding.
+// 128 -> 129 (#5553): the commit gate's git replay (`runGit` in
+// clients/staged-delta.ts), admitted by name in ORIGIN_ADMISSION_ROWS.
+// 129 -> 130 (#5621): `git rev-parse --git-common-dir` in
+// `ensureSeedCopyExcluded` (clients/dispatch/integration.ts), admitted by name
+// in ORIGIN_ADMISSION_ROWS; its one caller is a NO_CWD_EXEMPTION_ROWS row.
+// 130 -> 129 (#5410 D2): `detectRunner`'s `which pytest` spawn became a PATH
+// walk (`findCommandOnPath`), so its NO_CWD_EXEMPTION_ROWS row went with it.
+// 129 -> 128 (#5410 S5): the sync `findCommand` in `clients/safe-spawn.ts` had
+// no production caller; its `which`/`where` spawn and its row are deleted.
+// 128 -> 127 (#5410 F4): oxlint's `vp --version` probe moved onto the shared
+// resolver, so its spawn site and its wrapper row go.
+// 127 -> 126 (#5410 D9): the lazy installer's direct spawns went with the file.
+const EXPECTED_DIRECT_SITES = 126;
 /**
  * Every same-file spawn-routing wrapper call site the scan discovers. Pinned
  * as a LIST, not a count, because the list is the part round 2 got wrong: it
@@ -188,18 +216,12 @@ const EXPECTED_WRAPPER_SITES = [
 	"clients/dependency-checker.ts:runMadgeSpawn",
 	"clients/dependency-checker.ts:runMadgeSpawn",
 	"clients/dependency-checker.ts:runScanProject",
+	"clients/dispatch/integration.ts:ensureSeedCopyExcluded",
 	"clients/dispatch/runners/biome-check.ts:resolveBiomeFixKinds",
 	"clients/dispatch/runners/helm-lint.ts:lintChart",
 	"clients/dispatch/runners/helm-render.ts:runIacPass",
 	"clients/dispatch/runners/helm-render.ts:renderAndValidate",
-	"clients/dispatch/runners/oxlint.ts:resolveVitePlusCommand",
 	"clients/dispatch/runners/psscriptanalyzer.ts:spawnPs",
-	"clients/dispatch/runners/utils/lazy-installer.ts:performInstall",
-	"clients/dispatch/runners/utils/lazy-installer.ts:runLazyInstall",
-	"clients/dispatch/runners/utils/lazy-installer.ts:runLazyInstall",
-	"clients/dispatch/runners/utils/runner-helpers.ts:resolveCommandWithInstallFallback",
-	"clients/dispatch/runners/utils/runner-helpers.ts:verifyOrInstallCommand",
-	"clients/dispatch/runners/utils/runner-helpers.ts:verifyOrInstallCommand",
 	"clients/git-tracked-ignore.ts:fetchUntrackedIgnoredIds",
 	"clients/git-tracked-ignore.ts:fetchTrackedFiles",
 	"clients/gitleaks-client.ts:runScan",
@@ -211,6 +233,8 @@ const EXPECTED_WRAPPER_SITES = [
 	"clients/knip-client.ts:runAnalyze",
 	"clients/lsp/launch.ts:trySpawn",
 	"clients/lsp/launch.ts:trySpawn",
+	"clients/metrics/complexity-baseline.ts:resolveDefaultBranch",
+	"clients/opaque-mutation-scan.ts:readGitHead",
 	"clients/opaque-mutation-scan.ts:readGitStatusEntries",
 	"clients/opaque-mutation-scan.ts:readGitStatusEntries",
 	"clients/opaque-mutation-scan.ts:readGitStatusEntries",
@@ -278,6 +302,14 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"forwards the caller's SafeSpawnOptions object unchanged before adding safe-spawn defaults; the sole test-runner caller supplies no cwd",
 	],
 	[
+		"clients/metrics/complexity-baseline.ts#readAtDefaultBranch:166fb4b8~7330fe93",
+		"resolveDefaultBranch runs `git for-each-ref` with cwd = existingDir(path.dirname(realpathOrResolve(filePath))), the nearest existing directory of the file's own identity, so a file link answers its target's repository (#4966); it reads ref names only and resolves no project configuration from the dispatch cwd (#5087)",
+	],
+	[
+		"clients/opaque-mutation-scan.ts#seedGitHeadAt:5ae73b47~5ae73b47",
+		"readGitHead runs `git rev-parse --verify HEAD` (only when the HEAD files cannot answer) with cwd = seedGitHeadAt's own `root`, the sibling worktree a bash command named, whose HEAD tool_call records before the command runs; it reads a commit id and resolves no project configuration from the dispatch cwd (#5718)",
+	],
+	[
 		"clients/metrics-history.ts#getCurrentCommit:b46d4221~df24802d",
 		"safeSpawn runs Git with cwd = spawnDir, an existence walk from path.resolve(startDir) (startDir = path.dirname(filePath)) up to the first directory that exists, not a walk to the repository root; the site passes that cwd, and hasCwd=false here is resolveLocalInitializer failing closed on the reassigned let; this metrics probe does not resolve project configuration from the dispatch cwd",
 	],
@@ -334,10 +366,6 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"the analysis root reaches runAnalyze as `key` (path.resolve(targetDir)); the name carries no `cwd`, so the wrapper rule reads it as unsupplied. Same #2894 verdict as dead-code-client: the input is a directory, and `resolveToolCwd` dirnames its `file` argument",
 	],
 	[
-		"clients/lsp/jvm-runtime.ts#runJavaProbe:41cf49b2",
-		"`which java` / `where java` PATH lookup for the JVM language servers",
-	],
-	[
 		"clients/lsp/server.ts#tryGoInstallGopls:a28791c7",
 		"`go install golang.org/x/tools/gopls@latest` — installs into the Go tool directory",
 	],
@@ -354,12 +382,12 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"`gem install <gem> --bindir <pi-lens bin>` — installs into pi-lens's own bin directory",
 	],
 	[
-		"clients/mcp/review.ts#analyzeFileFresh:3ac7e2fe",
+		"clients/mcp/review.ts#analyzeFileFresh:12cbe8fa",
 		"forks the review worker with `process.execPath`; the project it must analyse is passed explicitly as the `--cwd=<dir>` argv flag, so the child's own directory is not the channel",
 	],
 	[
-		"clients/package-manager.ts#probeGlobalBinDirs:4e67f697",
-		"`npm config get prefix` / `pnpm bin -g` / `yarn global bin` — global install-location queries; under untrusted pi trust they run from HOME (#4530) so a project `.npmrc` cannot redirect them",
+		"clients/dispatch/integration.ts#prepareSeedLaneRun:ce8d9e31~ce8d9e31",
+		"#5621: the call to ensureSeedCopyExcluded passes the directory the seed copy is about to be written in (the given file's own directory); the `git rev-parse --git-common-dir` behind it asks which repository holds that directory, the query's subject, and resolves no project configuration",
 	],
 	[
 		"clients/safe-spawn.ts#safeSpawnAsync.killTree:77f62fd4",
@@ -372,10 +400,6 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/safe-spawn.ts#findCommandAsync:45a177c3",
 		"`which`/`where <command>` PATH lookup that returns the resolved path",
-	],
-	[
-		"clients/safe-spawn.ts#findCommand:e3470221",
-		"`which`/`where <command>` PATH lookup returning the path (deprecated sync form)",
 	],
 	[
 		"clients/sg-runner.ts#SgRunner.probeHomebrew:4df45ecb",
@@ -398,11 +422,7 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"the one spawn for `ast-grep scan --config <temp rule file> …` (#5247): `--config` and the scan target are absolute arguments the caller built (#4233 V3-HIGH-01), and when the resolved command is the scoped npx fallback `...this.sgSpawnOptions` supplies the pi-lens-owned neutral cwd (#4233 V3-HIGH-02) the scan cannot follow through a class-field spread",
 	],
 	[
-		"clients/test-runner-client.ts#TestRunnerClient.detectRunner:4411bf71",
-		"`which pytest` / `where pytest` PATH lookup for the global-pytest fallback",
-	],
-	[
-		"clients/tool-probe.ts#probeToolAsync:2d247383",
+		"clients/tool-probe.ts#probeToolAsync:4fc4430b",
 		'THE probe seam (#2894): `probeToolAsync` spawns a tool\'s own presence/version invocation and STRIPS whatever `cwd` reached it, because "does this binary exist, and what does it call itself" has the same answer from every directory. The 23 sites that each decided that for themselves now call it, so this is the one row a reviewer re-reads for the whole class',
 	],
 	[
@@ -411,6 +431,14 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 ];
 const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
+	[
+		"clients/staged-delta.ts#runGit:67db8378~b01c76f2",
+		"#5553: cwd is the directory the agent's own git command runs in (the session cwd after any literal `cd` the planner followed), so the replayed `git commit --dry-run` resolves the repository and the pathspecs exactly as the real command will; a tool-cwd root would change both",
+	],
+	[
+		"clients/dispatch/integration.ts#ensureSeedCopyExcluded:1404b4b3~7e9cb37a",
+		"#5621: cwd is ensureSeedCopyExcluded's own `dir` parameter, the directory the seed copy goes in; `git rev-parse --git-common-dir` reports on the repository that holds it, so a marker root would answer about a different repository. Its one caller is the checked site (the no-cwd row for prepareSeedLaneRun)",
+	],
 	[
 		"clients/safe-spawn.ts#safeSpawn:ad6fe3ed~be4673bc",
 		"the synchronous safe-spawn path derives its cwd from its own compatibility options, not the dispatch resolveToolCwd seam",
@@ -424,11 +452,11 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"LSP launch helper receives its own cwd parameter from the server launch boundary",
 	],
 	[
-		"clients/lsp/launch.ts#launchLSP:34d73dd1~2a84127e",
+		"clients/lsp/launch.ts#launchLSP:372ff96e~b7f9fcd3",
 		"launchLSP forwards its caller-provided cwd through trySpawn",
 	],
 	[
-		"clients/lsp/launch.ts#launchLSP:e7df4bb9~3f60133c",
+		"clients/lsp/launch.ts#launchLSP:b49474df~7dbc7b20",
 		"launchLSP forwards its caller-provided cwd through trySpawn",
 	],
 	[
@@ -500,10 +528,6 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"renderAndValidate forwards its own `cwd` parameter into runIacPass",
 	],
 	[
-		"clients/dispatch/runners/oxlint.ts#resolveVitePlusCommand:7b703741~dbf27697",
-		"`vp --version` probe inside resolveVitePlusCommand, whose own `cwd` parameter it passes; the checked site is its caller in this file",
-	],
-	[
 		"clients/dispatch/runners/psscriptanalyzer.ts#spawnPs:35a0658a~dbf27697",
 		"spawnPs is the file's parameter-routed wrapper: the cwd is its `options.cwd`, and its three call sites are the checked ones",
 	],
@@ -520,47 +544,11 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"cwd is `fileDir` = dirname(path.resolve(<resolveRunnerCwd result>, ctx.filePath)): tflint scans one module directory and its --config is passed absolute — a Terraform module IS a directory, which is why #2894 left it where cue-vet and terragrunt stay",
 	],
 	[
-		"clients/dispatch/runners/utils/lazy-installer.ts#runLazyInstall:c226c0b2~c226c0b2",
-		"runLazyInstall forwards its own `cwd` parameter into performInstall",
-	],
-	[
-		"clients/dispatch/runners/utils/lazy-installer.ts#performInstall:0e6f55b2~dbf27697",
-		"cwd is performInstall's own `cwd` parameter; the checked site is runLazyInstall's call in this file",
-	],
-	[
-		"clients/dispatch/runners/utils/lazy-installer.ts#tryLazyInstall:1adf4f32~1adf4f32",
-		"tryLazyInstall forwards its own `cwd` parameter into runLazyInstall",
-	],
-	[
-		"clients/dispatch/runners/utils/lazy-installer.ts#tryLazyInstallForFormatter:1adf4f32~1adf4f32",
-		"tryLazyInstallForFormatter forwards its own `cwd` parameter into runLazyInstall",
-	],
-	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#createAvailabilityChecker.isAvailableAsync:8b06bf2f~d99d2124",
+		"clients/dispatch/runners/utils/runner-helpers.ts#createAvailabilityChecker.isAvailableAsync:1fe0ada7~d99d2124",
 		"cwd is `resolvedCwd`, the availability checker's own cwd argument; the checker is the seam every runner probes through",
 	],
 	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#resolveToolCommandWithInstallFallback:e313e2e7~dbf27697",
-		"resolveToolCommandWithInstallFallback forwards its own `cwd` parameter into resolveCommandWithInstallFallback",
-	],
-	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#verifyOrInstallCommand:d80f1e68~dbf27697",
-		"cwd is verifyOrInstallCommand's own `cwd` parameter; its two call sites in this file are the checked ones",
-	],
-	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandArgsWithInstallFallback:0dcab07a~cb93074a",
-		"cwd is resolveCommandArgsWithInstallFallback's own `cwd` parameter, used for the `--version` verification spawn",
-	],
-	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandArgsWithInstallFallback:105fdbcb~dbf27697",
-		"resolveCommandArgsWithInstallFallback forwards its own `cwd` parameter into verifyOrInstallCommand",
-	],
-	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandWithInstallFallback:4a5cc9b1~4a5cc9b1",
-		"resolveCommandWithInstallFallback forwards its own `cwd` parameter into verifyOrInstallCommand",
-	],
-	[
-		"clients/file-utils.ts#detectFileChangedAfterCommand:9a4b1a12~dbf27697",
+		"clients/file-utils.ts#detectFileChangedAfterCommand:04d17168~dbf27697",
 		"cwd is detectFileChangedAfterCommand's own `cwd` parameter; its callers live in other files, which a per-file scan cannot follow",
 	],
 	[
@@ -580,8 +568,8 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"collectTrackedFiles forwards its own `cwd` parameter, the repository root its callers pass — `git ls-files` REPORTS ON that directory rather than resolving config from it, so moving it to a marker root would answer about a different repository (#2894)",
 	],
 	[
-		"clients/gitleaks-client.ts#GitleaksClient.scan:c23b1b18~4bd5cc03",
-		"passes `targetDir` = path.resolve(cwd) from the scan API's own argument; the security clients are driven by the MCP surface, not by dispatch",
+		"clients/gitleaks-client.ts#GitleaksClient.scan:c23b1b18~74b63300",
+		"passes `targetDir` = realpathOrResolve(cwd) from the scan API's own argument; the security clients are driven by the MCP surface, not by dispatch",
 	],
 	[
 		"clients/gitleaks-client.ts#GitleaksClient.runScan.spawn:937d6f21~353ea442",
@@ -598,6 +586,10 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/installer/index.ts#runCommand:bb1c961f~dbf27697",
 		"cwd is runCommand's own `cwd` parameter; its three call sites in this file are the checked ones",
+	],
+	[
+		"clients/package-manager.ts#probeGlobalBinDirs:40511879~eef5e504",
+		"`npm config get prefix` / `pnpm bin -g` / `yarn global bin`, global install-location queries, run from HOME under every trust (#4530, #5632): the managers read project configuration and create their bin dir from their cwd, so a project `.npmrc` cannot redirect them and a relative PNPM_HOME cannot write into the repository (the same rule as probeUserBase)",
 	],
 	[
 		"clients/installer/index.ts#probeUserBase:46b6fb79~eef5e504",
@@ -620,8 +612,8 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"passes `targetDir` = path.resolve(cwd) from the scan API's own argument",
 	],
 	[
-		"clients/jscpd-client.ts#JscpdClient.runScan:b6c89033~dbf27697",
-		"cwd is runScan's own `cwd` parameter, and `readProjectJscpdConfig(cwd)` decides the flags from the same directory",
+		"clients/jscpd-client.ts#JscpdClient.runScan.spawn:fb78f8be~dbf27697",
+		"cwd is runScan's own `cwd` parameter, captured by the spec's `spawn` callback (#5411 moved the call into it), and `readProjectJscpdConfig(cwd)` decides the flags from the same directory",
 	],
 	[
 		"clients/knip-client.ts#KnipClient.runAnalyze:b959739e~f5c0e305",
@@ -630,6 +622,14 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/mcp/review.ts#runRebuild:f93df254~9f5ecf07",
 		"cwd is `repoRoot`, the repository the rebuild script belongs to",
+	],
+	[
+		"clients/metrics/complexity-baseline.ts#readFileAtRef:96a14d2d~d9394988",
+		"cwd is the nearest existing directory of the file's own identity, and `git show <ref>:./<path>` names the path relative to it, so the blob resolves in the repository that holds the file (#4966); a dispatch tool-cwd would answer for another checkout (#5087). Moved out of readAtDefaultBranch (#5616), which reads the default branch through it",
+	],
+	[
+		"clients/metrics/complexity-baseline.ts#resolveDefaultBranch:e0d96155~dbf27697",
+		"cwd is resolveDefaultBranch's own `cwd` parameter, the file's own directory: `git for-each-ref` lists the default branch of the repository that directory is in (#5087)",
 	],
 	[
 		"clients/opaque-mutation-scan.ts#isGitWorktree:7e6a8cd3~edb3d44f",
@@ -668,8 +668,8 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"passes the realpath-canonicalized `targetDir` from the scan API's own argument",
 	],
 	[
-		"clients/opengrep-client.ts#OpengrepClient.runScan:6ed13398~353ea442",
-		"cwd is runScan's own `cwd` parameter, from which OpengrepClient.resolveConfig(cwd) already chose the rule config",
+		"clients/opengrep-client.ts#OpengrepClient.runScan.spawn:0a57c5d6~353ea442",
+		"cwd is runScan's own `cwd` parameter, captured by the spec's `spawn` callback (#5411 moved the call into it), from which OpengrepClient.resolveConfig(cwd) already chose the rule config",
 	],
 	[
 		"clients/installer/managed-tool-refresh.ts#validateOpengrepPack:c4cbdb3a~1f7c40b0",
@@ -696,7 +696,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"analysePipeline forwards its language `cwd` into runAutofix and separately passes the authoritative session root for adopted-writer admission (#4309)",
 	],
 	[
-		"clients/safe-spawn.ts#safeSpawnAsync:f7eca8ca~e39f490b",
+		"clients/safe-spawn.ts#safeSpawnAsync:f7eca8ca~f21f810b",
 		"this IS the spawn seam: `spawnCwd` is the cwd its own caller passed in options, so the origin rule applies to the callers, not here",
 	],
 	[
@@ -704,8 +704,8 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"cwd is probeWorkingTreeState's own `root` parameter — `git status` reports the worktree at that root. Not a tool probe in #2894's sense: it asks about a directory, so it cannot use the cwd-less probe seam",
 	],
 	[
-		"clients/trivy-client.ts#TrivyClient.scan:c23b1b18~4bd5cc03",
-		"passes `targetDir` = path.resolve(cwd) from the scan API's own argument",
+		"clients/trivy-client.ts#TrivyClient.scan:c23b1b18~74b63300",
+		"passes `targetDir` = realpathOrResolve(cwd) from the scan API's own argument",
 	],
 	[
 		"clients/trivy-client.ts#TrivyClient.runScan.spawn:89fa15ad~353ea442",

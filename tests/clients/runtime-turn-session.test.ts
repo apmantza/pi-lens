@@ -33,6 +33,7 @@ import {
 	registerPrimarySession,
 	releasePrimarySession,
 } from "../../clients/session-lifecycle.js";
+import { beginScope } from "../../clients/session-scope.js";
 import {
 	cancelLSPIdleReset,
 	getEffectiveLspIdleResetMs,
@@ -159,6 +160,92 @@ describe("LSP idle reset", () => {
 		}
 	});
 
+	// #5700 (B3) recurrence: a turn that edited cancelled the pending reset and
+	// nothing armed it again, so a session whose last turn wrote a file kept its
+	// whole fleet until the per-client timers (and never for a resident one).
+	// #5700 (B3): an edit turn cancelled the idle reset and nothing armed it
+	// again, so a session whose last turn wrote a file kept its fleet. The edit
+	// turn now restarts the window: the reset fires one full window after the
+	// LAST turn end, not after the earlier quiet turn's deadline.
+	it("re-arms the idle reset after a turn that edited a file (#5700)", async () => {
+		const env = setupTestEnvironment("pi-lens-idle-edit-turn-");
+		const runtime = new RuntimeCoordinator();
+		const cacheManager = new CacheManager(false);
+		const resetLSPService = vi.fn();
+		const filePath = path.join(env.tmpDir, "src/edited.ts");
+		fs.mkdirSync(path.dirname(filePath), { recursive: true });
+		fs.writeFileSync(filePath, "export const x = 1;\n");
+		const turnEnd = () =>
+			handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, {
+					ctxCwd: env.tmpDir,
+					resetLSPService,
+				}),
+			);
+
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		try {
+			const windowMs = getEffectiveLspIdleResetMs();
+			const half = Math.floor(windowMs / 2);
+			// A quiet turn arms the reset; half a window later an edit turn ends.
+			await turnEnd();
+			await vi.advanceTimersByTimeAsync(half);
+			cacheManager.addModifiedRange(
+				filePath,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+			);
+			await turnEnd();
+			expect(Object.keys(cacheManager.readTurnState(env.tmpDir).files)).toEqual(
+				[],
+			);
+
+			// The quiet turn's deadline passes: the edit turn restarted the window.
+			await vi.advanceTimersByTimeAsync(windowMs - half);
+			expect(resetLSPService).not.toHaveBeenCalled();
+			// One full window after the edit turn, the fleet is released once.
+			await vi.advanceTimersByTimeAsync(half);
+			expect(resetLSPService).toHaveBeenCalledTimes(1);
+		} finally {
+			cancelLSPIdleReset();
+			vi.useRealTimers();
+			env.cleanup();
+		}
+	});
+
+	it("arms the idle reset after an edit turn with no quiet turn before it (#5700)", async () => {
+		const env = setupTestEnvironment("pi-lens-idle-edit-only-");
+		const runtime = new RuntimeCoordinator();
+		const cacheManager = new CacheManager(false);
+		const resetLSPService = vi.fn();
+		const filePath = path.join(env.tmpDir, "src/edited.ts");
+		fs.mkdirSync(path.dirname(filePath), { recursive: true });
+		fs.writeFileSync(filePath, "export const x = 1;\n");
+
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		try {
+			cacheManager.addModifiedRange(
+				filePath,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+			);
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, {
+					ctxCwd: env.tmpDir,
+					resetLSPService,
+				}),
+			);
+			await vi.advanceTimersByTimeAsync(getEffectiveLspIdleResetMs());
+			expect(resetLSPService).toHaveBeenCalledTimes(1);
+		} finally {
+			cancelLSPIdleReset();
+			vi.useRealTimers();
+			env.cleanup();
+		}
+	});
+
 	it("skips a pending idle reset after the session generation changes", async () => {
 		const env = setupTestEnvironment("pi-lens-idle-generation-");
 		const runtime = new RuntimeCoordinator();
@@ -255,6 +342,60 @@ describe("LSP idle reset", () => {
 			cancelLSPIdleReset();
 			vi.useRealTimers();
 			emitWarning.mockRestore();
+			env.cleanup();
+		}
+	});
+
+	// #5737 (thread Q): the edit-turn arm ran for a secondary (subagent) session
+	// that the quiet-turn path already skipped. The idle timer is one module-level
+	// slot, so a secondary re-arm replaced the primary's pending timer and pushed
+	// its reset out by a whole window. The primary's reset must still fire one
+	// window after the primary's own turn end.
+	it("a secondary session's edit turn does not re-arm the primary's idle reset (#5737)", async () => {
+		const env = setupTestEnvironment("pi-lens-idle-secondary-edit-");
+		const runtime = new RuntimeCoordinator();
+		const cacheManager = new CacheManager(false);
+		const resetLSPService = vi.fn();
+		const filePath = path.join(env.tmpDir, "src/secondary-edit.ts");
+		fs.mkdirSync(path.dirname(filePath), { recursive: true });
+		fs.writeFileSync(filePath, "export const y = 2;\n");
+
+		registerPrimarySession({}, "primary-session", env.tmpDir);
+		runtime.setSessionLifecycle({ sessionId: "primary-session" });
+		const turnEnd = (overrides: Record<string, unknown> = {}) =>
+			handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, {
+					ctxCwd: env.tmpDir,
+					resetLSPService,
+					...overrides,
+				}),
+			);
+
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		try {
+			const windowMs = getEffectiveLspIdleResetMs();
+			const half = Math.floor(windowMs / 2);
+			// The primary's quiet turn arms the reset at T0.
+			await turnEnd();
+			await vi.advanceTimersByTimeAsync(half);
+			// A secondary subagent's edit turn ends half a window later.
+			cacheManager.addModifiedRange(
+				filePath,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+			);
+			await turnEnd({ sessionScope: beginScope({ role: "secondary" }) });
+
+			// The primary's reset is still due at T0 + one window, not later.
+			await vi.advanceTimersByTimeAsync(windowMs - half - 1);
+			expect(resetLSPService).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(1);
+			expect(resetLSPService).toHaveBeenCalledTimes(1);
+		} finally {
+			cancelLSPIdleReset();
+			releasePrimarySession();
+			vi.useRealTimers();
 			env.cleanup();
 		}
 	});
@@ -1307,7 +1448,10 @@ describe("context injection framing", () => {
 			env.tmpDir,
 		);
 
-		const result = consumeSessionStartGuidance(cacheManager, env.tmpDir);
+		const result = consumeSessionStartGuidance(cacheManager, env.tmpDir, {
+			sessionId: "reader",
+			coordinatorId: "reader",
+		});
 		expect(result).toBeDefined();
 		expect(result!.messages[0].content).toContain("not a user request");
 		expect(result!.messages[0].content).toContain("📌 pi-lens active");
@@ -1782,6 +1926,70 @@ describe("turn_end unified secret surfacing", () => {
 				consumeTurnEndFindings(cacheManager, env.tmpDir)?.messages?.[0]
 					?.content ?? "";
 			expect(content).not.toContain("hardcoded secrets detected");
+			expect(content).not.toContain("generic-api-key");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #5500: the secrets lane classified gitleaks's ABSOLUTE `File` against the
+	// scratch-name list, so a project checked out under Claude Code's own
+	// `.claude/worktrees/<lane>` layout (or a `.pi-lens/prepush-tmp` temp root)
+	// had every finding demoted to "scratch" and the blocker never fired.
+	// Recurrence prevented: the scratch judgement reading ancestors of the root.
+	it("fires the secrets blocker for a project under a .claude/worktrees ancestor, and still skips scratch inside it", async () => {
+		const env = setupTestEnvironment("pi-lens-secret-ancestor-");
+		try {
+			const root = path.join(env.tmpDir, ".claude/worktrees/lane");
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId: "ancestor-session" });
+			const cacheManager = new CacheManager(false);
+			const secretFile = path.join(root, "src/config.ts");
+			const scratchFile = path.join(root, ".pi/notes/leak.md");
+			for (const file of [secretFile, scratchFile]) {
+				fs.mkdirSync(path.dirname(file), { recursive: true });
+				fs.writeFileSync(file, "const k = 'AKIA...';\n");
+			}
+			cacheManager.addModifiedRange(
+				secretFile,
+				{ start: 1, end: 1 },
+				false,
+				root,
+				"ancestor-session",
+			);
+			cacheManager.writeCache(
+				"gitleaks",
+				{
+					success: true,
+					scannedAt: "",
+					findings: [
+						{
+							ruleId: "aws-access-token",
+							file: secretFile,
+							startLine: 42,
+							description: "AWS key",
+						},
+						{
+							ruleId: "generic-api-key",
+							file: scratchFile,
+							startLine: 1,
+							description: "Generic key",
+						},
+					],
+				},
+				root,
+			);
+
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, { ctxCwd: root }),
+			);
+
+			const content =
+				consumeTurnEndFindings(cacheManager, root)?.messages?.[0]?.content ??
+				"";
+			expect(content).toContain("hardcoded secrets detected");
+			expect(content).toContain("src/config.ts:42");
+			expect(content).toContain("aws-access-token");
 			expect(content).not.toContain("generic-api-key");
 		} finally {
 			env.cleanup();

@@ -3,6 +3,10 @@ import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { McpHarness } from "../mcp/harness.js";
 import { startPiRunner } from "../support/pi-runner.js";
+import {
+	expectPlantedStaleRow,
+	rowsWithoutLiveMember,
+} from "../support/baseline-staleness.js";
 
 type ListedTool = {
 	name: string;
@@ -105,6 +109,31 @@ function measure(tools: ListedTool[]) {
 	return { measured, descriptionTotal, schemaTotal };
 }
 
+type ToolRows = Record<string, { description: number; schema: number }>;
+
+/**
+ * The roster's two-sided comparison: a ledger row the live roster does not
+ * measure (the row-without-producer direction), and a measured tool the
+ * ledger does not carry. A row is the tool with both of its byte counts.
+ */
+function rosterDrift(ledger: ToolRows, measured: ToolRows): string[] {
+	const rows = (tools: ToolRows) =>
+		new Set(
+			Object.entries(tools).map(
+				([name, bytes]) =>
+					`${name} description=${bytes.description} schema=${bytes.schema}`,
+			),
+		);
+	return [
+		...rowsWithoutLiveMember(rows(ledger), rows(measured)).map(
+			(row) => `ledger row the roster does not measure: ${row}`,
+		),
+		...rowsWithoutLiveMember(rows(measured), rows(ledger)).map(
+			(row) => `measured tool the ledger does not carry: ${row}`,
+		),
+	];
+}
+
 function expectUniqueNames(tools: ListedTool[]): void {
 	const names = tools.map((tool) => tool.name);
 	expect(new Set(names).size, `duplicate tool names: ${names.join(", ")}`).toBe(
@@ -147,13 +176,30 @@ describe("tool roster description budget", () => {
 		// catches a schema regrowing after that trim.
 		// #5136 (2026-11-04): symbol_search's description gained the compound-suffix
 		// clause, so the description total and budget grew with the diff.
+		// #5506: lsp_navigation's commandArguments schema gained strict-compatible
+		// typed items, moving the measured roster by 66 bytes.
 		expect(total, detail).toBeLessThanOrEqual(baseline.pi.budget);
 		expect(baseline.pi.budget).toBe(
 			Math.ceil((descriptionTotal + schemaTotal) * 1.1),
 		);
 		expect(descriptionTotal, detail).toBe(baseline.pi.descriptionTotal);
 		expect(schemaTotal, detail).toBe(baseline.pi.schemaTotal);
-		expect(measured, detail).toEqual(baseline.pi.tools);
+		expect(rosterDrift(baseline.pi.tools, measured), detail).toEqual([]);
+	});
+
+	it("reds a planted baseline row the live roster never measured (#5072)", () => {
+		// The row-without-producer direction of the pi ledger: a tool row no
+		// registered tool measures, judged by the comparison the case above runs
+		// against the live roster.
+		const planted = "pilens_5072_ghost_tool";
+		expectPlantedStaleRow({
+			baseline: "tests/config/tool-roster-budget.baseline.json",
+			rowKey: planted,
+			verdict: rosterDrift(
+				{ ...baseline.pi.tools, [planted]: { description: 1, schema: 1 } },
+				measure(piTools).measured,
+			),
+		});
 	});
 
 	it("keeps the MCP tools/list roster within its two-sided baseline", () => {
@@ -171,12 +217,14 @@ describe("tool roster description budget", () => {
 		// 2026-09-10: budget is the measured after-trim total plus 10%.
 		// #5136 (2026-11-04): pilens_symbol_search now resolves the shared
 		// SYMBOL_SEARCH_DESCRIPTION constant, so its total and budget grew.
+		// #5506: pilens_lsp_navigation mirrors the typed commandArguments schema,
+		// moving the measured roster by 66 bytes.
 		expect(total, detail).toBeLessThanOrEqual(baseline.mcp.budget);
 		expect(baseline.mcp.budget).toBe(
 			Math.ceil((descriptionTotal + schemaTotal) * 1.1),
 		);
 		expect(descriptionTotal, detail).toBe(baseline.mcp.descriptionTotal);
 		expect(schemaTotal, detail).toBe(baseline.mcp.schemaTotal);
-		expect(measured, detail).toEqual(baseline.mcp.tools);
+		expect(rosterDrift(baseline.mcp.tools, measured), detail).toEqual([]);
 	});
 });

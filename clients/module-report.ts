@@ -125,7 +125,9 @@ export interface ModuleSymbolEntry {
 	kind: string;
 	startLine: number;
 	endLine: number;
-	exported: boolean;
+	/** true: exported; false: the language's rule decided it is not; absent:
+	 * no rule can decide for this language (#5599), which is not "not exported". */
+	exported?: boolean;
 	/** Set only for non-public members of an exported class (#258); omitted
 	 * otherwise. Explains why an otherwise-reachable member sits in `internal`. */
 	visibility?: "private" | "protected";
@@ -281,10 +283,15 @@ export interface ModuleReport {
 	warnings?: string[];
 	language?: string;
 	lineCount?: number;
-	summary: { imports: number; exports: number; symbols: number };
+	/** `exports` is absent when no top-level symbol has a visibility answer
+	 * (every one sits in `unclassified`): the count would read as "0 exported". */
+	summary: { imports: number; exports?: number; symbols: number };
 	imports: { external: string[]; internal: string[] };
 	api: ModuleSymbolEntry[];
 	internal: ModuleSymbolEntry[];
+	/** Top-level symbols whose visibility the language's rule cannot decide
+	 * (#5599): neither API nor INTERNAL. Omitted when empty. */
+	unclassified?: ModuleSymbolEntry[];
 	/** Important anonymous callbacks/closures that normal symbol outlines miss. */
 	callbacks: ModuleCallbackEntry[];
 	/**
@@ -824,7 +831,14 @@ function toEntry(
 	// the report's presentation.
 	const nonPublic =
 		sym.visibility === "private" || sym.visibility === "protected";
-	const exported = (sym.isExported || !!node?.exported) && !nonPublic;
+	// Unknown (#5599) is undefined on both sources and stays undefined here.
+	const answer =
+		sym.isExported === true || node?.exported === true
+			? true
+			: sym.isExported === undefined && node?.exported === undefined
+				? undefined
+				: false;
+	const exported = answer === undefined ? undefined : answer && !nonPublic;
 	// `flags` carries only non-derivable signals — "exported" is NOT pushed here
 	// since it duplicates the `exported` boolean field below (#512).
 	const flags: string[] = [];
@@ -843,7 +857,7 @@ function toEntry(
 		kind: sym.kind,
 		startLine,
 		endLine,
-		exported,
+		...(exported === undefined ? {} : { exported }),
 		...(sym.visibility ? { visibility: sym.visibility } : {}),
 		...(sym.decorators?.length ? { decorators: sym.decorators } : {}),
 		signature: sym.signature,
@@ -938,6 +952,9 @@ export function projectModuleReport(
 		...report,
 		api: report.api.map(stripEntryMetrics),
 		internal: report.internal.map(stripEntryMetrics),
+		...(report.unclassified
+			? { unclassified: report.unclassified.map(stripEntryMetrics) }
+			: {}),
 	};
 }
 
@@ -2091,8 +2108,14 @@ export async function moduleReport(
 	// `entries` in place (topLevel/api/internal hold the same object references).
 	annotateMiddleMan(entries, content, languageId);
 
-	const api = topLevel.filter((entry) => entry.exported);
-	const internal = topLevel.filter((entry) => !entry.exported);
+	const api: ModuleSymbolEntry[] = [];
+	const internal: ModuleSymbolEntry[] = [];
+	const unclassified: ModuleSymbolEntry[] = [];
+	for (const entry of topLevel) {
+		if (entry.exported === undefined) unclassified.push(entry);
+		else if (entry.exported) api.push(entry);
+		else internal.push(entry);
+	}
 	const warnings: string[] = [...(extractionWarnings ?? [])];
 	// Every graph-derived section below (who-uses-this, blast radius, call
 	// edges) came from the served snapshot, so the caveat belongs with them.
@@ -2202,13 +2225,16 @@ export async function moduleReport(
 		lineCount,
 		summary: {
 			imports: imports.external.length + imports.internal.length,
-			exports: api.length,
+			...(unclassified.length > 0 && api.length + internal.length === 0
+				? {}
+				: { exports: api.length }),
 			symbols: entries.length,
 		},
 		imports,
 		...(warnings.length > 0 ? { warnings } : {}),
 		api,
 		internal,
+		...(unclassified.length > 0 ? { unclassified } : {}),
 		callbacks,
 		callbackSupport: callbackSupportFor(languageId),
 		recommendedReads: rankRecommendedReads(
@@ -2489,7 +2515,11 @@ export function renderCompactModuleReport(
 		unavailable.push(provenanceLine(report, options.projection));
 		return unavailable.join("\n");
 	}
-	const allEntries = [...report.api, ...report.internal];
+	const allEntries = [
+		...report.api,
+		...report.internal,
+		...(report.unclassified ?? []),
+	];
 	const allRanges = allEntries.flatMap((e) => [e, ...(e.members ?? [])]);
 	const width =
 		Math.max(
@@ -2500,7 +2530,10 @@ export function renderCompactModuleReport(
 
 	const lines: string[] = [
 		`${report.path} ${report.language ?? "?"} ${report.lineCount ?? "?"}L [${report.staleness}] \u2014 ` +
-			`${report.summary.symbols} symbols, ${report.summary.exports} exported, ` +
+			`${report.summary.symbols} symbols, ` +
+			(report.summary.exports === undefined
+				? ""
+				: `${report.summary.exports} exported, `) +
 			`${report.summary.imports} imports${callbackSupportSuffix(report)}`,
 	];
 	if (report.error) lines.push(`INCOMPLETE: ${report.error}`);
@@ -2516,6 +2549,11 @@ export function renderCompactModuleReport(
 	if (report.internal.length > 0) {
 		lines.push("INTERNAL:");
 		for (const entry of report.internal)
+			lines.push(...compactEntryLines(entry, width, "  "));
+	}
+	if (report.unclassified && report.unclassified.length > 0) {
+		lines.push("SYMBOLS (visibility unknown):");
+		for (const entry of report.unclassified)
 			lines.push(...compactEntryLines(entry, width, "  "));
 	}
 	appendCallbacksSection(lines, report, width);

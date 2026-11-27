@@ -30,13 +30,12 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import {
-	createAvailabilityChecker,
-	resolveRunnerCwd,
+	resolveToolCommandWithInstallFallback,
+	toolAbsentSkip,
 } from "./utils/runner-helpers.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
-
-const typos = createAvailabilityChecker("typos", ".exe");
 
 // EXIT TABLE (typos-cli 1.29 docs https://github.com/crate-ci/typos): 0 = no typos, 2 = typos found, 1 = an error that
 // stopped the scan. Anything nonzero outside {2} is a rejected invocation.
@@ -130,16 +129,15 @@ const spellcheckRunner: RunnerDefinition = {
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "spellcheck/typos");
 		// Skip if typos-cli is not installed
-		if (!(await typos.isAvailableAsync(cwd))) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
-		}
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "typos");
+		if (!cmd) return toolAbsentSkip(cwd, { id: "typos" });
 
 		// Run typos-cli with JSON output
 		// --format json: Output JSON Lines
 		// --exclude <pattern>: Could be used to exclude code blocks if needed
 		const args = ["--format", "json", ctx.filePath];
 
-		const result = await safeSpawnAsync(typos.getCommand(cwd)!, args, {
+		const result = await safeSpawnAsync(cmd, args, {
 			cwd,
 			timeout: 15000,
 		});

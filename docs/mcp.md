@@ -136,7 +136,8 @@ the dispatcher accepts without comment: an undeclared key is reported in the
 result (a leading `Ignored unknown argument(s) ...` line, plus
 `structuredContent.ignoredArguments`). An ignored key that leaves a required
 input missing, or that is a declared parameter the call did not send written
-another way (`pilens_diagnostics {"filePath": ...}` for `path`; predicate in
+another way (`pilens_module_report {"filePath": ...}` for `path`; the three tools
+that declare `filePath` as an alias run it instead; predicate in
 [public-api-stability.md](public-api-stability.md)), turns the call into an error
 instead of a run on defaults; a looser "did you mean" stays a warning (#3749;
 details in [agent-tools.md](agent-tools.md)). The check is the one seam in
@@ -191,8 +192,8 @@ details in [agent-tools.md](agent-tools.md)). The check is the one seam in
         latency.log schema — lsp cold-spawn 5.5s visible, exactly the #203 cost)
 - [x] Phase 3: fresh worker + `pilens_rebuild` (honest review loop) + project_scan/health
       ↳ `mcp/worker.ts` (forked child loads freshly-built code from disk)
-      ↳ `clients/mcp/review.ts` — `analyzeFileFresh` (direct node fork, space-safe
-        on Windows), `runRebuild` (safeSpawnAsync npm), `resolveRebuildScript`
+      ↳ `clients/mcp/review.ts` — `analyzeFileFresh` (node fork through `safeSpawnAsync`,
+        space-safe on Windows), `runRebuild` (safeSpawnAsync npm), `resolveRebuildScript`
         (dist→build:dist, in-place→build, matched to the server's own layout)
       ↳ tools added: `pilens_analyze mode=warm|fresh`, `pilens_rebuild`,
         `pilens_project_scan`, `pilens_health`

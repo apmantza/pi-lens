@@ -1,6 +1,7 @@
 import * as os from "node:os";
 import { existsSync, readdirSync } from "node:fs";
 import * as path from "node:path";
+import { basename } from "node:path";
 import { type ExtensionLogLevel, logExtension } from "./extension-log.js";
 import {
 	isRealGitMarker,
@@ -8,6 +9,7 @@ import {
 	isWindowsPath,
 	nameMatchesMarkerGlob,
 	normalizeEphemeralMapKey,
+	pathsEqual,
 	realpathOrResolve,
 	toPosix,
 	walkUpDirs,
@@ -21,11 +23,23 @@ import {
 	createGenerationSource,
 } from "./generation-guard.js";
 import { rootMarkersForFile } from "./language-profile.js";
+import {
+	findToolConfig,
+	type ToolConfigHit,
+	type ToolConfigId,
+	type ToolConfigOptions,
+} from "./tool-config-presence.js";
 
 export type ToolCwdKind = "runner" | "formatter" | "lsp";
 
 export interface ToolCwdContext {
 	cwd?: string;
+	/**
+	 * The session's workspace root, when `cwd` is the file's own nested package:
+	 * `createDispatchContext` sets `cwd` to the file's language root and keeps the
+	 * workspace here (#5631).
+	 */
+	projectRoot?: string;
 	rootMarkers?: readonly string[];
 	/** Root already computed by a caller-owned resolver. */
 	serverRoot?: string;
@@ -40,6 +54,14 @@ export interface ToolCwdContext {
 export interface ToolCwdResolution {
 	cwd: string;
 	marker?: string;
+	/**
+	 * Set only when a config anchor moved `cwd` away from the directory the file's
+	 * marker climb found (#5541): that directory. `cwd` is where the child
+	 * starts and what its reported paths are relative to; every package-scoped
+	 * question (lint policy, Vite+ detection, which install is found) still asks
+	 * here, as it did before the anchor moved the spawn (#5543 review F1/F2).
+	 */
+	packageDir?: string;
 }
 
 export const FORMATTER_MARKERS: Readonly<Record<string, readonly string[]>> = {
@@ -240,6 +262,39 @@ export function logRunnerAdvisoryOnce(
 	ctx.log(message, "debug");
 }
 
+/**
+ * Runners whose config can sit above the nearest package manifest and holds a
+ * path the tool resolves from the process cwd (a plugin's `settings` entry), so
+ * the child runs in that config's directory (#5541). The tool-config seam owns
+ * where the config is, so the policy and this spawn cannot disagree (#5408).
+ * Biome is not listed: it resolves a config's paths from the config file.
+ */
+const CONFIG_ANCHORED_RUNNERS = [
+	"oxlint",
+	"eslint",
+] as const satisfies readonly ToolConfigId[];
+
+function configAnchorOf(
+	tool: string,
+	fromDir: string,
+	options: ToolConfigOptions,
+): ToolConfigHit | undefined {
+	const anchored = CONFIG_ANCHORED_RUNNERS.find((id) => id === tool);
+	return anchored ? findToolConfig(anchored, fromDir, options) : undefined;
+}
+
+/**
+ * Where the config climb stops (#5631). `cwd` is the file's language root, so a
+ * root config above a nested package sits outside it; the session's root is
+ * `projectRoot`. A project root that does not contain `cwd` says nothing about
+ * this file's session, so the ceiling stays at `cwd`. One rule for every config
+ * climb that bounds by the session (oxlint, ESLint, javac).
+ */
+export function configCeiling(cwd: string, projectRoot?: string): string {
+	if (!projectRoot) return cwd;
+	return isUnderDir(cwd, projectRoot) ? projectRoot : cwd;
+}
+
 /** Resolve every child process cwd/root through one bounded, synchronous seam. */
 export function resolveToolCwd(
 	kind: ToolCwdKind,
@@ -278,6 +333,30 @@ export function resolveToolCwd(
 		markerRoot &&
 		(insideDispatch ? isUnderDir(markerRoot, dispatchRoot) : true)
 	) {
+		// #5541: a caller-owned marker table still decides; a config outside the
+		// session is not the project's, so the climb stops at the session's root
+		// (#5631: the project root, not the package `ctx.cwd` names). The config
+		// seam climbs through `$HOME`, but the ceiling here is exclusive: a
+		// home-level config is the user's, never this project's.
+		const anchor =
+			kind === "runner" && !ctx.rootMarkers
+				? configAnchorOf(tool, markerRoot, {
+						homeDir,
+						...(insideDispatch
+							? { ceiling: configCeiling(dispatchRoot, ctx.projectRoot) }
+							: {}),
+					})
+				: undefined;
+		if (
+			anchor &&
+			!pathsEqual(anchor.dir, markerRoot) &&
+			!pathsEqual(anchor.dir, homeCeiling)
+		) {
+			const anchorMarker = basename(anchor.file);
+			if (!ctx.suppressTelemetry)
+				emitResolution(kind, tool, anchor.dir, `marker:${anchorMarker}`);
+			return { cwd: anchor.dir, marker: anchorMarker, packageDir: markerRoot };
+		}
 		const finalReason = `marker:${markerResult.marker ?? markers[0]}`;
 		if (!ctx.suppressTelemetry)
 			emitResolution(kind, tool, markerRoot, finalReason);
@@ -343,14 +422,14 @@ export function resolveToolCwd(
 
 /** Runner-shaped adapter kept at the same seam for every runner consumer. */
 export function resolveRunnerCwd(
-	ctx: { cwd: string; filePath: string },
+	ctx: { cwd: string; filePath: string; projectRoot?: string },
 	tool: string,
 ): string {
 	return resolveToolCwd("runner", tool, ctx.filePath, ctx).cwd;
 }
 
 export function resolveRunnerCwdWithReason(
-	ctx: { cwd: string; filePath: string },
+	ctx: { cwd: string; filePath: string; projectRoot?: string },
 	tool: string,
 ): ToolCwdResolution {
 	return resolveToolCwd("runner", tool, ctx.filePath, ctx);

@@ -67,7 +67,31 @@
 - The one exception to that boundary is a linked worktree of the session's own repository (same git commondir, different top level, `resolveLinkedWorktreeOwner` in `clients/review-graph/git-identity.ts`, #3871): turn_end selects and runs its tests with that worktree's root as the project root (`clients/test-target-roots.ts`), so config, `node_modules` and the failed-first state are the worktree's own. A worktree root without its own runner install (no `node_modules/.bin`, venv or `vendor/bin`) is skipped with a counted `turn-end-test-root-skipped` row rather than run through `npx` or a bare interpreter; a reported location is rebased through `displayRoot` using the runner cwd first, then the dispatch root, only when that file exists, and otherwise remains as printed. A sibling worktree's file is still foreign to every other root. Python's ambient `VIRTUAL_ENV`, `CONDA_PREFIX`, or absolute `UV_PROJECT_ENVIRONMENT` is accepted for the session checkout, and for a linked worktree only when the environment root is inside that checkout; a skipped pytest row says that ambient environments were not borrowed when one is set. The edit worklist is the session's project worklist (#2504), so a session whose cwd is itself a linked worktree never sees an edit in the main checkout or a sibling and runs only its own tests. Each turn that edited files writes one `turn_end_test_selection` record to `latency.log` (candidates, selected, why not, and selected/candidates per owning root; first 8 roots, the rest in `rootsOmitted`; `selected` includes carried deferred targets, which no candidate bucket counts, so per-root `selected` can sum below it; one row of about 570 B per edit turn with candidates, bounded by log rotation only), so a turn with 0 tests is explained without the dbg lines the MCP route drops.
 - Managed tools resolve through the registry and sanctioned availability seams.
   Do not hand-roll install, PATH, or package-manager discovery. Use typed
-  `SpawnFailure.kind`; repair only `tool-not-found`.
+  `SpawnFailure.kind`; repair only `tool-not-found`. A tool that has a
+  `TOOL_COMMAND_SPECS` row resolves through one ladder machinery, in two
+  orders. Runners (`resolveToolCommandWithInstallFallback`): the trusted
+  project's `.venv` or `node_modules/.bin` at exactly the project root, never a
+  parent directory's, then the managed install, then PATH with a version check.
+  Formatters (`resolveInstalledToolCommand`, where the caller owns the install
+  decision): the same project rung, then PATH with a version check, then the
+  managed install, because a formatter's version decides the bytes it writes, so
+  a working PATH binary is never replaced by a managed copy; a PATH binary that
+  fails its version check falls through to managed. One latch per (tool, order,
+  root), so the two never share an answer (#5410). A present tool that fails its
+  version check and has no later rung is a failed formatter outcome carrying the
+  probe's stderr, not "executable not found".
+  `BiomeClient` selects the shared resolver's presence-only ladder: exact-cwd
+  project shim, the client's auto-install result, managed Node shim, then
+  package-manager global bins before its npx fallback. It has no command cache
+  above the trust gate. Stylua retains its trust-gated ancestor Node-bin walk
+  before the shared formatter ladder; a walk hit is not version-probed.
+  The clients ask the same ladder (`resolveToolCommandWithInstallFallback`,
+  `toolBinaryVerdict`) rather than build a checker: jscpd, madge, knip and the
+  security scanners' managed-binary lookup (#5410). Every client-owned lookup
+  helper, installer ask or version probe that stays is a row of
+  `CLIENT_LADDER_ADMISSIONS` in `tests/config/client-ladder-census.test.ts`
+  with its reason; a new one reds until it is folded or admitted there. A
+  probe made with `safeSpawn*` that never asks the installer is not seen.
 - Windows LSP startup exit-code-1 failures are repairable only when the shared
   command resolver finds no command or an npm shim target is absent; present
   binaries that exit 1 remain runtime failures (#4263, #1199). The launch and
@@ -91,6 +115,19 @@
   sibling package of a monorepo session cwd, say) is refused as well; a caller
   that must format it passes that root as `sessionRoot`. Proven by
   `tests/clients/format-service-symlink-identity.test.ts`.
+- Every other writer of source files takes the same two seams from
+  `clients/write-source-file.ts` (#5417). `refuseOutOfRootWrites` is the root
+  guard: `ast_grep_replace` (the files its dry run matched, plus the
+  `no-autofix` flag), `applyWorkspaceEdit` and `lens_diagnostic_mark` refuse an
+  `adopted` or `none` identity, write nothing and record one
+  `adopted-root-writer-skipped` row per (file, writer). `writeSourceFile` runs
+  the writer inside pi's per-file mutation queue and calls its authorship
+  record on every exit, a throw included, so an interrupted write records the
+  files it reached. A fixer's write result is `resolveWriteResult`
+  (`clients/file-utils.ts`): `changed` is the bytes, `success` is the exit code,
+  and a nonzero exit that rewrote the file is still a change. Proven by
+  `tests/clients/write-source-file-5417.test.ts` and
+  `tests/clients/autofix-exit-status-5417.test.ts`.
 - Formatter and autofix policy is config-first where the registry says so.
   Formatting is strict by default. Autofix must carry per-diagnostic fixability
   or a conservative capability allowlist.
@@ -136,6 +173,21 @@
   seeded (maintainer scope, 2026-10-15). Collect-later linters and the MCP
   route have no seed. Proven by
   `tests/index-4483-first-write-seed-witness.test.ts`.
+- Every writer that names the files it will change takes the same seed before
+  it writes (#5553), through `captureWriterSeeds` in `clients/runtime-tool-call.ts`:
+  a bash command's written paths, an applied `ast_grep_replace`'s `paths`, an
+  applied LSP rename's file, an unclassified tool's one path while the
+  observational net still arms for it, and a tool learned from one observation.
+  These give the dispatch no edit span, so the two edit-gated lanes (ast-grep,
+  tree-sitter) read the whole file; their seed joins the linters'
+  (`PRE_EDIT_SEED_SPANLESS_RUNNER_IDS`, tied to the edit-scope census). Those
+  two lanes' entries classify only a dispatch that read the whole file: a
+  dispatch with an edit span (a host `edit`) reports the lines it touched, so it
+  neither classifies by them nor keeps them, and an identical blocker the edit
+  adds elsewhere blocks (`classifyPreExisting`, #5583 review F1). A
+  writer's written set wider than its named one (a rename's importers, a replace
+  over a folder, a rename_file's new path) is not seeded. Proven by
+  `tests/index-5553-writer-baselines.test.ts`.
 - `clients/dispatch/runners/runner-spawn-cwd-sweep.test.ts` is the population
   guard for child cwd derivation. Add a reasoned migration row instead of a
   pin-only update.

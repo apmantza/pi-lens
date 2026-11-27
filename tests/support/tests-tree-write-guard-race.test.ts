@@ -36,13 +36,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { TREE_WALK_TIMEOUT_MS } from "./test-timeout-scale.js";
 import { isUnderIndex2992Scratch } from "./tests-tree-write-guard-setup.js";
 import { installTestsTreeWriteGuard } from "./tests-tree-write-guard.js";
 
 describe("tests-tree write guard — real cross-process race (#3179)", () => {
 	it(
 		"survives a real cross-process create/remove race under an allowed prefix",
-		{ timeout: 15_000 },
+		{ timeout: TREE_WALK_TIMEOUT_MS },
 		async () => {
 			const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-3179-race-"));
 			fs.mkdirSync(path.join(root, "support"), { recursive: true });
@@ -60,13 +61,16 @@ describe("tests-tree write guard — real cross-process race (#3179)", () => {
 			// Bounded by the shell's own `timeout`, not by a raw setTimeout in
 			// this process: the churner's real exit is the synchronization
 			// point this test waits on, so it needs no timer of its own.
+			// No `-p` on the churner's mkdir (#5527): once rmSync has removed
+			// <root>/support, a mkdir that outlives the join below fails with
+			// ENOENT instead of recreating <root>.
 			const churner = spawn(
 				"timeout",
 				[
 					"3",
 					"bash",
 					"-c",
-					'while true; do mkdir -p "$1"; : > "$1/f.ts"; rm -rf "$1"; done',
+					'while true; do mkdir "$1"; : > "$1/f.ts"; rm -rf "$1"; done',
 					"_",
 					scratchDir,
 				],

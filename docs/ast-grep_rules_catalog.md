@@ -233,7 +233,7 @@ See [`docs/custom-rules.md`](custom-rules.md) to add your own. Rule sources: `ru
 | `strict-equality-js` | warning | yes | pi-lens | Use === instead of == |
 | `strict-inequality-js` | warning | yes | pi-lens | Use !== instead of != |
 | `throw-new-error-js` | warning | no | pi-lens | Use new Error() not Error() — explicit construction is clearer |
-| `unchecked-throwing-call-js` | error | no | pi-lens | $CALL without try/catch — throws on invalid input |
+| `unchecked-throwing-call-js` | warning | no | pi-lens | $CALL without try/catch — throws on invalid input |
 | `weak-rsa-key-js` | error | no | pi-lens | Weak RSA key size — use at least 2048 bits |
 
 ### Kotlin (13)
@@ -575,7 +575,7 @@ See [`docs/custom-rules.md`](custom-rules.md) to add your own. Rule sources: `ru
 | `ts-unnecessary-else-return` | warning | no | pi-lens | else after return - the else block is redundant |
 | `ts-void-zero` | warning | yes | pi-lens | void 0 for undefined - use undefined directly |
 | `ts-while-index-length` | warning | no | pi-lens | while loop with index < length - consider for-of or array methods |
-| `unchecked-throwing-call` | error | no | pi-lens | $CALL without try/catch — throws on invalid input |
+| `unchecked-throwing-call` | warning | no | pi-lens | $CALL without try/catch — throws on invalid input |
 | `weak-rsa-key` | error | no | pi-lens | Weak RSA key size — use at least 2048 bits |
 
 ## Disabled rules

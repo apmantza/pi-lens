@@ -4,6 +4,10 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
+import {
+	expectPlantedStaleRow,
+	rowsWithoutLiveMember,
+} from "../support/baseline-staleness.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const require = createRequire(import.meta.url);
@@ -104,6 +108,37 @@ describe("dependency boundary governance", () => {
 		expect(unexpectedViolations()).toEqual([]);
 	}, 60_000);
 
+	// Recurrence: a known-violations row whose cycle was fixed stayed admitted,
+	// so the same cycle returning would pass silently. The count pin below only
+	// sees an added row, never a stale one (planted: a row no cruise reports,
+	// pin bumped to 6, stayed green).
+	it("lists no known violation the cruise no longer reports", () => {
+		const live = new Set(
+			cruiseBuiltGraph().summary.violations.map(
+				(v) => `${v.rule.name}: ${v.from} -> ${v.to}`,
+			),
+		);
+		const known = parseJson5(
+			readFileSync(
+				resolve(repoRoot, ".dependency-cruiser-known-violations.json"),
+				"utf8",
+			),
+		) as Array<{ from: string; to: string; rule: { name: string } }>;
+		const rows = known.map((v) => `${v.rule.name}: ${v.from} -> ${v.to}`);
+		expect(rowsWithoutLiveMember(rows, live)).toEqual([]);
+		// #5072: a planted row for a cycle the cruise never reports reds through
+		// the same comparison.
+		const planted = "clients/5072-gone-cycle.js";
+		expectPlantedStaleRow({
+			baseline: ".dependency-cruiser-known-violations.json",
+			rowKey: planted,
+			verdict: rowsWithoutLiveMember(
+				[...rows, `no-client-cycles: ${planted} -> clients/file-utils.js`],
+				live,
+			),
+		});
+	}, 60_000);
+
 	it("keeps the configured boundary rules present", () => {
 		const config = require(resolve(repoRoot, ".dependency-cruiser.cjs")) as {
 			forbidden: Array<{ name?: string }>;
@@ -140,7 +175,24 @@ describe("dependency boundary governance", () => {
 			),
 		) as string[];
 
+		// The exact list: order and duplicates count, as they did before the
+		// row-comparison cells below (#5546 N2).
 		expect(eagerAllowlist).toEqual(resolvedStaticImports);
+		// Both directions: a listed module index.ts no longer imports eagerly,
+		// and an eager import the allowlist does not list.
+		const imported = new Set(resolvedStaticImports);
+		expect(rowsWithoutLiveMember(eagerAllowlist, imported)).toEqual([]);
+		expect(
+			rowsWithoutLiveMember(resolvedStaticImports, new Set(eagerAllowlist)),
+		).toEqual([]);
+		// #5072: a planted row for a module index.ts never imports reds through
+		// the same comparison.
+		const planted = "./clients/5072-gone-eager.js";
+		expectPlantedStaleRow({
+			baseline: "config/dependency-cruiser-eager-allowlist.json",
+			rowKey: planted,
+			verdict: rowsWithoutLiveMember([...eagerAllowlist, planted], imported),
+		});
 	}, 30_000);
 
 	it("pins the reviewed static-cycle baseline size", () => {

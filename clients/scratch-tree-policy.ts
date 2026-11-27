@@ -54,12 +54,10 @@
  *     fully in scope.
  */
 
-import { relative } from "node:path";
+import { relative, resolve } from "node:path";
 import { EXCLUDED_DIRS, getExcludedDirGlobs } from "./file-utils.js";
-import {
-	canonicalDirectory,
-	listNestedLinkedWorktreeRoots,
-} from "./review-graph/git-identity.js";
+import { realpathOrResolve, relativeInside } from "./path-utils.js";
+import { listNestedLinkedWorktreeRoots } from "./review-graph/git-identity.js";
 import { escapeRegExp } from "./string-utils.js";
 
 /**
@@ -70,7 +68,7 @@ import { escapeRegExp } from "./string-utils.js";
  * the caller joins it back onto its own spelling of `cwd`.
  */
 export function nestedWorktreeOffsets(cwd: string): string[] {
-	const base = canonicalDirectory(cwd);
+	const base = realpathOrResolve(cwd);
 	return listNestedLinkedWorktreeRoots(cwd).map((root) => relative(base, root));
 }
 
@@ -99,11 +97,36 @@ export function getScratchTreeDirNames(): string[] {
 }
 
 /**
- * Fnmatch-style glob patterns (`star/name/star`, not doublestar) for
- * vulture's `--exclude` — the format `dead-code-client.ts` needs.
+ * A path made literal for an fnmatch pattern: `*`, `?` and `[` are wrapped in a
+ * bracket class. Vulture's `--exclude` list is comma-split, so a comma cannot be
+ * escaped; callers that cannot drop the entry swap it for `?`.
  */
-export function getScratchTreeFnmatchPatterns(): string[] {
-	return literalExcludedDirNames().map((name) => `*/${name}/*`);
+export function escapeFnmatchLiteral(text: string): string {
+	return text.replace(/[*?[]/g, (ch) => `[${ch}]`);
+}
+
+/**
+ * Fnmatch-style patterns for vulture's `--exclude` (`dead-code-client.ts`),
+ * anchored at `root`. Vulture matches every pattern against the module's
+ * RESOLVED absolute path, so a bare `*\/<name>/*` also matches a scratch-named
+ * directory ABOVE the project and silently excludes every file (#5500: a
+ * project under `.claude/worktrees/<lane>` got an empty, exit-0 report). The
+ * prefix is the real root, glob characters literal and a comma (which cannot be
+ * escaped in the comma-split list) matching any one character; each name is
+ * given as a direct child and as a deeper descendant of the root.
+ * `extraDirNames` are tool-specific names beyond the shared list.
+ */
+export function getScratchTreeFnmatchPatterns(
+	root: string,
+	extraDirNames: readonly string[] = [],
+): string[] {
+	const prefix = escapeFnmatchLiteral(realpathOrResolve(root))
+		.replace(/,/g, "?")
+		.replace(/[/\\]+$/, "");
+	return [...literalExcludedDirNames(), ...extraDirNames].flatMap((name) => [
+		`${prefix}/${name}/*`,
+		`${prefix}/*/${name}/*`,
+	]);
 }
 
 // --- Secrets-lane tier (#1562 review-round F1) ---
@@ -162,33 +185,65 @@ export const SECRETS_LANE_SCRATCH_DIR_NAMES: readonly string[] = [
 ];
 
 /**
+ * The regex source that matches `root` itself, either separator, no anchor and
+ * no tail. gitleaks's `File` keeps the spelling of `--source` joined with the
+ * OS-native separator, so an anchor on `root` is an anchor on the project and
+ * on nothing above it.
+ */
+export function rootPathRegexSource(root: string): string {
+	const segments = resolve(root).split(/[/\\]/);
+	while (segments.length > 1 && segments[segments.length - 1] === "") {
+		segments.pop();
+	}
+	return segments.map(escapeRegExp).join("[/\\\\]");
+}
+
+/**
  * Regex patterns for gitleaks's `[allowlist] paths` config array, scoped to
  * the narrow secrets-lane tier above (NOT the walker-parity list — see the
- * module doc). Matched against the finding's relative path.
+ * module doc). Matched against the finding's `File`, which gitleaks reports as
+ * `--source` joined with the relative path, so each pattern is anchored at
+ * `root` and only a scratch directory INSIDE the project matches (#5500: the
+ * unanchored `(?:^|[/\\])name` form matched a `.claude/worktrees/<lane>`
+ * ancestor and dropped every finding before the TS backstop saw one).
  *
  * #1562 review-round F4: gitleaks's `File` field preserves the OS-native
  * separator from Go's directory walk — on Windows that's `\`, not `/` — so
- * an anchor of only `(?:^|/)` never matches there. Both separators are
- * accepted in the anchor and in the "rest of path" tail.
+ * both separators are accepted in the anchor and in the tail.
  */
-export function getSecretsLaneAllowlistPaths(): string[] {
+export function getSecretsLaneAllowlistPaths(root: string): string[] {
+	const anchor = rootPathRegexSource(root);
 	return SECRETS_LANE_SCRATCH_DIR_NAMES.map((name) => {
 		const escaped = escapeRegExp(name);
-		return `(?:^|[/\\\\])${escaped}(?:[/\\\\].*)?$`;
+		return `^${anchor}[/\\\\](?:.*[/\\\\])?${escaped}(?:[/\\\\].*)?$`;
 	});
 }
 
 /**
- * True when any path segment of `relPath` (forward- or back-slash separated)
- * is a secrets-lane scratch dir name. Used for the TS-side post-filter that
- * backstops the generated gitleaks config — belt-and-suspenders because we
- * can't exercise gitleaks's own TOML-regex engine in unit tests, only assert
- * the config we hand it.
+ * True when any path segment of `file` BELOW `root` is a secrets-lane scratch
+ * dir name. `file` is absolute or relative to `root`; a path outside `root` is
+ * not under it, so a scratch-named directory above the project never counts
+ * (#5500). Used for the TS-side post-filter that backstops the generated
+ * gitleaks config — belt-and-suspenders because we can't exercise gitleaks's
+ * own TOML-regex engine in unit tests, only assert the config we hand it.
  */
-export function isUnderSecretsLaneScratchTree(relPath: string): boolean {
+export function isUnderSecretsLaneScratchTree(
+	file: string,
+	root: string,
+): boolean {
+	const absolute = resolve(root, file);
+	// The lexical answer first (a link inside the project stays inside it), the
+	// real identities second: gitleaks reports the real spelling of a root that
+	// the caller spelled through a symlink.
+	const rel =
+		relativeInside(root, absolute) ??
+		relativeInside(realpathOrResolve(root), realpathOrResolve(absolute));
+	if (rel === undefined) return false;
 	const names = new Set(
 		SECRETS_LANE_SCRATCH_DIR_NAMES.map((n) => n.toLowerCase()),
 	);
-	const segments = relPath.split(/[/\\]/).filter(Boolean);
-	return segments.some((segment) => names.has(segment.toLowerCase()));
+	return rel
+		.split("/")
+		.filter(Boolean)
+		.some((segment) => names.has(segment.toLowerCase()));
 }

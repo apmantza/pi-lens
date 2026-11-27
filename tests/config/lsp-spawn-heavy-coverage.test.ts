@@ -136,6 +136,8 @@ function isLspSpawnHeavy(source: string): boolean {
  * reds any exemption whose file stops being a candidate (#1735).
  */
 const SPAWN_EXEMPTIONS: Readonly<Record<string, string>> = {
+	"tests/index-5553-writer-baselines.test.ts":
+		"#5553: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission (real git, sed, ast-grep); cannot run in two projects.",
 	"tests/tools/lsp-navigation-rename-first-open.test.ts":
 		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
 	["tests/support/fake-lsp-" + "server.test.ts"]:
@@ -150,6 +152,8 @@ const SPAWN_EXEMPTIONS: Readonly<Record<string, string>> = {
 		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
 	"tests/clients/lsp/powershell-bom-wire-5151.integration.test.ts":
 		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	"tests/clients/lsp/server-status-readiness-5487.test.ts":
+		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
 	"tests/clients/lsp/opengrep-offline-config-failure.test.ts":
 		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
 	"tests/clients/lsp/opengrep-new-file-4787.test.ts":
@@ -158,6 +162,10 @@ const SPAWN_EXEMPTIONS: Readonly<Record<string, string>> = {
 		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
 	"tests/clients/lsp/navigation-timeout.integration.test.ts":
 		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	"tests/clients/lsp/code-action-unanswered-5258.test.ts":
+		"#5258: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	"tests/clients/lsp/request-sender-5097.test.ts":
+		"#5097: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
 	"tests/clients/lsp/integration.test.ts":
 		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
 	["tests/clients/lsp/fake-lsp-" + "server-parent-watchdog.test.ts"]:
@@ -166,6 +174,12 @@ const SPAWN_EXEMPTIONS: Readonly<Record<string, string>> = {
 		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
 	"tests/clients/lsp/crash-respawn-debounce-wire.test.ts":
 		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	"tests/clients/lsp/open-document-budget-5700.test.ts":
+		"#5700: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	"tests/mcp/lsp-resident-budget-5700.smoke.test.ts":
+		"#5700: phased in the fully serialized wall-clock-budget lane (a real MCP child that starts a fake language server, waited on a real-clock deadline); cannot run in two projects.",
+	"tests/clients/lsp/effect-tsgo-initialize-fallback-5504.test.ts":
+		"#5504: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
 	"tests/clients/lsp/config-section-answers-4758.test.ts":
 		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
 	"tests/clients/lsp/clangd-lazy-indexing.test.ts":
@@ -182,12 +196,18 @@ const SPAWN_EXEMPTIONS: Readonly<Record<string, string>> = {
 		"real wedged child and CPU sampling run in the serialized wall-clock-budget phase; the lower-bound wedge assertion needs that quiet phase",
 	"tests/clients/head-move-resync-4476.test.ts":
 		"#4493: real git repositories plus fake-LSP children through the tool_call/tool_result seams; phased in the serialized wall-clock-budget lane (the flake-shape admission gate requires that lane), and its waits are the hooks' own returns and a request barrier, not a handshake-plus-diagnostics budget",
+	"tests/clients/cascade-retouch-push-only-5675.test.ts":
+		"#5675: the production LSPService and cascade over one real fake-server child are phased in the serialized wall-clock-budget lane, which the flake-shape admission gate requires; its assertions are the didChange frames the cascade sends and the verdicts it reads, with waits on the server's own republish, not a handshake-plus-first-diagnostics budget",
+	"tests/index-5552-lsp-resync-wire.test.ts":
+		"#5552: real tool_result/dispatcher and child-LSP wire traffic is phased in the serialized wall-clock-budget lane, which the flake-shape admission gate requires; its assertion is payload delivery, not a handshake-plus-diagnostics budget",
 	"tests/clients/lsp/managed-fallback-after-trust-refusal-4515.test.ts":
 		"#4515: the only launchLSP call that reaches a spawn is doubled; the project-local candidate it delegates to the real launchLSP is refused by project trust before any spawn (or, under trust, is absent), so no LSP child, handshake or diagnostics wait exists to starve",
 	"tests/clients/lsp/headless-tool-call-keepalive.test.ts":
 		"#2507: the real LSP child is spawned by a headless NODE child this test runs, not by this process; it is phased in the serialized wall-clock-budget lane (the flake-shape admission gate requires that lane), and its assertions are the child's exit code and stdout, not a handshake budget",
 	"tests/clients/lsp/kill-process-tree-real-child.test.ts":
 		"#2042/#3091: the real child is `/bin/sh` launched through `launchLSP` purely to obtain a pid whose `/proc` PPid is this process — there is no language server, no handshake and no diagnostics wait to starve; each leader is killed in the test's cleanup (the #3096 eviction cases hold about 257 live children for about a second) and the assertions read which signal `killProcessTree` issued and the eviction record. It is already phased in the serialized wall-clock-budget lane, which the flake-shape admission gate requires, and a file cannot sit in both lanes without running twice (same shape as the two entries above).",
+	"tests/clients/lsp/windows-server-containment-5694.test.ts":
+		"#5694: each `launchLSP` call runs inside a real host child this test starts, and the launched program is a Node script that writes its pid and idles; no language server, no handshake and no diagnostics wait. The assertions read whether that pid outlives its host. The file is phased in the serialized wall-clock-budget lane, which the flake-shape admission gate requires, and a file cannot sit in both lanes.",
 	"tests/clients/instance-reaper-pid-reuse.test.ts":
 		"#3539: the one `launchLSP` call starts `/bin/sh -c sleep 30` to read the owner tag out of its /proc environ; no language server, no handshake and no diagnostics wait. The file is phased in the serialized wall-clock-budget lane, which the flake-shape admission gate requires, and a file cannot sit in both lanes.",
 	"tests/clients/session-repository-trust-4530.test.ts":

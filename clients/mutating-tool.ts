@@ -137,7 +137,10 @@ interface MutationLineResult {
 	 * names no path, so the classifier falls back to the static field list.
 	 */
 	path?: string;
-	/** Individual ranges for a multi-range edit; the guard checks each one. */
+	/**
+	 * Per-range detail for an edit, including a single range; the guard checks
+	 * each one and a range-only producer needs it when `touchedLines` is absent.
+	 */
 	editRanges?: [number, number][];
 	preflightError?: string;
 	editBatchSummary?: ReadGuardEditBatchSummary;
@@ -238,34 +241,6 @@ export function isMutatingToolName(toolName: string): boolean {
 	return BUILTIN_MUTATING_TOOLS.has(toolName);
 }
 
-/**
- * #5239, #5248: the pi-lens tools whose result details name the files they
- * wrote. `lsp_navigation` covers rename, rename_file and executeCommand apply.
- */
-const APPLIED_FILES_TOOLS: ReadonlySet<string> = new Set([
-	"ast_grep_replace",
-	"lsp_navigation",
-]);
-
-/**
- * #5239, #5248: the files an applied `ast_grep_replace` or `lsp_navigation`
- * rewrote and the mutation bridge accepted, read from the tool's own result
- * details. A dry run, a refused apply and every other tool name none, so they
- * dispatch nothing here.
- */
-export function appliedFilesOfOwnTool(event: {
-	toolName?: string;
-	details?: unknown;
-}): string[] {
-	if (event.toolName === undefined || !APPLIED_FILES_TOOLS.has(event.toolName))
-		return [];
-	const listed = (event.details as { appliedFiles?: unknown } | undefined)
-		?.appliedFiles;
-	return Array.isArray(listed)
-		? listed.flatMap((entry) => (typeof entry === "string" ? [entry] : []))
-		: [];
-}
-
 /** Built-in mutating tool names, for reports and tests. */
 export function getBuiltinMutatingToolNames(): string[] {
 	return [...BUILTIN_MUTATING_TOOLS.keys()];
@@ -356,13 +331,16 @@ function parseHashlineAnchor(anchor: unknown): number | undefined {
 	return Number.isInteger(line) && line > 0 ? line : undefined;
 }
 
-/** Bounding box plus per-range detail for a multi-range edit. */
+/**
+ * Bounding box plus per-range detail for an edit. A single range is kept: the
+ * guard's range-only producers consume `editRanges` when they report no box.
+ */
 function combineRanges(ranges: [number, number][]): MutationLineResult {
 	const starts = ranges.map(([start]) => start);
 	const ends = ranges.map(([, end]) => end);
 	return {
 		touchedLines: [Math.min(...starts), Math.max(...ends)],
-		editRanges: ranges.length > 1 ? ranges : undefined,
+		editRanges: ranges.length > 0 ? ranges : undefined,
 	};
 }
 

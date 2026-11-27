@@ -2101,3 +2101,79 @@ describe("LSP workspace edits — CRLF boundary class, general (#1147 P3-5)", ()
 		}
 	});
 });
+
+describe("LSP workspace edits — mixed line endings take the edited range's ending (#5670)", () => {
+	// #5670 r2: applyTextEditsToString used the file's FIRST line ending for every
+	// edit, so a multi-line newText inserted into a CRLF range of an LF-first file
+	// (or the reverse) added a line break of the other style, which pi 1.5.2's own
+	// edit tool does not (it uses the ending of the line where the range starts).
+	const insertAt = (
+		content: string,
+		line: number,
+		character: number,
+		newText: string,
+	) =>
+		applyTextEditsToString(content, [
+			{
+				range: {
+					start: { line, character },
+					end: { line, character },
+				},
+				newText,
+			},
+		]);
+
+	it("an edit on a CRLF line of an LF-first file inserts CRLF", () => {
+		expect(insertAt("a\nx\r\nc\r\n", 1, 1, "\ny")).toBe("a\nx\r\ny\r\nc\r\n");
+	});
+
+	it("an edit on an LF line of a CRLF-first file inserts LF", () => {
+		expect(insertAt("a\r\nx\nc\n", 1, 1, "\ny")).toBe("a\r\nx\ny\nc\n");
+	});
+
+	it("an unterminated last line takes the ending of the line before it", () => {
+		expect(insertAt("a\nb\r\nc", 2, 1, "\nd")).toBe("a\nb\r\nc\r\nd");
+		expect(insertAt("a\r\nb\nc", 2, 1, "\nd")).toBe("a\r\nb\nc\nd");
+	});
+
+	it("a multi-line range takes the ending of the line where it starts", () => {
+		const range = {
+			start: { line: 1, character: 1 },
+			end: { line: 2, character: 1 },
+		};
+		expect(
+			applyTextEditsToString("x\na\r\nb\nc\n", [{ range, newText: "\nq\nr" }]),
+		).toBe("x\na\r\nq\r\nr\nc\n");
+		expect(
+			applyTextEditsToString("x\r\na\nb\r\nc\r\n", [
+				{ range, newText: "\nq\nr" },
+			]),
+		).toBe("x\r\na\nq\nr\r\nc\r\n");
+	});
+
+	it("each edit of one batch takes the ending of its own start line", () => {
+		const result = applyTextEditsToString("a\nb\r\nc\n", [
+			{
+				range: {
+					start: { line: 0, character: 1 },
+					end: { line: 0, character: 1 },
+				},
+				newText: "\n1",
+			},
+			{
+				range: {
+					start: { line: 1, character: 1 },
+					end: { line: 1, character: 1 },
+				},
+				newText: "\n2",
+			},
+		]);
+		expect(result).toBe("a\n1\nb\r\n2\r\nc\n");
+	});
+
+	it("pure LF and pure CRLF files are unchanged by the per-range rule", () => {
+		expect(insertAt("a\nb\n", 0, 1, "\nx")).toBe("a\nx\nb\n");
+		expect(insertAt("a\r\nb\r\n", 0, 1, "\nx")).toBe("a\r\nx\r\nb\r\n");
+		expect(insertAt("ab", 0, 1, "\nx")).toBe("a\nxb");
+	});
+});

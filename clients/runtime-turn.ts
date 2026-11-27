@@ -34,7 +34,7 @@ import {
 	type BlockerPartition,
 	type TurnEndFindingsCache,
 } from "./git-guard.js";
-import { blockerRepeatContent } from "./runtime-context.js";
+import { blockerRepeatContent, cappedBlockerLine } from "./runtime-context.js";
 import { cascadeSettleWaitMs } from "./cascade-budget.js";
 import { logCascade } from "./cascade-logger.js";
 import { isUnderDir, normalizeMapKey } from "./path-utils.js";
@@ -56,8 +56,11 @@ import {
 } from "./dispatch/runner-context.js";
 import { getKnipIgnorePatterns } from "./file-utils.js";
 import {
+	admitBlockerReplay,
 	admitsProjectWideFindings,
+	DEPENDENCY_DRIFT_MAX_DELIVERIES,
 	formatCacheAgeLabel,
+	unconfirmedBlockerNote,
 } from "./finding-delivery-gate.js";
 import {
 	getFullScanWallClockMs,
@@ -106,7 +109,7 @@ import { deadCodeIssueToProjectDiagnostic } from "./project-diagnostics/runner-a
 import { trivyFindingToProjectDiagnostic } from "./project-diagnostics/runner-adapters/trivy.js";
 import { knipIssuesToProjectDiagnostics } from "./project-diagnostics/runner-adapters/knip.js";
 import type { ProjectDiagnostic } from "./project-diagnostics/types.js";
-import { hasAmbientPythonEnvironment } from "./python-environment.js";
+import { hasAmbientPythonEnvironment } from "./python-ambient-environment.js";
 import { logLatency } from "./latency-logger.js";
 import {
 	getLspBudgetIdleTimeoutMs,
@@ -138,11 +141,7 @@ import {
 	advisoryPathKey,
 	snapshotAdvisoryProvenance,
 } from "./advisory-provenance.js";
-import {
-	DEPENDENCY_DRIFT_MAX_DELIVERIES,
-	SELF_DRIFT_MAX_DELIVERIES,
-	sweepInlineBlockerFreshness,
-} from "./blocker-freshness.js";
+import { sweepInlineBlockerFreshness } from "./blocker-freshness.js";
 import { sweepInlineBlockerPastEof } from "./blocker-past-eof.js";
 // #2001/#2002: collect-later delivery for slow auxiliary LSP servers.
 import { getLSPService } from "./lsp/capabilities.js";
@@ -1150,22 +1149,40 @@ function resyncCommitGateForReadOnlyTurn(args: {
 }
 
 /**
- * #1950/#4990: the delivery cap for a demoted record's OWN drift axis, or
- * `undefined` for a `past-eof` demotion (#1944 retires that after one delivery
- * and keeps no count) and for a record a sibling gate demoted.
+ * #1950/#4990: a demotion's own drift axis, if it has one. `past-eof` retires
+ * after its own single delivery (#1944) and has no count, and a record a
+ * sibling gate demoted has no axis here.
  */
-function driftDeliveryCap(
-	staleReason: "dependency-drift" | "past-eof" | "self-drift" | undefined,
-): { axis: "dependency-drift" | "self-drift"; cap: number } | undefined {
-	if (staleReason !== "dependency-drift" && staleReason !== "self-drift")
-		return undefined;
-	return {
-		axis: staleReason,
-		cap:
-			staleReason === "self-drift"
-				? SELF_DRIFT_MAX_DELIVERIES
-				: DEPENDENCY_DRIFT_MAX_DELIVERIES,
-	};
+function driftAxisOf(
+	staleReason: string | undefined,
+): "dependency-drift" | "self-drift" | undefined {
+	return staleReason === "dependency-drift" || staleReason === "self-drift"
+		? staleReason
+		: undefined;
+}
+
+/**
+ * #1950/#4990: a drift demotion is recoverable (its coordinates are still in
+ * bounds), so it does not retire after one delivery like the past-EOF case;
+ * the delivery gate's cap stops the repeat re-serve of a record that never
+ * heals, and this is the note on the delivery that reaches it. The count is a
+ * PEEK (fix-round F1): the hold's `onDelivered` commits it only once the
+ * content reaches the agent, so a suppressed turn or a part the cap cut never
+ * advances it.
+ */
+function driftCapNote(
+	runtime: Pick<RuntimeCoordinator, "peekInlineBlockerStaleDeliveryCount">,
+	bPath: string,
+	axis: "dependency-drift" | "self-drift",
+): string | undefined {
+	const staleDeliveries = runtime.peekInlineBlockerStaleDeliveryCount(bPath);
+	return admitBlockerReplay({
+		surface: "turn-end-demoted",
+		axis,
+		staleDeliveries,
+	}).shown === "retire-note"
+		? formatDeliveryCapNote(staleDeliveries + 1)
+		: undefined;
 }
 
 /**
@@ -1310,6 +1327,42 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	const files = ownFiles;
 
 	/**
+	 * Arm the session's LSP idle reset from this turn end: after a quiet turn
+	 * and, since #5700, after an edit turn too. A later turn end re-arms it, so
+	 * it fires only after a whole idle window with no turn end.
+	 */
+	const armLspIdleReset = (): void => {
+		// #713: subagent sessions use a shorter idle reset (nominally 60s) — a
+		// short-lived task agent holding a warm fleet for 4 minutes after its
+		// last turn is pure waste under fan-out. Classify ONCE here so every
+		// tick in this call path shares the same answer. PI_LENS_SUBAGENT_FULL=1
+		// restores the base delay via isSubagentSession() returning false.
+		// #1618: both branches route through `getEffectiveLspIdleResetMs` so
+		// AC6's derivation applies universally — see that function's doc for
+		// why the "shorter" path is not always literally 60s anymore.
+		const idleResetMs = getEffectiveLspIdleResetMs();
+		dbg(
+			`turn_end: ${files.length} modified file(s), scheduling LSP idle reset (${idleResetMs / 1000}s)`,
+		);
+		if (getFlag("no-lsp")) return;
+		const sessionGeneration = runtime.sessionGeneration;
+		scheduleLSPIdleReset(resetLSPService, idleResetMs, {
+			isCurrentSession: () => runtime.isCurrentSession(sessionGeneration),
+			// #2157 fix round 2: a secondary (subagent) evaluation's own timer
+			// must not release the primary's shared fleet — see the option's
+			// doc comment on `scheduleLSPIdleReset`.
+			isPrimarySession: () => {
+				const activePrimarySessionId = getActiveSessionId();
+				return (
+					activePrimarySessionId === undefined ||
+					activePrimarySessionId === runtime.telemetrySessionId
+				);
+			},
+			onError: (err) => dbg(`lsp idle reset failed: ${err}`),
+		});
+	};
+
+	/**
 	 * #2275: widget-footer sibling of #1950's inline-blocker cap, for the
 	 * widget store's OWN dependency-drift demotion
 	 * (`markWidgetFileBlockersStale`, driven by the freshness sweep further
@@ -1382,35 +1435,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		if (getFlag("lens-guard") && !runtime.gitGuardHasBlockers) {
 			retireSettledGitGuardRecord(runtime, cacheManager, cwd, sessionId);
 		}
-		// #713: subagent sessions use a shorter idle reset (nominally 60s) — a
-		// short-lived task agent holding a warm fleet for 4 minutes after its
-		// last turn is pure waste under fan-out. Classify ONCE here so every
-		// tick in this call path shares the same answer. PI_LENS_SUBAGENT_FULL=1
-		// restores the base delay via isSubagentSession() returning false.
-		// #1618: both branches route through `getEffectiveLspIdleResetMs` so
-		// AC6's derivation applies universally — see that function's doc for
-		// why the "shorter" path is not always literally 60s anymore.
-		const idleResetMs = getEffectiveLspIdleResetMs();
-		dbg(
-			`turn_end: no modified files, scheduling LSP idle reset (${idleResetMs / 1000}s)`,
-		);
-		if (!getFlag("no-lsp")) {
-			const sessionGeneration = runtime.sessionGeneration;
-			scheduleLSPIdleReset(resetLSPService, idleResetMs, {
-				isCurrentSession: () => runtime.isCurrentSession(sessionGeneration),
-				// #2157 fix round 2: a secondary (subagent) evaluation's own timer
-				// must not release the primary's shared fleet — see the option's
-				// doc comment on `scheduleLSPIdleReset`.
-				isPrimarySession: () => {
-					const activePrimarySessionId = getActiveSessionId();
-					return (
-						activePrimarySessionId === undefined ||
-						activePrimarySessionId === runtime.telemetrySessionId
-					);
-				},
-				onError: (err) => dbg(`lsp idle reset failed: ${err}`),
-			});
-		}
+		armLspIdleReset();
 		resetFormatService();
 		// #3218 criterion 2: a retirement nobody has reported (a
 		// `lens_diagnostics` confirmation lands on exactly this turn) falls
@@ -1430,17 +1455,13 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			return;
 	}
 
-	// Cancel any pending idle reset since we're actively working. #1618: also
-	// checks `pendingSweepRearm` — a timer deferred behind an in-flight
-	// workspace sweep already nulled `lspIdleResetTimeout` (the setTimeout
-	// callback clears it before checking the hold), so this guard used to
-	// read "nothing pending" and skip the cancel while a rearm was still
-	// queued to fire the instant the sweep released its hold — resurrecting
-	// idle reset on a session that had since gone back to active editing.
-	if (files.length > 0 && (lspIdleResetTimeout || pendingSweepRearm)) {
-		cancelLSPIdleReset();
-		dbg("turn_end: cancelled pending LSP idle reset (active editing)");
-	}
+	// #5700 (B3): an edit turn restarts the idle window instead of cancelling
+	// it. It used to cancel and nothing armed it again, so a session whose last
+	// turn wrote a file kept its whole fleet. Re-arming replaces the pending
+	// timer and any rearm parked behind a workspace sweep (#1618), so a parked
+	// rearm cannot fire early against a session that went back to editing.
+	// #5737 (thread Q): a secondary session re-arms nothing, as the quiet path does.
+	if (files.length > 0 && !isSecondarySession) armLspIdleReset();
 
 	dbg(
 		`turn_end: ${files.length} file(s) modified, cycles: ${turnState.turnCycles}/${turnState.maxCycles}, access: ${access}, owner: ${gateOwnerLabel}`,
@@ -1456,6 +1477,16 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 
 	const turnEndStart = Date.now();
 	const blockerParts: string[] = [];
+	/**
+	 * #5532: the inline-blocker replay parts of this turn by part, and the
+	 * pointer line each capped one reads as in the message (`blockerParts` keeps
+	 * the section).
+	 */
+	const replayedBlockers = new Map<
+		string,
+		{ filePath: string; displayPath: string }
+	>();
+	const cappedBlockerText = new Map<string, string>();
 	/**
 	 * #1622 review M2: findings the freshness gate demoted. A third tier between
 	 * blockers and advisories — not a blocker, because the cached coordinate is
@@ -1878,11 +1909,18 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			bPath: string,
 			displayPath: string,
 			reason: "dependency-drift" | "self-drift",
-			cap: number,
 		) =>
 		(): void => {
 			const deliveryCount = runtime.incrementInlineBlockerStaleDelivery(bPath);
-			if (deliveryCount < cap) return;
+			// The gate's rule, asked about the delivery just counted.
+			if (
+				admitBlockerReplay({
+					surface: "turn-end-demoted",
+					axis: reason,
+					staleDeliveries: deliveryCount - 1,
+				}).shown !== "retire-note"
+			)
+				return;
 			if (!runtime.retireDemotedDriftBlocker(bPath, reason)) return;
 			runtime.updateGitGuardStatus(false, "");
 			demotedFindingsRetired += 1;
@@ -1981,25 +2019,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				bPath,
 				deadLines,
 			);
-			// #1950/#4990: which axis's delivery cap applies, if this demotion has
-			// one. `past-eof` retires after its own single delivery (#1944) and has
-			// no count.
-			const drift = driftDeliveryCap(staleReason);
+			const driftAxis = driftAxisOf(staleReason);
 			let retirementNote: string | undefined;
 			if (retires) {
 				retirementNote = formatRetirementNote(deadLines);
-			} else if (drift !== undefined) {
-				// #1950/#4990: a drift demotion is recoverable (its coordinates are
-				// still in bounds), so it does not retire after one delivery like the
-				// past-EOF case; the cap stops the repeat re-serve of a record that
-				// never heals. The count is a PEEK (fix-round F1): the hold's
-				// `onDelivered` commits it only once the content reaches the agent,
-				// so a suppressed turn or a part the cap cut never advances it.
-				const tentativeCount =
-					runtime.peekInlineBlockerStaleDeliveryCount(bPath) + 1;
-				if (tentativeCount >= drift.cap) {
-					retirementNote = formatDeliveryCapNote(tentativeCount);
-				}
+			} else if (driftAxis !== undefined) {
+				retirementNote = driftCapNote(runtime, bPath, driftAxis);
 			}
 			const advisoryPart =
 				`${STALE_LINE_MARKER} ${displayPath}${suppressedByDispositionNote(policy.suppressed)}:\n${degraded.body}` +
@@ -2014,14 +2039,13 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					part: advisoryPart,
 					onDelivered: retirePastEofOnDelivery(bPath, deadLines, displayPath),
 				});
-			} else if (drift !== undefined) {
+			} else if (driftAxis !== undefined) {
 				deliveryHolds.push({
 					part: advisoryPart,
 					onDelivered: countDriftDeliveryOnDelivery(
 						bPath,
 						displayPath,
-						drift.axis,
-						drift.cap,
+						driftAxis,
 					),
 					skipOnSuppressed: true,
 				});
@@ -2043,12 +2067,32 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				policySuppressedPaths.push(bPath);
 				continue;
 			}
-			const replayPart = `Unresolved from this turn — ${displayPath}${suppressedByDispositionNote(policy.suppressed)}:\n${policy.body}`;
+			// #5784: the gate's sentence for blockers carried without a verdict,
+			// indented so `clients/git-guard.ts` parses it as section body. Built
+			// from the rows the policy kept (#5788 round 3 R3-3): a row the agent
+			// marked is out of the block, so it is out of the note too.
+			const note = unconfirmedBlockerNote(policy.keptDiagnostics, displayPath, {
+				on: "its latest write",
+				host,
+			});
+			const replayPart = `Unresolved from this turn — ${displayPath}${suppressedByDispositionNote(policy.suppressed)}:\n${policy.body}${note === undefined ? "" : `\n  ${note}`}`;
 			// @delivery-surface: runtime-turn:unresolved-inline-blocker
 			blockerParts.push(replayPart);
 			// #4617: the replay is about this file, which a no-write turn did not
 			// edit; a late runner's blocking survivor is pending, not resolved.
 			citePart(replayPart, [bPath]);
+			// #5532: a blocker the model has had in full 3 times renders as one
+			// pointer line. The part stays in `blockerParts` as pushed: it is the
+			// commit gate's blocker text and the key of the stamp's citations. Only
+			// a pi delivery counts (`blockerDeliveries`), so an MCP count stays 0.
+			replayedBlockers.set(replayPart, { filePath: bPath, displayPath });
+			if (
+				admitBlockerReplay({
+					surface: "turn-end-replay",
+					fullDeliveries: runtime.peekBlockerFullDeliveryCount(bPath),
+				}).shown === "collapse"
+			)
+				cappedBlockerText.set(replayPart, cappedBlockerLine(displayPath));
 		}
 	}
 	// #3248: the post-policy survivor set per file is FINAL here. The commit
@@ -4420,17 +4464,17 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			entries: DeferredTestTarget[],
 			label: string,
 		): DeferredTestTarget[] => {
-			const bounded = boundDeferredTargets(
+			const cappedTargets = boundDeferredTargets(
 				entries,
 				TEST_RUNNER_MAX_PERSISTED_TARGETS,
 				isThisSession,
 			);
-			if (bounded.length !== entries.length) {
+			if (cappedTargets.length !== entries.length) {
 				dbg(
 					`turn_end: ${label} test target list held ${entries.length} entries, bounded to the newest ${TEST_RUNNER_MAX_PERSISTED_TARGETS} (oldest foreign-session rows dropped)`,
 				);
 			}
-			return bounded;
+			return cappedTargets;
 		};
 		const writeTestFindings = (
 			record: TestRunnerFindingsCache,
@@ -5569,12 +5613,13 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				// budget and signal; the pass's internal deadline (3s) is the
 				// tighter of the two.
 				reverify = await bounded(
-					runPersistentReverify({
-						report: persistedReport,
-						cwd,
-						lspService: reverifyLspService,
-						signal: getAmbientAbortSignal(),
-					}),
+					(signal) =>
+						runPersistentReverify({
+							report: persistedReport,
+							cwd,
+							lspService: reverifyLspService,
+							signal,
+						}),
 					{
 						ms: HOOK_WALL_BUDGET_MS.turn_end,
 						signal: getAmbientAbortSignal(),
@@ -5748,7 +5793,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 										isSecretWarning(warning) &&
 										typeof warning.line === "number" &&
 										secretBlockedLocations.has(
-											secretLocationKey(warning.filePath, warning.line),
+											secretLocationKey(warning.filePath, warning.line, cwd),
 										)
 									),
 							);
@@ -6456,7 +6501,10 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		// so an otherwise empty turn still delivers them ONCE (the coordinator
 		// consumed them).
 		...resolvedParts.map(asIs),
-		...blockerParts.map(asIs),
+		...blockerParts.map((raw) => ({
+			raw,
+			text: cappedBlockerText.get(raw) ?? raw,
+		})),
 		...staleSecretParts.map(asIs),
 		// #3814: a blocking late-runner finding never reaches `advisoryParts`; it
 		// rides the blocker replay, so every advisory part gets the label.
@@ -6584,7 +6632,23 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					.sort((a, b) => compareOrdinal(a, b))
 					.join("|")
 			: "";
-		const signature = `${countDrivenFileSet}::${content}`;
+		// #5532: what the agent was TOLD is the section, not how the cap renders it:
+		// a blocker collapsing to its pointer after its 3rd delivery is not news.
+		// The signature reads a collapsed blocker as the section it stood for, so
+		// the turn that changed only that is a duplicate (it stages the pointer as
+		// a repeat); with nothing collapsed it is `content`, as before.
+		const signature = `${countDrivenFileSet}::${
+			cappedBlockerText.size === 0
+				? content
+				: capTurnEndMessage(
+						composedParts
+							.map((part) =>
+								cappedBlockerText.has(part.raw) ? part.raw : part.text,
+							)
+							.join("\n\n"),
+						holdPlan.heldCount,
+					)
+		}`;
 		const last = readLastDelivery(cacheManager, cwd);
 		const duplicate =
 			last?.signature === signature &&
@@ -6613,13 +6677,33 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		const waiting = duplicate
 			? readTurnEndGuardRecord(cacheManager, runtime, cwd, sessionId).stored
 			: undefined;
+		// #5532: a repeat is capped like any turn-end message, pointer lines
+		// included (review r2 N1). Full sections lead, so the room a collapse
+		// frees goes to blockers the cap cut before; collapsed lines alone are one
+		// line each.
+		const repeatParts: ComposedPart[] = [
+			...blockerParts.flatMap((part) =>
+				cappedBlockerText.has(part) ? [] : [part],
+			),
+			...blockerParts.flatMap((part) =>
+				cappedBlockerText.has(part) ? [part] : [],
+			),
+		].map((raw) => ({ raw, text: cappedBlockerText.get(raw) ?? raw }));
+		const pointerOnly = repeatParts.every((part) => part.raw !== part.text);
+		const repeatSeparator = pointerOnly ? "\n" : "\n\n";
+		const repeatJoined = repeatParts
+			.map((part) => part.text)
+			.join(repeatSeparator);
 		const repeatContent =
 			duplicate &&
 			blockerParts.length > 0 &&
 			deps.deliveryAddress === undefined &&
 			!(waiting && waiting.consumed !== true && waiting.repeat !== true)
-				? blockerRepeatContent(capTurnEndMessage(blockerParts.join("\n\n")))
+				? blockerRepeatContent(capTurnEndMessage(repeatJoined), pointerOnly)
 				: undefined;
+		// #5532: the blocker sections' own text, for the retained-injection check
+		// whatever the repeat renders for them.
+		const repeatBodies = repeatContent === undefined ? undefined : blockerParts;
 		if (duplicate && repeatContent === undefined) {
 			dbg(
 				"turn_end: duplicate findings detected (same session), suppressing re-prompt",
@@ -6692,6 +6776,36 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		// computed, and hand back whatever the cap cut (#3813). A repeat carries
 		// the blockers only, so no one-shot part reached the agent through it.
 		settleHolds(repeatContent !== undefined);
+		// #5532: how this message renders each blocker the cap lets through. The
+		// request that takes it counts them (`consumeTurnEndFindings`), never this
+		// staging: a staged message may never reach the model (injection toggled
+		// off, overwritten first). A pi delivery only: the MCP host keeps its
+		// blockers whole on every delivery.
+		const reachedParts =
+			repeatContent === undefined
+				? holdPlan.reachedParts
+				: planDeliveryHolds({
+						holds: [],
+						parts: repeatParts,
+						keptChars: turnEndKeptChars(repeatJoined),
+						separatorLength: repeatSeparator.length,
+					}).reachedParts;
+		const blockerDeliveries =
+			deps.deliveryAddress === undefined
+				? reachedParts.flatMap((part) => {
+						const replayed = replayedBlockers.get(part.raw);
+						return replayed === undefined
+							? []
+							: [
+									{
+										...replayed,
+										shown: cappedBlockerText.has(part.raw)
+											? ("collapsed" as const)
+											: ("full" as const),
+									},
+								];
+					})
+				: undefined;
 		const stagedContent = repeatContent ?? content;
 		repeatStaged = repeatContent !== undefined;
 		const fileSeqByPath: Record<string, number> = {};
@@ -6821,7 +6935,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				fileSeqByPath,
 				fileContentHashes: {},
 				consumed: false,
-				...(repeatContent === undefined ? {} : { repeat: true }),
+				...(repeatContent === undefined ? {} : { repeat: true, repeatBodies }),
+				...(blockerDeliveries === undefined ? {} : { blockerDeliveries }),
 				testFailures: existingGuard?.testFailures,
 				testFailureContent: existingGuard?.testFailureContent,
 				testFailureFiles: existingGuard?.testFailureFiles,
@@ -6845,7 +6960,10 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				"turn-end-findings",
 				{
 					content: stagedContent,
-					...(repeatContent === undefined ? {} : { repeat: true }),
+					...(repeatContent === undefined
+						? {}
+						: { repeat: true, repeatBodies }),
+					...(blockerDeliveries === undefined ? {} : { blockerDeliveries }),
 					affectedFiles,
 					affectedFilesTruncated,
 					provenance: stampProvenance(affectedFiles, affectedFilesTruncated),

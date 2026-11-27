@@ -491,7 +491,9 @@ describe("lens_diagnostics source and scope routing", () => {
 	});
 
 	it("routes source=lsp through the real probe implementation", async () => {
-		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-fold-lsp-"));
+		const cwd = fs.realpathSync.native(
+			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-fold-lsp-")),
+		);
 		const file = path.join(cwd, "bad.ts");
 		fs.writeFileSync(file, "const value: number = 'bad';\n");
 		const service = {
@@ -564,7 +566,9 @@ describe("lens_diagnostics source and scope routing", () => {
 		// Round 2 unconditionally deleted `path`/`paths` under scope=workspace
 		// and substituted `cwd`, silently widening a directory-scoped request
 		// into a whole-project sweep.
-		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-fold-dir-"));
+		const cwd = fs.realpathSync.native(
+			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-fold-dir-")),
+		);
 		const sub = path.join(cwd, "src");
 		fs.mkdirSync(sub);
 		fs.writeFileSync(path.join(sub, "a.ts"), "const a = 1;\n");
@@ -598,7 +602,9 @@ describe("lens_diagnostics source and scope routing", () => {
 		// Two DIFFERENT files (not the same path reused across calls) so a
 		// process-level per-file result cache cannot mask the second call's
 		// own routing decision.
-		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-fold-delta-"));
+		const cwd = fs.realpathSync.native(
+			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-fold-delta-")),
+		);
 		const fileA = path.join(cwd, "a.ts");
 		const fileB = path.join(cwd, "b.ts");
 		fs.writeFileSync(fileA, "const a = 1;\n");
@@ -1341,7 +1347,7 @@ describe("lens_diagnostics mode=delta", () => {
 		const result = await run(tool, { mode: "delta", severity: "error" });
 		const text = String(result.content[0].text);
 		// No actionable warnings (they're warnings, not errors)
-		expect(text).toContain("No error");
+		expect(text).toContain("No new error findings");
 	});
 
 	it("severity=error excludes the cached warning in delta mode", async () => {
@@ -1367,7 +1373,7 @@ describe("lens_diagnostics mode=delta", () => {
 			}),
 			{ mode: "delta", severity: "error" },
 		);
-		expect(String(result.content[0].text)).toContain("No error issues");
+		expect(String(result.content[0].text)).toContain("No new error findings");
 	});
 
 	it.each([
@@ -3310,6 +3316,51 @@ describe("lens_diagnostics mode=full", () => {
 			(result.details as { failedAnalyzers?: unknown[] }).failedAnalyzers,
 		).toEqual([{ id: "knip", summary: "knip timed out" }]);
 	});
+
+	// #5554 r2 F2: a failed, partial or aborted analyzer lane is part of what
+	// the report's clean claim speaks for. The review's probe pA read
+	// `full — clean (1 files) (1 failed: knip)` with a ✓ above it.
+	it.each([
+		["no", {}, true],
+		[
+			"a failed",
+			{ failed: [{ id: "knip", summary: "knip timed out" }] },
+			false,
+		],
+		[
+			"a partial",
+			{ partial: ["opengrep"], partialReasons: { opengrep: "x" } },
+			false,
+		],
+		["an aborted", { aborted: true, abortedIds: ["knip"] }, false],
+	])(
+		"mode=full with %s analyzer lane gives the ✓ and details.clean only when every lane completed (#5554)",
+		async (_label, lane, clean) => {
+			const widget = await vi.importActual<
+				typeof import("../../clients/widget-state.js")
+			>("../../clients/widget-state.js");
+			widget.clearWidgetState();
+			widget.recordDiagnostics("/proj/src/a.ts", []);
+			mockSummaries.push(...widget.getFileDiagnosticSummaries());
+			freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+				diagnostics: [],
+				runners: [],
+				cold: [],
+				timings: {},
+				...lane,
+			});
+			const result = await run(
+				makeTool(
+					{},
+					{ runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) },
+				),
+				{ mode: "full", refreshRunners: "cached" },
+			);
+			const text = String(result.content[0].text);
+			expect(text.includes("✓")).toBe(clean);
+			expect((result.details as { clean?: boolean }).clean).toBe(clean);
+		},
+	);
 
 	// #1004 review follow-up (honesty gap, #533): unlike every other
 	// fresh-fetch analyzer (a FRESH whole-project scan each call), test-runner
@@ -5937,8 +5988,8 @@ describe("lens_diagnostics mode=delta — per-entry freshness on a merged report
  */
 describe("lens_diagnostics injected workspace default (#4577 R2-2)", () => {
 	it("scans a cwd holding a host-unicode space instead of a folded sibling", async () => {
-		const parent = fs.mkdtempSync(
-			path.join(os.tmpdir(), "pi-lens-diag-ws-nbsp-"),
+		const parent = fs.realpathSync.native(
+			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-diag-ws-nbsp-")),
 		);
 		const cwd = path.join(parent, "proj\u00A0x");
 		fs.mkdirSync(cwd);
@@ -6056,6 +6107,7 @@ describe("lens_diagnostics mode=full keys one file once across link spellings (#
 		semantic: "blocking",
 		message: "stale mid-edit state",
 		line: 1,
+		col: 1,
 		rule: "ts:2393",
 		tool: "lsp",
 	};

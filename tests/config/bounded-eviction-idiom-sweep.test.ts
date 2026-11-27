@@ -86,6 +86,7 @@ import {
 	stableOccurrenceKey,
 	stripSource,
 } from "../support/sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -445,11 +446,15 @@ describe("#2442 no new hand-rolled evict-oldest program outside bounded-cache.ts
 	const { occurrences, scanned } = findFlaggedOccurrences();
 	const flagged = occurrences.map((o) => o.key);
 
-	it("actually finds the family (a dead scan must not read as clean)", () => {
-		// The registered population includes runtime eviction policies and two
-		// tooling matches. The registry audit below rejects missing/stale entries.
-		expect(flagged.length).toBeGreaterThanOrEqual(1);
-	});
+	it(
+		"actually finds the family (a dead scan must not read as clean)",
+		() => {
+			// The registered population includes runtime eviction policies and two
+			// tooling matches. The registry audit below rejects missing/stale entries.
+			expect(flagged.length).toBeGreaterThanOrEqual(1);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// #4606 S1: one plant per ADMITTED FORM, plus the refusal that proves the
 	// form's own gate. Each plant is a shape the lexical detector missed; the
@@ -1127,32 +1132,36 @@ describe("#2442 no new hand-rolled evict-oldest program outside bounded-cache.ts
 		).toEqual([]);
 	});
 
-	it("flags per OCCURRENCE, so an exemption cannot launder a new sibling", () => {
-		// #2442 review F6: exemptions used to be file-level, so appending a NEW
-		// eviction to an exempted file passed. Every flagged id carries a
-		// content-derived key (#2475: `path#symbol:hash` or `path#hash`, never a
-		// bare line number — see `stableOccurrenceKey`).
-		for (const item of flagged) {
-			expect(item).toMatch(
-				/^[\w./-]+\.(?:ts|mjs|js)#(?:[A-Za-z_$][\w$]*:)?[0-9a-f]{8}$/,
-			);
-		}
-		const exemptedFiles = new Set(
-			Object.keys(EXEMPT_SITES).map((k) => k.split("#")[0]),
-		);
-		// Every exempted FILE still has exactly the occurrences named, no more:
-		// a second, unexcused occurrence in the same file must show up as
-		// unaccounted below rather than riding the file's exemption.
-		for (const file of exemptedFiles) {
-			const inFile = flagged.filter((f) => f.startsWith(`${file}#`));
-			for (const occurrence of inFile) {
-				expect(
-					Object.hasOwn(EXEMPT_SITES, occurrence),
-					`${occurrence} is in an exempted file but is not itself exempted`,
-				).toBe(true);
+	it(
+		"flags per OCCURRENCE, so an exemption cannot launder a new sibling",
+		() => {
+			// #2442 review F6: exemptions used to be file-level, so appending a NEW
+			// eviction to an exempted file passed. Every flagged id carries a
+			// content-derived key (#2475: `path#symbol:hash` or `path#hash`, never a
+			// bare line number — see `stableOccurrenceKey`).
+			for (const item of flagged) {
+				expect(item).toMatch(
+					/^[\w./-]+\.(?:ts|mjs|js)#(?:[A-Za-z_$][\w$]*:)?[0-9a-f]{8}$/,
+				);
 			}
-		}
-	});
+			const exemptedFiles = new Set(
+				Object.keys(EXEMPT_SITES).map((k) => k.split("#")[0]),
+			);
+			// Every exempted FILE still has exactly the occurrences named, no more:
+			// a second, unexcused occurrence in the same file must show up as
+			// unaccounted below rather than riding the file's exemption.
+			for (const file of exemptedFiles) {
+				const inFile = flagged.filter((f) => f.startsWith(`${file}#`));
+				for (const occurrence of inFile) {
+					expect(
+						Object.hasOwn(EXEMPT_SITES, occurrence),
+						`${occurrence} is in an exempted file but is not itself exempted`,
+					).toBe(true);
+				}
+			}
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// #2487 review F1: the test above ("flags per OCCURRENCE") is vacuous
 	// against a real collision, because `expect(item).toBe(...)` compares the
@@ -1286,43 +1295,47 @@ describe("#2442 no new hand-rolled evict-oldest program outside bounded-cache.ts
 		expect(witnesses.join("\n")).toContain("probe.ts:7");
 	});
 
-	it("every occurrence is the definition file, migrated, or exempted with a reason", () => {
-		const audit = auditRegistry({
-			sweepName: "bounded-eviction-idiom sweep",
-			flagged: occurrences,
-			registered: [],
-			exemptions: EXEMPT_SITES,
-			scannedCount: scanned,
-			// Calibration: ~789 shipped files across clients/tools/mcp/scripts/
-			// tests/support/index.ts as of #4606 S1; half rounded down is
-			// comfortably under that.
-			minScanned: 300,
-			// The structural population is 24 programs: 16 the lexical detector also
-			// saw, 8 it could not (7 from #4606's measurement plus the script-side
-			// `pushTop` cap). A lost member must red, so the floor is the count.
-			minFlagged: 24,
-			remediation:
-				"Migrate the site to BoundedLruCache (get() re-inserts — LRU), " +
-				"BoundedFifoMap (get() never re-inserts — FIFO), or BoundedSet " +
-				"(Set-shaped, membership-only — #2460) from " +
-				"clients/bounded-cache.ts — all three return the evicted " +
-				"key(s)/value(s) from set()/add(), so eviction-side bookkeeping " +
-				"needs no hand-rolled block either — or add an EXEMPT_SITES entry " +
-				"here (keyed by " +
-				"`stableOccurrenceKey` from tests/support/sweep-kit.ts — " +
-				"`path#symbol:hash` or `path#hash`, printed above) with a real " +
-				"reason (see #2442's PR body verdict table for the shape of a " +
-				"legitimate exemption). A shape the structural recognizer cannot " +
-				"place is a REFUSED_PROGRAMS row: it names the stage the shape " +
-				"lacks and the live site, never a silent pass.",
-		});
-		expect(audit.problems, audit.problems.join("\n")).toEqual([]);
-		const byForm = new Map<string, number>();
-		for (const occurrence of occurrences)
-			byForm.set(occurrence.form, (byForm.get(occurrence.form) ?? 0) + 1);
-		process.stdout.write(
-			`bounded-eviction population: ${flagged.length} flagged, ${audit.problems.length} problems, ${REFUSED_PROGRAMS && Object.keys(REFUSED_PROGRAMS).length} refused live programs, ${scanned} source files\n` +
-				`bounded-eviction stages: ${EVICTION_FORMS.map((form) => `${form} ${byForm.get(form) ?? 0}`).join(", ")}\n`,
-		);
-	});
+	it(
+		"every occurrence is the definition file, migrated, or exempted with a reason",
+		() => {
+			const audit = auditRegistry({
+				sweepName: "bounded-eviction-idiom sweep",
+				flagged: occurrences,
+				registered: [],
+				exemptions: EXEMPT_SITES,
+				scannedCount: scanned,
+				// Calibration: ~789 shipped files across clients/tools/mcp/scripts/
+				// tests/support/index.ts as of #4606 S1; half rounded down is
+				// comfortably under that.
+				minScanned: 300,
+				// The structural population is 24 programs: 16 the lexical detector also
+				// saw, 8 it could not (7 from #4606's measurement plus the script-side
+				// `pushTop` cap). A lost member must red, so the floor is the count.
+				minFlagged: 24,
+				remediation:
+					"Migrate the site to BoundedLruCache (get() re-inserts — LRU), " +
+					"BoundedFifoMap (get() never re-inserts — FIFO), or BoundedSet " +
+					"(Set-shaped, membership-only — #2460) from " +
+					"clients/bounded-cache.ts — all three return the evicted " +
+					"key(s)/value(s) from set()/add(), so eviction-side bookkeeping " +
+					"needs no hand-rolled block either — or add an EXEMPT_SITES entry " +
+					"here (keyed by " +
+					"`stableOccurrenceKey` from tests/support/sweep-kit.ts — " +
+					"`path#symbol:hash` or `path#hash`, printed above) with a real " +
+					"reason (see #2442's PR body verdict table for the shape of a " +
+					"legitimate exemption). A shape the structural recognizer cannot " +
+					"place is a REFUSED_PROGRAMS row: it names the stage the shape " +
+					"lacks and the live site, never a silent pass.",
+			});
+			expect(audit.problems, audit.problems.join("\n")).toEqual([]);
+			const byForm = new Map<string, number>();
+			for (const occurrence of occurrences)
+				byForm.set(occurrence.form, (byForm.get(occurrence.form) ?? 0) + 1);
+			process.stdout.write(
+				`bounded-eviction population: ${flagged.length} flagged, ${audit.problems.length} problems, ${REFUSED_PROGRAMS && Object.keys(REFUSED_PROGRAMS).length} refused live programs, ${scanned} source files\n` +
+					`bounded-eviction stages: ${EVICTION_FORMS.map((form) => `${form} ${byForm.get(form) ?? 0}`).join(", ")}\n`,
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });

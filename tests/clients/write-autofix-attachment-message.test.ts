@@ -35,7 +35,10 @@ vi.mock("../../clients/latency-logger.js", async (importActual) => ({
 	...(await importActual<typeof import("../../clients/latency-logger.js")>()),
 	logLatency,
 }));
-vi.mock("../../clients/dispatch/integration.js", () => ({
+vi.mock("../../clients/dispatch/integration.js", async (importActual) => ({
+	...(await importActual<
+		typeof import("../../clients/dispatch/integration.js")
+	>()),
 	dispatchLintWithResult: vi.fn(),
 	computeCascadeForFile: vi.fn().mockResolvedValue(undefined),
 }));

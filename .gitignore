@@ -84,6 +84,7 @@ migrate-*.js
 !tests/fixtures/lsp-nightly/*.md
 !tests/support/scheduler-properties.md
 !.changelog/*.md
+!.changelog/highlights/*.md
 !AGENTS.md
 !HISTORY.md
 !README.md
@@ -107,15 +108,19 @@ migrate-*.js
 !docs/defect-shapes.md
 # #5026: scripts/check-pr-body.mjs reads the alignment family names from here.
 !docs/alignment-families.md
+# #5510: the prose standard every role contract points at.
+!docs/prose-standard.md
 !docs/invariants/*.md
 !docs/pi-lens-orchestration.md
 !docs/pi-lens-release.md
 !docs/merge-queue-rollout.md
 !docs/ci-bot-pr-checks.md
+!docs/ci.md
 !docs/pi-lens-monitor.md
 !docs/real-harness.md
 !docs/audit1.md
 !docs/agent-guide.md
+!docs/architecture.md
 !docs/agent-tools.md
 !docs/ast-grep_rules_catalog.md
 !docs/tree-sitter_rules_catalog.md

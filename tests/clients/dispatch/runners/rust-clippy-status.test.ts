@@ -22,26 +22,15 @@ import { resetDispatchAvailabilityState } from "../../../../clients/dispatch/run
 import type { RunnerResult } from "../../../../clients/dispatch/types.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
-const { safeSpawnAsync, tryLazyInstall, findCargoPathAsync } = vi.hoisted(
-	() => ({
-		safeSpawnAsync: vi.fn(),
-		tryLazyInstall: vi.fn(async () => true),
-		findCargoPathAsync: vi.fn(async () => "cargo"),
-	}),
-);
+const { safeSpawnAsync, findCargoPathAsync } = vi.hoisted(() => ({
+	safeSpawnAsync: vi.fn(),
+	findCargoPathAsync: vi.fn(async () => "cargo"),
+}));
 
 vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
 	...(await importOriginal<Record<string, unknown>>()),
 	safeSpawnAsync,
 }));
-
-vi.mock(
-	"../../../../clients/dispatch/runners/utils/lazy-installer.js",
-	async (importOriginal) => ({
-		...(await importOriginal<Record<string, unknown>>()),
-		tryLazyInstall,
-	}),
-);
 
 vi.mock("../../../../clients/rust-client.js", async (importOriginal) => ({
 	...(await importOriginal<Record<string, unknown>>()),
@@ -89,7 +78,6 @@ async function dispatchClippy(tmpDir: string, filePath: string) {
 describe("rust-clippy status is the execution outcome (#3751)", () => {
 	beforeEach(() => {
 		safeSpawnAsync.mockReset();
-		tryLazyInstall.mockClear();
 		resetDispatchAvailabilityState();
 	});
 

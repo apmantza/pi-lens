@@ -33,6 +33,7 @@ import {
 	registerWorkspaceTopologyReset,
 } from "./workspace-topology.js";
 import { PROJECT_ROOT_MARKERS } from "./project-root-markers.js";
+import { isJstsFactFile } from "./file-kinds.js";
 
 // #758: hard ceiling on the number of directory entries the startup source
 // count walk will visit before it gives up and declares the tree too big to
@@ -44,7 +45,9 @@ import { PROJECT_ROOT_MARKERS } from "./project-root-markers.js";
 // same pattern already guards jscpd-client.ts's hasSourceFilesRecursive walk.
 export const MAX_STARTUP_SCAN_ENTRIES = 50_000;
 
-const SOURCE_FILE_PATTERN = /\.(ts|tsx|js|jsx|py|go|rs|rb)$/;
+// #5446: the JS/TS family answers through the registry seam
+// (`isJstsFactFile`, file-kinds.ts); only the non-TS tail is spelled here.
+const NON_JSTS_SOURCE_FILE_PATTERN = /\.(py|go|rs|rb)$/;
 
 export interface StartupScanContext {
 	cwd: string;
@@ -286,7 +289,8 @@ function makeSourceCountVisitor(
 		// entries the cheap regex already flags as source.
 		if (
 			entry.isFile() &&
-			SOURCE_FILE_PATTERN.test(entry.name) &&
+			(isJstsFactFile(entry.name) ||
+				NON_JSTS_SOURCE_FILE_PATTERN.test(entry.name)) &&
 			!ignoreMatcher.isIgnored(fullPath, false)
 		) {
 			state.count += 1;

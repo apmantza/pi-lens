@@ -106,6 +106,11 @@ import {
 import { testSourceFiles as allTestSourceFiles } from "../support/module-instance-scan.js";
 import { localImportTargets } from "../support/hook-await-scan.js";
 import { assertSortedRegistry } from "../support/sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
+import {
+	expectPlantedStaleRow,
+	rowsWithoutLiveMember,
+} from "../support/baseline-staleness.js";
 
 // ── The baseline ─────────────────────────────────────────────────────────
 
@@ -225,6 +230,16 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"#5173 must distinguish natural host exit within 3 seconds from the dependency’s pending 10-second tick; fake clocks cannot measure another process’s exit",
 	},
+	"elapsed-time-assertion:clients/lsp/request-sender-5097.test.ts": {
+		detector: "elapsed-time-assertion",
+		reason:
+			"#5097 acceptance 3: Esc must return a navigation call on a silent server within 500 ms, and a firing bound must put the cancel of its pull and ping on the wire within 500 ms, and must end the touch and the wait it ran within a bound that the server's own 800 ms answer and 5 s loading window would otherwise exceed, and Esc must return a workspace pull and a read-only tsserver command within 500 ms of the abort, where their 5 s and 2.5 s ceilings would otherwise answer; the bound is the behavior and a fake clock cannot time a child process's wire",
+	},
+	"elapsed-time-assertion:clients/lsp/server-status-readiness-5487.test.ts": {
+		detector: "elapsed-time-assertion",
+		reason:
+			"#5487 (review of #5495): a failed workspace load and a server silent after loading must end a real touch inside its budget; the bound is the behavior and a fake clock cannot time a child process's replies",
+	},
 	// 2026-09-11 (#2886 round 2): the /lens-perf occupancy row keeps one
 	// real-clock sampler assertion alongside its deterministic yield count —
 	// event-loop occupancy has no deterministic proxy; the yield count is
@@ -324,6 +339,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			detector: "in-process-mock",
 			reason:
 				"the freshness gate writes its rows through logLatency; turn_end logs more phases after the gate than the five the getRecentLoggedPhases ring keeps, and test mode skips the file sink, so a passed-through spy is the only reader",
+		},
+	// 2026-11-16 (#5410): the ladder cells count install asks through a
+	// passthrough on the installer's ensureTool; the real lookups run.
+	"in-process-mock:clients/client-ladders-5410.test.ts::clients/installer/index":
+		{
+			detector: "in-process-mock",
+			reason:
+				"an install ask to the download boundary is only observable as the ensureTool call itself; the passthrough runs the real installer, and every ladder, trust and lookup above it is real",
 		},
 	// 2026-10-29 (#4990): the demoted channel's policy pass writes its
 	// inline_blocker_policy row through logLatency; turn_end logs more phases
@@ -478,6 +501,12 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"createLSPClient spawns a language-server process; the double it returns runs the real clientWaitForDiagnostics, publish handler and clearDiagnosticsForPath, and a real server cannot be made to publish twice and receive a refresh clear inside one quiet window on demand",
 		},
+	"in-process-mock:clients/lsp/touch-debounce-zero.test.ts::clients/lsp/client":
+		{
+			detector: "in-process-mock",
+			reason:
+				"createLSPClient spawns a language-server process; the double it returns runs the real handleNotifyOpen and reads content identity through the real sentContentFor and hasNotifyInFlightFor, and a real server cannot be made to report whether it holds exactly the debounce gate's bytes on demand",
+		},
 	// 2026-10-20 (#4638): tool availability is resolved so the spawn seam records the
 	// real argv (cwd + config args) without probing or installing ruff; only that
 	// resolver is doubled, and resolveToolCwd, ruffConfigArgs, safe-spawn stay real.
@@ -486,6 +515,24 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			detector: "in-process-mock",
 			reason:
 				"the argv case must not probe or install ruff: the resolver stands in for the availability probe and the spawn boundary is doubled to record argv, while resolveToolCwd and ruffConfigArgs run for real",
+		},
+	"in-process-mock:clients/runtime-tool-call-4220-baseline-scope.test.ts::clients/bootstrap":
+		{
+			detector: "in-process-mock",
+			reason:
+				"the analyzer load is held open through the shared bootstrapSeamMock so a session replacement lands inside it (#4220); the coordinator, scope and store are real",
+		},
+	"in-process-mock:clients/runtime-tool-call-4220-baseline-scope.test.ts::clients/metrics-history":
+		{
+			detector: "in-process-mock",
+			reason:
+				"the metrics-history writer is recorded rather than run, so the case can see whether a replaced session's snapshot write happened; its own I/O is not under test",
+		},
+	"in-process-mock:clients/runtime-tool-result-5087-complexity-delta.test.ts::clients/pipeline":
+		{
+			detector: "in-process-mock",
+			reason:
+				"runPipeline spawns every configured linter; the double decides only the blocker axis, and the handler, the complexity store and the re-measure are real",
 		},
 	// 2026-10-17 (#4504): the witness runs the real session_start / tool_call /
 	// tool_result handlers and only the per-file dispatch is stood in for, so
@@ -565,10 +612,39 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			"the real export still answers each call; the wrapper exists to prove a file without jedi's row is never walked",
 	},
 
+	// #5258: the re-verify's code-action lookup never answers, so only the
+	// pass's own wall bound ends it; that unanswered lookup is the cell.
+	"never-settling-wait:clients/persistent-reverify.test.ts": {
+		detector: "never-settling-wait",
+		reason:
+			"the cell under test is a code-action lookup that never answers; a settled promise would be an answer and erase it",
+	},
 	"never-settling-wait:scripts/mutate-fixture.test.ts": {
 		detector: "never-settling-wait",
 		reason:
 			"the interrupt witness must hold a real child open until SIGINT; replacing the wait with a settled promise would erase the lifecycle under test",
+	},
+	// #5452 r2 F2: the abort lands 200 ms into a real child's run, the one
+	// timed wait the abort case needs. Sorted before clients/lsp/.
+	"raw-timer-wait:clients/dispatch/runner-spawn-timeout-cooldown.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the abort must land while a real child is mid-run; a fake clock cannot stop a spawned process, and no double reproduces a child killed mid-run",
+	},
+	// #5549: concurrent calls must be observed while one real formatter child is
+	// alive; a fake clock cannot reproduce the live-child flight recurrence.
+	"raw-timer-wait:clients/formatters-live-flight.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the real child must remain alive while concurrent format calls are admitted or skipped; a fake clock cannot reproduce the live-child flight recurrence",
+	},
+	// #5746 r4: the late reader of a full stderr pipe starts after the crash
+	// writer met EAGAIN and inside its 1 s deadline; the writer exposes no
+	// event for that moment.
+	"raw-timer-wait:clients/lsp/client-crash-logging.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the late reader of a full stderr pipe must start after the crash writer met EAGAIN and before its 1 s deadline; the writer exposes no event for that moment, so a bounded real delay places the reader",
 	},
 	// 2026-09-07 (#2703 review r1): an unhandled derived-promise rejection is
 	// only observable through Node's `unhandledRejection` event, which fires
@@ -613,6 +689,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the census polls the real MCP child's background review-graph build before classifying the project_report JSON cell; a fake clock cannot advance that child's build",
 	},
+	// 2026-11-12 (#5267): the sweep's window is the loaded copy's real 30 s arm
+	// delay and real 60 s spawn grace; no fake clock can advance another
+	// process's timer.
+	"raw-timer-wait:index-3917-orphan-sweep-scope.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the witness times the extension copy's OWN setTimeout, which a fake clock in the harness graph cannot move; the observation window is the production arm delay plus the spawn grace",
+	},
 	// 2026-10-31 (#5108): the read-only bound is a live wall deadline.
 	"raw-timer-wait:index-5108-opaque-blocker-disclosure-witness.test.ts": {
 		detector: "raw-timer-wait",
@@ -637,6 +721,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "raw-timer-wait",
 		reason:
 			"the spawned MCP child re-stats the real stamp file and builds its review graph in the background; a fake clock in this process cannot advance either, so the settle and the bounded poll of that build are real timers",
+	},
+	"raw-timer-wait:real-harness/runner-host-exit-5703.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the host and detached-child death/reap transitions are real process lifecycle observations; fake timers cannot reproduce them",
 	},
 	// 2026-09-15 (#2042 cheapest probe): the sample-tail file is written by the
 	// wrapper's own real setInterval loop in a separate process; a poll waits
@@ -697,6 +786,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"Real sg execution proves CLI match behavior; a runner stub cannot exercise the binary.",
 	},
+	// 2026-11-13 (#5545): the defect is how the real `ast-grep` CLI relativizes
+	// candidate paths against the child's working directory, so only a real spawn
+	// over-excludes; a stubbed runner cannot reproduce an empty match list.
+	"real-process-spawn:clients/ast-grep-scan-ancestor-exclude.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the real `ast-grep` CLI decides which candidates its `--globs` excludes drop; a stubbed runner answers a match list of the test's choosing and cannot over-exclude anything",
+	},
 	// 2026-10-21 (#4713 R11): real `bash -c` is the oracle for which
 	// directory each generated spelling enters and where its redirect lands;
 	// the generator exists because hand-written expectations missed spellings.
@@ -715,6 +812,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"real git children establish build identity from repository state unavailable to an in-process stub",
 	},
+	// 2026-11-16 (#5675): whether a push-only dependent is asked again is decided
+	// by the didChange frames a spawned stdio server receives and the
+	// publications they cause.
+	"real-process-spawn:clients/cascade-retouch-push-only-5675.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the subject is whether the cascade re-sends a dependent to a push-only server whose only answer predates the edit, read off the didChange frames a spawned jdtls-shaped stdio server receives and the publications they cause; an in-process client double answers only what it was told",
+	},
 	"real-process-spawn:clients/config-diagnostic-codes.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -728,6 +833,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"a clean-tree HEAD move is a real git checkout; a stubbed git cannot produce the delta the look publishes",
 	},
+	// #5413: the cooldown is armed by safeSpawnAsync's own timeout, so the
+	// child that uses up its budget is real.
+	"real-process-spawn:clients/dispatch/runner-spawn-timeout-cooldown.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"a real child must use up its own spawn budget, be aborted mid-run, fail to launch, or exit non-zero: the cooldown is armed by safeSpawnAsync's own result, which no double reproduces",
+	},
 	"real-process-spawn:clients/dispatch/runners/ast-grep-playground-verify.test.ts":
 		{
 			detector: "real-process-spawn",
@@ -738,6 +850,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"a real ast-grep child applies ignore rules through its own file matcher",
+	},
+	// 2026-11-15 (#5621): the cells run the real ruff and eslint on given bytes
+	// and ask the real biome and oxlint CLIs whether they lint stdin at all; a
+	// double encodes the premise the cells check.
+	"real-process-spawn:clients/dispatch/seed-content-mode-5621.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"whether given bytes reach a real linter through stdin, and whether a sibling copy of them ever exists beside the file, are facts of the tool and the tree; a double would encode the premise (#5621 found biome's stdin lint reports nothing)",
 	},
 	// #4522: the census must know which fixture inputs git hides; its
 	// collectUntrackedIgnoredIds call spawns the real `git ls-files` that
@@ -790,6 +910,12 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"a clean-tree HEAD move only exists in a real repository that git checks out, rebases or resets; a stubbed git cannot rewrite the files the server holds",
+	},
+	// The #4493 HEAD look in a sibling linked worktree; its spawns run through the kit.
+	"real-process-spawn:clients/head-move-resync-sibling-worktree.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"a HEAD move in a linked worktree only exists in a real repository whose worktree git checks out; a stubbed git cannot rewrite the files the server holds there",
 	},
 	"real-process-spawn:clients/installer/pip-pep668.test.ts": {
 		detector: "real-process-spawn",
@@ -852,6 +978,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
 	},
+	"real-process-spawn:clients/lsp/code-action-unanswered-5258.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"#5258: a server that exits, answers ContentModified or sends a non-list mid-codeAction is the subject; the request sender's stream loss and retry cannot be stood in for without a real JSON-RPC stream.",
+	},
 	"real-process-spawn:clients/lsp/config-section-answers-4758.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -867,6 +998,12 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
 	},
+	"real-process-spawn:clients/lsp/effect-tsgo-initialize-fallback-5504.test.ts":
+		{
+			detector: "real-process-spawn",
+			reason:
+				"#5504: only a real child that exits after the launcher's startup window and before initialize answers reaches the registry's initialize fallback; a launcher double never exits that way.",
+		},
 	["real-process-spawn:clients/lsp/fake-lsp-" +
 	"server-parent-watchdog.test.ts"]: {
 		detector: "real-process-spawn",
@@ -908,6 +1045,12 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
 	},
+	// 2026-11-22 (#5700): the open-document cap is a wire claim.
+	"real-process-spawn:clients/lsp/open-document-budget-5700.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"#5700: which didOpen and didClose a real server receives, and in which order, is the subject; a stubbed transport cannot show what the server holds open.",
+	},
 	"real-process-spawn:clients/lsp/opengrep-late-empty-4786.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -935,6 +1078,16 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 				"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
 		},
 	"real-process-spawn:clients/lsp/refresh-and-sync-kind.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	"real-process-spawn:clients/lsp/request-sender-5097.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"#5097: the cancel on the wire and the connection's busy count are the subject, for a call's own request and for the pull and ping a firing bound started through the real service, and for a loading or healthy-but-slow server a touch is cut off from; a server that accepts a request and never answers it, and ignores the cancel, cannot be stood in for without a real JSON-RPC stream.",
+	},
+	"real-process-spawn:clients/lsp/server-status-readiness-5487.test.ts": {
 		detector: "real-process-spawn",
 		reason:
 			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
@@ -981,6 +1134,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
 	},
+	"real-process-spawn:clients/lsp/windows-server-containment-5694.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"#5694: which process the Windows kernel ends when a pi host dies is the subject; only a real host, a real cmd.exe and libuv's kill-on-close job show whether the server outlives it, and no child_process double has a process tree",
+	},
 	"real-process-spawn:clients/lsp/workspace-diagnostics-sweep-attribution.integration.test.ts":
 		{
 			detector: "real-process-spawn",
@@ -1024,6 +1182,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"real git children emit stderr bytes whose metrics classification cannot be observed in-process",
+	},
+	"real-process-spawn:clients/metrics/complexity-baseline.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the default-branch read is real git for-each-ref and git show against a real repository; a stub cannot show which ref and blob it resolves",
 	},
 	// 2026-10-22 (#4732): the cost under test is how many real `git status`
 	// children each tool call spawns; a stubbed git answers the count it is
@@ -1124,6 +1287,22 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the claim is what a CHILD process sees of the worker's environment, the inheritance the #4780 opengrep writes into the real home depended on; an in-process read of process.env proves the worker, not the child, and the probe child only prints its environment",
 	},
+	// 2026-11-23 (review 5754 F3): the trigger gate's glob population is git's
+	// own tracked list, so a directory, a gitignored build twin and a path
+	// outside the checkout are refused the way a real diff refuses them; a
+	// filesystem walk admits all three.
+	"real-process-spawn:config/agents-governance.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the glob gate validates each catalog selector against `git ls-files`, which is the population a PR diff draws from; a filesystem walk would admit a directory, a gitignored build twin and an out-of-checkout path that no diff contains",
+	},
+	// 2026-11-13 (#5072): the baseline census takes its population from git's
+	// tracked list, which only a real git answers.
+	"real-process-spawn:config/baseline-owner-governance.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the census population is git's own tracked list (dot-files and every extension included), which only a real git ls-files child answers; a hand-built list would restate the population the census is meant to find",
+	},
 	"real-process-spawn:config/gitignore-tracked-shadow.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -1133,6 +1312,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"the subject is the real `Record Windows Vitest outcome` bash block under GitHub's bash flags (a fixture Node program at the population-script path runs under the real `node`, so no PATH, delimiter, or executable name is mocked) and the ref-deleted Git fetch form through the git-fixture-env seam",
+	},
+	// 2026-11-16 (#5676): the census tracker's clean verdict is observable only by
+	// running the real step's bash; gh and the tracker script are the host boundary.
+	"real-process-spawn:config/lsp-capability-refresh-workflow.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the subject is the census tracker step's own bash (`bash -c` over the workflow run text) under GitHub's shell flags, and its clean loop's verdict is observable only by running it; the one fakes are gh and the tracker script at the host boundary",
 	},
 	"real-process-spawn:config/oxlint-advisory-rule-floor-gate.test.ts": {
 		detector: "real-process-spawn",
@@ -1159,6 +1345,17 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the subject is what a real bash command does to a real linked worktree, detected by git's own status; a stubbed shell or git answers neither",
 	},
+	// 2026-11-12 (#5267): the candidate rule reads the real OS process table, so
+	// the population must be real processes with a real dead owner and a real OS
+	// start spelling; a fabricated table would only test the mock.
+	"real-process-spawn:index-3917-orphan-sweep-scope.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the backstop's candidate rule is " +
+			"managed-binary + dead-owner-tag + older-than-grace over the real " +
+			"process table, and the #2042 guard only records a violation at a pid " +
+			"it can prove unowned; a stubbed snapshot answers both with what it was told",
+	},
 	"real-process-spawn:index-4504-opaque-prescan-root-witness.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -1171,13 +1368,51 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the subject is what a real non-bash tool writes into a real git checkout, detected by git's own status; a stubbed git answers only what it was told",
 	},
+	"real-process-spawn:index-5087-complexity-delta-witness.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the tier-2 witness builds its repository with real git, and the edit's default-branch read runs real git children",
+	},
 	// 2026-10-31 (#5108): a script-written file's blocker must reach the model
 	// through a real bash tool call, and the abandonment is a real 500 ms wall
-	// bound racing a handler held open past it.
+	// bound racing a handler held open past it. 2026-11-15 (#5616): the credit
+	// cases drive the trigger's own `python3` form, so the file asks the host
+	// once whether `python3` runs.
 	"real-process-spawn:index-5108-opaque-blocker-disclosure-witness.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the subject is what a real bash tool call writes into a real git checkout and what the model receives for it, detected by git's own status; a stubbed shell answers only what it was told",
+			"the subject is what a real bash tool call writes into a real git checkout and what the model receives for it, detected by git's own status; a stubbed shell answers only what it was told, and only the host can say whether python3 runs for the trigger's own python form",
+	},
+	// 2026-11-14 (#5552): the real tool_result and dispatcher must carry
+	// mtime-preserving shell-write bytes onto a real child LSP wire.
+	"real-process-spawn:index-5552-lsp-resync-wire.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the subject is the real pi tool_result and dispatcher sending mv and cp -p bytes over a child LSP wire; a stubbed shell or client cannot prove the protocol payload",
+	},
+	// 2026-11-14 (#5552): a bash `mv`, `rsync` and `tar x` keep the source's old
+	// mtime, so only git's own status shows the write; the writers are real
+	// children and the gate reads a real repo.
+	"real-process-spawn:index-5552-shell-write-forms.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the subject is what a real mv, rsync and tar write into a real git checkout with an old mtime and whether git's own status, the dispatcher and the commit gate see it; a stub answers only what it was told",
+	},
+	// 2026-11-14 (#5553): the commit gate reads the staged delta itself, so the
+	// subject is a real `git` repository, the gate's own `git` children and the
+	// real lanes, behind a real pi session.
+	"real-process-spawn:index-5553-staged-delta-gate.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the subject is whether bytes nobody authored reach git's own commit judged on the staged delta, read by the gate's real git children and the real tree-sitter and ast-grep lanes; a stub answers only what it was told",
+	},
+	// 2026-11-14 (#5553): every writer that names a path must reach the commit
+	// gate with the inherited blocker already in its baseline; the writers are
+	// real `sed`, ast-grep and fake-LSP children and the gate reads a real repo.
+	"real-process-spawn:index-5553-writer-baselines.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the subject is whether the bytes a real sed, ast-grep, language-server rename or foreign tool wrote reach git's own commit with the inherited blocker still counted; a stub answers only what it was told",
 	},
 	// 2026-09-03: the published-manifest guard must run the real `npm pack`
 	// (prepack/postpack are npm lifecycle hooks); header on the file states why.
@@ -1208,6 +1443,9 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// tree kill and the kill guard are tested against (a self-exiting mid
 	// process, a root forking during the kill, a reparented orphan); the
 	// guard's verdict reads the kernel's PPid, which no double has.
+	// 7 -> 8 in #5722 round 2: one real `safeSpawnAsync` child shows that the
+	// lifetime registry the guard wraps is the cell production registers in; a
+	// double carries no pid the ownership oracle can read.
 	"real-process-spawn:real-harness/child-exit.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -1241,6 +1479,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the first request after a real pi restart on a persisted session must advertise the lazy-tool roster pi restored and pi-lens planned; no in-process double runs the host's restore",
 	},
+	// 2026-11-20 (#5699): which processes outlive a real pi quit, and whether
+	// the next session reaps what a killed quit left, is visible only across
+	// real pi processes and a real language server in its own process group.
+	"real-process-spawn:real-harness/lsp-host-exit-5699.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"#5699: a language server that ignores EOF and SIGTERM must be gone after a real pi quit, and a quit killed before its exit hook must leave the row the next real pi session reaps, and a crashed pi (#5733 r4) must leave the row the next real session logs as vanished, and a pi that crashes after its server started (#5744) must end the server through its exit listeners; pi's quit and crash paths, its exit listeners and the next start's reaper and marker run only in real pi processes",
+	},
 	"real-process-spawn:real-harness/negative.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -1269,6 +1515,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"the read guard's branch admission after a real RPC clone, the nested-call ids pi mints, and the tool_execution_end pi's agent loop emits for a call a later extension blocked cannot be produced by an in-process double",
+	},
+	"real-process-spawn:real-harness/runner-host-exit-5703.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"#5703 requires a real pi host, its production safeSpawnAsync child, host SIGKILL, and the next host reaper; an in-process mock cannot prove survival across hosts",
 	},
 	"real-process-spawn:real-harness/scenario-1.test.ts": {
 		detector: "real-process-spawn",
@@ -1354,6 +1605,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"the exact local CLI, shallow checkout, `git check-ignore` (#2904) and the gh label read behind `--lint-local` (#4288, PATH stub) are the subjects; an in-process double cannot prove any of those command boundaries",
+	},
+	// 2026-11-13 (#5558): the `--comment` layout gate is the committed CLI; the
+	// exit status and stderr a posting role reads are the contract.
+	"real-process-spawn:scripts/check-prose.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the `--comment` CLI (argv parsing, exit status, stderr) is what a role runs before `gh issue comment`; an in-process call of the pure function would not prove either",
 	},
 	// 2026-10-14 (#4397): the changed-test shuffle job's exit code is the contract;
 	// only a real vitest start reorders the cases of a fixture that shares state.
@@ -1551,7 +1809,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"real-process-spawn:scripts/pre-push-targeted-tests.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"git's pre-push stdin and the hook script's exit/skip/lock-timeout contract are the subject; the union and lock-admission witnesses need a real git fixture and the real hook chain",
+			"git's pre-push stdin and the hook script's exit/skip/lock-timeout contract are the subject; the union and lock-admission witnesses need a real git fixture and the real hook chain; the #5468 F4 concurrent-sweep witness needs a second real gate process sweeping the shared base; the #5630 PATH cases run the real `/bin/sh` hook, because the PATH the shell hands its child and that child's spawn from another cwd are the subject, which an in-process call cannot see",
 	},
 	// #5348: scripts/probe-clean-signal.mjs runs on import and exits the process, so its
 	// --write-matrix gate is observable only as a real run and the doc it leaves.
@@ -1674,6 +1932,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// 2026-09-08 (#2628): the warm's install-log home resolution is the
 	// subject — a child whose env is fully pinned decides where the record
 	// lands, and its own `os.homedir()` fallback is unobservable in-process.
+	// #5311: the CLI's exit code is what makes the CI step advisory, and only the
+	// child's process status shows it; `runCli`'s return value is the in-process
+	// contract and cannot show what the step sees.
+	"real-process-spawn:scripts/test-timeout-headroom.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the committed script's process exit code (0 advisory, 1 on --fail-on-new, 2 unusable report) is the CI contract; only a child status observes it",
+	},
 	"real-process-spawn:scripts/warm-loader-cache.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -1686,6 +1952,15 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"the helper's real git fixture, node_modules symlink state, and unlink-before-remove ordering are the subject; an in-process double restates none of them",
+	},
+	// 2026-11-16 (#5528): the census's silence on 40+ shard-5 runs means clean
+	// only if its production readers (`ps`, the `/proc` environ read, the
+	// managed-name match) see a real managed process under a reaped owner; a
+	// fabricated table answers only what it was told.
+	"real-process-spawn:support/dead-owner-census-real-process.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the census must find a real managed process whose real owner tag names a reaped pid through the production process-table and environ readers; a faked table cannot show those readers see a leak",
 	},
 	["real-process-spawn:support/fake-lsp-" + "server.test.ts"]: {
 		detector: "real-process-spawn",
@@ -1716,6 +1991,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"the root afterEach's failing exit status is only observable from a separate Vitest process that deliberately leaks a session",
+	},
+	// 2026-02-08 (#5100): the run-time spawn gate's own test. Its witnesses are
+	// the real patched `child_process` exports in this file's own module graph
+	// and a child Vitest run whose fork produces the gate's teardown red.
+	"real-process-spawn:support/real-spawn-observer.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the gate's red is produced by a fork's afterAll, so the seam is a real child process: the file calls the patched real child_process exports and runs a child Vitest run over its fixtures",
 	},
 	// 2026-09-17 (#3179): the race is cross-process by construction —
 	// readdirSync/statSync inside node's own recursive-watch polyfill are
@@ -1805,6 +2088,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"a language-server client is a spawned process; this client's wait, store and clear are the real ones over a real state, and only the publish order and the mid-wait clear are scripted",
 		},
+	"service-double:clients/lsp/touch-debounce-zero.test.ts::LSPClientInfo": {
+		detector: "service-double",
+		reason:
+			"a language-server client is a spawned process; the client it returns runs the real handleNotifyOpen, sentContentFor and hasNotifyInFlightFor over a real state, and only the alive-answers are scripted",
+	},
 	// 2026-10-15 (#4485): see the cascade entries above.
 	"service-double:clients/quiet-window-session-straddle.test.ts::LSPClientInfo":
 		{
@@ -1825,19 +2113,60 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// 2026-10-16 (#4528 r1 F3): the spawn-gate window of a dependency restart
 	// exists only between real server processes, and the tool_call hook bounds
 	// its look, so the restart finishes after the hook returns.
+	// 2026-11-19 (#5702): the deferred retention sweep joins no awaitable from
+	// the hook (a setImmediate plus an async sweep), so the wiring pin and the
+	// phase-record read-back join it with real-time waits.
 	"ungoverned-wait-for:clients/head-move-resync-4476.test.ts": {
 		detector: "ungoverned-wait-for",
 		reason:
 			"the restart's spawn-gate window is between real server processes: one server's shutdown, the cache clock, and a restart that ends after the bounded tool_call hook returns expose no awaitable, so vi.waitFor joins them",
 	},
+	// 2026-11-22 (#5733 F1): a descendant in a language server's group is no
+	// child of the test, and only its pid file and /proc show its life.
+	"ungoverned-wait-for:clients/lsp/kill-process-tree-real-child.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"#5733 F1: the descendant that outlives its leader is no child of this process; its start shows only as the pid file it writes and its death only as its pid leaving /proc, neither exposes an awaitable, and each poll is bounded by its own timeout",
+	},
 	// 2026-10-23 (#4776 review H1): a formatter selection written after a trust
 	// change is observable only while a real detection is held open in its
 	// child process, and the child's start is visible only as the file it
 	// writes.
+	"ungoverned-wait-for:clients/lsp/open-document-budget-5700.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"#5737: the late pull must be on the server before the cap closes the document, and only the server's own trace shows that; the poll is bounded by its own timeout",
+	},
+	"ungoverned-wait-for:clients/lsp/request-sender-5097.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"#5097: the abort must land after the request is on the wire (and the server's own refresh must reach a re-pull, and a loading server must be reported loading, and the workspace pull and the read-only command must be on the wire before the Esc), and only the server's own trace shows that; the poll is bounded by its own timeout",
+	},
+	"ungoverned-wait-for:clients/lsp/windows-server-containment-5694.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"#5694: the server's start shows only as the pid file it writes and its death only as its pid going away; neither exposes an awaitable, and each poll is bounded by its own timeout",
+	},
+	"ungoverned-wait-for:clients/runtime-session.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"the deferred sweep runs on a setImmediate the hook does not await; the wiring pin joins its effect with vi.waitFor and the phase-record case ticks the real queue",
+	},
+	// #5745 r4: the owned-child ledger record read-back runs on every lane.
+	"ungoverned-wait-for:clients/safe-spawn-kill-ownership.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"where /proc is absent the row's start read is a process-table query on the child_process double whose settle has no awaitable; the wait ends on the asserted degradation row",
+	},
 	"ungoverned-wait-for:clients/session-repository-trust-4530.test.ts": {
 		detector: "ungoverned-wait-for",
 		reason:
 			"the late-write cell holds a real formatter detection open in a child `go` until trust changes; the child's start exposes no awaitable, only the file it writes",
+	},
+	"ungoverned-wait-for:clients/startup-overhead.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"the deferred sweep's phase record lands on a setImmediate the hook does not await; the read-back ticks the real queue and joins with vi.waitFor",
 	},
 	"ungoverned-wait-for:clients/word-index-lifecycle.test.ts": {
 		detector: "ungoverned-wait-for",
@@ -1870,6 +2199,25 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// 2026-11-01 (#5146): the fast POSIX shutdown returns before its ast-grep
 	// child exits, and that exit exposes no awaitable, so the shared session
 	// teardown polls /proc.
+	// 2026-11-20 (#5699): a host's language server is nobody's child once the
+	// host is gone, and only its pid file and its pid's death show its life.
+	"ungoverned-wait-for:mcp/lsp-host-exit-5699.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"#5699: the server's start shows only as the pid file it writes and its death, after its MCP host ends, only as its pid going away; neither exposes an awaitable, and each poll is bounded by its own timeout",
+	},
+	// 2026-11-22 (#5700): the MCP child releases an idle server on its own
+	// registry timer; only the server's trace shows the shutdown.
+	"ungoverned-wait-for:mcp/lsp-resident-budget-5700.smoke.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"#5700: the idle release lands on the language server's own registry timer inside the MCP child, which exposes no awaitable; the poll reads the server's trace for its shutdown and is bounded by its own timeout",
+	},
+	"ungoverned-wait-for:real-harness/lsp-host-exit-5699.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"#5699: the server's start shows only as the pid file it writes, its death after pi quits only as its pid going away, the settle's heartbeat only as the row it rewrites, and the next session's vanished marker (#5733 r4) only as a sessionstart.log line; none exposes an awaitable, and each poll is bounded by its own timeout",
+	},
 	"ungoverned-wait-for:support/mock-session-teardown.ts": {
 		detector: "ungoverned-wait-for",
 		reason:
@@ -1973,6 +2321,15 @@ interface RatchetProblem {
 	kind: "new-file" | "count-risen" | "stale-ceiling";
 	before?: number;
 	after: number;
+}
+
+/** One `detector:file` key per row of a per-detector table (#5072). */
+function detectorRows(
+	table: Partial<Record<DetectorName, Readonly<Record<string, number>>>>,
+): string[] {
+	return DETECTOR_NAMES.flatMap((detector) =>
+		Object.keys(table[detector] ?? {}).map((file) => `${detector}:${file}`),
+	);
 }
 
 /**
@@ -2088,25 +2445,76 @@ describe("flake-shape ratchet (#2547)", () => {
 			);
 			expect(problems.map(describeProblem)).toEqual([]);
 		},
-		30_000,
+		TREE_WALK_TIMEOUT_MS,
 	);
 
 	// Whole-tree scan performs AST parsing and can exceed Vitest's default under
 	// CI contention (run 34195211598, head 5c0aa5a4).
-	it("the baseline names no file that has vanished from the live scan", async () => {
-		// Stated asymmetrically on purpose (see module doc): a count FALLING is
-		// not a failure above, but a baseline entry for a file the scan no
-		// longer touches AT ALL is dead weight worth flagging here, same as
-		// `auditRegistry`'s stale-exemption check one layer up.
-		const stale: string[] = [];
-		for (const detector of DETECTOR_NAMES) {
-			const live = await countsByDetector(detector);
-			for (const file of Object.keys(FLAKE_SHAPE_BASELINE[detector] ?? {})) {
-				if (!(file in live)) stale.push(`${detector}:${file}`);
-			}
-		}
-		expect(stale).toEqual([]);
-	}, 30_000);
+	it(
+		"the baseline names no file that has vanished from the live scan",
+		async () => {
+			// Stated asymmetrically on purpose (see module doc): a count FALLING is
+			// not a failure above, but a baseline entry for a file the scan no
+			// longer touches AT ALL is dead weight worth flagging here, same as
+			// `auditRegistry`'s stale-exemption check one layer up.
+			const live: Partial<
+				Record<DetectorName, Readonly<Record<string, number>>>
+			> = {};
+			for (const detector of DETECTOR_NAMES)
+				live[detector] = await countsByDetector(detector);
+			expect(
+				rowsWithoutLiveMember(
+					detectorRows(FLAKE_SHAPE_BASELINE),
+					new Set(detectorRows(live)),
+				),
+			).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
+
+	it("reds a planted baseline row the live scan never touches (#5072)", () => {
+		// The dead-weight direction on a row this cell invents, over an empty live
+		// population: the scan touches nothing, so the row has to report itself.
+		const planted = "tests/clients/5072-gone-shape.test.ts";
+		const noLive: Partial<
+			Record<DetectorName, Readonly<Record<string, number>>>
+		> = {};
+		for (const detector of DETECTOR_NAMES) noLive[detector] = {};
+		const plantedBaseline = Object.fromEntries(
+			DETECTOR_NAMES.map((detector) => [
+				detector,
+				detector === "raw-timer-wait" ? { [planted]: 1 } : {},
+			]),
+		) as Baseline;
+		const stale = rowsWithoutLiveMember(
+			detectorRows(plantedBaseline),
+			new Set(detectorRows(noLive)),
+		);
+		expect(stale).toEqual([`raw-timer-wait:${planted}`]);
+		expectPlantedStaleRow({
+			baseline: "tests/support/flake-shape-baseline.json",
+			rowKey: planted,
+			verdict: stale,
+		});
+	});
+
+	it("reds a frozen mint whose bytes are not the pinned ones (#5072)", () => {
+		// The mint is digest-pinned, so its row identity is its content hash: a
+		// planted row changes the hash, and the digest verdict has to name the
+		// hash of the planted content, not only the file.
+		const drifted = JSON.stringify({
+			...FROZEN_BASELINE,
+			"raw-timer-wait": {
+				...FROZEN_BASELINE["raw-timer-wait"],
+				"tests/clients/5072-drift-row.test.ts": 1,
+			},
+		});
+		expectPlantedStaleRow({
+			baseline: "tests/support/flake-shape-baseline-frozen.json",
+			rowKey: createHash("sha256").update(drifted).digest("hex"),
+			verdict: frozenDigestProblems(drifted),
+		});
+	});
 
 	it("carries the three counts in this header (informational, kept in sync)", () => {
 		// Not asserted against a hardcoded number — this test's job is only to
@@ -2321,41 +2729,48 @@ describe("flake-shape ratchet — admission gate", () => {
 
 	// #2857: the admission sweep reads every admitted file's source and timed
 	// out at vitest's 5 s default under full-suite load; give it a real budget.
-	it("ADMITTED_AFTER_BASELINE entries carry the header and wallClockBudgetInclude membership", () => {
-		const included = new Set([
-			...wallClockBudgetInclude(),
-			...realHarnessInclude,
-		]);
-		const problems: string[] = [];
-		for (const [key, entry] of Object.entries(ADMITTED_AFTER_BASELINE)) {
-			const file = key
-				.slice(entry.detector.length + 1)
-				.split(IDENTITY_SEPARATOR)[0];
-			if (file.startsWith("support/") && !file.endsWith(".test.ts")) continue;
-			const absolute = path.join(repoRoot, "tests", file);
-			const source = fs.existsSync(absolute)
-				? fs.readFileSync(absolute, "utf8")
-				: undefined;
-			problems.push(...validateAdmission(key, entry, source, included, file));
-		}
-		for (const detector of DETECTOR_NAMES) {
-			for (const file of Object.keys(FLAKE_SHAPE_BASELINE[detector] ?? {})) {
-				if (!file.startsWith("support/") || file.endsWith(".test.ts")) continue;
-				const key = `${detector}:${file}`;
-				const entry = ADMITTED_AFTER_BASELINE[key];
-				if (!entry) {
-					problems.push(`${key}: missing ADMITTED_AFTER_BASELINE entry`);
-					continue;
-				}
-				const source = fs.readFileSync(
-					path.join(repoRoot, "tests", file),
-					"utf8",
-				);
+	it(
+		"ADMITTED_AFTER_BASELINE entries carry the header and wallClockBudgetInclude membership",
+		() => {
+			const included = new Set([
+				...wallClockBudgetInclude(),
+				...realHarnessInclude,
+			]);
+			const problems: string[] = [];
+			for (const [key, entry] of Object.entries(ADMITTED_AFTER_BASELINE)) {
+				const file = key
+					.slice(entry.detector.length + 1)
+					.split(IDENTITY_SEPARATOR)[0];
+				if (file.startsWith("support/") && !file.endsWith(".test.ts")) continue;
+				const absolute = path.join(repoRoot, "tests", file);
+				const source = fs.existsSync(absolute)
+					? fs.readFileSync(absolute, "utf8")
+					: undefined;
 				problems.push(...validateAdmission(key, entry, source, included, file));
 			}
-		}
-		expect(problems).toEqual([]);
-	}, 30_000);
+			for (const detector of DETECTOR_NAMES) {
+				for (const file of Object.keys(FLAKE_SHAPE_BASELINE[detector] ?? {})) {
+					if (!file.startsWith("support/") || file.endsWith(".test.ts"))
+						continue;
+					const key = `${detector}:${file}`;
+					const entry = ADMITTED_AFTER_BASELINE[key];
+					if (!entry) {
+						problems.push(`${key}: missing ADMITTED_AFTER_BASELINE entry`);
+						continue;
+					}
+					const source = fs.readFileSync(
+						path.join(repoRoot, "tests", file),
+						"utf8",
+					);
+					problems.push(
+						...validateAdmission(key, entry, source, included, file),
+					);
+				}
+			}
+			expect(problems).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// #3546: the caching above is a behaviour-preserving refactor — every
 	// value it returns must equal what the uncached production calls
@@ -2363,60 +2778,74 @@ describe("flake-shape ratchet — admission gate", () => {
 	// input. Old-vs-new probe through the real seam, not a re-derived copy
 	// of the caching logic, per the behaviour-preserving-refactor proof
 	// shape.
-	it("(#3546) the cached file list and import targets equal the uncached scan", () => {
-		const uncachedFiles = allTestSourceFiles().filter((file) =>
-			file.endsWith(".test.ts"),
-		);
-		expect(cachedAllTestFiles()).toEqual(uncachedFiles);
-		for (const file of uncachedFiles) {
-			expect(cachedLocalImportTargets(file)).toEqual(localImportTargets(file));
-		}
-	});
+	it(
+		"(#3546) the cached file list and import targets equal the uncached scan",
+		() => {
+			const uncachedFiles = allTestSourceFiles().filter((file) =>
+				file.endsWith(".test.ts"),
+			);
+			expect(cachedAllTestFiles()).toEqual(uncachedFiles);
+			for (const file of uncachedFiles) {
+				expect(cachedLocalImportTargets(file)).toEqual(
+					localImportTargets(file),
+				);
+			}
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// #3546 MUTATION: the cache must be load-bearing, not dead code — poison
 	// it and show `supportHelperHasLaneProof`'s answer for a REAL admitted
 	// entry flips, then show it flips back once the cache is restored. This
 	// is the guard's own red-on-neuter proof (docs/engineering-principles.md "Mutation output is quoted, not ticked").
-	it("MUTATION (#3546): a poisoned import-targets cache flips supportHelperHasLaneProof's answer", () => {
-		const included = new Set([
-			...wallClockBudgetInclude(),
-			...realHarnessInclude,
-		]);
-		expect(
-			supportHelperHasLaneProof("support/fault-injection.ts", included),
-		).toBe(true);
-
-		const saved = new Map(importTargetsCache);
-		for (const key of importTargetsCache.keys())
-			importTargetsCache.set(key, []);
-		try {
+	it(
+		"MUTATION (#3546): a poisoned import-targets cache flips supportHelperHasLaneProof's answer",
+		() => {
+			const included = new Set([
+				...wallClockBudgetInclude(),
+				...realHarnessInclude,
+			]);
 			expect(
 				supportHelperHasLaneProof("support/fault-injection.ts", included),
-			).toBe(false);
-		} finally {
-			importTargetsCache.clear();
-			for (const [key, value] of saved) importTargetsCache.set(key, value);
-		}
-		expect(
-			supportHelperHasLaneProof("support/fault-injection.ts", included),
-		).toBe(true);
-	});
+			).toBe(true);
+
+			const saved = new Map(importTargetsCache);
+			for (const key of importTargetsCache.keys())
+				importTargetsCache.set(key, []);
+			try {
+				expect(
+					supportHelperHasLaneProof("support/fault-injection.ts", included),
+				).toBe(false);
+			} finally {
+				importTargetsCache.clear();
+				for (const [key, value] of saved) importTargetsCache.set(key, value);
+			}
+			expect(
+				supportHelperHasLaneProof("support/fault-injection.ts", included),
+			).toBe(true);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// #3546 planted offender: a target nothing imports must be flagged
 	// (no lane proof) — same conclusion the uncached walk would reach, since
 	// the equivalence test above proves the cache returns identical data.
-	it("ATTACK (#3546): a support/ target no test imports has no lane proof — planted offender", () => {
-		const included = new Set([
-			...wallClockBudgetInclude(),
-			...realHarnessInclude,
-		]);
-		expect(
-			supportHelperHasLaneProof(
-				"support/__3546-planted-offender-never-imported.ts",
-				included,
-			),
-		).toBe(false);
-	});
+	it(
+		"ATTACK (#3546): a support/ target no test imports has no lane proof — planted offender",
+		() => {
+			const included = new Set([
+				...wallClockBudgetInclude(),
+				...realHarnessInclude,
+			]);
+			expect(
+				supportHelperHasLaneProof(
+					"support/__3546-planted-offender-never-imported.ts",
+					included,
+				),
+			).toBe(false);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// `ADMITTED_AFTER_BASELINE` is empty in steady state, so the test above
 	// alone never proves `validateAdmission` catches anything. These fixtures
@@ -2431,69 +2860,89 @@ describe("flake-shape ratchet — admission gate", () => {
 	};
 	const INCLUDED = new Set(["tests/clients/some-admitted-fixture.test.ts"]);
 
-	it("ATTACK: passes when the header, detector match, and membership all hold", () => {
-		expect(
-			validateAdmission(
+	it(
+		"ATTACK: passes when the header, detector match, and membership all hold",
+		() => {
+			expect(
+				validateAdmission(
+					"real-process-spawn:clients/some-admitted-fixture.test.ts",
+					GOOD_ENTRY,
+					GOOD_SOURCE,
+					INCLUDED,
+					"clients/some-admitted-fixture.test.ts",
+				),
+			).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
+
+	it(
+		"ATTACK: a missing header is caught",
+		() => {
+			const problems = validateAdmission(
+				"real-process-spawn:clients/some-admitted-fixture.test.ts",
+				GOOD_ENTRY,
+				"execFileSync(cmd); // no header at all\n",
+				INCLUDED,
+				"clients/some-admitted-fixture.test.ts",
+			);
+			expect(problems).toEqual([expect.stringContaining("missing")]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
+
+	it(
+		"ATTACK: a header naming the WRONG detector is caught",
+		() => {
+			const wrongDetectorSource =
+				"// flake-shape: raw-timer-wait — this reason talks about the wrong detector\n" +
+				"execFileSync(cmd);\n";
+			const problems = validateAdmission(
+				"real-process-spawn:clients/some-admitted-fixture.test.ts",
+				GOOD_ENTRY,
+				wrongDetectorSource,
+				INCLUDED,
+				"clients/some-admitted-fixture.test.ts",
+			);
+			expect(problems).toEqual([
+				expect.stringContaining('names detector "raw-timer-wait"'),
+			]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
+
+	it(
+		"ATTACK: missing wallClockBudgetInclude membership is caught even with a good header",
+		() => {
+			const problems = validateAdmission(
 				"real-process-spawn:clients/some-admitted-fixture.test.ts",
 				GOOD_ENTRY,
 				GOOD_SOURCE,
-				INCLUDED,
+				new Set<string>(), // empty: file is not in the include list
 				"clients/some-admitted-fixture.test.ts",
-			),
-		).toEqual([]);
-	});
+			);
+			expect(problems).toEqual([
+				expect.stringContaining("wallClockBudgetInclude"),
+			]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("ATTACK: a missing header is caught", () => {
-		const problems = validateAdmission(
-			"real-process-spawn:clients/some-admitted-fixture.test.ts",
-			GOOD_ENTRY,
-			"execFileSync(cmd); // no header at all\n",
-			INCLUDED,
-			"clients/some-admitted-fixture.test.ts",
-		);
-		expect(problems).toEqual([expect.stringContaining("missing")]);
-	});
-
-	it("ATTACK: a header naming the WRONG detector is caught", () => {
-		const wrongDetectorSource =
-			"// flake-shape: raw-timer-wait — this reason talks about the wrong detector\n" +
-			"execFileSync(cmd);\n";
-		const problems = validateAdmission(
-			"real-process-spawn:clients/some-admitted-fixture.test.ts",
-			GOOD_ENTRY,
-			wrongDetectorSource,
-			INCLUDED,
-			"clients/some-admitted-fixture.test.ts",
-		);
-		expect(problems).toEqual([
-			expect.stringContaining('names detector "raw-timer-wait"'),
-		]);
-	});
-
-	it("ATTACK: missing wallClockBudgetInclude membership is caught even with a good header", () => {
-		const problems = validateAdmission(
-			"real-process-spawn:clients/some-admitted-fixture.test.ts",
-			GOOD_ENTRY,
-			GOOD_SOURCE,
-			new Set<string>(), // empty: file is not in the include list
-			"clients/some-admitted-fixture.test.ts",
-		);
-		expect(problems).toEqual([
-			expect.stringContaining("wallClockBudgetInclude"),
-		]);
-	});
-
-	it("ATTACK: a nonexistent file is caught", () => {
-		expect(
-			validateAdmission(
-				"real-process-spawn:clients/does-not-exist.test.ts",
-				GOOD_ENTRY,
-				undefined,
-				INCLUDED,
-				"clients/does-not-exist.test.ts",
-			),
-		).toEqual([expect.stringContaining("does not exist")]);
-	});
+	it(
+		"ATTACK: a nonexistent file is caught",
+		() => {
+			expect(
+				validateAdmission(
+					"real-process-spawn:clients/does-not-exist.test.ts",
+					GOOD_ENTRY,
+					undefined,
+					INCLUDED,
+					"clients/does-not-exist.test.ts",
+				),
+			).toEqual([expect.stringContaining("does not exist")]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });
 
 describe("flake-shape ratchet — frozen mint (#4383 review F1)", () => {
@@ -3184,24 +3633,32 @@ describe("flake-shape scan — raw-timer-wait", () => {
 		expect(scanRawTimerWait("interleaving-kit.ts", source)).toEqual([]);
 	});
 
-	it("(#2563) the live scan walks tests/support helpers: fault-injection.ts sits in the population", async () => {
-		// Mutation-sensitive population proof: dropping the support walk from
-		// countsByDetector makes this red. fault-injection.ts is the one
-		// existing helper the extended scan flags (its sanctioned delayInside
-		// timer + teardown failsafe are baselined, not admitted).
-		expect(await countsByDetector("raw-timer-wait")).toHaveProperty(
-			"support/fault-injection.ts",
-		);
-	});
+	it(
+		"(#2563) the live scan walks tests/support helpers: fault-injection.ts sits in the population",
+		async () => {
+			// Mutation-sensitive population proof: dropping the support walk from
+			// countsByDetector makes this red. fault-injection.ts is the one
+			// existing helper the extended scan flags (its sanctioned delayInside
+			// timer + teardown failsafe are baselined, not admitted).
+			expect(await countsByDetector("raw-timer-wait")).toHaveProperty(
+				"support/fault-injection.ts",
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("(#2563) the spawn detector stays test-file-only: support helpers are the sanctioned spawn boundary", async () => {
-		// git-fixture-env.ts / fake-child.ts / spawn-shapes.ts import
-		// node:child_process by design — they are the fixture boundary the
-		// test-side detector routes callers toward, not a flake shape.
-		const spawnCounts = await countsByDetector("real-process-spawn");
-		expect(spawnCounts["support/git-fixture-env.ts"]).toBeUndefined();
-		expect(spawnCounts["support/fake-child.ts"]).toBeUndefined();
-	});
+	it(
+		"(#2563) the spawn detector stays test-file-only: support helpers are the sanctioned spawn boundary",
+		async () => {
+			// git-fixture-env.ts / fake-child.ts / spawn-shapes.ts import
+			// node:child_process by design — they are the fixture boundary the
+			// test-side detector routes callers toward, not a flake shape.
+			const spawnCounts = await countsByDetector("real-process-spawn");
+			expect(spawnCounts["support/git-fixture-env.ts"]).toBeUndefined();
+			expect(spawnCounts["support/fake-child.ts"]).toBeUndefined();
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("ATTACK (#2563): a raw timer inside a tests/support helper is a NEW flagged file", () => {
 		// The acceptance-criterion scenario for the new population: a helper
@@ -3568,53 +4025,59 @@ describe("flake-shape ratchet — in-process mocks and doubles (#4362)", () => {
 		}
 	});
 
-	it("ATTACK: a mock admission needs its header but no serialized lane", () => {
-		const key = `in-process-mock:${MOCK_FIXTURE}::clients/latency-logger`;
-		const entry = {
-			detector: "in-process-mock" as const,
-			reason: "the logger's own flush order is the behaviour under test",
-		};
-		const header =
-			"// flake-shape: in-process-mock — the logger's own flush order is under test\n";
-		const body = 'vi.mock("../../clients/latency-logger.js");\n';
-		// Good header, no lane: admitted (a mock adds no contention).
-		expect(
-			validateAdmission(key, entry, header + body, new Set(), MOCK_FIXTURE),
-		).toEqual([]);
-		// No header: refused.
-		expect(
-			validateAdmission(key, entry, body, new Set(), MOCK_FIXTURE),
-		).toEqual([expect.stringContaining("missing")]);
-		// A header quoted in a comment of prose, or in a string, is no header.
-		expect(
-			validateAdmission(
-				key,
-				entry,
-				`const s = "${header.trim()}";\n${body}`,
-				new Set(),
-				MOCK_FIXTURE,
-			),
-		).toEqual([expect.stringContaining("missing")]);
-		// A spawn header first and the mock header second: both validate.
-		const twoHeaders =
-			"// flake-shape: real-process-spawn — the real CLI exit code is under test\n" +
-			header +
-			body;
-		expect(
-			validateAdmission(key, entry, twoHeaders, new Set(), MOCK_FIXTURE),
-		).toEqual([]);
-		// Only the spawn header: the mock entry names the wrong detector.
-		expect(
-			validateAdmission(
-				key,
-				entry,
+	it(
+		"ATTACK: a mock admission needs its header but no serialized lane",
+		() => {
+			const key = `in-process-mock:${MOCK_FIXTURE}::clients/latency-logger`;
+			const entry = {
+				detector: "in-process-mock" as const,
+				reason: "the logger's own flush order is the behaviour under test",
+			};
+			const header =
+				"// flake-shape: in-process-mock — the logger's own flush order is under test\n";
+			const body = 'vi.mock("../../clients/latency-logger.js");\n';
+			// Good header, no lane: admitted (a mock adds no contention).
+			expect(
+				validateAdmission(key, entry, header + body, new Set(), MOCK_FIXTURE),
+			).toEqual([]);
+			// No header: refused.
+			expect(
+				validateAdmission(key, entry, body, new Set(), MOCK_FIXTURE),
+			).toEqual([expect.stringContaining("missing")]);
+			// A header quoted in a comment of prose, or in a string, is no header.
+			expect(
+				validateAdmission(
+					key,
+					entry,
+					`const s = "${header.trim()}";\n${body}`,
+					new Set(),
+					MOCK_FIXTURE,
+				),
+			).toEqual([expect.stringContaining("missing")]);
+			// A spawn header first and the mock header second: both validate.
+			const twoHeaders =
 				"// flake-shape: real-process-spawn — the real CLI exit code is under test\n" +
-					body,
-				new Set(),
-				MOCK_FIXTURE,
-			),
-		).toEqual([expect.stringContaining('names detector "real-process-spawn"')]);
-	});
+				header +
+				body;
+			expect(
+				validateAdmission(key, entry, twoHeaders, new Set(), MOCK_FIXTURE),
+			).toEqual([]);
+			// Only the spawn header: the mock entry names the wrong detector.
+			expect(
+				validateAdmission(
+					key,
+					entry,
+					"// flake-shape: real-process-spawn — the real CLI exit code is under test\n" +
+						body,
+					new Set(),
+					MOCK_FIXTURE,
+				),
+			).toEqual([
+				expect.stringContaining('names detector "real-process-spawn"'),
+			]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });
 
 describe("flake-shape scan — in-process-mock (#4362)", () => {
@@ -3654,6 +4117,13 @@ describe("flake-shape scan — in-process-mock (#4362)", () => {
 		// Shape 34: the call is read structurally, so an unlisted spelling
 		// of the same mock is the same entry.
 		expect(targetsIn(source)).toEqual(["clients/x"]);
+	});
+
+	it("does not count vi.doUnmock as an in-process mock (#5256 F3)", () => {
+		// Recurrence guard for #5256 F3: `doUnmock` restores the real module and
+		// replaces none. It reds if `doUnmock` joins the shared
+		// MOCK_REGISTRATION_NAMES list this scan reads (mutation M3).
+		expect(targetsIn('vi.doUnmock("../../clients/x.js");')).toEqual([]);
 	});
 
 	it("counts each mocked module once, however many times it is mocked", () => {

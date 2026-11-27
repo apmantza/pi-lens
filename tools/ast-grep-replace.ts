@@ -4,6 +4,7 @@
  * Extracted from index.ts for maintainability.
  */
 
+import * as path from "node:path";
 import { Type } from "../clients/deps/typebox.js";
 import type { AstGrepClient } from "../clients/ast-grep-client.js";
 import { combineAbortSignals } from "../clients/deadline-utils.js";
@@ -31,6 +32,7 @@ function errorTextWithHint(raw: string): string {
 	return hint ? `Error: ${raw}\n\n${hint}` : `Error: ${raw}`;
 }
 import {
+	astGrepSharedParams,
 	defaultedCwdHomeRefusal,
 	PATHS_GLOB_CLAUSE,
 	readAstGrepLang,
@@ -49,11 +51,19 @@ function lineCount(value: string): number {
 /**
  * `captureLineage`: the host's session capture (#3763). The tool takes it at
  * `execute` entry, before its first await, and the apply records under it.
+ * `getFlag`: the flag resolver the apply's `no-autofix` refusal reads.
  */
 export function createAstGrepReplaceTool(
 	astGrepClient: AstGrepClient,
 	captureLineage?: () => LineageHandle,
+	/**
+	 * Resolves a flag for a call's `cwd`, as `createLspNavigationTool`'s does:
+	 * the MCP host rebuilds it per request, pi's ignores the second argument.
+	 * An apply is refused under `no-autofix` (#5417).
+	 */
+	getFlag?: (name: string, cwd?: string) => boolean | string | undefined,
 ) {
+	const shared = astGrepSharedParams();
 	return {
 		name: "ast_grep_replace" as const,
 		label: "AST Replace",
@@ -82,48 +92,17 @@ export function createAstGrepReplaceTool(
 			rewrite: Type.String({
 				description: "Replacement using meta-variables from pattern",
 			}),
-			lang: Type.String({
-				description: "Language id, e.g. typescript, tsx, python, go.",
-			}),
+			lang: shared.lang,
 			paths: Type.Optional(
 				Type.Array(Type.String(), {
 					description: `Specific files/folders. ${PATHS_GLOB_CLAUSE}`,
 				}),
 			),
-			insideKind: Type.Optional(
-				Type.String({
-					description: "Ancestor AST node kind filter.",
-				}),
-			),
-			hasKind: Type.Optional(
-				Type.String({
-					description: "Immediate child AST node kind filter.",
-				}),
-			),
-			hasDescendantKind: Type.Optional(
-				Type.String({
-					description: "Recursive descendant AST node kind filter.",
-				}),
-			),
-			follows: Type.Optional(
-				Type.String({
-					description: "Preceding sibling pattern filter.",
-				}),
-			),
-			precedes: Type.Optional(
-				Type.String({
-					description: "Following sibling pattern filter.",
-				}),
-			),
+			...shared.relational,
 			apply: Type.Optional(
 				Type.Boolean({ description: "Apply changes (default: false)" }),
 			),
-			strictness: Type.Optional(
-				Type.String({
-					enum: ["smart", "relaxed", "ast", "cst", "signature", "template"],
-					description: "Match strictness; default smart.",
-				}),
-			),
+			strictness: shared.strictness,
 		}),
 		async execute(
 			_toolCallId: string,
@@ -290,6 +269,21 @@ export function createAstGrepReplaceTool(
 				};
 			}
 			const searchPaths = pathsRead.entries;
+			// #5417: an apply writes source files, so it takes the autofix writer's
+			// two refusals at its entry, before any scan: `no-autofix` here, and the
+			// session's writable roots in the client (a sibling repo, a vendor path).
+			// The workspace root is the call's cwd, which `paths` resolved against.
+			const sessionRoot = path.resolve(ctx.cwd ?? process.cwd());
+			if (applyFlag && getFlag?.("no-autofix", sessionRoot)) {
+				const reason =
+					"ast_grep_replace refused: apply is disabled by the no-autofix flag (autofix.enabled=false); a preview with apply: false is still allowed";
+				logOutcome("error", { errorRaw: reason });
+				return {
+					content: [{ type: "text" as const, text: `Error: ${reason}` }],
+					isError: true,
+					details: {},
+				};
+			}
 
 			// Phase 3: structural-intent params → synthesize YAML with fix: field
 			if (
@@ -330,7 +324,7 @@ export function createAstGrepReplaceTool(
 					ruleYaml,
 					searchPaths,
 					applyFlag,
-					{ lineage, toolCallId: _toolCallId, sessionId, signal },
+					{ lineage, toolCallId: _toolCallId, sessionId, signal, sessionRoot },
 				);
 				if (ruleResult.stalePreview) {
 					logOutcome("error", { errorRaw: "stale_preview" });
@@ -342,11 +336,7 @@ export function createAstGrepReplaceTool(
 							},
 						],
 						isError: true,
-						// #5244 r4: files an earlier path already rewrote still dispatch.
-						details: {
-							stalePreview: true,
-							appliedFiles: ruleResult.appliedFiles ?? [],
-						},
+						details: { stalePreview: true },
 					};
 				}
 				if (ruleResult.error) {
@@ -364,7 +354,7 @@ export function createAstGrepReplaceTool(
 							},
 						],
 						isError: true,
-						details: { appliedFiles: ruleResult.appliedFiles ?? [] },
+						details: {},
 					};
 				}
 				const output = astGrepClient.formatMatches(
@@ -381,9 +371,6 @@ export function createAstGrepReplaceTool(
 					details: {
 						matchCount: ruleResult.matches.length,
 						applied: applyFlag,
-						// #5239: the files the apply rewrote, for the `tool_result`
-						// handler's dispatch.
-						appliedFiles: ruleResult.appliedFiles ?? [],
 					},
 				};
 			}
@@ -394,7 +381,14 @@ export function createAstGrepReplaceTool(
 				lang,
 				searchPaths,
 				applyFlag,
-				{ strictness, lineage, toolCallId: _toolCallId, sessionId, signal },
+				{
+					strictness,
+					lineage,
+					toolCallId: _toolCallId,
+					sessionId,
+					signal,
+					sessionRoot,
+				},
 			);
 
 			if (result.stalePreview) {
@@ -440,9 +434,6 @@ export function createAstGrepReplaceTool(
 					totalMatches: result.totalMatches,
 					truncated: result.truncated,
 					applied: applyFlag,
-					// #5239: the files the apply rewrote, for the `tool_result`
-					// handler's dispatch.
-					appliedFiles: result.appliedFiles ?? [],
 				},
 			};
 		},

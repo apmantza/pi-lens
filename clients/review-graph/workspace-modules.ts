@@ -19,6 +19,7 @@ import {
 	type ProjectIgnoreMatcher,
 } from "../file-utils.js";
 import { isWithinForm, normalizeMapKey, toPosix } from "../path-utils.js";
+import { isJstsFactFile } from "../file-kinds.js";
 import { getWorkspaceManifestMarkers } from "../workspace-topology.js";
 
 export interface WorkspaceModule {
@@ -51,11 +52,10 @@ type PackageJson = {
 	peerDependencies?: Record<string, string>;
 };
 
+// Non-JS/TS source extensions; the JS/TS family answers through the
+// registry seam (`isJstsFactFile`, file-kinds.ts) (#5446: the hand-spelled
+// `.ts/.tsx/.js/.jsx` entries left `.mts`/`.cts`/`.mjs`/`.cjs` out).
 const SOURCE_EXTS = new Set([
-	".ts",
-	".tsx",
-	".js",
-	".jsx",
 	".py",
 	".go",
 	".rs",
@@ -526,7 +526,11 @@ export function getModuleSourceFiles(
 			// #1974: extension gate before isIgnored — isIgnored recompiles
 			// minimatch patterns per ancestor dir per call, so it should only run
 			// for files the cheap extension check already flags as source.
-			if (!SOURCE_EXTS.has(path.extname(entry.name).toLowerCase())) continue;
+			if (
+				!SOURCE_EXTS.has(path.extname(entry.name).toLowerCase()) &&
+				!isJstsFactFile(entry.name)
+			)
+				continue;
 			if (ignoreMatcher.isIgnored(fullPath, false)) continue;
 			files.push(normalizeMapKey(fullPath));
 		}

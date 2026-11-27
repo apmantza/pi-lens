@@ -24,8 +24,8 @@ export function isTestMode(): boolean {
 
 /**
  * The ONE read of the tool-install kill switch (#5231). Every path that can
- * download or run an installer (the managed installer, the lazy installer,
- * govulncheck's `go install`) asks here and answers "unavailable" without
+ * download or run an installer (the managed installer, govulncheck's
+ * `go install`) asks here and answers "unavailable" without
  * spawning when it is true. `tests/config/install-kill-switch-census.test.ts`
  * pins each install spawn to a consult of this function.
  *
@@ -65,6 +65,22 @@ export function isLspInstallDisabled(): boolean {
 export function toPositiveFinite(value: unknown): number {
 	const num = typeof value === "number" ? value : Number(value);
 	return Number.isFinite(num) && num > 0 ? num : 0;
+}
+
+/**
+ * The ONE read of a non-negative integer `PI_LENS_*` knob (#5419). An unset,
+ * blank or whitespace-only variable is the default, and an explicit `0` is a
+ * value: a knob whose documented setting is "0 disables" can be set to it. A
+ * non-numeric or negative value is the default. A fraction floors.
+ *
+ * Reads `process.env` on each call. A caller that stores the result keeps it
+ * for its own lifetime.
+ */
+export function nonNegativeIntEnv(name: string, fallback: number): number {
+	const raw = process.env[name];
+	if (raw === undefined || raw.trim() === "") return fallback;
+	const parsed = Number(raw);
+	return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
 }
 
 /**

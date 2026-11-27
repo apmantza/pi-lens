@@ -273,6 +273,16 @@ describe("runtime-agent-end deferred formatting", () => {
 				getFormatService: () =>
 					({ recordRead: () => {}, formatFile: vi.fn() }) as any,
 			});
+			await handleAgentEnd({
+				ctxCwd: env.tmpDir,
+				getFlag: (name) => name === "no-lsp",
+				notify: vi.fn(),
+				dbg: () => {},
+				runtime,
+				cacheManager: { addModifiedRange: vi.fn() } as any,
+				getFormatService: () =>
+					({ recordRead: () => {}, formatFile: vi.fn() }) as any,
+			});
 
 			expect(runtime.consumeDeferredFormatFiles()[0].kinds).toEqual(
 				new Set(["autofix", "format"]),
@@ -431,6 +441,83 @@ describe("runtime-agent-end deferred formatting", () => {
 					phase: "agent_end_deferred_mutation_requeue",
 					metadata: expect.objectContaining({ reason: "format-failed" }),
 				}),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("caps repeated deferred formatter requeues at one retry (#5549)", async () => {
+		const env = setupTestEnvironment("pi-lens-agent-end-format-cap-");
+		try {
+			const { getDegradationSummary, resetDegradationLedger } =
+				await import("../../clients/degradation-ledger.js");
+			resetDegradationLedger();
+			const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x=1\n");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.deferFormat(filePath, env.tmpDir, "edit", env.tmpDir);
+			const record = runtime.consumeDeferredFormatFiles()[0];
+
+			// Recurrence (#5549): an abandoned/timed-out formatter was requeued on
+			// every agent_end, so a wedged formatter could be retried forever.
+			runtime.requeueDeferredFormatFiles([record]);
+			expect(runtime.pendingDeferredFormatCount).toBe(1);
+			const retry = runtime.consumeDeferredFormatFiles()[0];
+			runtime.requeueDeferredFormatFiles([retry]);
+			expect(runtime.pendingDeferredFormatCount).toBe(0);
+			expect(getDegradationSummary()).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ kind: "formatter-requeue-dropped" }),
+				]),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// Recurrence (#5549, Qodo review): a fresh edit merged into a requeued
+	// format record kept that record's spent retry, so the edit's own first
+	// failure was dropped as a repeat of the old one.
+	it("resets the one-retry cap when a fresh edit merges into a requeued record", async () => {
+		const env = setupTestEnvironment("pi-lens-agent-end-format-cap-fresh-");
+		try {
+			const { getDegradationSummary, resetDegradationLedger } =
+				await import("../../clients/degradation-ledger.js");
+			resetDegradationLedger();
+			const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x=1\n");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const drainWithFailingFormat = () =>
+				handleAgentEnd({
+					ctxCwd: env.tmpDir,
+					getFlag: (name) => name === "no-lsp",
+					notify: vi.fn(),
+					dbg: () => {},
+					runtime,
+					cacheManager: { addModifiedRange: vi.fn() } as any,
+					getFormatService: () =>
+						({
+							recordRead: () => {},
+							formatFile: async () => {
+								throw new Error("format failed");
+							},
+						}) as any,
+				});
+
+			runtime.deferFormat(filePath, env.tmpDir, "edit", env.tmpDir);
+			await drainWithFailingFormat();
+			expect(runtime.pendingDeferredFormatCount).toBe(1);
+
+			// A fresh edit to the same file merges into the requeued record.
+			runtime.deferFormat(filePath, env.tmpDir, "edit", env.tmpDir);
+			await drainWithFailingFormat();
+
+			expect(runtime.pendingDeferredFormatCount).toBe(1);
+			expect(getDegradationSummary()).not.toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ kind: "formatter-requeue-dropped" }),
+				]),
 			);
 		} finally {
 			env.cleanup();

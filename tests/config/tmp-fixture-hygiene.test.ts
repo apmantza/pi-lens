@@ -56,12 +56,15 @@ import {
 	recordedTmpRootCreators,
 } from "../support/tmp-root-registry.js";
 import { getLatencyLogPath } from "../../clients/latency-logger.js";
+import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
 import {
 	buildProjectSnapshotFromRuntime,
 	getProjectSnapshotPath,
+	getProjectSnapshotPersistStateForTests,
 	saveProjectSnapshot,
-	waitForProjectSnapshotPersistsForTests,
 } from "../../clients/project-snapshot.js";
+import { waitFor } from "../clients/interleaving-kit.js";
+import { drainRegisteredBackgroundWritesForTests } from "../support/background-write-drains.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { findNearestProjectRoot } from "../../clients/startup-scan.js";
 
@@ -828,6 +831,41 @@ describe("tmp-fixture-hygiene", () => {
 		scaledTestTimeout(60_000),
 	);
 
+	it("refuses direct pre-push base allocation in every scope (#5439)", () => {
+		const owner = "scripts/pre-push-targeted-tests.mjs";
+		const call = ["const dir = mkdtemp", "Sync(path.join(base, 'run-'));"].join(
+			"",
+		);
+		const declaration =
+			"const base = ensurePrePushTmpRoot(resolvePrePushTmpRoot(process.env));";
+		expect
+			.soft(mkdtempSiteEscapes(owner, `${declaration}\n${call}`)(2))
+			.toBe(true);
+		for (const raw of [
+			`function decoy() { ${declaration} }\nfunction unsafe() { const base = arbitraryRoot();\n${call}\n}`,
+			`${declaration}\nfunction unsafe(base) {\n${call}\n}`,
+			call,
+			`// ${declaration}\n${call}`,
+			`const note = ${JSON.stringify(declaration)};\n${call}`,
+			`const base = arbitraryRoot();\n${call}`,
+			`const resolve = resolvePrePushTmpRoot; const base = ensurePrePushTmpRoot(resolve(process.env));\n${call}`,
+			`const base = ensurePrePushTmpRoot(resolvePrePushTmpRoot.call(null, process.env));\n${call}`,
+			`const resolved = resolvePrePushTmpRoot(process.env); const base = ensurePrePushTmpRoot(resolved);\n${call}`,
+		]) {
+			expect
+				.soft(
+					mkdtempSiteEscapes(
+						owner,
+						raw,
+					)(raw.split("\n").findIndex((line) => line.includes(call)) + 1),
+				)
+				.toBe(true);
+		}
+		expect(mkdtempSiteEscapes("fixture.ts", `${declaration}\n${call}`)(2)).toBe(
+			true,
+		);
+	});
+
 	it("exempts a mkdtemp site only for code, never for a comment or a string", () => {
 		// #4347: the exemption regexes read the raw call window, so a comment or
 		// a string naming os.tmpdir() or REPO_ROOT beside a stray parent excused
@@ -947,82 +985,104 @@ describe("tmp-fixture-hygiene", () => {
 		}
 	});
 
-	it("classifies a new repo-root entry by git: an untracked stray is a leak; a tracked or ignored one is not", () => {
-		const stray = `.probe-3715-stray-${process.pid}`;
-		const ignored = `probe-3715-${process.pid}-ignored.js`;
-		fs.mkdirSync(path.join(REPO_ROOT, stray));
-		fs.writeFileSync(path.join(REPO_ROOT, ignored), "");
-		try {
-			expect(
-				untrackedUnignoredEntries(
-					[stray, ignored, "package.json", ".probe-home"],
-					REPO_ROOT,
-				),
-			).toEqual([stray]);
-		} finally {
-			fs.rmSync(path.join(REPO_ROOT, stray), { recursive: true, force: true });
-			fs.rmSync(path.join(REPO_ROOT, ignored), { force: true });
-		}
-	});
+	it(
+		"classifies a new repo-root entry by git: an untracked stray is a leak; a tracked or ignored one is not",
+		() => {
+			const stray = `.probe-3715-stray-${process.pid}`;
+			const ignored = `probe-3715-${process.pid}-ignored.js`;
+			fs.mkdirSync(path.join(REPO_ROOT, stray));
+			fs.writeFileSync(path.join(REPO_ROOT, ignored), "");
+			try {
+				expect(
+					untrackedUnignoredEntries(
+						[stray, ignored, "package.json", ".probe-home"],
+						REPO_ROOT,
+					),
+				).toEqual([stray]);
+			} finally {
+				fs.rmSync(path.join(REPO_ROOT, stray), {
+					recursive: true,
+					force: true,
+				});
+				fs.rmSync(path.join(REPO_ROOT, ignored), { force: true });
+			}
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// #4003 recurrence: `tests/packaging-pack-manifest.test.ts` ran a real
 	// `npm pack` in the checkout, whose `prepare` built `dist/` there; git
 	// ignores `dist/`, so the census above passed while every dist-dependent
 	// file became order-dependent. A new build-output name is a leak even when
 	// ignored, and a pre-existing one is not.
-	it("flags a new dist/ or .pack-backup/ in the repo root even though git ignores it", () => {
-		const env = setupTestEnvironment("pi-lens-4003-build-output-", {
-			rootMarker: false,
-		});
-		try {
-			for (const name of ["dist", ".pack-backup", "kept-dist"])
-				fs.mkdirSync(path.join(env.tmpDir, name));
-			const census = unadmittedRepoRootEntries(["kept-dist"], env.tmpDir);
-			expect(census.unknown).toBeUndefined();
-			expect(census.leaked).toEqual([".pack-backup", "dist"]);
-			expect(
-				unadmittedRepoRootEntries(["dist", ".pack-backup"], env.tmpDir).leaked,
-			).toEqual([]);
-		} finally {
-			env.cleanup();
-		}
-	});
+	it(
+		"flags a new dist/ or .pack-backup/ in the repo root even though git ignores it",
+		() => {
+			const env = setupTestEnvironment("pi-lens-4003-build-output-", {
+				rootMarker: false,
+			});
+			try {
+				for (const name of ["dist", ".pack-backup", "kept-dist"])
+					fs.mkdirSync(path.join(env.tmpDir, name));
+				const census = unadmittedRepoRootEntries(["kept-dist"], env.tmpDir);
+				expect(census.unknown).toBeUndefined();
+				expect(census.leaked).toEqual([".pack-backup", "dist"]);
+				expect(
+					unadmittedRepoRootEntries(["dist", ".pack-backup"], env.tmpDir)
+						.leaked,
+				).toEqual([]);
+			} finally {
+				env.cleanup();
+			}
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// #4003: a build-output leak must survive the cell where git cannot answer
 	// for the OTHER new entries; reporting only `unknown` there would let a new
 	// dist/ pass in a tree git cannot read.
-	it("still flags a new dist/ when git cannot classify another new entry", () => {
-		const env = setupTestEnvironment("pi-lens-4003-build-output-unknown-", {
-			rootMarker: false,
-		});
-		try {
-			for (const name of ["dist", "stray"])
-				fs.mkdirSync(path.join(env.tmpDir, name));
-			const census = unadmittedRepoRootEntries([], env.tmpDir);
-			expect(census.leaked).toEqual(["dist"]);
-			expect(census.unknown).toContain("stray");
-		} finally {
-			env.cleanup();
-		}
-	});
+	it(
+		"still flags a new dist/ when git cannot classify another new entry",
+		() => {
+			const env = setupTestEnvironment("pi-lens-4003-build-output-unknown-", {
+				rootMarker: false,
+			});
+			try {
+				for (const name of ["dist", "stray"])
+					fs.mkdirSync(path.join(env.tmpDir, name));
+				const census = unadmittedRepoRootEntries([], env.tmpDir);
+				expect(census.leaked).toEqual(["dist"]);
+				expect(census.unknown).toContain("stray");
+			} finally {
+				env.cleanup();
+			}
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("reports unknown, never clean, when git cannot classify, and when the baseline predates the census", () => {
-		const env = setupTestEnvironment("pi-lens-3715-no-git-", {
-			rootMarker: false,
-		});
-		try {
-			fs.mkdirSync(path.join(env.tmpDir, "stray"));
-			expect(untrackedUnignoredEntries(["stray"], env.tmpDir)).toBeUndefined();
-			const unknown = unadmittedRepoRootEntries([], env.tmpDir);
-			expect(unknown.leaked).toEqual([]);
-			expect(unknown.unknown).toContain("stray");
-			expect(unadmittedRepoRootEntries(undefined).unknown).toContain(
-				"predates",
-			);
-		} finally {
-			env.cleanup();
-		}
-	});
+	it(
+		"reports unknown, never clean, when git cannot classify, and when the baseline predates the census",
+		() => {
+			const env = setupTestEnvironment("pi-lens-3715-no-git-", {
+				rootMarker: false,
+			});
+			try {
+				fs.mkdirSync(path.join(env.tmpDir, "stray"));
+				expect(
+					untrackedUnignoredEntries(["stray"], env.tmpDir),
+				).toBeUndefined();
+				const unknown = unadmittedRepoRootEntries([], env.tmpDir);
+				expect(unknown.leaked).toEqual([]);
+				expect(unknown.unknown).toContain("stray");
+				expect(unadmittedRepoRootEntries(undefined).unknown).toContain(
+					"predates",
+				);
+			} finally {
+				env.cleanup();
+			}
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// #4864 F4 (CodeRabbit's thread): the repo-root ledger records a `mkdir`
 	// creation, so the entry is a DIRECTORY even though the creating cell has
@@ -1034,41 +1094,52 @@ describe("tmp-fixture-hygiene", () => {
 	// did: every name below carries a directory-only rule, and the cell picks one
 	// the checkout does not currently hold, so the measured case is the removed
 	// directory (a stray one in a developer's tree cannot satisfy or break it).
-	it("admits a recorded directory through a directory-only ignore rule after its bytes are gone (#4864)", () => {
-		const absentIgnoredDir = [
-			".pack-backup",
-			"coverage",
-			"reports",
-			"out",
-		].find((name) => !fs.existsSync(path.join(REPO_ROOT, name)));
-		expect(
-			absentIgnoredDir,
-			"every candidate directory-only rule has a directory in this checkout",
-		).toBeDefined();
-		const name = absentIgnoredDir as string;
-		// No kind and no bytes: git cannot match the directory-only rule, which is
-		// the pre-fix answer this arm keeps beside the fix.
-		expect(untrackedUnignoredEntries([name], REPO_ROOT)).toEqual([name]);
-		// The ledger's kind: the same name is admitted.
-		expect(
-			untrackedUnignoredEntries([name], REPO_ROOT, new Set([name])),
-		).toEqual([]);
-	});
+	it(
+		"admits a recorded directory through a directory-only ignore rule after its bytes are gone (#4864)",
+		() => {
+			const absentIgnoredDir = [
+				".pack-backup",
+				"coverage",
+				"reports",
+				"out",
+			].find((name) => !fs.existsSync(path.join(REPO_ROOT, name)));
+			expect(
+				absentIgnoredDir,
+				"every candidate directory-only rule has a directory in this checkout",
+			).toBeDefined();
+			const name = absentIgnoredDir as string;
+			// No kind and no bytes: git cannot match the directory-only rule, which is
+			// the pre-fix answer this arm keeps beside the fix.
+			expect(untrackedUnignoredEntries([name], REPO_ROOT)).toEqual([name]);
+			// The ledger's kind: the same name is admitted.
+			expect(
+				untrackedUnignoredEntries([name], REPO_ROOT, new Set([name])),
+			).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("the run's real baseline sees a stray planted in the repo root, and not once it is removed", () => {
-		const stray = `.probe-3715-live-${process.pid}`;
-		fs.mkdirSync(path.join(REPO_ROOT, stray));
-		try {
-			const during = unadmittedRepoRootEntries(repoRootBaseline());
-			expect(during.unknown).toBeUndefined();
-			expect(during.leaked).toContain(stray);
-		} finally {
-			fs.rmSync(path.join(REPO_ROOT, stray), { recursive: true, force: true });
-		}
-		expect(unadmittedRepoRootEntries(repoRootBaseline()).leaked).not.toContain(
-			stray,
-		);
-	});
+	it(
+		"the run's real baseline sees a stray planted in the repo root, and not once it is removed",
+		() => {
+			const stray = `.probe-3715-live-${process.pid}`;
+			fs.mkdirSync(path.join(REPO_ROOT, stray));
+			try {
+				const during = unadmittedRepoRootEntries(repoRootBaseline());
+				expect(during.unknown).toBeUndefined();
+				expect(during.leaked).toContain(stray);
+			} finally {
+				fs.rmSync(path.join(REPO_ROOT, stray), {
+					recursive: true,
+					force: true,
+				});
+			}
+			expect(
+				unadmittedRepoRootEntries(repoRootBaseline()).leaked,
+			).not.toContain(stray);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// #3721 (the #3880 flake): the log sinks bind their path from PI_LENS_HOME at
 	// module load, and one home for every worker made the 33 files that run with
@@ -1343,10 +1414,18 @@ describe("tmp-fixture-hygiene", () => {
 			prefix: "pi-lens-5072-owner-population-stale-",
 			owner: "tests/index-integration.test.ts",
 		};
-		expect(tmpBaselineRowStaleness(planted)).toBe(
+		const stale = tmpBaselineRowStaleness(planted);
+		expect(stale).toBe(
 			"pi-lens-5072-owner-population-stale-: no live producer in " +
 				"tests/index-integration.test.ts; remove the admission",
 		);
+		// The registration this file's baseline needs (#5072): the plant above is
+		// a row the committed ledger does not carry, and the verdict above names it.
+		expectPlantedStaleRow({
+			baseline: "tests/config/tmp-fixture-hygiene-baseline.json",
+			rowKey: String(planted.prefix),
+			verdict: stale ?? "",
+		});
 		// The rule is not vacuously red: the owner of a checked-in row still
 		// answers for its family through the same call.
 		const baseline = JSON.parse(
@@ -1864,20 +1943,19 @@ describe("tmp-fixture-hygiene", () => {
 	// The real fix is at the producer, not an admission here: every call
 	// site (including tool-policy-conventions.test.ts's own afterEach, as of
 	// this change) awaits the drain seam the repo already ships for exactly
-	// this — waitForProjectSnapshotPersistsForTests — before its cleanup
+	// this — an idle wait that throws, then the registry drain — before its cleanup
 	// runs, so nothing is left in flight to recreate the directory once
-	// removed. Proven WITHOUT a raw wall-clock wait (this file's own
-	// dedicated, fully-serialized project is not in vitest.config.ts's
-	// wallClockBudgetInclude/realHarnessInclude, so a new raw timer here
-	// would need moving the file's whole project assignment just for one
-	// case): JS is single-threaded, so immediately after the synchronous
+	// removed. The wait is a state poll with a throwing budget, not a fixed
+	// pause; vitest's 5 s testTimeout is the bound that binds first (this
+	// project sets none of its own). JS is single-threaded, so immediately
+	// after the synchronous
 	// saveProjectSnapshot() call returns, NO microtask or macrotask of its
 	// fire-and-forget worker/main-thread-fallback dispatch has run yet —
 	// the body file cannot exist. Awaiting the real drain seam instead of a
 	// fixed pause is what proves completion, not elapsed time: once it
 	// resolves, the body file is verifiably ON DISK (not "probably done by
 	// now"), so cleanup right after it can leave nothing pending to recreate
-	// what it removes — checked synchronously, no wait either side.
+	// what it removes.
 	it("draining the real project-snapshot persist before cleanup leaves nothing to recreate pi-lens-tool-policy-conventions dirs", async () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-conventions-");
 		const cwd = path.join(env.tmpDir, "project");
@@ -1902,7 +1980,11 @@ describe("tmp-fixture-hygiene", () => {
 			fs.existsSync(gzPath),
 			"the persist is dispatched fire-and-forget; it cannot have landed in the same synchronous tick",
 		).toBe(false);
-		await waitForProjectSnapshotPersistsForTests(); // the #3186 fix
+		await waitFor(
+			() => getProjectSnapshotPersistStateForTests(cwd),
+			(state) => !state.active && !state.queued,
+		); // the #3186 fix: an idle wait that throws, not the bounded helper
+		await drainRegisteredBackgroundWritesForTests();
 		expect(
 			fs.existsSync(gzPath),
 			"the drain must not resolve before the persist actually reaches disk",

@@ -66,7 +66,7 @@ provisional.
 
 | Knob | Values |
 |---|---|
-| `NewLatchPerGen` | TRUE: the owner replaces the latch (`createCwdCachedProbe`; the checker replaces its cache, not a latch), so an older probe holds a retired object. FALSE: one object, reset in place (the sweep, a client's own latch) |
+| `NewLatchPerGen` | TRUE: the owner replaces the latch (`createCwdCachedProbe`, and the checker's per-cwd latch since #5410), so an older probe holds a retired object. FALSE: one object, reset in place (the sweep, a client's own latch) |
 | `Clear` | `"touch"`: the owner clears at its next touch. `"none"`: a process-lived client latch (govulncheck, security scan): only `SettleTrust` and `SyncInst` ever reset it |
 | `SettleGuard` | `"none"`: as built, no flight re-checks a generation after its await. `"gen"`: a settle whose captured generation is not the current one is dropped (the candidate fix). `"deny"`: every settle is dropped (the `MutDenyAll` mutant) |
 | `TrustStamp` | `"owed"`: #4776. `"lastRead"`: the stamp comes from the latest null read, which a joiner overwrites. `"current"`: the stamp is the trust at the note, the code before #4776 |
@@ -76,7 +76,7 @@ provisional.
 
 | Config | Verdict |
 |---|---|
-| `CwdProbe` | pass, all invariants (`createCwdCachedProbe` only, trust adoption included; the checker has no latch and no trust stamp) |
+| `CwdProbe` | pass, all invariants (`createCwdCachedProbe`, and since #5410 `createAvailabilityChecker`, which keeps one latch per cwd; trust adoption included) |
 | `SgSweep` | violated `OnlyStarterRecords` (**B1**: the sg sweep helpers, which had no production caller; #5345 deleted the sweep, and the config stands as the as-built record) |
 | `SgSweepServed` | violated `NoStaleServed` (B1 as a caller sees it) |
 | `SgSweepTrustStamp` | violated `StampNotNewer` (B1 reopens the #4776 hole) |
@@ -172,8 +172,8 @@ Not modelled:
 - the release-by-identity check as an invariant: `Settle` releases the slot
   by identity, and a mutation of it is not checked here (#1674's shape, the
   single-flight primitive's own tests);
-- `createAvailabilityChecker`'s cache, which carries no trust stamp: the
-  model covers it for the generation axis only;
+- `createAvailabilityChecker` before #5410, whose cache carried no trust
+  stamp: that shape is `Pre4530ReadNoTrust` (run-b of #5410);
 - the installer-backed resolvers (`ensureTool`, `getInstallAttempt`).
 - joined in-flight callers (`Call`, joined) are judged on the trust axis only.
   The reviewer's mutation M6, which keeps `flight` in `Ensured`, passes every

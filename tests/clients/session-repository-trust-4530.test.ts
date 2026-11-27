@@ -30,7 +30,10 @@ import {
 } from "../../clients/degradation-ledger.js";
 import { truncateForLedger } from "../../clients/ledger-bounds.js";
 import { createAvailabilityLatch } from "../../clients/dispatch/runners/utils/availability-policy.js";
+import { resetDispatchAvailabilityState } from "../../clients/dispatch/runners/utils/runner-helpers.js";
 import {
+	biomeFormatter,
+	prettierFormatter,
 	clearFormatterCache,
 	getFormattersForFile,
 	gofmtFormatter,
@@ -52,14 +55,20 @@ import {
 } from "../../clients/lsp/jvm-runtime.js";
 import {
 	_resetPackageManagerCache,
+	allAvailableGlobalBinDirs,
 	findGlobalBinary,
+	findNodeToolBinary,
 } from "../../clients/package-manager.js";
+import prismaValidateRunner from "../../clients/dispatch/runners/prisma-validate.js";
+import { RUNNERS, TestRunnerClient } from "../../clients/test-runner-client.js";
+import { makeRunnerCtx } from "../support/runner-ctx.js";
 import { GoServer } from "../../clients/lsp/server.js";
 import {
 	resetProjectTrust,
 	setProjectTrustState,
 } from "../../clients/project-trust.js";
 import { RustClient } from "../../clients/rust-client.js";
+import { withUnadmittedRootSpawns } from "../../clients/session-repository.js";
 import {
 	findCommandAsync,
 	safeSpawnAsync,
@@ -72,6 +81,13 @@ import {
 } from "../support/path-probe-stub.js";
 import { withEnv } from "../support/with-env.js";
 import { pinFixtureHome, setupTestEnvironment } from "./test-utils.js";
+
+import { readNdjsonRows } from "../support/ndjson-rows.js";
+import {
+	flushExtensionLog,
+	getExtensionLogPath,
+} from "../../clients/extension-log.js";
+import { BiomeClient } from "../../clients/biome-client.js";
 
 const TOOL = "pi-lens-4530-tool";
 const POSIX = process.platform !== "win32";
@@ -143,6 +159,15 @@ function plant(dir: string, marker: string, name = TOOL): string {
 
 function ran(marker: string): boolean {
 	return fs.existsSync(marker);
+}
+
+/** The lines a stand-in appended to `log`, oldest first; none when it never ran. */
+function readLog(log: string): string[] {
+	if (!fs.existsSync(log)) return [];
+	return fs
+		.readFileSync(log, "utf8")
+		.split("\n")
+		.filter((line) => line.length > 0);
 }
 
 /**
@@ -891,13 +916,44 @@ describe.skipIf(!POSIX)("package-manager global lookups (#4530)", () => {
 		expect(ran(marker)).toBe(true);
 	});
 
-	it("F8/A4: project configuration cannot redirect the global-bin query", async () => {
-		// The stand-in answers like npm does: a `.npmrc` in its cwd sets the
-		// prefix. The redirected prefix sits OUTSIDE the session, so only the
-		// query's cwd (not the target judgment) can keep it out.
+	it.each(["trusted", "untrusted"] as const)(
+		"F8/A4: project configuration cannot redirect the global-bin query (%s)",
+		async (trust) => {
+			setProjectTrustState(trust);
+			// The stand-in answers like npm does: a `.npmrc` in its cwd sets the
+			// prefix. The redirected prefix sits OUTSIDE the session, so only the
+			// query's cwd (not the target judgment) can keep it out. Under `trusted`
+			// the query used to run in the session and read that `.npmrc` (#5632).
+			const redirected = path.join(layout.outside, "redirected");
+			const honest = path.join(layout.root, "honest-prefix");
+			fs.mkdirSync(path.join(honest, "bin"), { recursive: true });
+			plant(path.join(redirected, "bin"), path.join(layout.root, "unused"));
+			fs.writeFileSync(
+				path.join(layout.main, ".npmrc"),
+				`prefix=${redirected}\n`,
+			);
+			stub.plantOnPath(
+				"npm",
+				[
+					`if [ "$*" != 'config get prefix' ]; then exit 1; fi`,
+					`if [ -f .npmrc ]; then printf '%s\\n' '${redirected}'; else printf '%s\\n' '${honest}'; fi`,
+				].join("\n"),
+			);
+
+			expect(await findGlobalBinary(TOOL)).toBeUndefined();
+		},
+	);
+
+	it("F8/A4: a trusted lookup answers from HOME, so the redirected answer is served under neither trust", async () => {
+		// #5632: a trusted query used to run in the project and reuse its `.npmrc`
+		// answer. Both trust states now answer the honest prefix, so the redirected
+		// tool is never served, before or after the flip to untrusted.
 		const redirected = path.join(layout.outside, "redirected");
 		const honest = path.join(layout.root, "honest-prefix");
-		fs.mkdirSync(path.join(honest, "bin"), { recursive: true });
+		const honestTool = plant(
+			path.join(honest, "bin"),
+			path.join(layout.root, "unused"),
+		);
 		plant(path.join(redirected, "bin"), path.join(layout.root, "unused"));
 		fs.writeFileSync(
 			path.join(layout.main, ".npmrc"),
@@ -911,46 +967,86 @@ describe.skipIf(!POSIX)("package-manager global lookups (#4530)", () => {
 			].join("\n"),
 		);
 
-		expect(await findGlobalBinary(TOOL)).toBeUndefined();
-	});
-
-	it("F8/A4: an answer made under trust never serves an untrusted lookup", async () => {
-		// Trusted, the query runs in the project and reads its `.npmrc`; that
-		// redirected answer must not be reused once the trust answer changes.
-		const redirected = path.join(layout.outside, "redirected");
-		const honest = path.join(layout.root, "honest-prefix");
-		fs.mkdirSync(path.join(honest, "bin"), { recursive: true });
-		const redirectedTool = plant(
-			path.join(redirected, "bin"),
-			path.join(layout.root, "unused"),
-		);
-		fs.writeFileSync(
-			path.join(layout.main, ".npmrc"),
-			`prefix=${redirected}\n`,
-		);
-		stub.plantOnPath(
-			"npm",
-			[
-				`if [ "$*" != 'config get prefix' ]; then exit 1; fi`,
-				`if [ -f .npmrc ]; then printf '%s\\n' '${redirected}'; else printf '%s\\n' '${honest}'; fi`,
-			].join("\n"),
-		);
-
 		setProjectTrustState("trusted");
-		expect(await findGlobalBinary(TOOL)).toBe(redirectedTool);
+		expect(await findGlobalBinary(TOOL)).toBe(honestTool);
 		resetProjectTrust();
-		expect(await findGlobalBinary(TOOL)).toBeUndefined();
+		expect(await findGlobalBinary(TOOL)).toBe(honestTool);
 	});
 
-	it("F11: two session cwds share one manager probe (no cwd in the key)", async () => {
+	it("F11: distinct refused session roots require separately judged manager probes", async () => {
 		stub.plantManager("npm");
 
 		await findGlobalBinary(TOOL);
 		enterSession(layout.wt);
 		await findGlobalBinary(TOOL);
 
-		expect(stub.queries()).toEqual(["config get prefix"]);
+		expect(stub.queries()).toEqual(["config get prefix", "config get prefix"]);
 	});
+
+	/**
+	 * #5632: under trust the global-bin query ran in the session cwd, so a
+	 * relative PNPM_HOME made `pnpm bin -g` create a literal `${HOME}` tree in
+	 * the repository (the reporter's `~/.zshrc` export). Each stand-in logs the
+	 * directory it ran from; the pnpm stand-in creates `$PNPM_HOME/bin` relative
+	 * to that directory, as the reported `pnpm bin -g` side effect does (pnpm is
+	 * not installed on the CI host, so this mirrors the report, not a live run).
+	 * PATH holds only the stub's stand-ins, so the stand-in names `/bin/mkdir`
+	 * absolutely; a bare `mkdir` would be "not found" and the tree never made.
+	 * Every manager now runs from HOME under every trust state; the untrusted
+	 * and unknown rows were already HOME and are the control.
+	 */
+	it.each(
+		(["npm", "pnpm", "yarn"] as const).flatMap((pm) =>
+			(["trusted", "untrusted", "unknown"] as const).map(
+				(trust) => [pm, trust] as const,
+			),
+		),
+	)(
+		"F14/A5: the %s global-bin query runs from HOME under %s trust (#5632)",
+		async (pm, trust) => {
+			const log = path.join(layout.root, "query-cwd.log");
+			const honest = path.join(layout.root, "honest-prefix");
+			const script = {
+				npm: [
+					`if [ "$*" != 'config get prefix' ]; then exit 1; fi`,
+					`printf '%s\\n' "$(pwd -P)" >> '${log}'`,
+					`printf '%s\\n' '${honest}'`,
+				],
+				pnpm: [
+					`if [ "$*" != 'bin -g' ]; then exit 1; fi`,
+					`printf '%s\\n' "$(pwd -P)" >> '${log}'`,
+					`/bin/mkdir -p "$PNPM_HOME/bin"`,
+					`printf '%s\\n' "$PNPM_HOME/bin"`,
+				],
+				yarn: [
+					`if [ "$*" != 'global bin' ]; then exit 1; fi`,
+					`printf '%s\\n' "$(pwd -P)" >> '${log}'`,
+					`printf '%s\\n' '${honest}/bin'`,
+				],
+			}[pm];
+			stub.plantOnPath(pm, script.join("\n"));
+			cleanups.push(withEnv({ PNPM_HOME: "${HOME}/Library/pnpm" }));
+			setProjectTrustState(trust);
+
+			const dirs = await allAvailableGlobalBinDirs();
+
+			expect(fs.existsSync(path.join(layout.main, "${HOME}"))).toBe(false);
+			expect(readLog(log)).toEqual([layout.home]);
+			if (pm === "pnpm") {
+				// #5632 review F1: the answer is relative, so it resolves against the
+				// query cwd (HOME), the dir the side effect landed in, not the session.
+				expect(dirs).toEqual([
+					path.join(layout.home, "${HOME}", "Library", "pnpm", "bin"),
+				]);
+				// The probe still runs; its side effect lands in the pinned HOME.
+				expect(
+					fs.existsSync(
+						path.join(layout.home, "${HOME}", "Library", "pnpm", "bin"),
+					),
+				).toBe(true);
+			}
+		},
+	);
 
 	it("F10/A11: Java resolves again after a trust flip", async () => {
 		const jdk = path.join(layout.outside, "jdk");
@@ -974,7 +1070,7 @@ describe.skipIf(!POSIX)("package-manager global lookups (#4530)", () => {
 	// #4776 review G2 (and the Java thread): a verdict written after a trust
 	// change by a probe that started before it answered for the OLD trust, and
 	// stamping it current kept a tool missing (or found) under the new trust.
-	it("F10/A11: a Java probe joined after a trust flip is not shared across it", async () => {
+	it("F10/A11: a Java probe that a trust flip crosses is discarded, not served", async () => {
 		const jdk = path.join(layout.outside, "jdk");
 		writeStandIn(path.join(jdk, "bin"), "java", "exit 0");
 		writeStandIn(path.join(layout.main, "bin"), "java", "exit 0");
@@ -985,8 +1081,20 @@ describe.skipIf(!POSIX)("package-manager global lookups (#4530)", () => {
 			}),
 		);
 
-		// The untrusted probe is in flight (its search path is already scoped)
-		// when pi trusts the project and a second caller asks.
+		// #5607: the first call loads its probe helpers lazily, and awaits that
+		// load before asking `java` anything. Cold, the flip below lands first
+		// and the "untrusted" call asks under trust, so no untrusted probe is in
+		// flight; the sibling case warmed it, which made the order matter. Warm
+		// it here, then drop the verdict that call latched so the probe is real.
+		await resolveJavaRuntimeEnv();
+		_resetJvmRuntimeCacheForTests();
+		resetDispatchAvailabilityState();
+
+		// The untrusted probe is in flight when pi trusts the project: it awaits
+		// fs.promises.stat and findCommand and reads trust at spawn, so its
+		// answer is the one toolOnPath discards. The held-probe join itself is
+		// pinned by availability-fold-5410 ("starts its own probe when trust
+		// changed under an in-flight one").
 		const untrusted = resolveJavaRuntimeEnv();
 		setProjectTrustState("trusted");
 		const trusted = resolveJavaRuntimeEnv();
@@ -1063,3 +1171,310 @@ describe.runIf(process.platform === "win32")(
 		});
 	},
 );
+
+// Recurrence #5689: the package-manager query itself executed a manager in an
+// adopted root; the later server-command trust check cannot undo its effects.
+describe.skipIf(!POSIX)("package-manager probe root trust (#5689)", () => {
+	const members = [
+		"launch",
+		"global-dirs",
+		"biome-formatter",
+		"prettier-formatter",
+		"biome-client",
+		// #5782 V3: callers whose local walk judges a scan root other than the
+		// session; the global half judged process.cwd() and ran B's manager.
+		"node-tool",
+		"prisma",
+		"test-runner",
+	] as const;
+	async function probe(
+		member: (typeof members)[number],
+		root: string,
+		admitted: boolean,
+	) {
+		if (member === "launch") {
+			await expect(
+				withLspProjectCodePermission(admitted, () =>
+					launchLSP("pi-lens-5689-absent", [], { cwd: root }),
+				),
+			).rejects.toThrow();
+		} else if (member === "global-dirs") {
+			await allAvailableGlobalBinDirs(undefined, root);
+		} else if (member === "node-tool") {
+			await findNodeToolBinary("pi-lens-5689-absent", root);
+		} else if (member === "prisma") {
+			const schema = path.join(root, "schema.prisma");
+			fs.writeFileSync(schema, "model A { id Int @id }\n");
+			await prismaValidateRunner.run(
+				makeRunnerCtx(schema, root, {
+					kind: "prisma",
+					pi: { getFlag: () => undefined } as never,
+				}),
+			);
+		} else if (member === "test-runner") {
+			const testFile = path.join(root, "a.test.ts");
+			fs.writeFileSync(testFile, "\n");
+			await new TestRunnerClient(false).runTestFileAsync(testFile, root, {
+				runner: "vitest",
+				config: RUNNERS.vitest,
+			});
+		} else if (member === "biome-client") {
+			await (
+				new BiomeClient() as unknown as {
+					getBiomeBinary(cwd: string): Promise<unknown>;
+				}
+			).getBiomeBinary(root);
+		} else {
+			const formatter =
+				member === "biome-formatter" ? biomeFormatter : prettierFormatter;
+			await formatter.resolveCommand?.(path.join(root, "missing.ts"), root);
+		}
+	}
+	it.each(members)(
+		"%s refuses the absolute in-root pnpm then permits admitted code",
+		async (member) => {
+			cleanups.push(withEnv({ PI_LENS_TEST_MODE: "0" }));
+			const root = path.join(layout.outside, "adopted");
+			const bin = path.join(root, "bin");
+			const marker = path.join(layout.root, "5689-marker");
+			writeStandIn(bin, "pnpm", `printf ran >> '${marker}'`);
+			cleanups.push(
+				withEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH}` }),
+			);
+			setProjectTrustState("unknown");
+			await probe(member, root, false);
+			expect(ran(marker)).toBe(false);
+			await flushExtensionLog();
+			const written = readNdjsonRows(getExtensionLogPath());
+			expect(written.skipped).toBe(0);
+			expect(written.rows).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						subsystem: "project-trust",
+						metadata: expect.objectContaining({ entry: bin }),
+					}),
+				]),
+			);
+			expect(getDegradationSummary()).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ kind: "trust-refusal" }),
+				]),
+			);
+			_resetPackageManagerCache();
+			setProjectTrustState("trusted");
+			// The direct owner has no root permission argument: call it outside the
+			// unadmitted-root scope for its admitted control.
+			if (member === "global-dirs") await allAvailableGlobalBinDirs();
+			else await probe(member, root, true);
+			expect(ran(marker)).toBe(true);
+		},
+	);
+	// Recurrence #5782 F1/F6: the unjudged session_start prime ran a planted
+	// finder and manager from the session root. The owner derives the refusal
+	// with no caller input, and a warm second call stays refused. The session
+	// sits at HOME, where the spawn seam's session-repository judge refuses
+	// nothing, so only the owner's default admission can refuse the plant.
+	it("R3 F1: default discovery and its warm cache never execute a session manager", async () => {
+		const marker = path.join(layout.root, "r3-default-marker");
+		const finderMarker = path.join(layout.root, "r3-default-finder");
+		const bin = path.join(layout.home, "bin");
+		process.chdir(layout.home);
+		writeStandIn(bin, "pnpm", `printf ran >> '${marker}'`);
+		writeStandIn(bin, "which", `printf ran >> '${finderMarker}'; exit 1`);
+		cleanups.push(
+			withEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH}` }),
+		);
+		setProjectTrustState("unknown");
+		await allAvailableGlobalBinDirs();
+		await allAvailableGlobalBinDirs();
+		expect(ran(marker)).toBe(false);
+		expect(ran(finderMarker)).toBe(false);
+	});
+	it.each(members)(
+		"R3 F2/F5: %s refuses a manager file link into an adopted root",
+		async (member) => {
+			const root = path.join(layout.outside, "adopted");
+			const marker = path.join(layout.root, "r3-link-marker");
+			const bin = path.join(root, "bin");
+			writeStandIn(bin, "pnpm", `printf ran >> '${marker}'`);
+			const outsideBin = path.join(layout.root, "linked-bin");
+			fs.mkdirSync(outsideBin);
+			fs.symlinkSync(path.join(bin, "pnpm"), path.join(outsideBin, "pnpm"));
+			cleanups.push(
+				withEnv({ PATH: `${outsideBin}${path.delimiter}${process.env.PATH}` }),
+			);
+			setProjectTrustState("unknown");
+			await probe(member, root, false);
+			expect(ran(marker)).toBe(false);
+		},
+	);
+	it("R3 F6: discovery scopes the finder and still runs an outside manager", async () => {
+		const finderMarker = path.join(layout.root, "r3-finder-marker");
+		const managerMarker = path.join(layout.root, "r3-manager-marker");
+		const root = path.join(layout.outside, "adopted");
+		const bin = path.join(root, "bin");
+		writeStandIn(bin, "which", `printf ran >> '${finderMarker}'; exit 1`);
+		stub.plantOnPath("pnpm", `printf ran >> '${managerMarker}'`);
+		cleanups.push(
+			withEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH}` }),
+		);
+		setProjectTrustState("unknown");
+		await allAvailableGlobalBinDirs(undefined, root);
+		expect(ran(finderMarker)).toBe(false);
+		expect(ran(managerMarker)).toBe(true);
+	});
+
+	// Recurrence #5782 F6: a scoped finder can cache absence; that evidence
+	// must not suppress an outside manager under the next root's PATH view.
+	it("R3 F6: a scoped absence cannot suppress a later outside manager", async () => {
+		const root = path.join(layout.outside, "adopted");
+		const marker = path.join(layout.root, "r3-availability-marker");
+		const bin = path.join(root, "bin");
+		writeStandIn(bin, "pnpm", `printf ran >> '${marker}'`);
+		cleanups.push(
+			withEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH}` }),
+		);
+		setProjectTrustState("unknown");
+		await allAvailableGlobalBinDirs(undefined, root);
+		expect(ran(marker)).toBe(false);
+		await allAvailableGlobalBinDirs();
+		expect(ran(marker)).toBe(true);
+	});
+
+	it("R3 F1: identical PATH views still separate executable identity by root", async () => {
+		const root = path.join(layout.outside, "adopted");
+		const otherRoot = path.join(layout.outside, "other");
+		const bin = path.join(root, "bin");
+		const outsideBin = path.join(layout.root, "shared-link-bin");
+		const answer = path.join(layout.outside, "identity-answer");
+		writeStandIn(bin, "pnpm", `printf '%s\\n' '${answer}'`);
+		fs.mkdirSync(outsideBin);
+		fs.symlinkSync(path.join(bin, "pnpm"), path.join(outsideBin, "pnpm"));
+		cleanups.push(
+			withEnv({ PATH: `${outsideBin}${path.delimiter}${process.env.PATH}` }),
+		);
+		setProjectTrustState("unknown");
+		expect(await allAvailableGlobalBinDirs(undefined, otherRoot)).toContain(
+			answer,
+		);
+		expect(await allAvailableGlobalBinDirs(undefined, root)).not.toContain(
+			answer,
+		);
+	});
+	it("R3 F6: concurrent root views do not share finder absence", async () => {
+		const root = path.join(layout.outside, "adopted");
+		const otherRoot = path.join(layout.outside, "other");
+		const bin = path.join(root, "bin");
+		const answer = path.join(layout.outside, "concurrent-answer");
+		writeStandIn(bin, "pnpm", `printf '%s\\n' '${answer}'`);
+		cleanups.push(
+			withEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH}` }),
+		);
+		setProjectTrustState("unknown");
+		const [refused, outside] = await Promise.all([
+			allAvailableGlobalBinDirs(undefined, root),
+			allAvailableGlobalBinDirs(undefined, otherRoot),
+		]);
+		expect(refused).not.toContain(answer);
+		expect(outside).toContain(answer);
+	});
+
+	it("R3 F1: an unscoped warm answer cannot bypass a later root refusal", async () => {
+		const root = path.join(layout.outside, "adopted");
+		const bin = path.join(root, "bin");
+		const answer = path.join(layout.outside, "poisoned-answer");
+		writeStandIn(bin, "pnpm", `printf '%s\\n' '${answer}'`);
+		cleanups.push(
+			withEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH}` }),
+		);
+		setProjectTrustState("unknown");
+		expect(await allAvailableGlobalBinDirs()).toContain(answer);
+		expect(await allAvailableGlobalBinDirs(undefined, root)).not.toContain(
+			answer,
+		);
+	});
+
+	it("launch refuses an adopted manager even when host trust is trusted", async () => {
+		const root = path.join(layout.outside, "adopted");
+		const marker = path.join(layout.root, "5689-marker");
+		const bin = path.join(root, "bin");
+		writeStandIn(bin, "pnpm", `printf ran >> '${marker}'`);
+		cleanups.push(
+			withEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH}` }),
+		);
+		setProjectTrustState("trusted");
+		await probe("launch", root, false);
+		expect(ran(marker)).toBe(false);
+	});
+	it("refuses a PATH directory link by identity and still probes an outside manager", async () => {
+		const root = path.join(layout.outside, "adopted");
+		const marker = path.join(layout.root, "5689-marker");
+		const bin = path.join(root, "bin");
+		writeStandIn(bin, "pnpm", `printf ran >> '${marker}'`);
+		const link = path.join(layout.root, "outside-link");
+		fs.symlinkSync(bin, link, "dir");
+		const outsideMarker = path.join(layout.root, "5689-outside-marker");
+		stub.plantOnPath("pnpm", `printf ran >> '${outsideMarker}'`);
+		cleanups.push(
+			withEnv({ PATH: `${link}${path.delimiter}${process.env.PATH}` }),
+		);
+		setProjectTrustState("unknown");
+		await probe("biome-client", root, false);
+		expect(ran(marker)).toBe(false);
+		expect(ran(outsideMarker)).toBe(true);
+	});
+
+	// Recurrence #5782 R5: the candidate a global bin dir held was judged
+	// against the session only, so a tool linked into scan root B came back
+	// from node-tool (the caller then runs it). An outside target still
+	// resolves, and a trusted session admits the link.
+	it("R5: node-tool refuses a global tool linked into the scan root", async () => {
+		const root = path.join(layout.outside, "adopted");
+		const inRoot = writeStandIn(path.join(root, "tools"), "real", "exit 0");
+		const outside = writeStandIn(
+			path.join(layout.root, "outside-tools"),
+			"real",
+			"exit 0",
+		);
+		const binDir = stub.plantManager("npm");
+		const link = path.join(binDir, "pi-lens-5782-tool");
+		const outsideLink = path.join(binDir, "pi-lens-5782-outside");
+		fs.symlinkSync(inRoot, link);
+		fs.symlinkSync(outside, outsideLink);
+		setProjectTrustState("unknown");
+		expect(await findNodeToolBinary("pi-lens-5782-tool", root)).toBeUndefined();
+		expect(trustRefusals()).toContain(
+			truncateForLedger(`project-command:${fs.realpathSync(inRoot)}`),
+		);
+		expect(await findNodeToolBinary("pi-lens-5782-outside", root)).toBe(
+			outsideLink,
+		);
+		_resetPackageManagerCache();
+		setProjectTrustState("trusted");
+		expect(await findNodeToolBinary("pi-lens-5782-tool", root)).toBe(link);
+	});
+
+	// Recurrence #5782 R5: inside launch's scope for an unadmitted root, the
+	// installer's global rung ran `--version` on a link into that root under a
+	// trusted host. Outside the scope the same link verifies and runs.
+	it("R5: the installer never runs a global link into an unadmitted root", async () => {
+		const root = path.join(layout.outside, "adopted");
+		const marker = path.join(layout.root, "r5-installer-marker");
+		const target = writeStandIn(
+			path.join(root, "tools"),
+			"real",
+			`printf ran >> '${marker}'`,
+		);
+		const link = path.join(stub.plantManager("npm"), "oxfmt");
+		fs.symlinkSync(target, link);
+		setProjectTrustState("trusted");
+		expect(
+			await withUnadmittedRootSpawns(root, () => getToolPath("oxfmt")),
+		).not.toBe(link);
+		expect(ran(marker)).toBe(false);
+		_resetPackageManagerCache();
+		resetPathWalkMemo();
+		expect(await getToolPath("oxfmt")).toBe(link);
+		expect(ran(marker)).toBe(true);
+	});
+});

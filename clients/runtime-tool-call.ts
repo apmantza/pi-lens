@@ -7,6 +7,7 @@ import { recordDegradationOnce } from "./degradation-ledger.js";
 import { CODE_KINDS, detectFileKind } from "./file-kinds.js";
 import { isPathIgnoredByProject } from "./file-utils.js";
 import { evaluateGitGuard, isGitCommitOrPushAttempt } from "./git-guard.js";
+import { gateStagedDelta } from "./staged-delta.js";
 import { dropHashlineAnchorMemo } from "./hashline-anchor.js";
 import { evaluateSharedCheckoutGuard } from "./shared-checkout-guard.js";
 import { logLatency } from "./latency-logger.js";
@@ -21,10 +22,12 @@ import {
 	recordOpaqueCaptureRefused,
 	recordOpaqueRootRefusals,
 	resolveOpaqueRecoveryRoots,
+	seedGitHeadAt,
 	shouldRunOpaqueRecovery,
 	type PendingOpaqueBaseline,
 } from "./opaque-mutation-scan.js";
 import { bounded } from "./deadline-utils.js";
+import { nonNegativeIntEnv } from "./env-utils.js";
 import { HOOK_WALL_BUDGET_MS } from "./hook-budgets.js";
 import { normalizeForGuardMatch } from "./host-edit-normalize.js";
 import { retargetReplacementIndentation } from "./indent-retarget.js";
@@ -40,11 +43,18 @@ import {
 	resolveTreeSitterLanguage,
 } from "./tree-sitter-shared.js";
 import {
+	captureComplexityBaseline,
+	complexityBaselineKey,
+} from "./metrics/complexity-baseline.js";
+import {
 	classifyMutatingTool,
 	isProviderReplayCall,
 	readMutationPathField,
 } from "./mutating-tool.js";
-import { isProvisionalLearnedAttribution } from "./mutation-attribution.js";
+import {
+	isProvisionalLearnedAttribution,
+	shouldArmObservationForTool,
+} from "./mutation-attribution.js";
 import { armObservedMutation } from "./observed-mutation.js";
 import { extractWrittenPathsFromCommand } from "./bash-file-access.js";
 import { getLSPService } from "./lsp/capabilities.js";
@@ -61,6 +71,7 @@ import {
 } from "./oldtext-autopatch.js";
 import {
 	isExternalOrVendorFile,
+	pathsEqual,
 	resolveToolCallFilePath,
 	toPosix,
 } from "./path-utils.js";
@@ -85,22 +96,23 @@ import {
 	tryCorrectIndentationMismatchFromContent,
 } from "./read-guard-tool-lines.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
-import { resyncHeadMove } from "./runtime-tool-result.js";
+import { resyncHeadMove, resyncHeadMovesAt } from "./runtime-tool-result.js";
 import {
 	resolveReadEvidenceCorrelationId,
 	resolveToolCallCorrelationId,
 } from "./tool-event.js";
-import { loadDispatchIntegration } from "./dispatch/lazy.js";
+import { captureWriterSeeds, type WriterSeedDeps } from "./pre-edit-capture.js";
 
-const LSP_TOOLCALL_NAV_TOUCH_BUDGET_MS = Math.max(
-	0,
-	Number.parseInt(
-		process.env.PI_LENS_TOOLCALL_NAV_TOUCH_MS ??
-			process.env.PI_LENS_LSP_NAV_CLIENT_WAIT_MS ??
-			"1500",
-		10,
-	) || 1500,
-);
+// #5419 F1: the same positive-or-default read as lsp/index.ts
+// NAV_CLIENT_WAIT_TIMEOUT_MS. The tool-call knob wins when it is set, and the nav
+// knob is read otherwise; 0, blank, negative and non-numeric give 1500.
+export const LSP_TOOLCALL_NAV_TOUCH_BUDGET_MS =
+	nonNegativeIntEnv(
+		process.env.PI_LENS_TOOLCALL_NAV_TOUCH_MS === undefined
+			? "PI_LENS_LSP_NAV_CLIENT_WAIT_MS"
+			: "PI_LENS_TOOLCALL_NAV_TOUCH_MS",
+		1500,
+	) || 1500;
 const LSP_TOOLCALL_TOUCH_BUDGET_MS = Math.max(
 	0,
 	Number.parseInt(process.env.PI_LENS_TOOLCALL_TOUCH_MS ?? "750", 10) || 750,
@@ -426,12 +438,13 @@ export type ToolCallResult = { block: true; reason?: string } | void;
  */
 async function captureOpaqueBaseline(
 	root: string,
-	sessionRoot: boolean,
 	startedAt: number,
+	projectSeq: number,
 	toolName: string,
 ): Promise<{ state: PendingOpaqueBaseline; note: string }> {
-	if (!sessionRoot)
-		return { state: { startedAt, strategy: "git" }, note: "git" };
+	// An admitted sibling worktree (#2050) answers the probe as a checkout and
+	// takes the dirty set too, or a discard run in it (`cd ../wt && git
+	// restore`) leaves no evidence (#4502).
 	if (await isGitWorktree(root)) {
 		// Git-first: the timestamp IS the baseline; git answers what changed, at
 		// any repo size, with no file-universe cap.
@@ -446,6 +459,7 @@ async function captureOpaqueBaseline(
 		return {
 			state: {
 				startedAt,
+				projectSeq,
 				strategy: "git",
 				...(dirtyPaths === undefined ? {} : { dirtyPaths }),
 			},
@@ -460,9 +474,15 @@ async function captureOpaqueBaseline(
 		recordOpaqueCaptureRefused("home-root", toolName);
 	return {
 		state: outcome.snapshot
-			? { startedAt, strategy: "stat-diff", stats: outcome.snapshot }
+			? {
+					startedAt,
+					projectSeq,
+					strategy: "stat-diff",
+					stats: outcome.snapshot,
+				}
 			: {
 					startedAt,
+					projectSeq,
 					strategy: "stat-diff",
 					statsUnknownReason: outcome.unknownReason ?? "walk-failed",
 				},
@@ -555,6 +575,12 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 	// #4943: the calling session, which this call's read-guard log rows name
 	// (an in-process subagent's call is its own, not the coordinator's).
 	const callSessionId = deps.sessionId ?? runtime.telemetrySessionId;
+	// #4220, #5443 review F5: the session this call belongs to, captured before
+	// its first await. A `/new` inside any await below retires it; the
+	// successor's session_start clears the stores, and a write taken under a
+	// handle captured after that await would land this session's file in the
+	// successor's store, which then never takes its own baseline.
+	const callSession = runtime.captureSessionGeneration();
 
 	// #2423 review round 4, finding F5: the hashline anchor memo is keyed by
 	// mtime+size, which a same-size rewrite inside one mtime tick cannot
@@ -652,6 +678,22 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				label: "head-move-resync",
 			},
 		);
+	// #5553: every writer but a classified host `write` or `edit` that names a
+	// file it is about to change takes the pre-edit seed here, before the write
+	// and before the baselines below, so the files a capture may create (a
+	// rules cache) are not part of the diff those baselines are taken for.
+	// A provider's replay is a card for work already done (#5160): its file
+	// holds the post-write bytes, which no seed may describe.
+	const writerPaths = isProviderReplayCall(event)
+		? []
+		: namedWriterPaths(deps, toolName);
+	if (writerPaths.length > 0)
+		await captureWriterSeeds(
+			namedWriterTargets(writerPaths, runtime.projectRoot),
+			writerSeedDeps(deps),
+			true,
+			"disk",
+		);
 	// #2000 phase 2: opaque-command pre-snapshot. A bash command whose writes
 	// the extractor will not recognize gets a bounded stat snapshot of the
 	// project source universe BEFORE it runs; the tool_result side diffs it.
@@ -701,6 +743,9 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 	if (opaqueCommand !== undefined && !isProviderReplayCall(event)) {
 		if (scanRoot && shouldRunOpaqueRecovery(toolName, scanRoot)) {
 			const started = Date.now();
+			// #5616: taken with `started`, before any await, so a write pi-lens
+			// records once the command may run is newer than it.
+			const seqAtStart = runtime.projectSeq;
 			// #2050: the trees this command's writes must be recovered from. The
 			// session root is where the host ran it; any further root is a
 			// checkout the command itself named and that belongs to THIS
@@ -715,14 +760,14 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			};
 			let resultNote = "";
 			for (const [index, root] of scopes.roots.entries()) {
-				// The session root keeps the strategy it chose before: git when it
-				// is a worktree, the bounded stat snapshot otherwise. An admitted
-				// worktree IS a checkout by admission, so its baseline is the
-				// timestamp and its recovery is `git status` in that root.
+				// Each root takes git when it is a worktree (with its dirty set,
+				// #4502), the bounded stat snapshot otherwise. An admitted worktree
+				// IS a checkout by admission, so its recovery is `git status` in
+				// that root.
 				const baseline = await captureOpaqueBaseline(
 					root,
-					index === 0,
 					started,
+					seqAtStart,
 					toolName,
 				);
 				if (index === 0) resultNote = baseline.note;
@@ -751,6 +796,44 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 					roots: scopes.roots.join(",").slice(0, 300),
 				},
 			});
+			// The HEAD each named sibling worktree starts from: a command that moves
+			// HEAD there (`cd ../wt && git rebase`) rewrites files `git status`
+			// never names, and its tool_result can only see the move against a
+			// HEAD read before the command ran. The session root's look ran above.
+			const siblings = scopes.roots.slice(1);
+			const siblingLookSignal = ctx.signal;
+			// The baseline first, outside the bound: the look below may be cut
+			// before it reads HEAD, and the host runs the command the moment this
+			// hook returns (#5718 review r1). A sibling that already has a record
+			// keeps it, so a move made outside pi is still the look's to publish.
+			await Promise.all(
+				siblings.map((root) =>
+					seedGitHeadAt(
+						root,
+						headRecordKey(
+							opaqueBaselineSlot(root, runtime.sessionGeneration),
+							deps.sessionId,
+						),
+					),
+				),
+			);
+			if (siblings.length > 0)
+				await bounded(
+					resyncHeadMovesAt({
+						roots: siblings,
+						sessionGeneration: runtime.sessionGeneration,
+						sessionId: deps.sessionId,
+						trigger: "tool_call",
+						label: toolName,
+						runtime,
+					}),
+					{
+						ms: HOOK_WALL_BUDGET_MS.tool_result_read_only,
+						signal: siblingLookSignal,
+						hook: "tool_call",
+						label: "sibling-head-move-resync",
+					},
+				);
 		}
 	}
 	// #2430: the observational net. A call the seam could NOT classify, whose
@@ -840,6 +923,23 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			return {
 				block: true,
 				reason: guard.reason,
+			};
+		}
+		// #5553: the record above holds what pi-lens saw written; this reads the
+		// staged delta itself, so bytes nobody authored are judged too.
+		const gateCwd = ctx.cwd ?? runtime.projectRoot;
+		const stagedGuard = await gateStagedDelta(
+			toolName,
+			event.input,
+			{ cwd: gateCwd, projectRoot: runtime.projectRoot || gateCwd, getFlag },
+			ctx.signal,
+		);
+		if (stagedGuard.block) {
+			return {
+				block: true,
+				...(stagedGuard.reason === undefined
+					? {}
+					: { reason: stagedGuard.reason }),
 			};
 		}
 	}
@@ -1157,7 +1257,8 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				let lspSymbolError: string | undefined;
 				try {
 					const result = await bounded(
-						getOpenDocumentSymbols(filePath).then((symbols) => ({ symbols })),
+						() =>
+							getOpenDocumentSymbols(filePath).then((symbols) => ({ symbols })),
 						{
 							ms: EXPANSION_BUDGET_MS,
 							signal: deps.ctx.signal,
@@ -1330,8 +1431,11 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 		);
 	}
 
-	// Record complexity baseline for historical tracking (booboo/tdi).
-	// Not shown inline - just captured for delta analysis.
+	// Record the file's complexity baseline at its first touch (#5087): the
+	// function table of the bytes on disk before this tool runs. The edit's
+	// `tool_result` judges its delta against it and the default branch. The
+	// metrics-history snapshot (`/lens-tdi`) is taken from the same measure,
+	// until #5090 retires it.
 	//
 	// #2467: every client-free guard runs FIRST, so a tool call that cannot
 	// produce a baseline never loads the analyzer graph. This await used to sit
@@ -1352,12 +1456,13 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 		!getFlag("no-complexity") &&
 		!isExternalOrVendor &&
 		filePath &&
-		!runtime.complexityBaselines.has(filePath) &&
+		!runtime.complexityBaselines.has(complexityBaselineKey(filePath)) &&
 		isComplexitySupportedFile(filePath)
 	) {
 		// Fail open: no clients means no baseline for this call, counted once in
-		// the ledger. A complexity baseline is delta-analysis bookkeeping — it
-		// must never be the reason a user's tool call fails or stalls.
+		// the ledger, and the next touch asks again. A complexity baseline is
+		// delta-analysis bookkeeping — it must never be the reason a user's tool
+		// call fails or stalls.
 		const complexityClient = (
 			await requestBootstrapClients({
 				reason: "tool-call-complexity-baseline",
@@ -1378,18 +1483,33 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				signal: deps.ctx.signal,
 			})
 		)?.complexityClient;
-		const baseline = await complexityClient?.analyzeFile(filePath);
-		if (baseline) {
-			runtime.complexityBaselines.add(filePath);
+		// #5443 review F6: one measure per first touch. The baseline table is
+		// the analysis' own keyed rows, not a second parse and walk of the file.
+		const analysis = complexityClient
+			? await complexityClient.analyzeFile(filePath)
+			: undefined;
+		// #4220: every write below lands in the call's session (`callSession`,
+		// captured at entry) or nowhere.
+		if (complexityClient) {
+			callSession.guardedWrite(filePath, () =>
+				runtime.complexityBaselines.set(
+					complexityBaselineKey(filePath),
+					captureComplexityBaseline(analysis?.measuredFunctions),
+				),
+			);
+		}
+		if (analysis && callSession.isCurrent()) {
 			const { captureSnapshot } = await import("./metrics-history.js");
-			captureSnapshot(filePath, {
-				maintainabilityIndex: baseline.maintainabilityIndex,
-				cognitiveComplexity: baseline.cognitiveComplexity,
-				maxNestingDepth: baseline.maxNestingDepth,
-				linesOfCode: baseline.linesOfCode,
-				maxCyclomatic: baseline.maxCyclomaticComplexity,
-				entropy: baseline.codeEntropy,
-			});
+			callSession.guardedWrite(filePath, () =>
+				captureSnapshot(filePath, {
+					maintainabilityIndex: analysis.maintainabilityIndex,
+					cognitiveComplexity: analysis.cognitiveComplexity,
+					maxNestingDepth: analysis.maxNestingDepth,
+					linesOfCode: analysis.linesOfCode,
+					maxCyclomatic: analysis.maxCyclomaticComplexity,
+					entropy: analysis.codeEntropy,
+				}),
+			);
 		}
 	} else if (
 		getFlag("no-complexity") &&
@@ -1907,7 +2027,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				const existingFile = runtime.cachedExports.get(name);
 				if (
 					existingFile &&
-					path.resolve(existingFile) !== path.resolve(filePath) &&
+					!pathsEqual(existingFile, filePath) &&
 					!currentFileExports?.has(name)
 				) {
 					dupeWarnings.push(
@@ -1926,110 +2046,94 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 		}
 	}
 
-	// #4483: last, so only a call every pi-lens guard allowed pays for it.
-	if (isWriteOrEdit && !isExternalOrVendor) {
-		const started = Date.now();
-		const controller = new AbortController();
-		const signal = deps.ctx.signal
-			? AbortSignal.any([deps.ctx.signal, controller.signal])
-			: controller.signal;
-		const outcome = await bounded(capturePreEditSeed(filePath, deps, signal), {
-			ms: PRE_EDIT_CAPTURE_BUDGET_MS,
-			signal: deps.ctx.signal,
-			hook: "tool_call",
-			label: "pre-edit-linter-capture",
-		});
-		controller.abort();
-		if (!outcome || outcome.outcome === "failed")
-			recordDegradationOnce({
-				kind: "pre-edit-capture-incomplete",
-				subject: "pre-edit",
-				reason: outcome?.outcome ?? "abandoned",
-			});
-		recordPreEditCapture(filePath, outcome, Date.now() - started);
-	}
+	// #4483: last, so only a call every pi-lens guard allowed pays for it. A
+	// tool pi-lens learned from one observation names no span either (#5553).
+	if (isWriteOrEdit && !isExternalOrVendor)
+		await captureWriterSeeds(
+			[filePath],
+			writerSeedDeps(deps),
+			mutation.provenance === "learned",
+			"disk",
+		);
+}
+
+/** The seed capture's view of a `tool_call`: its session, flags and signal. */
+function writerSeedDeps(deps: ToolCallDeps): WriterSeedDeps {
+	return {
+		projectRoot: deps.runtime.projectRoot,
+		session: deps.runtime.captureSessionGeneration(),
+		getFlag: deps.getFlag,
+		signal: deps.ctx.signal,
+		hook: "tool_call",
+	};
 }
 
 /**
- * #4483: how long a `tool_call` waits for the pre-edit linter capture.
- * `tool_call` has no wall budget of its own (clients/hook-budgets.ts); this
- * is the per-await bound. Measured in PR #4483's body.
+ * #5553: the files a writer other than a classified host `write` or `edit`
+ * names before it changes them, as absolute paths (they may not exist):
+ * a bash command's written paths; an applied `ast_grep_replace`'s `paths`; the
+ * file an applied LSP rename's symbol sits in (its importers are not named,
+ * an accepted residual); and the one path an unclassified tool names, when
+ * the observational net would arm for it (a tool not known to be read-only
+ * and not yet seen clean: a `read` or `grep` names a path too).
  */
-export const PRE_EDIT_CAPTURE_BUDGET_MS = 500;
-
-type PreEditCaptureResult =
-	| Awaited<
-			ReturnType<
-				Awaited<
-					ReturnType<typeof loadDispatchIntegration>
-				>["capturePreEditLinterFindings"]
-			>
-	  >
-	| { outcome: "failed"; failure: string };
-
-/**
- * #4483: before the host first replaces an existing file's bytes this
- * session, run its linters over those bytes and seed the file's delta, so
- * the write's dispatch reports their old errors as pre-existing instead of
- * as blockers (`capturePreEditLinterFindings`). Never rejects.
- */
-function capturePreEditSeed(
-	filePath: string,
-	deps: ToolCallDeps,
-	signal: AbortSignal,
-): Promise<PreEditCaptureResult> {
-	const session = deps.runtime.captureSessionGeneration();
-	const workspaceRoot = deps.runtime.projectRoot || process.cwd();
-	const pi = { getFlag: (flag: string) => deps.getFlag(flag) };
-	return loadDispatchIntegration()
-		.then(({ capturePreEditLinterFindings }) =>
-			capturePreEditLinterFindings(
-				filePath,
-				workspaceRoot,
-				pi,
-				session,
-				signal,
-			),
-		)
-		.catch((cause: unknown): PreEditCaptureResult => {
-			const failure = cause instanceof Error ? cause.message : String(cause);
-			return { outcome: "failed", failure: failure.slice(0, 200) };
-		});
+function namedWriterPaths(deps: ToolCallDeps, toolName: string): string[] {
+	const { event, ctx, runtime } = deps;
+	const input = ((event as { input?: unknown }).input ?? {}) as Record<
+		string,
+		unknown
+	>;
+	const resolve = (raw: unknown): string[] => {
+		const resolved =
+			typeof raw === "string"
+				? resolveToolCallFilePath(raw, ctx.cwd, runtime.projectRoot)?.path
+				: undefined;
+		return resolved === undefined ? [] : [resolved];
+	};
+	if (toolName === "bash")
+		return typeof input.command === "string"
+			? extractWrittenPathsFromCommand(
+					input.command,
+					runtime.projectRoot || process.cwd(),
+				)
+			: [];
+	if (toolName === "ast_grep_replace")
+		return input.apply === true && Array.isArray(input.paths)
+			? input.paths.flatMap(resolve)
+			: [];
+	if (toolName === "lsp_navigation")
+		return input.operation === "rename" && input.apply === true
+			? resolve(getToolCallRawFilePath(toolName, event))
+			: [];
+	return shouldRunOpaqueRecovery(
+		toolName,
+		opaquePrescanRoot(ctx.cwd, runtime.projectRoot),
+	) && shouldArmObservationForTool(toolName)
+		? resolve(readMutationPathField(event))
+		: [];
 }
 
 /**
- * #4483: one latency row per capture that ran (`undefined` = the bound gave
- * up first, `abandoned`). A file already dispatched this session, a file
- * whose abandoned capture is still running, or a session with `--no-delta`
- * writes none, so a long session pays one row per file, not one per write.
+ * #5553: the named paths a capture is worth running for: existing regular
+ * files, each once, without the ones dispatch never analyses (a gitignored
+ * file, a vendor path, a file outside the project), as the host-edit site
+ * skips them. A file the write creates has no bytes to seed, and a skipped
+ * capture would log a row for every `echo > new.ts`.
  */
-function recordPreEditCapture(
-	filePath: string,
-	outcome: PreEditCaptureResult | undefined,
-	durationMs: number,
-): void {
-	if (
-		outcome?.outcome === "skipped" &&
-		(outcome.reason === "already-dispatched" ||
-			outcome.reason === "no-delta" ||
-			outcome.reason === "in-flight")
-	)
-		return;
-	logLatency({
-		type: "phase",
-		phase: "pre_edit_capture",
-		filePath,
-		durationMs,
-		result: outcome?.outcome ?? "abandoned",
-		metadata: {
-			...(outcome?.outcome === "seeded" && {
-				seeded: outcome.seeded,
-				runners: outcome.runners.join(","),
-			}),
-			...((outcome?.outcome === "skipped" ||
-				outcome?.outcome === "discarded") && { reason: outcome.reason }),
-			...(outcome?.outcome === "failed" && { failure: outcome.failure }),
-			budgetMs: PRE_EDIT_CAPTURE_BUDGET_MS,
-		},
+function namedWriterTargets(
+	filePaths: readonly string[],
+	projectRoot: string,
+): string[] {
+	return [...new Set(filePaths)].filter((candidate) => {
+		try {
+			return (
+				nodeFs.statSync(candidate).isFile() &&
+				!isExternalOrVendorFile(candidate, projectRoot) &&
+				!isPathIgnoredByProject(candidate, projectRoot, false)
+			);
+		} catch {
+			// none: a path that cannot be stat'd has no bytes to seed.
+			return false;
+		}
 	});
 }

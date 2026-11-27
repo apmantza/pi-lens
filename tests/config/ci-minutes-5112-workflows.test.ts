@@ -12,10 +12,13 @@
 //    required row, #2618), or whose heavy steps lose their guard and install on
 //    every docs pull request again;
 //  - the three required context names changing with the job's name template;
-//  - the cut reaching master: Install test, Strict install and strictness are
-//    pull_request cuts only, so a master push, the merge queue and a dispatch
-//    must still run them in full (an over-wide `if:` leaves them with no run
-//    at all; the nightly schedule was dropped for cost, #5112);
+//  - the cut reaching master: Install test and strictness are pull_request
+//    cuts only, so a master push, the merge queue and a dispatch must still run
+//    them in full (an over-wide `if:` leaves them with no run at all; the
+//    nightly schedule was dropped for cost, #5112). Strict install is its own
+//    workflow file (strict-install.yml, #5002): no pull_request trigger, so it
+//    posts no skipped row on a pull request, and a master push and a manual
+//    dispatch keep it;
 //  - the greeting job starting a runner for every author (1,446 min for an
 //    action that posts to a first-time author only).
 import { readFileSync } from "node:fs";
@@ -52,6 +55,7 @@ const load = (file: string) =>
 	) as Workflow;
 
 const ci = load("ci.yml");
+const strictInstall = load("strict-install.yml");
 const lint = load("lint.yml");
 const greetings = load("greetings.yml");
 
@@ -130,11 +134,23 @@ describe("the cuts leave master, the merge queue and dispatches intact (#5112)",
 			)(),
 		);
 
-	it("ci.yml strict-install-cold-cache skips a pull request and runs every other event", () => {
-		const expr = ci.jobs["strict-install-cold-cache"].if as string;
-		expect(evaluate(expr, "pull_request")).toBe(false);
-		for (const event of ["push", "merge_group", "workflow_dispatch"])
-			expect(evaluate(expr, event), event).toBe(true);
+	// #5002: a job `if:` that skips a pull request still posts a SKIPPED row on
+	// it, so the job lives in a workflow with no pull_request trigger at all.
+	// It no longer runs on merge_group or ci.yml's bot-PR dispatch (a deliberate
+	// consequence; adding merge_group would join the bot dispatch set, which
+	// tool-smoke.yml's steps enumerate).
+	it("strict-install.yml never starts on a pull request and keeps a master push and a dispatch", () => {
+		const triggers = Object.keys(strictInstall.on).sort();
+		expect(triggers).toEqual(["push", "workflow_dispatch"]);
+		expect(strictInstall.on.push).toEqual({ branches: ["master"] });
+		for (const event of ["pull_request", "pull_request_target", "merge_group"])
+			expect(strictInstall.on[event], event).toBeUndefined();
+		const job = strictInstall.jobs["strict-install-cold-cache"];
+		expect(job.name).toBe("Strict install (cold npm cache) (fast-fail)");
+		// Without a pull_request trigger the job needs no gate, and ci.yml has
+		// none left to skip.
+		expect(job.if).toBeUndefined();
+		expect(ci.jobs["strict-install-cold-cache"]).toBeUndefined();
 	});
 
 	// The strictness steps carry the cut as a step `if`: the guarded steps skip

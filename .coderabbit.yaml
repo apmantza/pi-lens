@@ -103,6 +103,7 @@ knowledge_base:
     filePatterns: # https://docs.coderabbit.ai/reference/configuration
       - "AGENTS.md"
       - "docs/defect-shapes.md"
+      - "docs/ci.md"
       - "docs/invariants/*.md"
       - "docs/pi-lens-*.md"
 

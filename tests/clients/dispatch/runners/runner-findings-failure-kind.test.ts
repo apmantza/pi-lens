@@ -38,6 +38,7 @@ import {
 	type RunnerResult,
 } from "../../../../clients/dispatch/types.js";
 import { installLspServiceDouble } from "../../../support/lsp-service-seam.js";
+import { plantGateConfig } from "../../../support/gate-config-fixtures.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
 const { safeSpawnAsync, lspTouch, logLatency } = vi.hoisted(() => ({
@@ -93,10 +94,6 @@ vi.mock(
 			_cwd: string,
 			toolId: string,
 		) => toolId,
-		resolveLocalFirstAsync: async (toolName: string) => ({
-			cmd: toolName,
-			args: [],
-		}),
 		createCwdCachedProbe: () =>
 			Object.assign(async () => true, {
 				getVerdict: () => ({ outcome: "ok" as const }),
@@ -113,11 +110,6 @@ vi.mock("../../../../clients/tool-policy.js", async (importOriginal) => ({
 	>()),
 	getLinterPolicyForCwd: () => null,
 	markdownlintConfigArgs: () => [],
-	hasEslintConfig: () => true,
-	hasMypyConfig: () => true,
-	hasPhpstanConfig: () => true,
-	hasStylelintConfig: () => true,
-	hasYamllintConfig: () => true,
 }));
 
 vi.mock("../../../../clients/rust-client.js", async (importOriginal) => ({
@@ -712,8 +704,9 @@ const DRIVERS: Record<string, Driver> = {
 		file: "src/app.rb",
 		content: "puts 1\n",
 		status: "failed",
-		// The first spawn is the `--version` probe in
-		// resolveCommandArgsWithInstallFallback.
+		// The first spawn is the `--version` probe of the registry ladder
+		// (`resolveRubocopCommand`: `rubocop --version`, or `bundle --version` first
+		// for a Gemfile that names rubocop).
 		reply: ({ args, filePath }) =>
 			args.includes("--version")
 				? { status: 0, stdout: "1.66.0" }
@@ -1066,6 +1059,7 @@ async function drive(runnerId: string, driver: Driver): Promise<Observed> {
 		const absFile = path.join(root, ...driver.file.split("/"));
 		fs.mkdirSync(path.dirname(absFile), { recursive: true });
 		fs.writeFileSync(absFile, driver.content);
+		plantGateConfig(runnerId, root);
 		driver.prepare?.(root);
 
 		const registry = new RunnerRegistry();

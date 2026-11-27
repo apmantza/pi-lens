@@ -81,6 +81,19 @@ function sweepShapeFiles(): Array<{ file: string; source: string }> {
 }
 
 const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
+	// #5411: an outcome table over four report-scanning clients. Its readdir
+	// census asks whether one run left a report directory behind in its own
+	// scratch parent, so there is no source population to floor.
+	"tests/clients/report-scan-outcomes.test.ts":
+		"behavior table over four report clients; its readdir checks one scratch parent for leftovers, not a source population sweep",
+	// #5594: the overlay seam's behaviour table. Its readdir checks that one run
+	// left nothing in its own scratch parent, so there is no source population.
+	// #5621: the seed-copy behaviour cells. Their readdir checks that one failed
+	// copy write left no `pi-lens-seed-*` file in its own scratch repo.
+	"tests/clients/dispatch/seed-content-mode-5621.test.ts":
+		"behavior cells over the seed-copy writer; its readdir checks one scratch repo for a leftover copy after a failed write, not a source population sweep",
+	"tests/clients/dispatch/runners/ignore-anchor.test.ts":
+		"behavior table over the config-overlay seam; its readdir checks one scratch parent for leftovers after a run, not a source population sweep",
 	"tests/clients/ast-grep-rule-regex-budget.test.ts":
 		"rule YAML corpus enumeration, not a production population sweep",
 	"tests/config/lsp-idle-eviction-registry.test.ts":
@@ -156,7 +169,8 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 	"tests/clients/dispatch/runners/parsed-nothing-sweep.test.ts":
 		"runner outcome cases, not a production population sweep",
 	"tests/clients/dispatch/runners/run-outcome-ratchet.test.ts":
-		"runner outcome cases, not a production population sweep",
+		"runner outcome cases; its out-of-tree spawn census (#5308) carries its " +
+		"own scanned/flagged floors in the same file",
 	"tests/clients/extension-terminal-silence.test.ts":
 		"terminal behavior cases, not a production population sweep",
 	"tests/clients/gzip-stage-write.test.ts":
@@ -167,6 +181,9 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 	"tests/clients/installer/opengrep-pack-refresh-4765.test.ts":
 		"refresh behavior cases; it lists the rule-pack cache directory once to assert no " +
 		"candidate file outlives a refresh, not a production population sweep",
+	"tests/clients/installer/archive-install.integration.test.ts":
+		"archive install behavior cases; its #5701 cases list the tools directory once to assert no " +
+		"partial download outlives a failed stream, not a production population sweep",
 	"tests/clients/instance-reaper-prune-concurrency.test.ts":
 		"concurrency cases, not a production population sweep",
 	"tests/clients/instance-reaper-backstop.test.ts":

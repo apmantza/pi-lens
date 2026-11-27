@@ -121,11 +121,53 @@ describe("runAutofix tool agreement seam (#3005)", () => {
 		expect(detectFileChangedAfterCommand).toHaveBeenCalledWith(
 			file,
 			"markdownlint-cli2",
-			expect.arrayContaining(["--fix", file]),
+			// #5544 round 2: the CLI argument is the project-relative target, so
+			// cli2's `ignores` can match it; the change-detection target (first
+			// argument) stays the absolute dispatched path.
+			expect.arrayContaining(["--fix", "README.md"]),
 			env.tmpDir,
-			[1],
 		);
+		expect(
+			(
+				vi.mocked(detectFileChangedAfterCommand).mock.calls[0]![2] as string[]
+			).includes(file),
+		).toBe(false);
 		expect(getDegradationSummary()).toEqual([]);
+	});
+
+	it("hands oxlint autofix the project-relative target (#5556)", async () => {
+		fs.writeFileSync(
+			path.join(env.tmpDir, ".oxlintrc.json"),
+			JSON.stringify({ rules: { "no-unused-vars": "warn" } }),
+		);
+		fs.writeFileSync(
+			path.join(env.tmpDir, "package.json"),
+			JSON.stringify({ devDependencies: { oxlint: "^1.0.0" } }),
+		);
+		fs.writeFileSync(
+			path.join(env.tmpDir, "package-lock.json"),
+			JSON.stringify({
+				lockfileVersion: 3,
+				packages: { "": {}, "node_modules/oxlint": { version: "1.0.0" } },
+			}),
+		);
+		const file = path.join(env.tmpDir, "sample.ts");
+		fs.writeFileSync(file, "const unused = 1;\n");
+		resolveToolCommandWithInstallFallback.mockResolvedValue("oxlint");
+
+		await runAutofix(
+			file,
+			env.tmpDir,
+			() => undefined,
+			() => {},
+			deps(),
+		);
+
+		const call = vi.mocked(detectFileChangedAfterCommand).mock.calls.at(-1);
+		expect(call).toBeDefined();
+		expect(call?.[0]).toBe(file);
+		expect(call?.[1]).toBe("oxlint");
+		expect(call?.[2]).toEqual(["--fix", "sample.ts"]);
 	});
 
 	it("declines once when the Node lockfile cannot establish agreement", async () => {

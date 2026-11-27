@@ -100,9 +100,10 @@ const ADMITTED: Readonly<Record<string, Admission>> = {
 	},
 	"clients/lsp/launch.ts#nodeSpawn": {
 		reason:
-			"the LSP launcher's own starts (trySpawn's shell and direct arms): its PATH scan and child PATH are trust-scoped (trustScopedEnvironment), a bare command resolving into the project is refused (refuseProjectLookup), and the served-root project-local gate (#4248) runs on top; plus its taskkill teardown, whose System32 path now resolves through `windowsExe`",
+			"the LSP launcher's own starts (trySpawn's shell and direct arms): its PATH scan and child PATH are trust-scoped (trustScopedEnvironment), a bare command resolving into the project, or into an LSP root not admitted for project code (#5674), is refused (refuseProjectLookup), and the served-root project-local gate (#4248) runs on top; plus its taskkill teardown, whose System32 path now resolves through `windowsExe`",
 		sites: 3,
-		evidence: "refuseProjectLookup(command, spawnCommand, cwd, env)",
+		evidence:
+			"refuseProjectLookup(command, spawnCommand, cwd, env, reachesRoot)",
 	},
 	"clients/lsp/client.ts#nodeSpawn": {
 		reason:
@@ -127,12 +128,6 @@ const ADMITTED: Readonly<Record<string, Admission>> = {
 			"process-table queries through the unref'd collector with fixed ps/wmic/PowerShell literals; a refused query yields no rows, never a wrong kill",
 		sites: 2,
 		evidence: "buildProcessQuery",
-	},
-	"clients/mcp/review.ts#spawn": {
-		reason:
-			"the analyze worker's interpreter is the running node (`process.execPath`), an absolute file this process already runs, never a search-path lookup",
-		sites: 1,
-		evidence: "spawn(process.execPath",
 	},
 };
 

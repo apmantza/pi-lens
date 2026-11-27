@@ -988,18 +988,39 @@ describe("run() — REST transport end to end (#3497)", () => {
 		).rejects.toMatchObject({ code: "ETIMEDOUT" });
 	});
 
+	// #5516 review round 1, F1, red-first: this case used a `total_count: 0`
+	// fixture, so it issued ONE request and asserted one header -- dropping the
+	// token on pages 2+ of `restGet` left all 87 tests in the file green. The
+	// fixture now really paginates (101 runs over two `per_page=100` pages), and
+	// the `toHaveLength(2)` line below is what keeps the case from sliding back
+	// into a single-request fixture that asserts a single header.
 	it("R4: every restGet call carries the Bearer token, never a bare or missing Authorization header", async () => {
 		const seenAuthHeaders: Array<string | undefined> = [];
-		const fetchImpl = async (_url: string, init?: RequestInit) => {
+		const fetchImpl = async (url: string, init?: RequestInit) => {
 			const headers = init?.headers as Record<string, string>;
 			seenAuthHeaders.push(headers.Authorization);
-			return new Response(JSON.stringify({ total_count: 0, check_runs: [] }));
+			const page = Number(new URL(url).searchParams.get("page"));
+			const checkRuns = Array.from(
+				{ length: page === 1 ? 100 : 1 },
+				(_unused, i) => ({
+					name: `check-${(page - 1) * 100 + i}`,
+				}),
+			);
+			return new Response(
+				JSON.stringify({ total_count: 101, check_runs: checkRuns }),
+			);
 		};
-		await restFetchCheckRunsPayload("acme/repo", "sha", {
+		const payload = await restFetchCheckRunsPayload("acme/repo", "sha", {
 			token: "sekrit-token",
 			fetchImpl,
 		});
-		expect(seenAuthHeaders).toEqual(["Bearer sekrit-token"]);
+		// The fixture really reached page 2, and both pages were pooled.
+		expect(seenAuthHeaders).toHaveLength(2);
+		expect(payload.check_runs).toHaveLength(101);
+		expect(seenAuthHeaders).toEqual([
+			"Bearer sekrit-token",
+			"Bearer sekrit-token",
+		]);
 	});
 });
 

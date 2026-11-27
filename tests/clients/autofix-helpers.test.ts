@@ -5,14 +5,10 @@
  * used by the pipeline autofix phase.
  */
 
+import { hasToolConfig } from "../../clients/tool-config-presence.js";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { detectFileChangedAfterCommand } from "../../clients/file-utils.js";
-import {
-	hasEslintConfig,
-	hasSqlfluffConfig,
-	hasStylelintConfig,
-} from "../../clients/pipeline.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 
 describe("Autofix Helpers", () => {
@@ -21,7 +17,7 @@ describe("Autofix Helpers", () => {
 			const { tmpDir, cleanup } = setupTestEnvironment();
 			createTempFile(tmpDir, ".eslintrc.json", '{"root": true}');
 
-			expect(hasEslintConfig(tmpDir)).toBe(true);
+			expect(hasToolConfig("eslint", tmpDir)).toBe(true);
 			cleanup();
 		});
 
@@ -33,14 +29,14 @@ describe("Autofix Helpers", () => {
 				JSON.stringify({ eslintConfig: { root: true } }),
 			);
 
-			expect(hasEslintConfig(tmpDir)).toBe(true);
+			expect(hasToolConfig("eslint", tmpDir)).toBe(true);
 			cleanup();
 		});
 
 		it("returns false when no eslint config exists", () => {
 			const { tmpDir, cleanup } = setupTestEnvironment();
 
-			expect(hasEslintConfig(tmpDir)).toBe(false);
+			expect(hasToolConfig("eslint", tmpDir)).toBe(false);
 			cleanup();
 		});
 
@@ -48,7 +44,7 @@ describe("Autofix Helpers", () => {
 			const { tmpDir, cleanup } = setupTestEnvironment();
 			createTempFile(tmpDir, "package.json", "not valid json");
 
-			expect(hasEslintConfig(tmpDir)).toBe(false);
+			expect(hasToolConfig("eslint", tmpDir)).toBe(false);
 			cleanup();
 		});
 
@@ -56,7 +52,7 @@ describe("Autofix Helpers", () => {
 			const { tmpDir, cleanup } = setupTestEnvironment();
 			createTempFile(tmpDir, ".stylelintrc", "{}");
 
-			expect(hasStylelintConfig(tmpDir)).toBe(true);
+			expect(hasToolConfig("stylelint", tmpDir)).toBe(true);
 			cleanup();
 		});
 
@@ -64,7 +60,7 @@ describe("Autofix Helpers", () => {
 			const { tmpDir, cleanup } = setupTestEnvironment();
 			createTempFile(tmpDir, "package.json", JSON.stringify({ stylelint: {} }));
 
-			expect(hasStylelintConfig(tmpDir)).toBe(true);
+			expect(hasToolConfig("stylelint", tmpDir)).toBe(true);
 			cleanup();
 		});
 
@@ -72,7 +68,7 @@ describe("Autofix Helpers", () => {
 			const { tmpDir, cleanup } = setupTestEnvironment();
 			createTempFile(tmpDir, ".sqlfluff", "[sqlfluff]\ndialect = ansi");
 
-			expect(hasSqlfluffConfig(tmpDir)).toBe(true);
+			expect(hasToolConfig("sqlfluff", tmpDir)).toBe(true);
 			cleanup();
 		});
 
@@ -84,14 +80,14 @@ describe("Autofix Helpers", () => {
 				"[tool.sqlfluff]\ndialect = ansi",
 			);
 
-			expect(hasSqlfluffConfig(tmpDir)).toBe(true);
+			expect(hasToolConfig("sqlfluff", tmpDir)).toBe(true);
 			cleanup();
 		});
 
 		it("returns false when no sqlfluff config exists", () => {
 			const { tmpDir, cleanup } = setupTestEnvironment();
 
-			expect(hasSqlfluffConfig(tmpDir)).toBe(false);
+			expect(hasToolConfig("sqlfluff", tmpDir)).toBe(false);
 			cleanup();
 		});
 	});

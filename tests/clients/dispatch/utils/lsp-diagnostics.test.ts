@@ -71,3 +71,31 @@ describe("convertLspDiagnostics — scan-provenance identity (#692)", () => {
 		expect(scanned[0].rule).toBe("lsp:no-eval");
 	});
 });
+
+// #5412: the LSP path must retain the advisory tier used by CLI runners.
+describe("LSP severity semantics (#5412)", () => {
+	it.each([
+		[1, "error", "blocking"],
+		[2, "warning", "warning"],
+		[3, "info", "warning"],
+		[4, "hint", "warning"],
+		[0, "info", "none"],
+		[5, "info", "none"],
+		[undefined, "info", "none"],
+	] as const)(
+		"maps severity %s to %s with semantic %s",
+		(raw, severity, semantic) => {
+			const diagnostics = convertLspDiagnostics(
+				[
+					astGrepDiag({
+						severity: raw as LSPDiagnostic["severity"],
+						source: "Pyright",
+					}),
+				],
+				"/repo/a.py",
+			);
+			expect(diagnostics).toHaveLength(1);
+			expect(diagnostics[0]).toMatchObject({ severity, semantic });
+		},
+	);
+});

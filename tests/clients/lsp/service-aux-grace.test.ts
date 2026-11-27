@@ -2975,9 +2975,11 @@ describe('#1533 — silent auxiliary honesty on clientScope "all"', () => {
 
 	it("case 2 — a fast silent aux beside a slower primary narrows to partial, not confirmed", async () => {
 		// The counter-case to the test above, and the honest half of the blast radius.
-		// rust-analyzer declares 3000 and typos 1500, so under a 2000ms cap:
-		//   timeoutFor(rust-analyzer) = min(2000, 3000) = 2000
-		//   timeoutFor(typos)         = min(2000, 1500) = 1500
+		// (This case first used `rust-analyzer`, a display name whose row never
+		// applied to the registry id `rust`; it moved to a registry id, #5485.)
+		// python-jedi declares 3000 and typos 1500, so under a 2000ms cap:
+		//   timeoutFor(python-jedi) = min(2000, 3000) = 2000
+		//   timeoutFor(typos)       = min(2000, 1500) = 1500
 		//   timeoutMs                 = max(2000, 1500) = 2000
 		// The primary answers at 800ms and typos settles silently at 1500ms, so the
 		// wait ends at 1500 — comfortably inside `timeoutMs`, which is why
@@ -2990,20 +2992,20 @@ describe('#1533 — silent auxiliary honesty on clientScope "all"', () => {
 		// is the INEQUALITY (aux budget < timeoutMs), not the specific milliseconds.
 		const { LSPService } = await import("../../../clients/lsp/index.js");
 		const service = new LSPService();
-		const file = "C:/repo/main.rs";
-		const primaryClient = makeClient(800, [makeDiagnostic("borrow error")], {
-			serverId: "rust-analyzer",
+		const file = "C:/repo/main.py";
+		const primaryClient = makeClient(800, [makeDiagnostic("name error")], {
+			serverId: "python-jedi",
 		});
 		const auxClient = makeClient(1500, [], { serverId: "typos" });
 		getServersForFileWithConfig.mockReturnValue([
-			makePrimaryServer("rust-analyzer", ".rs"),
-			makeAuxServer("typos", ".rs"),
+			makePrimaryServer("python-jedi", ".py"),
+			makeAuxServer("typos", ".py"),
 		]);
 		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
 			options?.serverId === "typos" ? auxClient : primaryClient,
 		);
 
-		const touch = service.touchFile(file, "fn main() {}", {
+		const touch = service.touchFile(file, "x = 1", {
 			// The cascade neighbour fan-out's own shape, non-cold-snapshot lane.
 			clientScope: "all",
 			collectDiagnostics: true,
@@ -3034,7 +3036,7 @@ describe('#1533 — silent auxiliary honesty on clientScope "all"', () => {
 		expect(result?.unconfirmedServerIds).toEqual(["typos"]);
 		expect(
 			(result?.diags ?? []).map((d: { message: string }) => d.message),
-		).toContain("borrow error");
+		).toContain("name error");
 	});
 
 	// #1531, now CLOSED and live rather than pending. The client-global
@@ -3611,6 +3613,81 @@ describe("#4763 — published-diagnostic count on lsp_aux_wait_outcome", () => {
 				outcome: "answered",
 				publishedCount: 1,
 			}),
+		]);
+	});
+});
+
+// #5419 F2: PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS=0 disables early unblock in full
+// mode. The race finalized at the first answer (1 of 2 results here), which the
+// knob's comment, the issue and the changelog all say it must not do.
+describe("#5419 PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS: 0 disables early unblock", () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+		getServersForFileWithConfig.mockReset();
+		createLSPClient.mockReset();
+		logLatency.mockReset();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+		delete process.env.PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS;
+	});
+
+	/**
+	 * Two language servers with a finding each: `ts-fast` answers at 50 ms and
+	 * `ts-slow` at 300 ms. Returns the messages of the merged result in `mode`
+	 * (full unless a row passes "document", #5419 V1).
+	 */
+	async function fullModeMessages(
+		grace: string,
+		mode: "full" | "document" = "full",
+	): Promise<string[]> {
+		process.env.PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS = grace;
+		vi.resetModules();
+		(await import("../../../clients/lsp/config.js"))._setServersForFileForTests(
+			getServersForFileWithConfig,
+		);
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const clients: Record<string, ReturnType<typeof makeClient>> = {
+			"ts-fast": makeClient(50, [makeDiagnostic("fast server finding")], {
+				serverId: "ts-fast",
+			}),
+			"ts-slow": makeClient(300, [makeDiagnostic("slow server finding")], {
+				serverId: "ts-slow",
+			}),
+		};
+		getServersForFileWithConfig.mockReturnValue([
+			makePrimaryServer("ts-fast"),
+			makePrimaryServer("ts-slow"),
+		]);
+		createLSPClient.mockImplementation(
+			async (options: { serverId: string }) => clients[options.serverId],
+		);
+		const pending = new LSPService().getDiagnostics(FILE, mode);
+		await vi.runAllTimersAsync();
+		return (await pending).map((diagnostic) => diagnostic.message);
+	}
+
+	it("waits for the slow client when the grace is 0 (2 of 2 results)", async () => {
+		expect(await fullModeMessages("0")).toEqual(
+			expect.arrayContaining(["fast server finding", "slow server finding"]),
+		);
+	});
+
+	it("keeps the 400 ms early-unblock window: both clients answer in time (2 of 2 results)", async () => {
+		expect(await fullModeMessages("400")).toEqual(
+			expect.arrayContaining(["fast server finding", "slow server finding"]),
+		);
+	});
+
+	// #5419 V1: the document-mode arm of `earlyUnblockOn` (clients/lsp/index.ts).
+	// With the knob at 0 only that arm finalizes at the first answer, so dropping
+	// it makes document mode wait for the slow client. No other row runs document
+	// mode with the knob at 0.
+	it("document mode finalizes at the first answer when the grace is 0 (1 of 2 results)", async () => {
+		expect(await fullModeMessages("0", "document")).toEqual([
+			"fast server finding",
 		]);
 	});
 });

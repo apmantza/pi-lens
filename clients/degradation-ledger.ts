@@ -84,7 +84,7 @@ export type DegradationKind =
 	| "actionable-warnings-quickfix-uncredited"
 	/** `adopted-root-binary-refused`: #4309: a resolved executable belongs to the adopted or session project. */
 	| "adopted-root-binary-refused"
-	/** `adopted-root-writer-skipped`: #4309: an autonomous formatter or fixer is disabled for an adopted file. */
+	/** `adopted-root-writer-skipped`: #4309, #5417: a write outside the session's writable roots (a formatter, fixer, `ast_grep_replace`, a language-server edit or `lens_diagnostic_mark`) is refused. */
 	| "adopted-root-writer-skipped"
 	/**
 	 * `agent-advisory-dropped`: #3748: a model-facing advisory (`clients/agent-nudge.ts`'s queue) never
@@ -205,7 +205,23 @@ export type DegradationKind =
 	| "aux_wait_repromoted"
 	/** `availability-probe-overrun`: An availability probe exceeded its advertised wall-clock budget (#2131). */
 	| "availability-probe-overrun"
+	/**
+	 * `background-write-drain-deadline`: The test-side runner of the registered background-write drains
+	 * (`tests/support/background-write-drains.ts`, #5745) did not reach a fixed
+	 * point, a full pass after which no drain reports pending work, before its
+	 * deadline. The runner stops scheduling passes and rejects, naming the
+	 * drains still pending, so the fixture root is not removed under them.
+	 * Subject: `fixed-point`; once per ledger session.
+	 */
+	| "background-write-drain-deadline"
 	| "bash-view-clipped"
+	/**
+	 * `bash-write-scope-guessed`: A bash command filled a directory the scan could not read (`rsync ... "$D"`,
+	 * `tar x -C "$(mktemp -d)"`, #5552), so the working directory stood in for
+	 * it and the files git lists as changed there are credited as the
+	 * command's writes. Subject: the normalized root; once per session.
+	 */
+	| "bash-write-scope-guessed"
 	/**
 	 * `biome-explain-unavailable`: `biome-check.ts`'s `resolveBiomeFixKinds` (#1810) couldn't get a real
 	 * fix-tier verdict for a rule from `biome explain <rule>` — either the
@@ -243,6 +259,24 @@ export type DegradationKind =
 	 */
 	| "blocker-position-unaligned"
 	/**
+	 * `blocker-repeat-capped`: #5532: a live inline blocker the session did not clear was delivered in full
+	 * `BLOCKER_FULL_DELIVERY_CAP` times, so later deliveries get a one-line
+	 * pointer instead (`consumeTurnEndFindings`). The blocker stays in
+	 * `lens_diagnostics` and the commit gate. Subject is
+	 * `inline-blocker-repeat:<file>`; counted, written on the blocker's first
+	 * delivered pointer only.
+	 */
+	| "blocker-repeat-capped"
+	/**
+	 * `blocker-replay-suppressed`: #5784: a per-write blocker line (the withheld line, `Still unfixed`)
+	 * whose blockers were all carried without a verdict, and which this
+	 * session already delivered for the same file, surface and blocker set, was
+	 * held back (`admitBlockerReplay`). The blockers stay in the record, the
+	 * commit gate and `lens_diagnostics`. Subject is `<surface>:<file>`;
+	 * counted.
+	 */
+	| "blocker-replay-suppressed"
+	/**
 	 * `bounded-pid-lock-wait-skipped`: #3594: `acquireBoundedPidFileLock`'s wait (the durable-store sync
 	 * waiter) was skipped because the same top-generation holder an earlier
 	 * wait ran out on is still there. The call falls back at once, same as
@@ -274,7 +308,10 @@ export type DegradationKind =
 	 * the run's edit (a push-only server that never republishes a dependent). The
 	 * neighbour is now unconfirmed rather than clean; the subject is
 	 * `<serverId>:<path key>` and the record counts per session, so a repeated
-	 * exporter edit does not need a new kind to be visible.
+	 * exporter edit does not need a new kind to be visible. #5675: the cascade
+	 * now re-sends the document once first; the record is still written when
+	 * that re-touch left the answer pre-edit or did not conclude, and its reason
+	 * says so.
 	 */
 	| "cascade-pre-edit-answer"
 	/**
@@ -293,6 +330,13 @@ export type DegradationKind =
 	 * Subject is the change-log path.
 	 */
 	| "change-log-lock-unavailable"
+	/**
+	 * `complexity-delta-failed`: #5087: an edit's complexity delta threw (a
+	 * parser or store failure), so its tool result carries no delta; the
+	 * edit's own output is unaffected. Subject is the edited file; once per
+	 * file per session.
+	 */
+	| "complexity-delta-failed"
 	/**
 	 * `config-deprecated`: A config file location or root key the user wrote is DEPRECATED and was
 	 * still honored (#2426). The deliberate opposite of `config-ignored`: the
@@ -558,6 +602,8 @@ export type DegradationKind =
 	/** `formatter-agreement-unavailable`: A formatter write was declined because project/tool agreement was not provable. */
 	| "formatter-agreement-unavailable"
 	| "formatter-failure"
+	/** `formatter-requeue-dropped`: a deferred format failure reached its one-retry cap. */
+	| "formatter-requeue-dropped"
 	| "formatter-skip"
 	/**
 	 * `formatter-unavailable`: A selected formatter's executable was proven absent (#2413): its
@@ -665,7 +711,26 @@ export type DegradationKind =
 	 * autofix is declined for that scan rather than guessed at.
 	 */
 	| "gradle-ktlint-scan-budget-exceeded"
+	/**
+	 * `grammar-blocked`: a tree-sitter grammar could not be fetched or loaded,
+	 * so the rules that need that grammar do not run (#1536, #1548, #4224).
+	 * Subject is usually the grammar file, and most sites count, so one
+	 * retrying grammar keeps one ring slot. grammar-source.ts records
+	 * `grammars.lock.json` when it falls back to a weaker-integrity check and
+	 * the download still proceeds. The PowerShell `-File` run failure used to share this kind and
+	 * records `powershell-run-failed` now, because a blocked grammar download
+	 * and a blocked PowerShell analysis need different user actions (#5400).
+	 */
 	| "grammar-blocked"
+	/**
+	 * `held-group-outlived-leader`: #5733: a held LSP process group was still
+	 * present when its shutdown ladder ended, after its leader was seen to
+	 * exit: a descendant ignored the ladder's SIGTERM. `releaseOwnChildPid`
+	 * SIGKILLs the group and keeps the hold until that kill is confirmed.
+	 * Counted; subject is the fixed site `lsp-shutdown`, the group id is in the
+	 * reason. Informational: the kill is the ladder working, so a tally.
+	 */
+	| "held-group-outlived-leader"
 	/**
 	 * `held-own-pid-evicted`: #3096: `holdOwnChildPid` found the held-pid set full of still-live
 	 * groups and `BoundedSet.add` dropped the oldest, usually the longest-lived
@@ -735,11 +800,11 @@ export type DegradationKind =
 	 */
 	| "inline-blocker-unstructured"
 	/**
-	 * `install-disabled`: #5231: an install the lazy installer or govulncheck would have run was
+	 * `install-disabled`: #5231: an install govulncheck would have run was
 	 * refused because `PI_LENS_DISABLE_TOOL_INSTALL=1` (`isToolInstallDisabled`).
-	 * Subject is the tool id (`rubocop`, `rustfmt`, `govulncheck`), recorded
-	 * ONCE per tool per session (`recordDegradationOnce`): both entry points
-	 * are reached per save, so a counted row would grow without adding
+	 * Subject is the tool id (`govulncheck`), recorded
+	 * ONCE per tool per session (`recordDegradationOnce`): the entry point
+	 * is reached per save, so a counted row would grow without adding
 	 * information. The managed installer reports the same refusal through its
 	 * own install-attempt record.
 	 */
@@ -807,6 +872,12 @@ export type DegradationKind =
 	 */
 	| "instance-registry-deregister-root-failed"
 	/**
+	 * `instance-registry-exit-settle-timeout`: #5745: a process about to exit
+	 * explicitly (the MCP `fresh` worker) waited `settleRegistryWritesBeforeExit`'s
+	 * 2 s bound for its queued registry writes and gave up; its entry may outlive it.
+	 */
+	| "instance-registry-exit-settle-timeout"
+	/**
 	 * `instance-registry-identity-fallback`: #3071: a registration-record write fell back to the process cwd because
 	 * the session's identity carried no `projectRoot` — `instance-registry.ts`
 	 * still records the child, just without the caller-supplied root.
@@ -846,7 +917,9 @@ export type DegradationKind =
 	/**
 	 * `instance-registry-registration-missing`: #3071: an LSP child was recorded before `registerInstance` had run for
 	 * this process (or its entry was reaped) — `instance-registry.ts`
-	 * synthesizes a minimal host entry so the child stays tracked.
+	 * synthesizes a minimal host entry so the child stays tracked. A
+	 * `safeSpawnAsync` child's row is dropped instead (#5745 r5, subject
+	 * `owned-child:<pid>`): a spawned command never creates its host's entry.
 	 */
 	| "instance-registry-registration-missing"
 	/**
@@ -1116,6 +1189,14 @@ export type DegradationKind =
 	 */
 	| "lsp-edit-stale-content"
 	/**
+	 * `lsp-empty-classification-failed`: #5258: the silent-on-clean classification of an empty (or
+	 * severity-filtered) `lsp_diagnostics` answer could not run (a rejected
+	 * capability read or a throwing registry), so the file reads unconfirmed
+	 * instead of "confirmed clean". Subject is the file path;
+	 * `recordDegradationOnce` keeps it at one row per file per session.
+	 */
+	| "lsp-empty-classification-failed"
+	/**
 	 * `lsp-environment-gap-demoted`: #4532: a TypeScript diagnostic was demoted from blocking to warning
 	 * because the file's root resolves no `node_modules`, so its ambient
 	 * declarations (`node:*` module types, the `NodeJS` namespace, `node`'s
@@ -1134,16 +1215,16 @@ export type DegradationKind =
 	| "lsp-file-birth-unknown"
 	/**
 	 * `lsp-idle-eviction`: An idle LSP client was released by the shared idle-eviction timer (a
-	 * server whose registry `idleEviction` is `transparent`); it respawns on the
+	 * server whose registry `idleEviction` is not `resident`, #5700); it respawns on the
 	 * next request. Subject is the client key.
 	 */
 	| "lsp-idle-eviction"
 	/**
 	 * `lsp-idle-eviction-declined`: #3952: `scheduleIdleEviction` was asked to arm a client and DECLINED,
-	 * because the server object the service holds does not declare
-	 * `idleEviction: "transparent"` and the client is not an adopted-root one.
+	 * because the server object the service holds declares
+	 * `idleEviction: "resident"` (#5700) and the client is not an adopted-root one.
 	 * The pair this row separates is `resident-by-declaration` (a policy answer:
-	 * `unmeasured`/`resident` servers are meant to stay) from
+	 * `resident` servers are meant to stay) from
 	 * `not-evicted` (a measurement whose arm never reached the policy), and
 	 * before it both read as "the timer did not fire". Subject is the server id,
 	 * recorded ONCE per server per session: the declaration is the same every
@@ -1195,7 +1276,7 @@ export type DegradationKind =
 	 */
 	| "lsp-nav-late-answer"
 	/**
-	 * `lsp-nav-request-timeout`: `navRequest`'s (`clients/lsp/client.ts`) per-request `withTimeout`
+	 * `lsp-nav-request-timeout`: `navRequest`'s (`clients/lsp/client.ts`) per-request sender bound
 	 * abandoned a hover/definition/references/etc. request (#1716). Every
 	 * timeout is counted here; only the FIRST occurrence per (method, file)
 	 * this session also writes a detailed `lsp_nav_request_timeout`
@@ -1207,6 +1288,19 @@ export type DegradationKind =
 	/** `lsp-notify-stall-cpu-busy`: A busy notify-stall discriminator was deferred; detail is rising-edge bounded. */
 	| "lsp-notify-stall-cpu-busy"
 	/**
+	 * `lsp-open-document-cap`: #5700: a client held more documents open than the
+	 * registry's cap (`getLspOpenDocumentCap`) and closed its least recently sent
+	 * ones with `didClose`. A closed document's last findings stay in the
+	 * client's cache, marked `closed`, and a later touch opens it again. Subject
+	 * is the server id, ONCE per server per session: the cap is the same every
+	 * time, so one row answers for every close. A close whose send failed is
+	 * counted under the subject `<server id>:close-failed` (the document stays
+	 * open; the next open past the cap retries it).
+	 */
+	| "lsp-open-document-cap"
+	/** `lsp-open-document-cap-close-failed`: #5737: a cap eviction's `didClose` failed, leaving the document open. */
+	| "lsp-open-document-cap-close-failed"
+	/**
 	 * `lsp-probe-finding-policy`: #3071: `tools/lsp-diagnostics.ts`'s probe-disposition filter threw while
 	 * applying policy to a batch of findings; the batch is returned unfiltered
 	 * (nothing suppressed) rather than dropped. Subject is the cwd.
@@ -1214,7 +1308,7 @@ export type DegradationKind =
 	| "lsp-probe-finding-policy"
 	/**
 	 * `lsp-pull-diagnostic-timeout`: A `textDocument/diagnostic` or `workspace/diagnostic` pull's per-request
-	 * `withTimeout` abandoned a GENUINELY dispatched request (#1771). Every
+	 * `withDeadline` abandoned a GENUINELY dispatched request (#1771). Every
 	 * pull timeout emits a detailed `lsp_pull_diagnostic_timeout` latency.log
 	 * record already, but until now that record counted nothing in the
 	 * ledger — the bounded-telemetry rule (`clients/bounded-telemetry.ts`)
@@ -1225,7 +1319,7 @@ export type DegradationKind =
 	| "lsp-pull-diagnostic-timeout"
 	/**
 	 * `lsp-pull-late-answer`: A `textDocument/diagnostic` or `workspace/diagnostic` pull's per-request
-	 * `withTimeout` abandoned the request, and the request later settled anyway
+	 * `withDeadline` abandoned the request, and the request later settled anyway
 	 * (#1713). The answer arrived too late to serve the caller that timed out,
 	 * so it is discarded — this kind is the only trace that it ever landed.
 	 */
@@ -1266,7 +1360,7 @@ export type DegradationKind =
 	 *
 	 * This is deliberately NOT `warm-attach-membership-probe-abandoned`: that
 	 * one fires when the CALLER's remaining budget abandons the wait
-	 * (`clients/warm-attach.ts`'s `withinRemaining`), not when the request's own
+	 * (`clients/warm-attach.ts`'s `withDeadline`), not when the request's own
 	 * ceiling wins, so before this row a release left no record anywhere. The
 	 * row marks a release that happened; a regression that stopped releasing
 	 * never reaches it, so the wire test of the ceiling pins that case.
@@ -1289,6 +1383,15 @@ export type DegradationKind =
 	 */
 	| "lsp-server-config-load-failed"
 	/**
+	 * `lsp-server-loading-gated`: #5487: a diagnostics pull was held to the readiness the server announced
+	 * (`experimental/serverStatus`, rust-analyzer): its empty answer came while
+	 * the server was still loading, so it was retracted and asked again after
+	 * quiescence instead of reading as a clean file. Subject is the server id;
+	 * one `lsp_server_loading_gated` record per server per session, every
+	 * occurrence counted here.
+	 */
+	| "lsp-server-loading-gated"
+	/**
 	 * `lsp-server-message`: #4764: any other `window/showMessage` text, recorded once per distinct
 	 * message per session (`lsp_server_message`). Subject
 	 * `<serverId>:message:<digest>`, reason the message itself (truncated at the
@@ -1297,6 +1400,14 @@ export type DegradationKind =
 	 * sink; past it one `<serverId>:showMessage-cap` counter grows instead.
 	 */
 	| "lsp-server-message"
+	/**
+	 * `lsp-server-uncontained`: #5694: a Windows `.cmd` language-server shim
+	 * that `resolveNpmCmdShim` (clients/lsp/launch.ts) could not run directly
+	 * (not an npm cmd-shim template, a missing script, no Node `.exe`), so the
+	 * server runs behind cmd.exe and outlives a pi that is killed. Once per
+	 * shim path (the subject) per session; the reason names why.
+	 */
+	| "lsp-server-uncontained"
 	/**
 	 * `lsp-server-unexpected-close`: A language-server child process CLOSED without pi-lens having asked it to
 	 * (#1969). `clientShutdown()` sets `state.shutdownRequested`, so evictions
@@ -1378,10 +1489,16 @@ export type DegradationKind =
 	 * was structurally always zero.
 	 */
 	| "madge-skip-visibility-unavailable"
+	/** `managed-tool-download`: #5701: a managed release, Maven, or archive
+	 * payload download failed after its bounded stream was started. The
+	 * installer records the tool id and typed download failure once per attempt.
+	 */
+	| "managed-tool-download"
 	/**
-	 * `managed-tool-install`: #3071: a managed-tool archive extraction (tgz/zip) failed —
-	 * `clients/installer/index.ts`'s `recordArchiveExtractionDegradation`.
-	 * Subject is `<toolId>:<format>`, reason names the extraction failure.
+	 * `managed-tool-install`: #5561: a managed pip-tool install threw after
+	 * its strategy ladder was exhausted. `clients/installer/index.ts` records
+	 * the tool id and bounded install failure; npm/gem failures use their own
+	 * existing install logs and lock-loss has its dedicated kind.
 	 */
 	| "managed-tool-install"
 	/**
@@ -1406,6 +1523,15 @@ export type DegradationKind =
 	 * group count is the exact number of such calls, the reason the latest keys.
 	 */
 	| "mcp-ignored-arguments"
+	/**
+	 * `mode-suppression`: #5400 narrows this to its one remaining meaning: a
+	 * user-facing notice the host mode cannot render, so it is logged instead of
+	 * shown in print/json mode (#1334, #1366). Subject is the notice surface
+	 * (`ctx.ui.notify`, `user degradation notice`) and the reason names the
+	 * mode, so a headless operator still sees what was suppressed. zizmor
+	 * running offline used to share this kind and records `zizmor-offline`
+	 * now.
+	 */
 	| "mode-suppression"
 	/**
 	 * `mutation-bridge-invalid-branch-epoch`: #3677: the mutation bridge received a foreign `readGuardBranchEpoch` that
@@ -1426,6 +1552,22 @@ export type DegradationKind =
 	 * records the same drop as `io-bridge-mutate-dropped` and never this.
 	 */
 	| "mutation-bridge-out-of-scope"
+	/**
+	 * `mutation-bridge-stage-failed`: #5551 (review r1 F1): one stage of a
+	 * mutation record (`stamp`, `turn-state` or `deferral`) threw, for
+	 * example a turn-state write whose data directory cannot be created. The
+	 * other stages and the change-log receipt still ran. Once per stage per
+	 * session, the path and the error in the reason.
+	 */
+	| "mutation-bridge-stage-failed"
+	/**
+	 * `named-write-credit-withheld`: A bash call started with at least `SAME_HEAD_DIRTY_SET_CAP` dirty working-tree
+	 * paths (#5552), so the baseline's dirty set was cut and no path can be
+	 * shown clean before the command. A file or directory the command names is
+	 * then not credited by content, and a write that keeps an old mtime stays
+	 * on the mtime rule. Subject: the normalized root; once per session.
+	 */
+	| "named-write-credit-withheld"
 	| "native-read-clipped"
 	/**
 	 * `native-read-raced-writer`: #3524: the file moved between a native read's tool_call and its
@@ -1592,6 +1734,17 @@ export type DegradationKind =
 	 * itself already landed; only the hash is missing. Subject is the file path.
 	 */
 	| "pipeline-post-write-hash-unavailable"
+	/**
+	 * `powershell-run-failed`: #5400 (the #1540 and #1598 records, split out of
+	 * `grammar-blocked`): a PowerShell `-File` analysis run produced nothing
+	 * usable. Three causes, named in the reason: the child died with no exit
+	 * status (crash or signal), it exited nonzero, most often because the
+	 * execution policy refused to load the script, or it exited 0 with empty or
+	 * unparseable stdout. Subject is `psscriptanalyzer`; counted, so every
+	 * affected save raises the exact tally while one retained entry holds the
+	 * latest reason. Only the execution-policy cause latches analysis off.
+	 */
+	| "powershell-run-failed"
 	/** `pre-edit-capture-incomplete`: #4543: first-write capture exceeded its deadline or capacity (once/session). */
 	| "pre-edit-capture-incomplete"
 	/** `process-bridge-unavailable`: A mounted process bridge refused calls during a primary-session gap. */
@@ -1843,6 +1996,17 @@ export type DegradationKind =
 	/** `runner-findings-stale`: A completed runner answer was stale and dropped instead of being replayed. */
 	| "runner-findings-stale"
 	/**
+	 * `runner-ignore-unanchored`: #5594: detekt, phpstan or credo matches the ignore globs of the
+	 * project's own config against the file's absolute path, so a project under
+	 * an ignored ancestor (`.claude/worktrees/<lane>`) reads clean without being
+	 * analysed. The runner anchors the globs at the project root through a
+	 * generated copy of the config; this row says it could not (an unrecognised
+	 * pattern form, an unreadable config, a tool that cannot report what it
+	 * resolved), so the tool ran on the original config and a clean answer was
+	 * reported `inconclusive`. Subject is the tool id; the reason names the cause.
+	 */
+	| "runner-ignore-unanchored"
+	/**
 	 * `runner-parsed-nothing`: A shell-out runner's tool DID produce output, exited nonzero, and the
 	 * runner's parser extracted ZERO diagnostics from it (#1948). The adjacent
 	 * `runner-empty-result` covers "the tool produced nothing"; this covers
@@ -1854,6 +2018,25 @@ export type DegradationKind =
 	 * file clean, or did the parser fail to read it?".
 	 */
 	| "runner-parsed-nothing"
+	/**
+	 * `runner-skip-cause`: #5258: a runner skipped because its tool could not be
+	 * found (`not-installed`) or the managed install is off
+	 * (`install-disabled`, `PI_LENS_DISABLE_TOOL_INSTALL=1`), so the files it
+	 * serves read "not checked" with a named cause. Subject is
+	 * `<runnerId>:<reason>`, once per session: every later edit takes the same
+	 * skip, so the record states the coverage gap once instead of once per edit.
+	 */
+	| "runner-skip-cause"
+	/**
+	 * `runner-spawn-timeout-cooldown`: #5413: a runner was skipped without
+	 * running because one of its spawns used up its own timeout earlier this
+	 * session (`spawn-timeout-cooldown.ts`). Subject is the runner id, once per
+	 * session: every later edit takes the same skip, so the record states the
+	 * coverage gap once instead of once per edit.
+	 */
+	| "runner-spawn-timeout-cooldown"
+	/** `safe-spawn-owned-child-registry-failed`: A safeSpawnAsync child was created, but its best-effort registry update failed. */
+	| "safe-spawn-owned-child-registry-failed"
 	/**
 	 * `safe-spawn-signal-reraise-unsupported`: The self-signal re-raise at the end of `installLifetimeCleanup`'s signal
 	 * handler did not happen, so the host exits without the signal's default
@@ -1884,11 +2067,27 @@ export type DegradationKind =
 	 */
 	| "scan-worktree-exclusion-skipped"
 	/**
+	 * `script-write-credit-withheld`: A file a bash call changed without naming it (a script's
+	 * write, #5616) was not credited to the call, so its blockers went out as
+	 * the withheld line, not a STOP. Subject: `<cause>:<normalized root>`, the
+	 * cause one of `dirty-before`, `other-writer`, `dirty-set-cut`,
+	 * `no-dirty-set` or `failed-command`; once per session each.
+	 */
+	| "script-write-credit-withheld"
+	/**
 	 * `security-scan-report-failed`: A report-file security scanner (gitleaks, trivy) could not produce a result:
 	 * its CLI failed to spawn, exited non-zero without writing its report, or
 	 * the scan threw. Subject is the tool; counted, with the latest message kept.
 	 */
 	| "security-scan-report-failed"
+	/**
+	 * `seed-exclude-unwritable`: #5621: the repository's local exclude file
+	 * (`info/exclude` of the common git dir) could not be read or written, or
+	 * git gave no answer, so the seed copy written beside a file for one run is
+	 * not excluded from `git add -A`. The copy is still written. Once per
+	 * session.
+	 */
+	| "seed-exclude-unwritable"
 	| "self-drift-hash-budget-exhausted"
 	/** `self-drift-unverifiable`: A self-drift baseline could not be verified within its available evidence. */
 	| "self-drift-unverifiable"
@@ -1936,6 +2135,15 @@ export type DegradationKind =
 	| "session-scope-read-dropped"
 	/** `session-start-duplicate`: A duplicate RPC session start was suppressed after its first full pass. */
 	| "session-start-duplicate"
+	/**
+	 * `session-start-guidance-addressed-elsewhere`: #5792: a request found the per-project session-start
+	 * guidance record stamped for another session (or an unstamped one from
+	 * before #5792, read by a non-coordinator session) and left it for its
+	 * owner. Once per owner, so a skip reads apart from "no guidance was due"
+	 * without one row per request. Subject is the owner's session id, or
+	 * `unstamped`.
+	 */
+	| "session-start-guidance-addressed-elsewhere"
 	/**
 	 * `session-successor-pending`: #3662: a primary replacement shutdown left the process with no primary
 	 * and a successor pending. Subject `declined`: a `startup` start in that
@@ -2039,6 +2247,8 @@ export type DegradationKind =
 	 * Subject is the command label; the reason names the stream and the error.
 	 */
 	| "spawn-output-handler-fault"
+	/** `staged-delta-degraded`: #5553: the commit gate could not read the staged delta (a command it cannot replay, a git read that failed or was cut, an unreadable file, a lane that gave no answer, a throw or the bound) and refused the commit. Subject is the reason; once per reason per session. */
+	| "staged-delta-degraded"
 	/** `startup-analyzer-disabled`: A configured analyzer was deliberately skipped for this session. */
 	| "startup-analyzer-disabled"
 	/** `startup-warm-skipped`: A project-size bound skipped the session-start warm pipeline (#4126). */
@@ -2080,6 +2290,11 @@ export type DegradationKind =
 	 * checks stay attributable.
 	 */
 	| "test-runner-failed-target-state"
+	/**
+	 * `test-runner-pytest-not-executable` (#5410): the pytest on PATH has no
+	 * execute bit, so it is no runner; once per file.
+	 */
+	| "test-runner-pytest-not-executable"
 	/**
 	 * `test-target-foreign-checkout`: The final automatic-test gate rejected a positively foreign checkout.
 	 * Self and deferred targets may have no discovery/cache record; keep this
@@ -2250,6 +2465,16 @@ export type DegradationKind =
 	 * latches this permanently instead of retrying on every parse call.
 	 */
 	| "web-tree-sitter-load-failed"
+	/**
+	 * `widget-change-listener-failed`: a store-change listener registered beside
+	 * the TUI render callback threw while a widget write was notifying it, or
+	 * (subject `widget-hide-timer`) the host repaint the hide timer asks for
+	 * threw from its detached callback. The write already committed and stays
+	 * committed; the failure is bounded to one record per subject per session so
+	 * a persistently broken projection cannot flood the ledger. See
+	 * `requestRender` and `clearHideElapsed` in `clients/widget-state.ts`.
+	 */
+	| "widget-change-listener-failed"
 	| "widget-disposition-reconcile-fallback"
 	/**
 	 * `widget-mark-anchor-unreadable`: #3183: a file whose widget record holds a `false-positive`-marked row could
@@ -2289,7 +2514,18 @@ export type DegradationKind =
 	 * the per-kind entry bound is reached.
 	 */
 	| "word-index-orphan-file-id"
-	| "workspace-glob-cap";
+	| "workspace-glob-cap"
+	/**
+	 * `zizmor-offline`: #5400 (the #1535 record, split out of
+	 * `mode-suppression`): zizmor starts without a GitHub token because the
+	 * `gh auth token` probe never got a fair hearing, or is cooling down from
+	 * one, so its online audits (`known-vulnerable-actions`, `unpinned-uses`,
+	 * `impostor-commit`) are skipped while the scan still looks clean (#1459's
+	 * security-silence shape). Subject is `zizmor`; counted per offline start,
+	 * so a recurring offline start is one row with an exact tally. A genuine
+	 * "not authenticated" answer records nothing: nothing unexpected happened.
+	 */
+	| "zizmor-offline";
 
 export interface DegradationRecord {
 	kind: unknown;
@@ -2811,14 +3047,20 @@ const INFORMATIONAL_DEGRADATION_KINDS: ReadonlySet<string> = new Set([
 	// #3952: both are the idle-eviction POLICY answering, not a timer that
 	// failed. `lsp-idle-eviction` is the memory bound releasing a client that
 	// respawns on the next request; `lsp-idle-eviction-declined` is the
-	// declaration `unmeasured`/`resident` doing its job, once per server, so a
-	// nominal session writes up to one row per non-`transparent` server (32 of
-	// the 49 built-ins today). A `⚠` per server on every healthy session is
+	// declaration `resident` doing its job, once per server, so a
+	// nominal session writes up to one row per `resident` server (the five
+	// held indexers today, #5700). A `⚠` per server on every healthy session is
 	// the cry-wolf shape #2505 rejected; the sibling that DOES stand out is a
 	// measurement whose arm never reached the policy, and that one reads as a
 	// missing row, not as a warning here.
 	"lsp-idle-eviction",
 	"lsp-idle-eviction-declined",
+	// #5700: the open-document cap closing a cold document is the resident
+	// budget working; the server reopens it on the next touch.
+	"lsp-open-document-cap",
+	// #5733: a group that outlived its leader at shutdown was SIGKILLed; the
+	// ladder ending it is the design working.
+	"held-group-outlived-leader",
 ]);
 
 export function renderDegradationLines(

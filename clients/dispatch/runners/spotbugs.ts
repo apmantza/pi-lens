@@ -15,14 +15,12 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import {
-	createAvailabilityChecker,
-	resolveAvailableOrInstall,
+	resolveToolCommandWithInstallFallback,
+	toolAbsentSkip,
 } from "./utils/runner-helpers.js";
 
 // SpotBugs is a JVM tool installed via the archive strategy (#133); java gates
 // it (no JRE → skip). It analyzes the *bytecode tree*, not the edited source.
-const java = createAvailabilityChecker("java", ".exe", ["-version"]);
-const spotbugs = createAvailabilityChecker("spotbugs", ".bat", ["-version"]);
 
 const MAX_DIAGNOSTICS = 50;
 const MAX_XML_BYTES = 4 * 1024 * 1024;
@@ -215,6 +213,7 @@ const spotbugsRunner: RunnerDefinition = {
 	id: "spotbugs",
 	appliesTo: ["java", "kotlin"],
 	priority: PRIORITY.DEEP_LANGUAGE_ANALYSIS,
+	timeoutMs: 120_000,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "spotbugs");
@@ -228,8 +227,10 @@ const spotbugsRunner: RunnerDefinition = {
 		}
 
 		// JRE required — skip silently if absent (SpotBugs needs JDK 11+).
-		if (!(await java.isAvailableAsync(cwd))) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!(await resolveToolCommandWithInstallFallback(cwd, "java"))) {
+			// #5258: Java's own verdict, so a hung or rejecting Java is not
+			// worded as an absent one.
+			return toolAbsentSkip(cwd, { id: "java", runtime: true });
 		}
 
 		// Cache gate: re-run only when the .class tree changed since last scan.
@@ -243,8 +244,8 @@ const spotbugsRunner: RunnerDefinition = {
 			};
 		}
 
-		const cmd = await resolveAvailableOrInstall(spotbugs, "spotbugs", cwd);
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "spotbugs");
+		if (!cmd) return toolAbsentSkip(cwd, { id: "spotbugs" });
 
 		// One file per RUN: pid and millisecond are shared by two cold starts of
 		// one process, and a shared file lets one run read or delete the other's.

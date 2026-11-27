@@ -1,7 +1,11 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
-import { findLocalToolConfig, pathsEqual } from "../../path-utils.js";
+import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { hasToolConfig } from "../../tool-config-presence.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
+import { optionSafeTargetArg } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -9,21 +13,9 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import {
-	createAvailabilityChecker,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-const vale = createAvailabilityChecker("vale", ".exe");
-
-/**
- * Check for a .vale.ini config file in cwd or parent dirs.
- */
-function findValeConfig(cwd: string): string | undefined {
-	return findLocalToolConfig(cwd, [".vale.ini"]);
-}
 
 /**
  * Parse Vale JSON output.
@@ -135,30 +127,28 @@ const valeRunner: RunnerDefinition = {
 	appliesTo: ["markdown"],
 	priority: PRIORITY.DOC_QUALITY,
 	skipTestFiles: false,
-	requiresConfig: (cwd) => findValeConfig(cwd) !== undefined,
+	requiresConfig: (cwd) => hasToolConfig("vale", cwd),
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "vale");
 
 		// Config-gated: skip unless a .vale.ini is found
 		if (!valeRunner.requiresConfig?.(cwd)) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-configured");
 		}
 
-		let cmd: string | null = null;
-		if (await vale.isAvailableAsync(cwd)) {
-			cmd = vale.getCommand(cwd);
-		} else {
-			cmd = await resolveToolCommandWithInstallFallback(cwd, "vale");
-		}
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "vale");
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip(cwd, { id: "vale" });
 
 		// Vale exits 1 when a run reports an error-level alert and 0 for
 		// warning or suggestion alerts alone (exit table below).
+		// #5556: vale matches its `.vale.ini` section globs against this string, so
+		// an absolute path missed `[docs/*.md]` and met `[**/.claude/**]` in a
+		// lane's own ancestors (a silent `{}`); `-a.md` is a flag, not a file.
 		const result = await safeSpawnAsync(
 			cmd,
-			["--output", "JSON", ctx.filePath],
+			["--output", "JSON", optionSafeTargetArg(cwd, ctx.filePath)],
 			{ cwd, timeout: 15000 },
 		);
 

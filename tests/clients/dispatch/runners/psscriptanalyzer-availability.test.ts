@@ -7,6 +7,12 @@
  * available" for the session. Two changes, asserted here: the spawn goes
  * through `safeSpawnAsync`, and the verdict goes through the availability
  * policy.
+ *
+ * #5400: the three `-File` run-failure records used to go out as
+ * "grammar-blocked", the kind `clients/tree-sitter-client.ts` and
+ * `clients/grammar-source.ts` use for a refused grammar fetch or load, so a
+ * `pilens_health` group mixed a PowerShell execution-policy block with a
+ * blocked grammar download. They now emit their own kind.
  */
 
 import * as fs from "node:fs";
@@ -20,7 +26,10 @@ const { safeSpawnAsync, logLatencySpy } = vi.hoisted(() => ({
 	logLatencySpy: vi.fn(),
 }));
 
-vi.mock("../../../../clients/safe-spawn.js", () => ({
+vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/safe-spawn.js")
+	>()),
 	safeSpawnAsync,
 	safeSpawn: vi.fn(),
 }));
@@ -53,7 +62,9 @@ async function ledgerReasons(
  * run fails on the latch, not on missing test scaffolding.
  */
 async function loadRunner(): Promise<{
-	run: (ctx: never) => Promise<{ status: string; diagnostics: unknown[] }>;
+	run: (
+		ctx: never,
+	) => Promise<{ status: string; diagnostics: unknown[]; skipReason?: string }>;
 }> {
 	vi.resetModules();
 	const mod =
@@ -271,7 +282,8 @@ describe("psscriptanalyzer availability (#1490)", () => {
 		safeSpawnAsync.mockImplementation(async (_cmd: string, args: string[]) =>
 			args.some((arg) => arg.includes("Get-Module")) ? timeoutResult : ok(),
 		);
-		expect((await runner.run(ctx())).status).toBe("skipped");
+		// #5258 r3: the module probe's own verdict, not an absent module.
+		expect((await runner.run(ctx())).skipReason).toBe("probe-incomplete");
 		expect(callsMatching("Get-Module")).toHaveLength(1);
 		expect(
 			decisions().find((entry) => entry.metadata?.tool === "psscriptanalyzer")
@@ -329,7 +341,7 @@ describe("psscriptanalyzer availability (#1490)", () => {
 		safeSpawnAsync.mockImplementation(async (_cmd: string, args: string[]) =>
 			args.some((arg) => arg.includes("Get-Module")) ? moduleMissing : ok(),
 		);
-		expect((await runner.run(ctx())).status).toBe("skipped");
+		expect((await runner.run(ctx())).skipReason).toBe("not-installed");
 		expect(
 			decisions().find((entry) => entry.metadata?.tool === "psscriptanalyzer")
 				?.metadata,
@@ -360,7 +372,7 @@ describe("psscriptanalyzer execution-policy-blocked -File run (#1540)", () => {
 			cause: "policy-denied",
 			latched: true,
 		});
-		expect(await ledgerReasons("grammar-blocked")).toEqual(
+		expect(await ledgerReasons("powershell-run-failed")).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
 					subject: "psscriptanalyzer",
@@ -368,6 +380,9 @@ describe("psscriptanalyzer execution-policy-blocked -File run (#1540)", () => {
 				}),
 			]),
 		);
+		// #5400: this runner shares nothing with a refused tree-sitter grammar
+		// fetch, so it must not write the grammar kind any more.
+		expect(await ledgerReasons("grammar-blocked")).toEqual([]);
 	});
 
 	it("latches the policy block so a later save does not re-spawn -File", async () => {
@@ -396,7 +411,7 @@ describe("psscriptanalyzer execution-policy-blocked -File run (#1540)", () => {
 		);
 		expect(execDecision).toBeDefined();
 		expect(execDecision?.metadata).toMatchObject({ outcome: "transient" });
-		expect(await ledgerReasons("grammar-blocked")).toEqual(
+		expect(await ledgerReasons("powershell-run-failed")).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
 					subject: "psscriptanalyzer",
@@ -545,7 +560,7 @@ describe("psscriptanalyzer exit-0 with unreadable stdout (#1598)", () => {
 		// The pre-fix bug: empty stdout parses to `[]`, and the runner reports
 		// "succeeded" with zero diagnostics -- identical to a real clean file.
 		expect(result.status).not.toBe("succeeded");
-		expect(await ledgerReasons("grammar-blocked")).toEqual(
+		expect(await ledgerReasons("powershell-run-failed")).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
 					subject: "psscriptanalyzer",
@@ -569,7 +584,7 @@ describe("psscriptanalyzer exit-0 with unreadable stdout (#1598)", () => {
 
 		const result = await runner.run(ctx());
 		expect(result.status).not.toBe("succeeded");
-		expect(await ledgerReasons("grammar-blocked")).toEqual(
+		expect(await ledgerReasons("powershell-run-failed")).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
 					subject: "psscriptanalyzer",

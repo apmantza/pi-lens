@@ -201,12 +201,140 @@ const SIGNAL_PROPERTY = /(?:^|[,{(\s])signal\s*(?::|,|\})/;
  * from.
  */
 export function findBoundedCallLines(stripped) {
-	const hits = new Set();
+	return [...new Set(findBoundedCalls(stripped).map((call) => call.line))].sort(
+		(a, b) => a - b,
+	);
+}
+/**
+ * The first top-level argument of a call's own `(...)` text, and the text
+ * after the comma that ends it (`rest` is `""` for a one-argument call).
+ * Depth is counted over `([{` so a thunk's parameter list, an object literal
+ * and a nested call cannot end the argument early.
+ */
+function splitFirstArgument(args) {
+	let depth = 0;
+	for (let i = 1; i < args.length; i++) {
+		const ch = args[i];
+		if (ch === "(" || ch === "[" || ch === "{") depth++;
+		else if (ch === ")" || ch === "]" || ch === "}") depth--;
+		else if (ch === "," && depth === 0) {
+			return {
+				first: args.slice(1, i),
+				rest: args.slice(i + 1),
+				restFrom: i + 1,
+			};
+		}
+	}
+	return { first: args.slice(1, -1), rest: "", restFrom: args.length };
+}
+/**
+ * Is `first` (the already-stripped first argument of a `bounded()` call) a
+ * function LITERAL: the thunk form (#5550)? Admits `function`, an arrow with
+ * a parenthesised parameter list (with or without a return type) and a bare
+ * `x => ...`, each optionally `async`. Everything else, an identifier, a
+ * call, a member access, a conditional, an arrow bound to a local first, is
+ * the promise form: the detector cannot see what a name holds, so it never
+ * credits one with the thunk's cancel (a gate admits the known-good literal
+ * and refuses the rest).
+ */
+export function isThunkLiteral(first) {
+	const text = first.replace(/^\s+/, "").replace(/^async\b\s*/, "");
+	if (/^function\b/.test(text)) return true;
+	if (/^[A-Za-z_$][\w$]*\s*=>/.test(text)) return true;
+	if (!text.startsWith("(")) return false;
+	const close = matchingCloseIndex(text, 0, "(", ")");
+	if (close === -1) return false;
+	return /^\s*(?::[^=;]*?)?=>/.test(text.slice(close + 1));
+}
+/**
+ * Every shipped `bounded()` CALL in one already-stripped source: the line
+ * {@link findBoundedCallLines} keys it on, and its form, `"thunk"` (a function
+ * literal, #5550) or `"promise"` (anything else).
+ *
+ * The `signal` property is looked up AFTER the first argument only: a thunk's
+ * body spells `signal` too (it is the parameter), and keying on that line
+ * would let the options' own `signal` change without re-keying the row.
+ */
+export function findBoundedCalls(stripped) {
+	const calls = [];
 	for (const match of stripped.matchAll(BOUNDED_CALL_HEAD)) {
 		const head = lineOf(stripped, match.index);
 		const args = callArguments(stripped, match.index + match[0].length - 1);
-		const offset = args.split("\n").findIndex((l) => SIGNAL_PROPERTY.test(l));
-		hits.add(offset < 0 ? head : head + offset);
+		const { first, rest, restFrom } = splitFirstArgument(args);
+		const restLines = rest.split("\n");
+		const offset = restLines.findIndex((l) => SIGNAL_PROPERTY.test(l));
+		const restLineBase = args.slice(0, restFrom).split("\n").length - 1;
+		calls.push({
+			line: offset < 0 ? head : head + restLineBase + offset,
+			form: isThunkLiteral(first) ? "thunk" : "promise",
+		});
+	}
+	return calls;
+}
+/**
+ * A module specifier naming {@link DEFINITION_FILE} (`./deadline-utils.js`,
+ * `../clients/deadline-utils`), read from RAW source because the strip blanks
+ * strings.
+ */
+const DEADLINE_UTILS_SPECIFIER =
+	/["'][^"'\n]*\/deadline-utils(?:\.js|\.ts)?["']/;
+/**
+ * Every OTHER way a module that imports {@link DEFINITION_FILE} can reach
+ * `bounded()`: an alias (`const b = bounded`, `import { bounded as b }`), a
+ * value passed on (`run(bounded, p, o)`), a re-export (named, or
+ * `export * from`, which hands every name to a barrel's consumers), a namespace import
+ * (`import * as du from ".../deadline-utils.js"`, whose `du.bounded(` the call
+ * detector cannot see) and a dynamic `import(".../deadline-utils.js")`. The
+ * call detector cannot see where such a reference ends up called, so the form
+ * is refused instead of guessed at (#5550; AGENTS.md shape 69). Admitted: the
+ * call head itself and a plain, un-aliased `import { bounded }` specifier.
+ * Takes RAW source (it needs the specifier strings the strip blanks).
+ */
+export function findBoundedReferenceLines(raw) {
+	if (!DEADLINE_UTILS_SPECIFIER.test(raw)) return [];
+	const stripped = stripSource(raw);
+	const hits = new Set();
+	const rawWithStrings = stripSource(raw, { strings: "keep" });
+	for (const match of rawWithStrings.matchAll(
+		/(?:\*\s+as\s+[\w$]+\s+from\s*|\bexport\s*(?:type\s+)?\*\s*from\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)["'][^"'\n]*\/deadline-utils(?:\.js|\.ts)?["']/g,
+	)) {
+		hits.add(lineOf(rawWithStrings, match.index));
+	}
+	// A module that imports deadline-utils WITHOUT `bounded` can use the word as
+	// a local name; the identifier rule applies only where `bounded` is imported.
+	const importsBounded =
+		/\bimport\s+(?:type\s+)?\{[^}]*(?<![\w$])bounded(?![\w$])[^}]*\}/.test(
+			stripped,
+		);
+	const exportsBounded =
+		/\bexport\s*\{[^}]*(?<![\w$])bounded(?![\w$])[^}]*\}/.test(stripped);
+	if (!importsBounded && !exportsBounded)
+		return [...hits].sort((a, b) => a - b);
+	const callHeads = new Set(
+		[...stripped.matchAll(BOUNDED_CALL_HEAD)].map((m) => m.index),
+	);
+	const plainImports = new Set();
+	for (const clause of stripped.matchAll(
+		/\bimport\s+(?:type\s+)?\{([^}]*)\}/g,
+	)) {
+		const base = clause.index + clause[0].indexOf("{") + 1;
+		for (const spec of clause[1].matchAll(
+			/(?<![\w$])bounded(?![\w$])(?!\s+as\b)/g,
+		)) {
+			plainImports.add(base + spec.index);
+		}
+	}
+	for (const match of stripped.matchAll(/(?<![\w$])bounded(?![\w$])/g)) {
+		if (callHeads.has(match.index) || plainImports.has(match.index)) continue;
+		// `typeof bounded` is a type position: it can name the function's
+		// signature but never call it.
+		if (
+			/\btypeof\s+$/.test(
+				stripped.slice(Math.max(0, match.index - 12), match.index),
+			)
+		)
+			continue;
+		hits.add(lineOf(stripped, match.index));
 	}
 	return [...hits].sort((a, b) => a - b);
 }
@@ -424,4 +552,26 @@ export function scanFiles(repoRoot, files, detect, prefix, skipRel) {
 		}
 	}
 	return { occurrences, scanned };
+}
+/**
+ * Occurrence key (as {@link scanFiles} builds it with the `call:` prefix) ->
+ * the call's form, over the same files and the same key derivation, so the
+ * registry's `work` word can be checked against what the call actually passes
+ * (#5550). Two calls that key alike keep the thunk form only when both are
+ * thunks: the weaker reading wins, never the stronger.
+ */
+export function scanBoundedCallForms(repoRoot, files, skipRel) {
+	const forms = new Map();
+	for (const absolute of files) {
+		const rel = relativePosix(repoRoot, absolute);
+		if (skipRel?.(rel)) continue;
+		const raw = fs.readFileSync(absolute, "utf8");
+		const stripped = stripSource(raw);
+		const rawLines = raw.split("\n");
+		for (const call of findBoundedCalls(stripped)) {
+			const key = `call:${awaitOccurrenceKey(rel, rawLines, call.line - 1)}`;
+			forms.set(key, forms.get(key) === "promise" ? "promise" : call.form);
+		}
+	}
+	return forms;
 }

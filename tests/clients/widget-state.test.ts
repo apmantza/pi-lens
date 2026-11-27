@@ -1,15 +1,21 @@
+import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { visibleWidth } from "@earendil-works/pi-tui";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	_resetStateCacheForTests,
+	markDisposition,
+} from "../../clients/diagnostic-dispositions.js";
 import {
 	IN_FLIGHT_REASON,
 	noPrimaryCheckerReason,
 } from "../../clients/dispatch/types.js";
 import {
 	__testing,
+	clearWidgetChangeCallback,
 	clearWidgetState,
 	drainRenderedDependencyDriftFilePaths,
 	exportWidgetState,
@@ -17,6 +23,7 @@ import {
 	getFileDiagnostics,
 	getFileDiagnosticSummaries,
 	getSessionLanguages,
+	getWidgetSummary,
 	importWidgetState,
 	incrementWidgetDependencyDriftDelivery,
 	isBlocking,
@@ -36,13 +43,25 @@ import {
 	renderWidget,
 	setRenderCallback,
 	setSessionLanguages,
+	setWidgetChangeCallback,
+	WIDGET_CLEAR_HIDE_DELAY_MS,
 	WIDGET_STATE_VERSION,
+	widgetStore,
 } from "../../clients/widget-state.js";
+import { beginScope } from "../../clients/session-scope.js";
+import { setupTestEnvironment } from "./test-utils.js";
 
 const e = String.fromCharCode(27);
 const theme = {
 	fg: (_color: string, s: string) => `${e}[38;2;102;102;102m${s}${e}[39m`,
 };
+
+// Row labels travel inside styled text and OSC-8 hyperlinks; assertions on a
+// label's spelling read the stripped, visible frame (so a URI target can never
+// satisfy a label check).
+const visibleFrame = (lines: string[]): string =>
+	stripTerminalSequences(lines.join("\n"));
+const visibleLine = (line: string): string => stripTerminalSequences(line);
 
 afterEach(() => {
 	clearWidgetState();
@@ -522,29 +541,290 @@ describe("widget-state renderWidget", () => {
 		}
 	});
 
-	it("deduplicates files by basename — last write wins at most 5 entries", () => {
+	// #5460: rows key on the widget store's path identity, so a clean edit to one
+	// same-named file must never hide a second one that holds findings. The old
+	// basename dedupe was last-write-wins and let the header read ✓ clean while a
+	// blocker was still open.
+	it("never hides a blocking file behind a clean same-named file", () => {
 		const a = `${process.cwd()}/pi-lens/index.ts`;
 		const b = `${process.cwd()}/pi-webaio/index.ts`;
 		recordRunner(a, "type-safety", "failed", 1);
 		recordDiagnostics(a, [
-			{ severity: "error", message: "error in pi-lens", rule: "E1" },
+			{
+				severity: "error",
+				semantic: "blocking",
+				message: "error in pi-lens",
+				rule: "E1",
+			},
 		]);
 		recordRunner(b, "eslint", "succeeded", 3);
-		recordDiagnostics(b, [
-			{ severity: "error", message: "warning in pi-webaio", rule: "W1" },
+		recordDiagnostics(b, []);
+
+		const allLines = visibleFrame(renderWidget(120, theme));
+
+		// Both rows draw, distinguished by enough parent path.
+		expect(allLines).toContain("pi-lens/index.ts");
+		expect(allLines).toContain("pi-webaio/index.ts");
+		// The blocker's detail still renders.
+		expect(allLines).toContain("error in pi-lens");
+		// The header counts the full population: a blocking finding is open,
+		// so the frame never answers ✓ clean.
+		expect(allLines).toContain("●1E");
+		expect(allLines).not.toContain("✓ clean");
+	});
+
+	it("shows same-named rows on separate lines in the vertical layout", () => {
+		const a = `${process.cwd()}/pi-lens/widget.ts`;
+		const b = `${process.cwd()}/pi-webaio/widget.ts`;
+		recordRunner(a, "tsc", "succeeded", 1);
+		recordDiagnostics(a, [
+			{
+				severity: "error",
+				semantic: "blocking",
+				message: "blocker in pi-lens",
+				rule: "E1",
+			},
 		]);
+		recordRunner(b, "tsc", "succeeded", 2);
+		recordDiagnostics(b, []);
+
+		const lines = renderWidget(50, theme);
+
+		// The two FILE rows: the blocker's row and the clean sibling's row are
+		// distinct and parent-labelled, and the detail block's header line names
+		// the blocker's file the same way.
+		expect(lines.map(visibleLine)).toContain(" pi-lens/widget.ts");
+		const blockRow = lines.find(
+			(l) =>
+				visibleLine(l).includes("pi-lens/widget.ts") &&
+				visibleLine(l).includes("●"),
+		);
+		const cleanRow = lines.find(
+			(l) =>
+				visibleLine(l).includes("pi-webaio/widget.ts") &&
+				visibleLine(l).includes("✓"),
+		);
+		expect(blockRow).toBeDefined();
+		expect(cleanRow).toBeDefined();
+		for (const line of lines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(50);
+		}
+	});
+
+	it("the five-row cap keeps both renderable same-named files", () => {
+		const observed = Date.now() - 5_000;
+		const a = `${process.cwd()}/pi-lens/index.ts`;
+		const b = `${process.cwd()}/pi-webaio/index.ts`;
+		recordDiagnostics(
+			a,
+			[
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "blocker a",
+					rule: "E1",
+				},
+			],
+			undefined,
+			observed,
+		);
+		recordDiagnostics(
+			b,
+			[
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "blocker b",
+					rule: "E2",
+				},
+			],
+			undefined,
+			observed + 100,
+		);
+		for (let i = 0; i < 3; i++) {
+			recordDiagnostics(
+				`${process.cwd()}/unique-file-${i}.ts`,
+				[
+					{
+						severity: "error",
+						semantic: "blocking",
+						message: `blocker ${i}`,
+						rule: "E1",
+					},
+				],
+				undefined,
+				observed + 200 + i * 100,
+			);
+		}
+
+		const allLines = visibleFrame(renderWidget(120, theme));
+
+		// Five tier-0 (blocking) renderables: every slot is a blocker, including
+		// both same-named members — the cap governs slots, not file identity.
+		expect(allLines).toContain("pi-lens/index.ts");
+		expect(allLines).toContain("pi-webaio/index.ts");
+		for (let i = 0; i < 3; i++) {
+			expect(allLines).toContain(`unique-file-${i}.ts`);
+		}
+	});
+
+	it.each([40, 100] as const)(
+		"keeps long same-named labels inside %s columns and the blocking row on its own parent",
+		(width) => {
+			const long = (head: string) =>
+				`${process.cwd()}/${head}-${"parent-segment-".repeat(6)}/index.ts`;
+			recordDiagnostics(long("left"), [
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "blocker",
+					rule: "E1",
+				},
+			]);
+			recordDiagnostics(long("right"), []);
+
+			const lines = renderWidget(width, theme).map(visibleLine);
+			const row = lines.find(
+				(line) => line.includes("left-") && line.includes("●"),
+			);
+			expect(row).toBeDefined();
+			for (const line of lines) {
+				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			}
+		},
+	);
+
+	// #5460 review F2: `truncateBasename` cut the stem by UTF-16 units but
+	// measured the label in columns. A wide-character parent overran the row
+	// budget, so `packHorizontalRow` dropped the blocker's token and drew `+2`.
+	it.each([70, 100] as const)(
+		"draws a same-named wide-character row's file token inside %s columns",
+		(width) => {
+			// Each parent is 40 CJK characters (80 columns), so the depth-1 label
+			// overruns the horizontal budget at both widths.
+			const a = `${process.cwd()}/${"甲".repeat(40)}/index.ts`;
+			const b = `${process.cwd()}/${"乙".repeat(40)}/index.ts`;
+			recordRunner(a, "tsc", "succeeded", 1);
+			recordDiagnostics(a, [
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "blocker in cjk",
+					rule: "E1",
+				},
+			]);
+			recordRunner(b, "tsc", "succeeded", 2);
+			recordDiagnostics(b, []);
+
+			const lines = renderWidget(width, theme);
+			const frame = visibleFrame(lines);
+
+			// The blocker's token: its dot, a truncated label ending in its
+			// extension, and its error count.
+			expect(frame).toMatch(/● \S*\.ts 1E/);
+			for (const line of lines) {
+				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			}
+		},
+	);
+
+	it("terminates and stays inside the width when two records spell the same segments", () => {
+		recordDiagnostics("/p/dup//index.ts", [
+			{
+				severity: "error",
+				semantic: "blocking",
+				message: "blocker in dup",
+				rule: "E1",
+			},
+		]);
+		recordDiagnostics("/p/dup/index.ts", []);
 
 		const lines = renderWidget(120, theme);
+		const frame = lines.map(visibleLine).join("\n");
 
-		const fileRows = lines.filter((l) => l.includes("index.ts"));
-		// Dedup: only one index.ts entry in the file list
-		expect(fileRows.length).toBeGreaterThanOrEqual(1);
-		expect(fileRows.length).toBeLessThanOrEqual(4);
+		expect(frame).toContain("●1E");
+		expect(frame).toContain("p/dup/index.ts");
+		for (const line of lines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(120);
+		}
+	});
 
-		// Later file's diagnostics supersede earlier
-		const allLines = lines.join("");
-		expect(allLines).toContain("warning in pi-webaio");
-		expect(allLines).not.toContain("error in pi-lens");
+	it("grows the parent hint only as far as needed to separate same-named rows", () => {
+		const a = `${process.cwd()}/app/src/leaf.ts`;
+		const b = `${process.cwd()}/lib/src/leaf.ts`;
+		recordRunner(a, "tsc", "succeeded", 1);
+		recordDiagnostics(a, [
+			{
+				severity: "error",
+				semantic: "blocking",
+				message: "blocker in app",
+				rule: "E1",
+			},
+		]);
+		recordRunner(b, "tsc", "succeeded", 2);
+		recordDiagnostics(b, []);
+
+		const allLines = visibleFrame(renderWidget(120, theme));
+
+		// Shared `src` parent: one more segment is enough.
+		expect(allLines).toContain("app/src/leaf.ts");
+		expect(allLines).toContain("lib/src/leaf.ts");
+		// Minimal hint — never the whole absolute display path.
+		expect(allLines).not.toContain(`${process.cwd()}/app/src/leaf.ts`);
+		expect(allLines).not.toContain(`${process.cwd()}/lib/src/leaf.ts`);
+	});
+
+	it("disambiguates a drawn row against a same-named sibling the cap did not draw", () => {
+		const observed = Date.now() - 5_000;
+		const drawn = `${process.cwd()}/pi-lens/index.ts`;
+		recordDiagnostics(
+			drawn,
+			[
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "newest blocker",
+					rule: "E1",
+				},
+			],
+			undefined,
+			observed + 400,
+		);
+		for (let i = 0; i < 4; i++) {
+			recordDiagnostics(
+				`${process.cwd()}/filler-${i}.ts`,
+				[
+					{
+						severity: "error",
+						semantic: "blocking",
+						message: `filler ${i}`,
+						rule: "E1",
+					},
+				],
+				undefined,
+				observed + 300 - i * 100,
+			);
+		}
+		// Same basename as `drawn`, oldest blocker: tier ties go to recency, so
+		// the five-row cap keeps `drawn` plus the fillers and leaves this out.
+		recordDiagnostics(
+			`${process.cwd()}/pi-webaio/index.ts`,
+			[
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "oldest blocker",
+					rule: "E1",
+				},
+			],
+			undefined,
+			observed,
+		);
+
+		const allLines = visibleFrame(renderWidget(120, theme));
+
+		expect(allLines).toContain("pi-lens/index.ts");
+		expect(allLines).not.toContain("oldest blocker");
 	});
 
 	it("paints the file row red when any diagnostic carries semantic=blocking, even if severity is warning", () => {
@@ -1120,6 +1400,16 @@ describe("widget-state renderWidget", () => {
 		const allLines = renderWidget(60, theme).join("");
 		expect(allLines).not.toContain("recovered.ts");
 		expect(allLines).not.toContain("fmt-failed:");
+	});
+
+	it("keeps a formatter failure when a later run of it is skipped (#5549)", () => {
+		// RECURRENCE GUARDED: #5549 r2 F11. A cooled formatter answers a typed
+		// skip (success:true) on the next write, and that record replaced the
+		// failure, so the red marker vanished while the formatter stayed broken.
+		const filePath = `${process.cwd()}/cooled.ts`;
+		recordFormatter(filePath, "gofmt", false, false, "failed");
+		recordFormatter(filePath, "gofmt", false, true, "skipped");
+		expect(renderWidget(60, theme).join("")).toContain("fmt-failed:gofmt");
 	});
 
 	it("does not render an unchanged successful formatter", () => {
@@ -2609,6 +2899,333 @@ describe("past-EOF diagnostic gate (#1641)", () => {
 	});
 });
 
+describe("renderWidget hideWhenClean", () => {
+	const hide = { hideWhenClean: true } as const;
+	const clean = () => {
+		setSessionLanguages(["jsts"]);
+		recordRunner("/repo/a.ts", "type-safety", "succeeded", 0);
+		recordDiagnostics("/repo/a.ts", []);
+	};
+	const warn = () =>
+		recordDiagnostics("/repo/a.ts", [
+			{ severity: "warning", message: "w", line: 1, rule: "r" },
+		]);
+	const delay = WIDGET_CLEAR_HIDE_DELAY_MS;
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+	afterEach(() => {
+		clearWidgetState();
+		vi.useRealTimers();
+	});
+
+	it("shows ✓ clean before the hide delay has passed", () => {
+		clean();
+		expect(visibleFrame(renderWidget(120, theme, hide))).toContain("✓ clean");
+		vi.advanceTimersByTime(delay - 1);
+		expect(visibleFrame(renderWidget(120, theme, hide))).toContain("✓ clean");
+	});
+
+	// A session with an LSP server up and no file record draws a bare header
+	// that `✓ clean` never replaces; it hides at once, with no delay to wait out.
+	describe("with nothing to report and no completed check", () => {
+		const bare = { compact: true, hideWhenClean: true } as const;
+
+		it("hides an LSP-only session at once, in every layout", () => {
+			setSessionLanguages(["jsts"]);
+			recordLsp("typescript", "/repo", "spawn_success");
+			expect(renderWidget(120, theme, hide)).toEqual([]);
+			expect(renderWidget(60, theme, hide)).toEqual([]);
+			expect(renderWidget(120, theme, bare)).toEqual([]);
+			// Without the setting the bare header still draws.
+			expect(renderWidget(120, theme).length).toBeGreaterThan(0);
+		});
+
+		it("hides a session whose only file no check can cover", () => {
+			setSessionLanguages(["jsts"]);
+			recordDiagnostics("/repo/notes.zzz", [], undefined, undefined, {
+				reason: "no analyzer handles this file type",
+				inapplicable: true,
+			});
+			expect(renderWidget(120, theme).length).toBeGreaterThan(0);
+			expect(renderWidget(120, theme, hide)).toEqual([]);
+		});
+
+		it("draws while an LSP server is still spawning, then hides once it is ready", () => {
+			recordLsp("typescript", "/repo", "spawn_start");
+			expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+			vi.advanceTimersByTime(delay * 2);
+			expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+			recordLsp("typescript", "/repo", "spawn_success");
+			expect(renderWidget(120, theme, hide)).toEqual([]);
+		});
+
+		it("draws again when a warning lands after the idle hide", () => {
+			recordLsp("typescript", "/repo", "spawn_success");
+			expect(renderWidget(120, theme, hide)).toEqual([]);
+			warn();
+			expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+		});
+
+		it("shows ✓ clean for the full delay once the first check completes", () => {
+			recordLsp("typescript", "/repo", "spawn_success");
+			expect(renderWidget(120, theme, hide)).toEqual([]);
+			clean();
+			expect(visibleFrame(renderWidget(120, theme, hide))).toContain("✓ clean");
+			vi.advanceTimersByTime(delay - 1);
+			expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+			vi.advanceTimersByTime(1);
+			expect(renderWidget(120, theme, hide)).toEqual([]);
+		});
+
+		it("keeps drawing a file still under analysis", () => {
+			recordRunner("/repo/a.ts", "type-safety", "running", 0);
+			expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+		});
+	});
+
+	it("draws nothing once a clean state has shown for the hide delay", () => {
+		clean();
+		renderWidget(120, theme, hide);
+		vi.advanceTimersByTime(delay);
+		expect(renderWidget(120, theme, hide)).toEqual([]);
+	});
+
+	it("asks for a repaint exactly when the hide delay passes", () => {
+		clean();
+		const repaint = vi.fn();
+		setRenderCallback(repaint);
+		renderWidget(120, theme, hide);
+		vi.advanceTimersByTime(delay - 1);
+		expect(repaint).toHaveBeenCalledTimes(0);
+		vi.advanceTimersByTime(1);
+		expect(repaint).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps the widget visible while a warning is recorded, and restarts the full delay once it clears", () => {
+		clean();
+		renderWidget(120, theme, hide);
+		vi.advanceTimersByTime(delay - 1);
+		warn();
+		expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+		vi.advanceTimersByTime(delay * 2);
+		expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+
+		recordDiagnostics("/repo/a.ts", []);
+		expect(visibleFrame(renderWidget(120, theme, hide))).toContain("✓ clean");
+		vi.advanceTimersByTime(delay - 1);
+		expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+		vi.advanceTimersByTime(1);
+		expect(renderWidget(120, theme, hide)).toEqual([]);
+	});
+
+	it("draws again when a warning lands after the widget hid", () => {
+		clean();
+		renderWidget(120, theme, hide);
+		vi.advanceTimersByTime(delay);
+		expect(renderWidget(120, theme, hide)).toEqual([]);
+		warn();
+		expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+	});
+
+	it("draws again when a file enters analysis after the widget hid", () => {
+		clean();
+		renderWidget(120, theme, hide);
+		vi.advanceTimersByTime(delay);
+		expect(renderWidget(120, theme, hide)).toEqual([]);
+		// A second file under analysis: `a.ts` stays a completed check, so only
+		// the pending analysis keeps the state from reading clean.
+		recordRunner("/repo/b.ts", "type-safety", "running", 0);
+		const summary = getWidgetSummary();
+		expect(summary).toMatchObject({
+			hasPendingAnalysis: true,
+			hasRenderableCheckedFile: true,
+			uncheckedCount: 0,
+			totalErrors: 0,
+			totalWarnings: 0,
+			totalSuppressed: 0,
+		});
+		expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+	});
+
+	describe("after the hide delay, a state that is not clean still draws", () => {
+		const settled = () => {
+			clean();
+			renderWidget(120, theme, hide);
+			vi.advanceTimersByTime(delay);
+			expect(renderWidget(120, theme, hide)).toEqual([]);
+		};
+
+		it("an error", () => {
+			settled();
+			recordDiagnostics("/repo/b.ts", [
+				{ severity: "error", semantic: "blocking", message: "x", line: 1 },
+			]);
+			expect(visibleFrame(renderWidget(120, theme, hide))).toContain("1E");
+		});
+
+		it("an unchecked file", () => {
+			settled();
+			recordDiagnostics("/repo/b.ts", [], undefined, undefined, {
+				reason: "no primary checker is enabled for this kind",
+			});
+			expect(visibleFrame(renderWidget(120, theme, hide))).toContain(
+				"1 unchecked",
+			);
+		});
+
+		it("a language server that is spawning", () => {
+			settled();
+			recordLsp("typescript-language-server", process.cwd(), "spawn_start");
+			expect(visibleFrame(renderWidget(120, theme, hide))).toContain("LSP↑");
+		});
+	});
+
+	describe("a suppressed finding", () => {
+		let env: ReturnType<typeof setupTestEnvironment>;
+		const priorHome = process.env.PI_LENS_HOME;
+		const content = "const bad = true;\n";
+		const finding = {
+			tool: "eslint",
+			rule: "no-constant-condition",
+			message: "Unexpected constant condition",
+			line: 1,
+		};
+
+		beforeEach(() => {
+			env = setupTestEnvironment("pi-lens-hide-clear-");
+			process.env.PI_LENS_HOME = env.tmpDir;
+			_resetStateCacheForTests();
+		});
+		afterEach(() => {
+			clearWidgetState();
+			_resetStateCacheForTests();
+			if (priorHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = priorHome;
+			env.cleanup();
+		});
+
+		it("keeps the widget drawn after the hide delay", () => {
+			const file = path.join(env.tmpDir, "fixture.ts");
+			nodeFs.writeFileSync(file, content);
+			setSessionLanguages(["jsts"]);
+			// A completed check, so the header alone reads `✓ clean`: only the
+			// suppressed count keeps the widget drawn.
+			recordRunner(file, "type-safety", "succeeded", 0);
+			recordDiagnostics(file, [{ ...finding, severity: "error" }]);
+			markDisposition(
+				env.tmpDir,
+				{ ...finding, cwd: env.tmpDir, filePath: file, content },
+				"false-positive",
+			);
+			expect(getWidgetSummary().totalSuppressed).toBe(1);
+			expect(getWidgetSummary().totalErrors).toBe(0);
+			expect(visibleFrame(renderWidget(120, theme))).toContain("✓ clean");
+
+			renderWidget(120, theme, hide);
+			vi.advanceTimersByTime(delay);
+			expect(visibleFrame(renderWidget(120, theme, hide))).toContain(
+				"suppressed: 1",
+			);
+		});
+	});
+
+	it("fires no repaint after the store is cleared, and a later clean render starts a fresh delay", () => {
+		clean();
+		const repaint = vi.fn();
+		setRenderCallback(repaint);
+		renderWidget(120, theme, hide);
+		vi.advanceTimersByTime(delay - 1000);
+		clearWidgetState();
+		setRenderCallback(repaint);
+		vi.advanceTimersByTime(delay * 2);
+		expect(repaint).toHaveBeenCalledTimes(0);
+
+		clean();
+		repaint.mockClear();
+		renderWidget(120, theme, hide);
+		vi.advanceTimersByTime(delay - 1);
+		expect(renderWidget(120, theme, hide).length).toBeGreaterThan(0);
+		vi.advanceTimersByTime(1);
+		expect(repaint).toHaveBeenCalledTimes(1);
+		expect(renderWidget(120, theme, hide)).toEqual([]);
+	});
+
+	// Recurrence: PR #5725 r1 (CodeRabbit). A file with a completed snapshot
+	// and a failed formatter has no error or warning, so the gate read it as
+	// clean and hid the `fmt-failed` row the user needs.
+	it("keeps drawing a failed-formatter row after the hide delay", () => {
+		clean();
+		recordFormatter("/repo/a.ts", "biome", false, false);
+		expect(visibleFrame(renderWidget(120, theme, hide))).toContain("x a.ts");
+		vi.advanceTimersByTime(delay * 2);
+		expect(visibleFrame(renderWidget(120, theme, hide))).toContain("x a.ts");
+		expect(visibleFrame(renderWidget(60, theme, hide))).toContain(
+			"fmt-failed:biome",
+		);
+	});
+
+	it("arms no timer and keeps drawing when hideWhenClean is off", () => {
+		clean();
+		const before = vi.getTimerCount();
+		expect(visibleFrame(renderWidget(120, theme))).toContain("✓ clean");
+		expect(vi.getTimerCount()).toBe(before);
+		vi.advanceTimersByTime(delay * 2);
+		expect(visibleFrame(renderWidget(120, theme))).toContain("✓ clean");
+	});
+
+	it("hides the compact summary after the delay", () => {
+		clean();
+		const opts = { compact: true, hideWhenClean: true } as const;
+		expect(visibleFrame(renderWidget(120, theme, opts))).toContain("✓ clean");
+		vi.advanceTimersByTime(delay);
+		expect(renderWidget(120, theme, opts)).toEqual([]);
+	});
+
+	describe("a resumed session", () => {
+		let env: ReturnType<typeof setupTestEnvironment>;
+
+		beforeEach(() => {
+			env = setupTestEnvironment("pi-lens-hide-resume-");
+		});
+		afterEach(() => {
+			clearWidgetState();
+			env.cleanup();
+		});
+
+		it("shows ✓ clean for the full delay after the store restores a clean sidecar, then hides", async () => {
+			const file = path.join(env.tmpDir, "a.ts");
+			nodeFs.writeFileSync(file, "export {};\n");
+			setSessionLanguages(["jsts"]);
+			recordRunner(file, "type-safety", "succeeded", 0);
+			recordDiagnostics(file, []);
+			// The previous session hid its clean widget before it saved.
+			renderWidget(120, theme, hide);
+			vi.advanceTimersByTime(delay);
+			expect(renderWidget(120, theme, hide)).toEqual([]);
+			const saved = exportWidgetState();
+
+			await widgetStore.restore(beginScope({ role: "primary" }), saved, {
+				reason: "resume",
+				source: "own-sidecar",
+				savedAt: nodeFs.statSync(file).mtimeMs + 1000,
+				sessionManager: undefined,
+				cwd: env.tmpDir,
+			});
+
+			expect(getFileDiagnosticSummaries().map((f) => f.filePath)).toEqual([
+				file,
+			]);
+			expect(visibleFrame(renderWidget(120, theme, hide))).toContain("✓ clean");
+			vi.advanceTimersByTime(delay - 1);
+			expect(visibleFrame(renderWidget(120, theme, hide))).toContain("✓ clean");
+			vi.advanceTimersByTime(1);
+			expect(renderWidget(120, theme, hide)).toEqual([]);
+		});
+	});
+});
+
 // #3959: opt-in one-line widget summary (ui.compactWidget / --lens-compact-widget).
 describe("renderWidget compact summary (#3959)", () => {
 	const summaryFixture = () => {
@@ -2714,6 +3331,22 @@ describe("a file no check completed on is not clean in the footer (#5258)", () =
 
 		recordDiagnostics("/repo/open.ts", []);
 		expect(renderWidget(120, theme).join("\n")).toContain("✓ clean");
+	});
+
+	// #5460 review F1: the unchecked line named its file by basename, so two
+	// same-named unchecked files read `⚠ index.ts: …` above rows labelled
+	// `a/index.ts` and `b/index.ts`. The line names the row its reason belongs to.
+	it("names the unchecked file by its row label when a same-named file shares its basename", () => {
+		const observed = Date.now() - 5_000;
+		recordDiagnostics("/repo/a/index.ts", [], undefined, observed, { reason });
+		recordDiagnostics("/repo/b/index.ts", [], undefined, observed + 100, {
+			reason,
+		});
+
+		const frame = visibleFrame(renderWidget(120, theme));
+
+		expect(frame).toContain(`⚠ b/index.ts: ${reason}`);
+		expect(frame).not.toContain(`⚠ index.ts: ${reason}`);
 	});
 
 	it("keeps a file's findings ahead of its unchecked mark", () => {
@@ -2900,5 +3533,256 @@ describe("a file no check can ever cover (#5287)", () => {
 		delete older.files[0].uncheckedInapplicable;
 		expect(importWidgetState(older)).toBe(true);
 		expect(renderWidget(120, theme).join("\n")).toContain("1 unchecked");
+	});
+});
+
+// The widget header and the `pi-lens-issues` status come from one tally. These
+// cases pin the projection's fields to what the header actually draws, so a
+// future header change cannot leave the status counting on its own.
+describe("getWidgetSummary", () => {
+	it("reports the same counts the header draws for errors and warnings", () => {
+		recordDiagnostics("/repo/summary.ts", [
+			{
+				severity: "error",
+				semantic: "blocking",
+				message: "blocking",
+				line: 1,
+				rule: "typescript:1",
+			},
+			{
+				severity: "warning",
+				message: "warning",
+				line: 2,
+				rule: "ts-react-antipatterns",
+			},
+		]);
+
+		const bag = getWidgetSummary();
+		expect(bag).toMatchObject({
+			totalBlocking: 1,
+			totalErrors: 1,
+			totalWarnings: 1,
+			totalSuppressed: 0,
+			hasPendingAnalysis: false,
+			uncheckedCount: 0,
+			hasRenderableCheckedFile: true,
+			hasFiles: true,
+		});
+		const header = renderWidget(120, theme)[0] ?? "";
+		expect(header).toContain(`●${bag.totalErrors}E`);
+		expect(header).toContain(`!${bag.totalWarnings}W`);
+	});
+
+	it("reports clean only when the header draws ✓ clean", () => {
+		recordDiagnostics("/repo/clean.ts", []);
+
+		const bag = getWidgetSummary();
+		expect(bag.hasPendingAnalysis).toBe(false);
+		expect(bag.uncheckedCount).toBe(0);
+		expect(bag.hasRenderableCheckedFile).toBe(true);
+		expect(renderWidget(120, theme).join("\n")).toContain("✓ clean");
+	});
+
+	it("reports the unchecked count the header draws", () => {
+		recordDiagnostics("/repo/unchecked.ts", [], undefined, undefined, {
+			reason: "no primary checker is enabled for this kind",
+		});
+
+		const bag = getWidgetSummary();
+		expect(bag.uncheckedCount).toBe(1);
+		expect(renderWidget(120, theme).join("\n")).toContain("⚠ 1 unchecked");
+	});
+
+	it("reports no files and no clean claim on an empty store", () => {
+		const bag = getWidgetSummary();
+		expect(bag.hasFiles).toBe(false);
+		expect(bag.totalErrors).toBe(0);
+		expect(bag.totalWarnings).toBe(0);
+		// A record with no final snapshot is unfinished evidence, not clean.
+		recordFormatter("/repo/formatted.ts", "prettier", false, true);
+		expect(getWidgetSummary().hasPendingAnalysis).toBe(true);
+	});
+});
+
+describe("clearWidgetState notifies the activation listener (#5588)", () => {
+	it("publishes the reset emptiness even though the render callback is dropped", () => {
+		const listener = vi.fn();
+		setWidgetChangeCallback(listener);
+		try {
+			recordDiagnostics("/repo/reset.ts", [
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "blocking",
+					line: 1,
+					rule: "typescript:1",
+				},
+			]);
+			listener.mockClear();
+
+			clearWidgetState();
+
+			expect(listener).toHaveBeenCalledTimes(1);
+		} finally {
+			clearWidgetChangeCallback(listener);
+		}
+	});
+
+	it("a throwing store-change listener cannot break the write", () => {
+		const listener = vi.fn(() => {
+			throw new Error("projection failed");
+		});
+		setWidgetChangeCallback(listener);
+		try {
+			expect(() =>
+				recordDiagnostics("/repo/throwing-listener.ts", [
+					{
+						severity: "error",
+						semantic: "blocking",
+						message: "blocking",
+						line: 1,
+						rule: "typescript:1",
+					},
+				]),
+			).not.toThrow();
+			expect(listener).toHaveBeenCalled();
+			expect(getFileDiagnostics("/repo/throwing-listener.ts")).toHaveLength(1);
+		} finally {
+			clearWidgetChangeCallback(listener);
+		}
+	});
+});
+
+// #5588 review: four writers moved from the render callback to
+// `requestRender()` had no test. Swapping any one of them back to
+// `requestRenderFn?.()` stayed green, so the store-change feed that the
+// `pi-lens-issues` footer relies on could silently stop for that writer. One
+// listener-call test per writer, through the real store, pins each move.
+describe("every store writer notifies the activation listener (#5588)", () => {
+	it("importWidgetState notifies the listener when it imports a snapshot", () => {
+		recordDiagnostics("/repo/import-listener.ts", [
+			{
+				severity: "error",
+				semantic: "blocking",
+				message: "blocking",
+				line: 1,
+				rule: "typescript:1",
+			},
+		]);
+		const snapshot = exportWidgetState();
+		clearWidgetState();
+		const listener = vi.fn();
+		setWidgetChangeCallback(listener);
+		try {
+			expect(importWidgetState(snapshot)).toBe(true);
+			expect(getFileDiagnostics("/repo/import-listener.ts")).toHaveLength(1);
+			expect(listener).toHaveBeenCalledTimes(1);
+		} finally {
+			clearWidgetChangeCallback(listener);
+		}
+	});
+
+	it("reconcileStaleWidgetDependencyBlockers notifies the listener when a dependency drift demotes a finding", async () => {
+		const tmpDir = await fs.mkdtemp(
+			path.join(os.tmpdir(), "pi-lens-listener-reconcile-"),
+		);
+		try {
+			const consumer = path.join(tmpDir, "consumer.ts");
+			const dep = path.join(tmpDir, "dep.ts");
+			await fs.writeFile(dep, "export const x = 1;\n");
+			await fs.writeFile(
+				consumer,
+				'import { x } from "./dep.js";\nexport const y = x;\n',
+			);
+			recordDiagnostics(
+				consumer,
+				[
+					{
+						severity: "error",
+						semantic: "blocking",
+						message: "type error",
+						tool: "lsp",
+					},
+				],
+				1,
+				Date.now() - 60_000,
+			);
+			const future = new Date(Date.now() + 60_000);
+			await fs.utimes(dep, future, future);
+
+			const listener = vi.fn();
+			setWidgetChangeCallback(listener);
+			try {
+				const { demoted } =
+					await reconcileStaleWidgetDependencyBlockers(tmpDir);
+				expect(demoted).toBe(1);
+				expect(listener).toHaveBeenCalledTimes(1);
+			} finally {
+				clearWidgetChangeCallback(listener);
+			}
+		} finally {
+			await fs.rm(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("markWidgetFileBlockersStale notifies the listener when it marks a file's blockers stale", () => {
+		recordDiagnostics(
+			"/repo/mark-listener.ts",
+			[
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "type error",
+					tool: "lsp",
+				},
+			],
+			1,
+			Date.now() - 60_000,
+		);
+		const listener = vi.fn();
+		setWidgetChangeCallback(listener);
+		try {
+			expect(
+				markWidgetFileBlockersStale(
+					"/repo/mark-listener.ts",
+					"dependency-drift",
+				),
+			).toBe(true);
+			expect(listener).toHaveBeenCalledTimes(1);
+		} finally {
+			clearWidgetChangeCallback(listener);
+		}
+	});
+
+	it("retireWidgetDependencyDriftBlockers notifies the listener when it retires a demoted finding", () => {
+		recordDiagnostics(
+			"/repo/retire-listener.ts",
+			[
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "type error",
+					tool: "lsp",
+				},
+			],
+			1,
+			Date.now() - 60_000,
+		);
+		expect(
+			markWidgetFileBlockersStale(
+				"/repo/retire-listener.ts",
+				"dependency-drift",
+			),
+		).toBe(true);
+		const listener = vi.fn();
+		setWidgetChangeCallback(listener);
+		try {
+			expect(
+				retireWidgetDependencyDriftBlockers("/repo/retire-listener.ts"),
+			).toBe(true);
+			expect(listener).toHaveBeenCalledTimes(1);
+		} finally {
+			clearWidgetChangeCallback(listener);
+		}
 	});
 });

@@ -19,7 +19,10 @@ import { describe, expect, it, vi } from "vitest";
 import { createReadGuard, type ReadRecord } from "../../clients/read-guard.js";
 import { logReadGuardEvent } from "../../clients/read-guard-logger.js";
 
-vi.mock("../../clients/read-guard-logger.js", () => ({
+vi.mock("../../clients/read-guard-logger.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../clients/read-guard-logger.js")
+	>()),
 	logReadGuardEvent: vi.fn(),
 	getReadGuardLogPath: vi.fn(() => "/dev/null"),
 }));

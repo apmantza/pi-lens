@@ -7,6 +7,8 @@
  * Supports venv-local installations.
  */
 
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { stripAnsi } from "../../sanitize.js";
 import {
@@ -23,16 +25,11 @@ import type {
 } from "../types.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 import { parseRuffOutput } from "./utils/diagnostic-parsers.js";
-import {
-	createAvailabilityChecker,
-	resolveAvailableOrInstall,
-	resolveRunnerCwd,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { semanticFor } from "../types.js";
 
-const ruff = createAvailabilityChecker("ruff", ".exe");
-
-function parseRuffJson(raw: string, filePath: string): Diagnostic[] {
+export function parseRuffJson(raw: string, filePath: string): Diagnostic[] {
 	try {
 		const parsed = JSON.parse(raw) as Array<{
 			code?: string;
@@ -77,16 +74,17 @@ const ruffRunner: RunnerDefinition = {
 	id: "ruff-lint",
 	appliesTo: ["python"],
 	priority: PRIORITY.FORMAT_AND_LINT_PRIMARY,
+	lintsGivenContent: true,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "ruff");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("ruff-lint")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
-		const cmd = await resolveAvailableOrInstall(ruff, "ruff", cwd);
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "ruff");
 		if (!cmd) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip(cwd, { id: "ruff" });
 		}
 
 		// Shared config-args seam (#1247): the autofix path consumes the same
@@ -106,9 +104,17 @@ const ruffRunner: RunnerDefinition = {
 				"--output-format",
 				"json",
 				...configArgs,
-				ctx.filePath,
+				// #5621: given bytes arrive on stdin under the file's real path, so
+				// the config, the ignores and the reported filename are the file's.
+				...(ctx.givenContent === undefined
+					? [ctx.filePath]
+					: ["--stdin-filename", ctx.filePath, "-"]),
 			],
-			{ cwd, timeout: 30000 },
+			{
+				cwd,
+				timeout: 30000,
+				...(ctx.givenContent !== undefined && { input: ctx.givenContent }),
+			},
 		);
 
 		// EXIT TABLE (Ruff 0.6 docs https://docs.astral.sh/ruff/linter/): 0 = clean, 1 = findings, 2 = findings/error or

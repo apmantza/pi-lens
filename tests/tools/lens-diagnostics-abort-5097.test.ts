@@ -117,16 +117,25 @@ describe.skipIf(process.platform === "win32")(
 			);
 		};
 
+		// The pid the parked scan wrote; 0 until the file carries content, because
+		// `echo $$ > scan.pid` creates the file before it writes. The kill test
+		// creates the file before its first read, so a missing file never gets here.
+		const pidOf = (file: string): number =>
+			Number(fs.readFileSync(file, "utf8").trim());
+
 		it("kills madge in 2 s and keeps the saved row", async () => {
+			// An empty scan.pid in place before the parked scan writes its pid, as
+			// the producer's create-then-write leaves it.
+			const pidFile = path.join(ctl, "scan.pid");
+			fs.writeFileSync(pidFile, "");
 			await call(new AbortController().signal);
 			const saved = madgeRow();
 			expect(saved).toContain("a.ts");
 
 			const ac = new AbortController();
 			const pending = call(ac.signal);
-			const pidFile = path.join(ctl, "scan.pid");
-			expect(await pollFor(() => fs.existsSync(pidFile), 20_000)).toBe(true);
-			const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
+			expect(await pollFor(() => pidOf(pidFile) > 0, 20_000)).toBe(true);
+			const pid = pidOf(pidFile);
 			ac.abort();
 			await pending;
 			// Acceptance (d): no scan child 2 s after the abort.
@@ -136,6 +145,15 @@ describe.skipIf(process.platform === "win32")(
 			// window, and the pre-fix code reds here with an empty row.
 			await pollFor(() => madgeRow() !== saved, 1_500);
 			expect(madgeRow()).toBe(saved);
+		});
+
+		// #5105 review F2: a read error other than a missing file reaches the
+		// caller. A catch that returned 0 for every error would read a fault as
+		// "no pid yet" and park the wait for its whole budget.
+		it("throws on a pid path it cannot read instead of reading it as 0", () => {
+			const notAFile = path.join(ctl, "pid-path-is-a-directory");
+			fs.mkdirSync(notAFile, { recursive: true });
+			expect(() => pidOf(notAFile)).toThrow(/EISDIR/);
 		});
 	},
 );

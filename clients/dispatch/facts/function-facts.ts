@@ -1,6 +1,9 @@
 import type { FactProvider } from "../fact-provider-types.js";
 import { isJstsFactFile } from "../../file-kinds.js";
-import { measureFunction } from "../../metrics/function-metrics.js";
+import {
+	functionName,
+	measureFunction,
+} from "../../metrics/function-metrics.js";
 import { findOwnerName } from "../../symbol-containment.js";
 import {
 	extractFactsFromTree,
@@ -137,47 +140,6 @@ function parameterName(param: TsNode): string {
 	return param.type === "identifier"
 		? param.text
 		: (firstNamedChild(param)?.text ?? "");
-}
-
-function getFunctionName(node: TsNode): string {
-	if (node.type === "function_declaration") {
-		return firstChildOfType(node, "identifier")?.text ?? "<anonymous>";
-	}
-	if (node.type === "method_definition") {
-		// The name is the child just before formal_parameters (property_identifier /
-		// private / computed / string / number); skip async/get/set modifiers.
-		const kids = node.children ?? [];
-		const paramsIdx = kids.findIndex(
-			(c: TsNode) => c?.type === "formal_parameters",
-		);
-		for (let i = paramsIdx - 1; i >= 0; i -= 1) {
-			const t = kids[i]?.type;
-			if (
-				t === "property_identifier" ||
-				t === "private_property_identifier" ||
-				t === "computed_property_name" ||
-				t === "string" ||
-				t === "number"
-			) {
-				return kids[i].text;
-			}
-		}
-		return "<anonymous>";
-	}
-	if (node.type === "arrow_function" || node.type === "function_expression") {
-		// Name comes from the binding site (like the old parent-based lookup):
-		// `const f = () => …` / `{ prop: () => … }`.
-		const parent = node.parent;
-		if (parent?.type === "variable_declarator") {
-			const id = firstChildOfType(parent, "identifier");
-			if (id) return id.text;
-		} else if (parent?.type === "pair") {
-			const key = (parent.children ?? [])[0];
-			if (key) return key.text;
-		}
-		return "<anonymous>";
-	}
-	return "<unknown>";
 }
 
 function isCallPassThrough(
@@ -375,7 +337,7 @@ export const functionFactProvider: FactProvider = {
 
 					const bodySummary = summarizeBody(node, params);
 					summaries.push({
-						name: getFunctionName(node),
+						name: functionName(node) ?? "<anonymous>",
 						line: node.startPosition.row + 1,
 						column: node.startPosition.column + 1,
 						endLine: body.endPosition.row + 1,

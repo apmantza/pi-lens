@@ -53,6 +53,22 @@ const FINITE_REASONS: Readonly<Record<string, string>> = {
 	// than unbounded over a closed population.
 	"clients/dispatch/known-runner-ids.ts#177da0f7":
 		"runner-id identity written once per RunnerRegistry.register'd runner definition; finite vocabulary, bounded by the dispatch registry's own population",
+	// #5410: one PATH-only availability checker per `hasTool` command — the
+	// literal commands runners and the covering-lane gate ask for, keyed
+	// through normalizeCacheKey. The checkers' per-cwd latches clear at each
+	// session's availability generation bump.
+	"clients/dispatch/dispatcher.ts#TOOL_PROBE_TIMEOUT_MS:dd9d9784":
+		"keys are the bare commands `hasTool` callers pass (string literals in runners and the LSP server catalog's covers gates), a closed vocabulary; values are checkers whose per-cwd latches the session generation clears",
+	// #5410: one resolver checker per registry tool id.
+	"clients/dispatch/runners/utils/runner-helpers.ts#resolveVendorToolCommand:b63e705b":
+		"keys are tool ids with a TOOL_COMMAND_SPECS entry (finite, ~20; an id without a spec stores nothing); values are checkers whose per-cwd latches the session generation clears",
+	// #5413: the collect-later run in flight per (project, runner).
+	"clients/dispatch/collect-later-tier.ts#observeRunnerLatency:d31792ad":
+		"keys are (project root, runner id) pairs with a collect-later run in flight: runner ids are the dispatch registry's closed vocabulary and roots are the session's own; chain deletes the key when the flight's last run settles, and resetObservedRunnerLatency clears it at session_start",
+	// #5745 r7: owned-child ledger chains in flight, joined by the module's
+	// background-write drain.
+	"clients/safe-spawn.ts#681e4285":
+		"one entry per owned-child ledger chain still in flight (a start read bounded at 1 s, then one lock-bounded registry write or removal); each chain deletes its own entry in finally when it settles",
 	"clients/session-scope.ts#toStartReason:e2e4ae2a":
 		"#3612 `sessionStores`: keyed by store name, one entry per `defineSessionStore` call at module load (a second declaration of a name throws); four stores today, and the session-scope sweep pins every name",
 };
@@ -415,14 +431,13 @@ describe("#2981 long-lived containers are bounded or admitted", () => {
 		"clients/dispatch/integration.ts#FACT_RULE_IDS:8d2583ad",
 		"clients/dispatch/integration.ts#cascadeTurnScope:20fbf3b2",
 		"clients/dispatch/rule-id-normalize.ts#bundledCodeRabbitRules:8617a0bf",
-		"clients/dispatch/runners/helm-lint.ts#helm:c1b621dc",
-		"clients/dispatch/runners/helm-render.ts#trivy:c1b621dc",
+		"clients/dispatch/runners/helm-lint.ts#c1b621dc",
+		"clients/dispatch/runners/helm-render.ts#c1b621dc",
 		"clients/dispatch/runners/tree-sitter.ts#41fffd47",
 		"clients/dispatch/runners/utils/runner-helpers.ts#discoverManagedTool:15947de8",
 		"clients/dispatch/runners/utils/runner-helpers.ts#installAttemptsByCwd:bbf98ee1",
 		"clients/dispatch/runners/utils/runner-helpers.ts#resolveInstallInFlightByCwd:4905867e",
-		"clients/dispatch/runners/utils/runner-helpers.ts#correctedAvailabilityByCwd:14cfe5d8",
-		"clients/dispatch/runners/utils/runner-helpers.ts#uncorrectedEmissionsByCwd:a46e032f",
+		"clients/dispatch/runners/utils/runner-helpers.ts#correctedAvailabilityByCwd:a46e032f",
 		"clients/file-utils.ts#createProjectIgnoreMatcher:32d2341a",
 		"clients/file-utils.ts#isRecordableProjectPath:f343d35d",
 		"clients/file-kinds.ts#TERRAGRUNT_FILENAMES:1c874cb6",
@@ -431,6 +446,12 @@ describe("#2981 long-lived containers are bounded or admitted", () => {
 		"clients/installer/index.ts#getInstallFailureReason:d74e98d9",
 		"clients/installer/index.ts#getInstallAttempt:c20998b0",
 		"clients/installer/index.ts#_probeCacheChangeGeneration:1040840d",
+		// #5657: this key is the Set `_probeCacheUpdatesPending` in
+		// clients/installer/index.ts. The scanner names a declaration after the
+		// one above it, so the key carries the Map's name and the Set's own line
+		// hash. Bound: one entry per `updateProbeCache` call in flight, deleted when
+		// that call settles and cleared by the test reset. The Set is empty when idle.
+		"clients/installer/index.ts#_probeCacheChangeVersions:119f05be",
 		"clients/installer/index.ts#_probeCacheChanges:509e90ff",
 		"clients/installer/index.ts#extractVersionToken:e8cefebf",
 		"clients/installer/index.ts#resolvePlatformPackageBinary:0c6ca0e4",
@@ -488,8 +509,6 @@ describe("#2981 long-lived containers are bounded or admitted", () => {
 		"clients/dispatch/runners/psscriptanalyzer.ts#psCmdLatch:d04c7adf",
 		"clients/dispatch/runners/psscriptanalyzer.ts#psAnalyzerLatchByCmd:d95a85ac",
 		"clients/dispatch/runners/rust-clippy.ts#makeClippyProbe:e3811ba4",
-		"clients/dispatch/runners/utils/lazy-installer.ts#LAZY_INSTALL_TIMEOUT_MS:d9d707ca",
-		"clients/dispatch/runners/utils/lazy-installer.ts#suppressionFor:d1456960",
 		"clients/dispatch/runners/utils/runner-helpers.ts#managedNodeToolCandidates:ee842ef8",
 		"clients/dispatch/runners/utils/runner-helpers.ts#managedBinaryVerdicts:85753e76",
 		"clients/extension-log.ts#consoleGuardInstalled:388c75ce",
@@ -513,9 +532,9 @@ describe("#2981 long-lived containers are bounded or admitted", () => {
 		"clients/lsp/server.ts#directLspCommandUnavailableUntil:831316db",
 		"clients/opaque-mutation-scan.ts#getOpaqueBaselineStore:feff1538",
 		"clients/opaque-mutation-scan.ts#isGitWorktree:97337298",
-		"clients/package-manager.ts#PROBE_TIMEOUT_MS:ab1ec294",
+		"clients/package-manager.ts#PROBE_TIMEOUT_MS:169c8f55",
 		// #4530: `globalBinDirCache` keys on trust scope × manager, 2 × 4 keys.
-		"clients/package-manager.ts#updateArgs:e94f9156",
+		"clients/package-manager.ts#updateArgs:85b1ae12",
 		"clients/package-root.ts#1f3e8efd",
 		"clients/project-lens-config.ts#configCache:77a8d572",
 		"clients/project-report.ts#computeDeadWeight:7e342b62",

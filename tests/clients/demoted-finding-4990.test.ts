@@ -46,7 +46,7 @@ import {
 	_resetStateCacheForTests,
 	markDisposition,
 } from "../../clients/diagnostic-dispositions.js";
-import { SELF_DRIFT_MAX_DELIVERIES } from "../../clients/blocker-freshness.js";
+import { SELF_DRIFT_MAX_DELIVERIES } from "../../clients/finding-delivery-gate.js";
 import type { Diagnostic } from "../../clients/dispatch/types.js";
 import { formatDiagnostics } from "../../clients/dispatch/utils/format-utils.js";
 import { consumeTurnEndFindings } from "../../clients/runtime-context.js";

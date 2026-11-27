@@ -301,6 +301,13 @@ type FileDiagnosticResult = {
 	 */
 	timedOut?: boolean;
 	/**
+	 * #5487: the subset of {@link timedOut} whose primary announced it could
+	 * not answer yet (still loading, or its workspace failed to load). It did
+	 * not time out, and waiting longer does not help a failed load, so the
+	 * text names the cause instead of the deadline.
+	 */
+	serverNotReady?: ServerNotReady;
+	/**
 	 * #3750: set when `confirmation === "unconfirmed"` because the primary
 	 * server's root fell back (`lsp:server-root-fallback`) and its empty answer
 	 * would otherwise have read as clean.
@@ -629,9 +636,13 @@ export function createLspDiagnosticsTool(
 			// sweep so a client a publish restarts receives the re-push that follows.
 			// #5005 F3: the caller's signal rides along, so an abandoned answer is
 			// neither held by this walk nor paying for it.
+			// #5501: an MCP hover may have spawned a server before this cwd's first
+			// look, so the look names the live clients' epoch for the config files
+			// it finds; without it a manifest fixed in between was only recorded.
 			await lookForOutOfBandChanges(cwd, "tool_call", undefined, {
 				walk: "always",
 				signal,
+				liveClients: () => lspService.livePrimaryClientRoots?.() ?? [],
 			});
 
 			// #4532 gap 13: a document the server already holds may have changed
@@ -810,6 +821,44 @@ export function createLspDiagnosticsTool(
 	};
 }
 
+/**
+ * #5487: why a primary that announced its readiness gave no verdict, from the
+ * touch's own reason (`TouchFileResult.inconclusiveReason`) and, for a failed
+ * load, the server's message.
+ */
+type ServerNotReady = {
+	reason: "server-loading" | "server-load-failed";
+	detail?: string;
+};
+
+function serverNotReadyOf(
+	touched: TouchFileResult | undefined,
+): ServerNotReady | undefined {
+	// Only an inconclusive touch carries a reason.
+	const reason = touched?.inconclusiveReason;
+	if (reason !== "server-loading" && reason !== "server-load-failed") {
+		return undefined;
+	}
+	return {
+		reason,
+		...(touched?.inconclusiveDetail !== undefined && {
+			detail: touched.inconclusiveDetail,
+		}),
+	};
+}
+
+/**
+ * #5487: the cause and the next step, one wording for every route. "Timed
+ * out" sends an agent to wait or retry, which never fixes a broken manifest.
+ */
+function serverNotReadyText(notReady: ServerNotReady): string {
+	if (notReady.reason === "server-loading") {
+		return "server still loading the workspace; retry shortly";
+	}
+	const detail = notReady.detail;
+	return `workspace failed to load${detail ? ` (${detail})` : ""}; fix the project manifest`;
+}
+
 type DiagnosticsCollectionResult = {
 	diagnostics: LSPDiagnostic[];
 	tooLargeReason?: string;
@@ -823,6 +872,8 @@ type DiagnosticsCollectionResult = {
 	 * bare 0.
 	 */
 	timedOut: boolean;
+	/** #5487: see {@link FileDiagnosticResult.serverNotReady}. */
+	serverNotReady?: ServerNotReady;
 	/**
 	 * True only when `touchFile` explicitly preserved completion of its configured
 	 * diagnostics policy. This is distinct from merely receiving an empty array;
@@ -911,6 +962,7 @@ async function collectDiagnosticsForFile(
 	explicitQuery = false,
 ): Promise<DiagnosticsCollectionResult> {
 	let timedOut = false;
+	let serverNotReady: ServerNotReady | undefined;
 	let content: string | undefined;
 	// `touchFile` is the authoritative collection boundary for every scope: it
 	// preserves per-touch timeout, content-binding, and silent-clean confirmation
@@ -1032,6 +1084,7 @@ async function collectDiagnosticsForFile(
 		timedOut =
 			touched?.inconclusive === true &&
 			touched.inconclusiveReason !== "primary-unavailable";
+		serverNotReady = serverNotReadyOf(touched);
 	} catch {
 		// Non-fatal: getDiagnostics may still have stale/health information.
 	}
@@ -1096,6 +1149,7 @@ async function collectDiagnosticsForFile(
 	return {
 		diagnostics: filtered,
 		timedOut,
+		...(serverNotReady !== undefined && { serverNotReady }),
 		skipReason: touched?.skipReason,
 		confirmedByTouch,
 		...(noClientAnswered && { noClientAnswered: true as const }),
@@ -1184,10 +1238,14 @@ function diagnosticsToFileDiags(
  * capability-snapshot classifier the #458 cascade lane already trusts
  * (`classifyCascadeWaitTier`) so this tool's notion of "silent tier-3" stays
  * in lockstep with the rest of the LSP layer instead of drifting via a second
- * copy of the server-strategy table. Fail-safe: any error or missing snapshot
- * (server not alive, capability probe failure) reads as "clean" — the same
- * default this tool has always had — rather than manufacturing a new failure
- * mode from a best-effort classification.
+ * copy of the server-strategy table.
+ *
+ * #5258 (shape 10): a classification that cannot run (a rejected capability
+ * read, a throwing registry) is "unconfirmed" with a record, never "clean":
+ * "confirmed clean" renders only from an answer, and a lookup that failed
+ * answered nothing. A missing snapshot (no live client) is not a throw: the
+ * wait policy reads it as `waits`, which stays clean here (a named residual on
+ * #5258; `primaryUnavailable` is judged before this read).
  */
 async function classifyEmptyResult(
 	file: string,
@@ -1197,8 +1255,13 @@ async function classifyEmptyResult(
 		const snapshots = await lspService.getCapabilitySnapshots(file);
 		const tier = classifyCascadeWaitTier(lspService, file, snapshots);
 		return tier === "tier3-silent" ? "unconfirmed" : "clean";
-	} catch {
-		return "clean";
+	} catch (cause) {
+		recordDegradationOnce({
+			kind: "lsp-empty-classification-failed",
+			subject: file,
+			reason: `the silent-on-clean classification of an empty answer failed (${cause instanceof Error ? cause.message : String(cause)}); the file reads unconfirmed, not clean`,
+		});
+		return "unconfirmed";
 	}
 }
 
@@ -1233,31 +1296,28 @@ async function primaryRootFallback(
  * server had computed but never published (silentOnClean) — these must be
  * surfaced to the caller, not discarded. `confirmed: false` is the existing
  * "unconfirmed" fallback (command unavailable, error, or the file isn't part
- * of any project). Fail-safe: any error in the tier classification itself
- * (missing snapshot, server not alive) reads as `confirmed: true` with no
- * diagnostics — the same "clean" default this tool has always had.
+ * of any project).
+ *
+ * #5258: the tier read is `classifyEmptyResult`'s, so a read that fails is not
+ * a clean answer here either; it falls to the direct sync request, which
+ * answers only where the server advertises it (`attemptTsserverSyncDiagnostics`
+ * never throws).
  */
 async function resolveEmptyResult(
 	file: string,
 	lspService: NonNullable<ReturnType<typeof getLSPService>>,
 ): Promise<{ confirmed: boolean; diagnostics: LSPDiagnostic[] }> {
-	try {
-		const snapshots = await lspService.getCapabilitySnapshots(file);
-		const tier = classifyCascadeWaitTier(lspService, file, snapshots);
-		if (tier !== "tier3-silent") {
-			return { confirmed: true, diagnostics: [] };
-		}
-		const syncDiagnostics = await attemptTsserverSyncDiagnostics(
-			file,
-			lspService,
-		);
-		if (syncDiagnostics === undefined) {
-			return { confirmed: false, diagnostics: [] };
-		}
-		return { confirmed: true, diagnostics: syncDiagnostics };
-	} catch {
+	if ((await classifyEmptyResult(file, lspService)) === "clean") {
 		return { confirmed: true, diagnostics: [] };
 	}
+	const syncDiagnostics = await attemptTsserverSyncDiagnostics(
+		file,
+		lspService,
+	);
+	if (syncDiagnostics === undefined) {
+		return { confirmed: false, diagnostics: [] };
+	}
+	return { confirmed: true, diagnostics: syncDiagnostics };
 }
 
 /**
@@ -1719,6 +1779,7 @@ async function collectFileDiagnosticResult(
 	const {
 		diagnostics: rawDiags,
 		timedOut,
+		serverNotReady,
 		confirmedByTouch,
 		unconfirmedServerIds,
 		diagnosticsUnsupportedServerIds,
@@ -1907,6 +1968,13 @@ async function collectFileDiagnosticResult(
 		unavailable: lspUnavailableMessage(file, health),
 		confirmation,
 		timedOut: confirmation === "unconfirmed" ? timedOut : undefined,
+		// #5487: the per-file `reason` (`batchOutcomeReason`) names it too.
+		...(confirmation === "unconfirmed" &&
+			timedOut &&
+			serverNotReady !== undefined && {
+				serverNotReady,
+				inconclusiveReason: serverNotReadyText(serverNotReady),
+			}),
 		...(rootFallback && { rootFallback }),
 		...(skipReason !== undefined && { skipReason }),
 		...(primaryUnavailable !== undefined && {
@@ -1956,6 +2024,7 @@ async function runFileDiagnostics(
 	const {
 		diagnostics: rawDiags,
 		timedOut,
+		serverNotReady,
 		confirmedByTouch,
 		unconfirmedServerIds,
 		diagnosticsUnsupportedServerIds,
@@ -2129,6 +2198,10 @@ async function runFileDiagnostics(
 		if (diagnosticsUnsupportedServerIds.length > 0) {
 			return `Primary LSP${primaryId ? ` (${primaryId})` : ""}: unconfirmed — a custom server with no pull provider has not published diagnostics yet. NOT the same as 0 diagnostics; it is checked again once the server publishes.`;
 		}
+		// #5487: the server said why it gave no verdict; it did not time out.
+		if (timedOut && serverNotReady !== undefined) {
+			return `Primary LSP${primaryId ? ` (${primaryId})` : ""}: unconfirmed — ${serverNotReadyText(serverNotReady)}. NOT the same as 0 diagnostics.`;
+		}
 		if (timedOut) {
 			return (
 				"Primary LSP: check timed out — NOT the same as 0 diagnostics; the " +
@@ -2287,6 +2360,7 @@ function tallyConfirmation(results: FileDiagnosticResult[]): {
 	clean: number;
 	unconfirmed: number;
 	timedOut: number;
+	serverNotReady: ServerNotReady[];
 	primaryUnavailable: PrimaryUnavailableTally;
 	rootFallbackReasons: string[];
 	tooLarge: number;
@@ -2294,6 +2368,7 @@ function tallyConfirmation(results: FileDiagnosticResult[]): {
 	let clean = 0;
 	let unconfirmed = 0;
 	let timedOut = 0;
+	const serverNotReady: ServerNotReady[] = [];
 	let primaryUnavailable = 0;
 	const primaryUnavailableCauses: PrimaryUnavailableCause[] = [];
 	const primaryUnavailableRootReasons = new Set<string>();
@@ -2309,7 +2384,9 @@ function tallyConfirmation(results: FileDiagnosticResult[]): {
 			unconfirmed += 1;
 			// #570: timed-out checks are a subset of "unconfirmed" — tallied
 			// separately so the aggregate text can say WHY, not just THAT.
-			if (result.timedOut) timedOut += 1;
+			// #5487: a server that said why it gave no verdict did not time out.
+			if (result.serverNotReady) serverNotReady.push(result.serverNotReady);
+			else if (result.timedOut) timedOut += 1;
 			// #4322: so is a file whose language server never answered.
 			if (result.primaryUnavailable !== undefined) {
 				primaryUnavailable += 1;
@@ -2336,6 +2413,7 @@ function tallyConfirmation(results: FileDiagnosticResult[]): {
 		clean,
 		unconfirmed,
 		timedOut,
+		serverNotReady,
 		primaryUnavailable: {
 			count: primaryUnavailable,
 			cause: combinePrimaryUnavailableCauses(primaryUnavailableCauses),
@@ -2442,6 +2520,7 @@ function unconfirmedReasonClause(
 		cause: undefined,
 		rootFallbackReasons: [],
 	},
+	serverNotReady: readonly ServerNotReady[] = [],
 ): string {
 	// #4322: a fourth, disjoint reason — no language server answered at all.
 	// The rest of the unconfirmed files keep their own explanation.
@@ -2454,8 +2533,25 @@ function unconfirmedReasonClause(
 				: "");
 		const rest = unconfirmed - primaryUnavailable.count;
 		return rest > 0
-			? `${head}; the other ${rest}: ${unconfirmedReasonClause(rest, timedOut, rootFallbackReasons)}`
+			? `${head}; the other ${rest}: ${unconfirmedReasonClause(rest, timedOut, rootFallbackReasons, undefined, serverNotReady)}`
 			: `${head}.`;
+	}
+	// #5487: a fifth, disjoint reason — the server said why it gave no verdict
+	// (still loading, or its workspace failed to load). Not a timeout: one line
+	// per cause, with the next step.
+	if (serverNotReady.length > 0) {
+		const counts = new Map<string, number>();
+		for (const notReady of serverNotReady) {
+			const text = serverNotReadyText(notReady);
+			counts.set(text, (counts.get(text) ?? 0) + 1);
+		}
+		const head = [...counts]
+			.map(([text, count]) => `${count} not checked: ${text}.`)
+			.join(" ");
+		const rest = unconfirmed - serverNotReady.length;
+		return rest > 0
+			? `${head} The other ${rest}: ${unconfirmedReasonClause(rest, timedOut, rootFallbackReasons)}`
+			: head;
 	}
 	// #3750: a third, disjoint reason — the file's server root fell back, so its
 	// empty answer was demoted (`primaryRootFallback`). Named per server.
@@ -2511,6 +2607,7 @@ async function collectBatchDiagnostics(
 	clean: number;
 	unconfirmed: number;
 	timedOut: number;
+	serverNotReady: ServerNotReady[];
 	rootFallbackReasons: string[];
 	primaryUnavailable: PrimaryUnavailableTally;
 	outcomeCounts: Record<BatchFileOutcome, number>;
@@ -2647,6 +2744,7 @@ async function collectBatchDiagnostics(
 		clean,
 		unconfirmed,
 		timedOut,
+		serverNotReady,
 		primaryUnavailable,
 		rootFallbackReasons,
 	} = tallyConfirmation(results);
@@ -2694,6 +2792,7 @@ async function collectBatchDiagnostics(
 		clean,
 		unconfirmed,
 		timedOut,
+		serverNotReady,
 		rootFallbackReasons,
 		primaryUnavailable,
 		outcomeCounts,
@@ -2823,6 +2922,7 @@ async function runBatchFileDiagnostics(
 		clean,
 		unconfirmed,
 		timedOut,
+		serverNotReady,
 		rootFallbackReasons,
 		primaryUnavailable,
 		outcomeCounts,
@@ -2893,7 +2993,7 @@ async function runBatchFileDiagnostics(
 		lines.push(
 			"",
 			`${clean} file${clean === 1 ? "" : "s"} confirmed clean, ${unconfirmed} unconfirmed: ` +
-				`${unconfirmedReasonClause(unconfirmed, timedOut, rootFallbackReasons, primaryUnavailable)} NOT the same as 0 diagnostics.`,
+				`${unconfirmedReasonClause(unconfirmed, timedOut, rootFallbackReasons, primaryUnavailable, serverNotReady)} NOT the same as 0 diagnostics.`,
 		);
 	}
 	const auxiliaryOnlyLine = auxiliaryOnlyFindingsLine(results);
@@ -3113,6 +3213,7 @@ async function runDirectoryDiagnostics(
 		clean,
 		unconfirmed,
 		timedOut,
+		serverNotReady,
 		rootFallbackReasons,
 		primaryUnavailable,
 		outcomeCounts,
@@ -3150,7 +3251,7 @@ async function runDirectoryDiagnostics(
 		const cleanLine =
 			unconfirmed > 0
 				? `${clean} clean · ${unconfirmed} unconfirmed: ` +
-					`${unconfirmedReasonClause(unconfirmed, timedOut, rootFallbackReasons, primaryUnavailable)} NOT the same as 0 diagnostics.`
+					`${unconfirmedReasonClause(unconfirmed, timedOut, rootFallbackReasons, primaryUnavailable, serverNotReady)} NOT the same as 0 diagnostics.`
 				: withheldDisclosure
 					? `No diagnostics found. ${withheldDisclosure}`
 					: "No diagnostics found.";
@@ -3201,6 +3302,7 @@ async function runDirectoryDiagnostics(
 								timedOut,
 								rootFallbackReasons,
 								primaryUnavailable,
+								serverNotReady,
 							),
 					]
 				: []),

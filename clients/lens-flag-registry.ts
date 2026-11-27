@@ -310,6 +310,11 @@ export const LENS_FLAGS: readonly LensFlagSpec[] = [
 		"Opt-in (#3959): render the pi-lens widget as ONE summary line (languages + error/warning totals) instead of also stacking file rows, the suppressed count and blocker details below it. Default off. Also via ui.compactWidget=true in ~/.pi-lens/config.json.",
 		"ui.compactWidget",
 	),
+	globalOptInFlag(
+		"lens-issues-status",
+		"Opt-in: publish a compact pi-lens-issues footer status (●<N>E, !<N>W, ⚠ <N> unchecked, ✓ clean) projected from the widget header. Default off. Also via ui.issuesStatus=true in ~/.pi-lens/config.json.",
+		"ui.issuesStatus",
+	),
 	{
 		name: "no-lazy-tools",
 		description:
@@ -394,6 +399,10 @@ export const GLOBAL_NON_FLAG_CONFIG_SECTIONS: readonly string[] = [
 	"dispatch",
 	"widget",
 	"startup",
+	// #5793: `opaqueScan.nonWriterTools`, the tool names a user declares never
+	// write. Read at both scopes; a project file's list is honored only when pi
+	// trusts the project (`clients/opaque-mutation-scan.ts`).
+	"opaqueScan",
 	"$schema",
 ];
 
@@ -461,6 +470,8 @@ export const PROJECT_NON_FLAG_CONFIG_SECTIONS: readonly string[] = [
 	"trivy",
 	"helm",
 	"startup",
+	// #5793: also a global section; see `GLOBAL_NON_FLAG_CONFIG_SECTIONS`.
+	"opaqueScan",
 	// `tools` is MIXED-SCOPE, and belongs here for the project-scoped half
 	// (#3112). `tools.<name>.enabled` is not a registry flag at all: it is
 	// hand-parsed by `readToolConfig` against `TOOL_REGISTRY` in BOTH loaders,

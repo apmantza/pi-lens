@@ -15,11 +15,6 @@ import {
 	hasToolConfig,
 	type ToolConfigId,
 } from "../../clients/tool-config-presence.js";
-import {
-	hasMypyConfig,
-	hasSqlfluffConfig,
-	hasYamllintConfig,
-} from "../../clients/tool-policy.js";
 import { pinFixtureHome, setupTestEnvironment } from "./test-utils.js";
 
 function write(file: string, content = ""): string {
@@ -211,13 +206,136 @@ describe("tool-config-presence: what counts as config", () => {
 		expect(configured("mix", { "mix.exs": "" })).toBe(true);
 		expect(configured("editorconfig", { ".editorconfig": "" })).toBe(true);
 	});
+});
 
-	it("keeps the policy helpers on the seam's answer", () => {
-		withDir((dir) => {
-			write(path.join(dir, "setup.cfg"), "[sqlfluff]\n[mypy]\n[yamllint]\n");
-			expect(hasSqlfluffConfig(dir)).toBe(true);
-			expect(hasMypyConfig(dir)).toBe(true);
-			expect(hasYamllintConfig(dir)).toBe(true);
+describe("tool-config-presence: package.json, imports, the package boundary (#5408 slice 2)", () => {
+	// Recurrence: `tool-policy.ts` read `package.json#eslintConfig`,
+	// `package.json#stylelint`, a `vite-plus` dependency and any
+	// `vite.config.*` that contained the text `vite-plus` (a comment counted),
+	// each in its own finder.
+	it("reads a package.json field only when it holds a value", () => {
+		expect(
+			configured("stylelint", {
+				"package.json": JSON.stringify({ stylelint: { rules: {} } }),
+			}),
+		).toBe(true);
+		expect(
+			configured("stylelint", {
+				"package.json": JSON.stringify({ name: "x" }),
+			}),
+		).toBe(false);
+		expect(
+			configured("stylelint", {
+				"package.json": JSON.stringify({ stylelint: null }),
+			}),
+		).toBe(false);
+		// An unparseable or non-object package.json is no evidence, never a throw.
+		expect(configured("stylelint", { "package.json": "{ stylelint" })).toBe(
+			false,
+		);
+		expect(configured("stylelint", { "package.json": "null" })).toBe(false);
+	});
+
+	it("reads a package.json dependency by exact name, in either group", () => {
+		const pkg = (deps: Record<string, string>, group = "devDependencies") =>
+			JSON.stringify({ [group]: deps });
+		expect(
+			configured("vitePlus", {
+				"package.json": pkg({ "vite-plus": "^0.1.0" }),
+			}),
+		).toBe(true);
+		expect(
+			configured("vitePlus", {
+				"package.json": pkg(
+					{ "@voidzero-dev/vite-plus-core": "1" },
+					"dependencies",
+				),
+			}),
+		).toBe(true);
+		for (const lookalike of ["vite-plus-extras", "vite_plus", "Vite-Plus"]) {
+			expect(
+				configured("vitePlus", { "package.json": pkg({ [lookalike]: "1" }) }),
+				lookalike,
+			).toBe(false);
+		}
+		expect(
+			configured("vitePlus", { "package.json": pkg({ "vite-plus": "" }) }),
+		).toBe(false);
+	});
+
+	it("reads an import of the tool's package from a Vite config, never a mention", () => {
+		const viteConfig = (text: string, name = "vite.config.ts") =>
+			configured("vitePlus", { [name]: text });
+		expect(viteConfig('import { defineConfig } from "vite-plus";\n')).toBe(
+			true,
+		);
+		expect(
+			viteConfig("import x from 'vite-plus/config';\n", "vite.config.mjs"),
+		).toBe(true);
+		expect(viteConfig('import "vite-plus";\n')).toBe(true);
+		expect(
+			viteConfig('const v = require("vite-plus");\n', "vite.config.cjs"),
+		).toBe(true);
+		expect(viteConfig('const v = await import("vite-plus");\n')).toBe(true);
+		expect(viteConfig('// import x from "vite-plus";\n')).toBe(false);
+		expect(viteConfig('/* import x from "vite-plus"; */\n')).toBe(false);
+		expect(
+			viteConfig('/*\n * require("vite-plus")\n */\nexport default {};\n'),
+		).toBe(false);
+		expect(viteConfig('import x from "vite-plus-extras";\n')).toBe(false);
+		expect(viteConfig('import x from "my-vite-plus";\n')).toBe(false);
+		expect(viteConfig('export default { name: "vite-plus" };\n')).toBe(false);
+		// A comment marker inside a string does not hide the import after it.
+		expect(
+			viteConfig('const u = "http://x"; import y from "vite-plus";\n'),
+		).toBe(true);
+	});
+
+	it("honours legacy ESLint config only up to the nearest package.json", () => {
+		withDir((root) => {
+			const home = path.join(root, "no-home");
+			const pkgDir = path.join(root, "packages", "app");
+			const start = path.join(pkgDir, "src");
+			fs.mkdirSync(start, { recursive: true });
+			write(path.join(root, ".eslintrc.json"), "{}");
+			write(path.join(pkgDir, "package.json"), "{}");
+			// Above the package boundary: a legacy file is not this package's.
+			expect(hasToolConfig("eslint", start, { homeDir: home })).toBe(false);
+			// A flat config is found past the boundary (ESLint's own discovery).
+			write(path.join(root, "eslint.config.mjs"), "export default [];");
+			expect(findToolConfig("eslint", start, { homeDir: home })?.source).toBe(
+				"file",
+			);
+			fs.rmSync(path.join(root, "eslint.config.mjs"));
+			// At the boundary itself the legacy file and the package field count.
+			write(path.join(pkgDir, ".eslintrc.json"), "{}");
+			expect(hasToolConfig("eslint", start, { homeDir: home })).toBe(true);
+			fs.rmSync(path.join(pkgDir, ".eslintrc.json"));
+			write(
+				path.join(pkgDir, "package.json"),
+				JSON.stringify({ eslintConfig: {} }),
+			);
+			expect(findToolConfig("eslint", start, { homeDir: home })?.source).toBe(
+				"json-field",
+			);
+		});
+	});
+
+	it("stops at a caller's ceiling, visiting it", () => {
+		withDir((root) => {
+			const home = path.join(root, "no-home");
+			const project = path.join(root, "proj");
+			const start = path.join(project, "src", "main");
+			fs.mkdirSync(start, { recursive: true });
+			write(path.join(root, "pom.xml"), "<project/>");
+			expect(hasToolConfig("javaBuild", start, { homeDir: home })).toBe(true);
+			expect(
+				hasToolConfig("javaBuild", start, { homeDir: home, ceiling: project }),
+			).toBe(false);
+			write(path.join(project, "build.gradle"), "");
+			expect(
+				hasToolConfig("javaBuild", start, { homeDir: home, ceiling: project }),
+			).toBe(true);
 		});
 	});
 });

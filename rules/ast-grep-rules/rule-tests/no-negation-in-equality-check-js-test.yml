@@ -3,6 +3,14 @@ valid:
   - 'a !== b'
   - '!(a === b)'
   - 'a === b'
+  # #5466: a double-negation comparison (both operands negated) is a
+  # deliberate boolean comparison, not a negation binding tighter than the
+  # operator. A single negated operand below stays invalid — the mutation
+  # guard for this exemption.
+  - '!a === !b'
+  - '!a !== !b'
+  - '!a == !b'
+  - '!a != !b'
 invalid:
   - '!a === b'
   - '!a !== b'

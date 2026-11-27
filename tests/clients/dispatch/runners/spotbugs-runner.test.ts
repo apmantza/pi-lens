@@ -4,22 +4,36 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setupTestEnvironment, useTrackedTempDirs } from "../../test-utils.js";
 
-const { safeSpawnAsync } = vi.hoisted(() => ({ safeSpawnAsync: vi.fn() }));
-vi.mock("../../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
+const { safeSpawnAsync, runtime } = vi.hoisted(() => ({
+	safeSpawnAsync: vi.fn(),
+	runtime: {
+		javaPresent: true,
+	},
+}));
+vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/safe-spawn.js")
+	>()),
+	safeSpawnAsync,
+}));
 
-// java present + spotbugs resolves to a stub command. createAvailabilityChecker
-// is called at module load for both java and spotbugs.
+// java present + spotbugs resolves to a stub command. The runtime ladder is the
+// registry resolver (`resolveToolCommandWithInstallFallback`, #5410); the typed
+// Java verdict wording is pinned through the real ladder in
+// `tests/clients/dispatch/runners/availability-fold-5410.test.ts`.
 vi.mock(
 	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
 	async (importOriginal) => ({
 		...(await importOriginal<
 			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: () => ({
-			isAvailableAsync: async () => true,
-			getCommand: () => null,
-		}),
-		resolveAvailableOrInstall: async () => "spotbugs-stub",
+		resolveToolCommandWithInstallFallback: async (
+			_cwd: string,
+			toolId: string,
+		) => {
+			if (toolId === "java") return runtime.javaPresent ? "java" : null;
+			return toolId === "spotbugs" ? "spotbugs-stub" : null;
+		},
 	}),
 );
 
@@ -55,6 +69,7 @@ describe("spotbugs runner — cache + skip (#133)", () => {
 
 	beforeEach(() => {
 		safeSpawnAsync.mockReset();
+		runtime.javaPresent = true;
 		// The runner reads SpotBugs' -output file; the real CLI writes it, so the
 		// mock writes the fixture XML to that path.
 		safeSpawnAsync.mockImplementation(async (_cmd: string, args: string[]) => {
@@ -85,6 +100,20 @@ describe("spotbugs runner — cache + skip (#133)", () => {
 			expect(res.diagnostics[0].rule).toBe("NP_ALWAYS_NULL");
 			expect(res.diagnostics[0].line).toBe(7);
 			expect(safeSpawnAsync).toHaveBeenCalledTimes(1);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// Recurrence (#5258 r2 review F1, Qodo #4): an absent Java runtime was worded
+	// `spotbugs: not installed`, blaming SpotBugs for the missing JRE it needs.
+	it("names the missing Java runtime, not SpotBugs, when Java is absent", async () => {
+		try {
+			runtime.javaPresent = false;
+			const res = await run(env.tmpDir);
+			expect(res.status).toBe("skipped");
+			expect(res.skipReason).toBe("runtime-missing");
+			expect(safeSpawnAsync).not.toHaveBeenCalled();
 		} finally {
 			env.cleanup();
 		}

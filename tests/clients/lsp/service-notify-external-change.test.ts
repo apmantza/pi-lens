@@ -297,3 +297,49 @@ describe("LSPService.notifyExternalFileChange (#1668)", () => {
 		expect(hashes.size).toBe(1024);
 	});
 });
+
+// Recurrence (#5501): a `Cargo.toml` fixed after rust-analyzer failed to load
+// its workspace reached no server, because the name routes by extension to the
+// TOML server and `rust` was not named for it. The closed config list names the
+// server; a client that is not live is never spawned for it.
+describe("LSPService.notifyOutOfBandFileChanges manifest routing (#5501)", () => {
+	beforeEach(async () => {
+		vi.resetModules();
+		(await import("../../../clients/lsp/config.js"))._setServersForFileForTests(
+			getServersForFileWithConfig,
+		);
+		getServersForFileWithConfig.mockReset();
+		createLSPClient.mockReset();
+	});
+
+	it.each([
+		["Cargo.toml", "rust"],
+		["go.mod", "go"],
+		["go.work", "go"],
+	])(
+		"sends %s to the live %s client and to no other language server",
+		async (name, serverId) => {
+			const { LSPService } = await import("../../../clients/lsp/index.js");
+			const service = new LSPService();
+			const manifest = `C:/repo/${name}`;
+			// The extension route a manifest takes on its own: `.toml` names the TOML
+			// server and `.mod` names none.
+			getServersForFileWithConfig.mockImplementation((file: string) =>
+				file.endsWith(".toml") ? [makeServer("toml")] : [],
+			);
+			const target = makeClient();
+			const other = makeClient();
+			const state = (
+				service as unknown as { state: { clients: Map<string, unknown> } }
+			).state;
+			state.clients.set(`${serverId}:c:/repo`, target);
+			state.clients.set("typescript:c:/repo", other);
+
+			service.notifyOutOfBandFileChanges([{ filePath: manifest, type: 2 }]);
+
+			expect(target.notify.watchedFileChange).toHaveBeenCalledWith(manifest, 2);
+			expect(other.notify.watchedFileChange).not.toHaveBeenCalled();
+			expect(createLSPClient).not.toHaveBeenCalled();
+		},
+	);
+});

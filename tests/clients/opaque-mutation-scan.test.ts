@@ -54,12 +54,14 @@ import type { ProjectChangeEntry } from "../../clients/project-changes.js";
 
 import {
 	captureFileStats,
+	captureGitDirtyPaths,
 	diffFileStats,
 	OPAQUE_BASELINE_PENDING_CAP,
 	OpaqueBaselineStore,
 	OPAQUE_SCAN_MAX_FILES,
 	recoverOpaqueChangesViaGit,
 	resetOpaqueMutationState,
+	SAME_HEAD_DIRTY_SET_CAP,
 } from "../../clients/opaque-mutation-scan.js";
 import { extractWrittenPathsFromCommand } from "../../clients/bash-file-access.js";
 import {
@@ -234,8 +236,8 @@ describe("OpaqueBaselineStore", () => {
 	// call. Entries are per call now; only a host without ids shares the slot.
 	it("keeps one entry per tool-call id in a slot; take consumes", () => {
 		const store = new OpaqueBaselineStore();
-		store.record("/p:1", "a", { startedAt: 1, strategy: "git" });
-		store.record("/p:1", "b", { startedAt: 2, strategy: "git" });
+		store.record("/p:1", "a", { startedAt: 1, projectSeq: 0, strategy: "git" });
+		store.record("/p:1", "b", { startedAt: 2, projectSeq: 0, strategy: "git" });
 		expect(store.take("/p:1", "a")?.startedAt).toBe(1);
 		expect(store.take("/p:1", "a")).toBeUndefined();
 		expect(store.take("/p:1", "b")?.startedAt).toBe(2);
@@ -245,9 +247,21 @@ describe("OpaqueBaselineStore", () => {
 	it("falls back to the shared slot for a host with no tool-call ids, counting the overwrite", () => {
 		resetDegradationLedger();
 		const store = new OpaqueBaselineStore();
-		store.record("/p:1", undefined, { startedAt: 1, strategy: "git" });
-		store.record("/p:1", undefined, { startedAt: 2, strategy: "git" });
-		store.record("/p:1", undefined, { startedAt: 3, strategy: "git" });
+		store.record("/p:1", undefined, {
+			startedAt: 1,
+			projectSeq: 0,
+			strategy: "git",
+		});
+		store.record("/p:1", undefined, {
+			startedAt: 2,
+			projectSeq: 0,
+			strategy: "git",
+		});
+		store.record("/p:1", undefined, {
+			startedAt: 3,
+			projectSeq: 0,
+			strategy: "git",
+		});
 		expect(store.take("/p:1", undefined)?.startedAt).toBe(3);
 		expect(store.take("/p:1", undefined)).toBeUndefined();
 		expect(lostBaselines()).toEqual([
@@ -259,7 +273,11 @@ describe("OpaqueBaselineStore", () => {
 		resetDegradationLedger();
 		const store = new OpaqueBaselineStore();
 		for (let i = 0; i <= OPAQUE_BASELINE_PENDING_CAP; i++)
-			store.record("/p:1", `call-${i}`, { startedAt: i, strategy: "git" });
+			store.record("/p:1", `call-${i}`, {
+				startedAt: i,
+				projectSeq: 0,
+				strategy: "git",
+			});
 		expect(store.take("/p:1", "call-0")).toBeUndefined();
 		expect(store.take("/p:1", "call-1")?.startedAt).toBe(1);
 		expect(lostBaselines()).toEqual([
@@ -314,6 +332,255 @@ describe("recoverOpaqueChangesViaGit (real git repo)", () => {
 		expect(outcome.paths).toContain(
 			normalizeMapKey(path.join(repoDir, "src", "new.ts")),
 		);
+	});
+
+	it("recovers a named tracked overwrite that was clean before, whatever its mtime (#5552)", async () => {
+		const target = path.join(repoDir, "src", "base.ts");
+		const startedAt = Date.now();
+		writeViaNodeChild(target, "named overwrite\n");
+		const old = new Date(startedAt - 10_000);
+		fs.utimesSync(target, old, old);
+
+		await expect(
+			recoverOpaqueChangesViaGit(repoDir, startedAt, {
+				namedPaths: [target],
+				dirtyBefore: [],
+			}),
+		).resolves.toMatchObject({
+			verdict: "recovered",
+			paths: [normalizeMapKey(target)],
+		});
+		await expect(
+			recoverOpaqueChangesViaGit(repoDir, startedAt, {
+				namedPaths: [],
+				dirtyBefore: [],
+			}),
+		).resolves.toMatchObject({ verdict: "recovered", paths: [] });
+	});
+
+	// #5616 review F4: the baseline's `git status` failed, timed out or hit its
+	// output cap, so it holds no dirty set and "clean before" is unknown. A file
+	// the call changed without naming it is not credited. The no-git witness
+	// drives the stat-diff branch, not this one.
+	it("withholds script credit when the baseline holds no dirty set (#5616)", async () => {
+		const target = path.join(repoDir, "src", "base.ts");
+		const startedAt = Date.now();
+		writeViaNodeChild(target, "script write\n");
+		const outcome = await recoverOpaqueChangesViaGit(repoDir, startedAt, {
+			scriptCredit: { observedWriters: () => new Set<string>() },
+		});
+		expect(outcome.scriptCredit).toEqual({
+			credited: [],
+			withheld: [{ key: normalizeMapKey(target), cause: "no-dirty-set" }],
+		});
+	});
+
+	// #5552 r2 F3: `cp -n` is recognized as a write but may write nothing. A
+	// named path that was already dirty before the command (the user's edit)
+	// keeps the mtime rule, and so does every named path when the baseline has
+	// no dirty set (git could not answer, or a root that takes no capture).
+	it.each([
+		{ name: "dirty before the command", dirtyBefore: "target" as const },
+		{ name: "no dirty set captured", dirtyBefore: undefined },
+	])(
+		"leaves a named old-mtime path on the mtime rule when $name (#5552)",
+		async ({ dirtyBefore }) => {
+			const target = path.join(repoDir, "src", "base.ts");
+			const startedAt = Date.now();
+			writeViaNodeChild(target, "user edit\n");
+			const old = new Date(startedAt - 10_000);
+			fs.utimesSync(target, old, old);
+
+			await expect(
+				recoverOpaqueChangesViaGit(repoDir, startedAt, {
+					namedPaths: [target],
+					dirtyBefore:
+						dirtyBefore === "target" ? [normalizeMapKey(target)] : undefined,
+				}),
+			).resolves.toMatchObject({ verdict: "recovered", paths: [] });
+		},
+	);
+
+	// #5552: `mv ../old.ts src/new.ts` into a path git does not track keeps the
+	// old mtime too; git lists it as untracked, and the named file is the write.
+	it("recovers a named untracked destination with an old mtime, and leaves an unnamed one", async () => {
+		const named = path.join(repoDir, "src", "moved-in.ts");
+		const other = path.join(repoDir, "src", "other-old.ts");
+		const startedAt = Date.now();
+		for (const file of [named, other]) {
+			fs.writeFileSync(file, "moved\n", "utf8");
+			const old = new Date(startedAt - 10_000);
+			fs.utimesSync(file, old, old);
+		}
+
+		await expect(
+			recoverOpaqueChangesViaGit(repoDir, startedAt, {
+				namedPaths: [named],
+				dirtyBefore: [],
+			}),
+		).resolves.toMatchObject({
+			verdict: "recovered",
+			paths: [normalizeMapKey(named)],
+		});
+	});
+
+	// #5552: `rsync -a` and `tar x` write files argv never names, with the
+	// source's old mtime. The prescan names the DIRECTORY they fill, and a file
+	// git lists under it that was clean before the command is the command's
+	// write; one outside it, or already dirty, stays on the mtime rule.
+	it("recovers files under a named directory, whatever their mtime (#5552)", async () => {
+		const inside = path.join(repoDir, "src", "base.ts");
+		const added = path.join(repoDir, "src", "deep", "added.ts");
+		const outside = path.join(repoDir, "elsewhere.ts");
+		const windowed = path.join(repoDir, "fresh.ts");
+		const startedAt = Date.now();
+		fs.mkdirSync(path.dirname(added), { recursive: true });
+		for (const file of [inside, added, outside]) {
+			fs.writeFileSync(file, "moved\n", "utf8");
+			const old = new Date(startedAt - 10_000);
+			fs.utimesSync(file, old, old);
+		}
+		// Outside the scope, so only the mtime window reports it, and it is no
+		// named write.
+		fs.writeFileSync(windowed, "fresh\n", "utf8");
+
+		const outcome = await recoverOpaqueChangesViaGit(repoDir, startedAt, {
+			namedPaths: [path.join(repoDir, "src")],
+			dirtyBefore: [],
+		});
+		expect(outcome.verdict).toBe("recovered");
+		expect([...outcome.paths].sort()).toEqual(
+			[inside, added, windowed].map(normalizeMapKey).sort(),
+		);
+		expect([...(outcome.namedCredited ?? [])].sort()).toEqual(
+			[inside, added].map(normalizeMapKey).sort(),
+		);
+	});
+
+	// Recurrence prevented: `src` named as a scope must not claim `src-old/`,
+	// whose path merely starts with the same letters.
+	it("does not read a sibling directory with a shared prefix as under the scope (#5552)", async () => {
+		const sibling = path.join(repoDir, "src-old", "moved.ts");
+		const startedAt = Date.now();
+		fs.mkdirSync(path.dirname(sibling), { recursive: true });
+		fs.writeFileSync(sibling, "moved\n", "utf8");
+		const old = new Date(startedAt - 10_000);
+		fs.utimesSync(sibling, old, old);
+
+		await expect(
+			recoverOpaqueChangesViaGit(repoDir, startedAt, {
+				namedPaths: [path.join(repoDir, "src")],
+				dirtyBefore: [],
+			}),
+		).resolves.toMatchObject({ verdict: "recovered", paths: [] });
+	});
+
+	// #5581 r2 F3, for a directory: `rsync --ignore-existing` is recognized and
+	// writes nothing over a file the user had already edited.
+	it.each([
+		{ name: "dirty before the command", dirtyBefore: "target" as const },
+		{ name: "no dirty set captured", dirtyBefore: undefined },
+	])(
+		"leaves an old-mtime file under a named directory on the mtime rule when $name (#5552)",
+		async ({ dirtyBefore }) => {
+			const target = path.join(repoDir, "src", "base.ts");
+			const startedAt = Date.now();
+			fs.writeFileSync(target, "user edit\n", "utf8");
+			const old = new Date(startedAt - 10_000);
+			fs.utimesSync(target, old, old);
+
+			const outcome = await recoverOpaqueChangesViaGit(repoDir, startedAt, {
+				namedPaths: [path.join(repoDir, "src")],
+				dirtyBefore:
+					dirtyBefore === "target" ? [normalizeMapKey(target)] : undefined,
+			});
+			expect(outcome).toMatchObject({ verdict: "recovered", paths: [] });
+			expect(outcome.namedCredited).toBeUndefined();
+		},
+	);
+
+	// Recurrence prevented (#5552 review r1 F1): the baseline keeps only the
+	// first SAME_HEAD_DIRTY_SET_CAP dirty paths, so a user-dirty file past the
+	// cut read as "clean before" and a directory scope credited it as the
+	// command's write at any mtime (600 dirty files, a bare `tar x`: 88 of the
+	// user's files dispatched, and the commit blocked as the agent's). A cut
+	// set proves nothing about the rest, so nothing is credited and the call
+	// stays on the mtime rule, with one record of why.
+	it.each([
+		{ dirty: SAME_HEAD_DIRTY_SET_CAP - 1, credits: true },
+		{ dirty: SAME_HEAD_DIRTY_SET_CAP, credits: false },
+		{ dirty: SAME_HEAD_DIRTY_SET_CAP + 88, credits: false },
+	])(
+		"credits a named directory only while the dirty set is whole: $dirty dirty files, credits $credits (#5552)",
+		async ({ dirty, credits }) => {
+			resetDegradationLedger();
+			const userDir = path.join(repoDir, "user");
+			fs.mkdirSync(userDir, { recursive: true });
+			for (let i = 0; i < dirty; i += 1)
+				fs.writeFileSync(path.join(userDir, `u${i}.ts`), "v1\n", "utf8");
+			execSync("git add -A && git commit -qm users", { cwd: repoDir });
+			const startedAt = Date.now();
+			const old = new Date(startedAt - 3 * 86_400_000);
+			for (let i = 0; i < dirty; i += 1) {
+				const file = path.join(userDir, `u${i}.ts`);
+				fs.writeFileSync(file, "user edit\n", "utf8");
+				fs.utimesSync(file, old, old);
+			}
+			const dirtyBefore = await captureGitDirtyPaths(repoDir);
+			// The command: a `tar x` into user/ lands one old-mtime file.
+			const extracted = path.join(userDir, "extracted.ts");
+			fs.writeFileSync(extracted, "from the archive\n", "utf8");
+			fs.utimesSync(extracted, old, old);
+
+			const outcome = await recoverOpaqueChangesViaGit(repoDir, startedAt, {
+				namedPaths: [userDir],
+				dirtyBefore,
+			});
+
+			expect(outcome.verdict).toBe("recovered");
+			if (credits) {
+				expect(outcome.paths).toEqual([normalizeMapKey(extracted)]);
+				expect(outcome.namedCredited).toEqual([normalizeMapKey(extracted)]);
+			} else {
+				expect(outcome.paths).toEqual([]);
+				expect(outcome.namedCredited).toBeUndefined();
+			}
+			const withheld = getDegradationSummary().filter(
+				(group) => group.kind === "named-write-credit-withheld",
+			);
+			expect(withheld).toHaveLength(credits ? 0 : 1);
+		},
+		60_000,
+	);
+
+	// Same recurrence, the named FILE reader of the same set (#5581): a file the
+	// command named that sits past the cut is not shown clean either.
+	it("credits no named file once the dirty set is cut (#5552)", async () => {
+		const target = path.join(repoDir, "src", "base.ts");
+		const startedAt = Date.now();
+		fs.writeFileSync(target, "moved\n", "utf8");
+		const old = new Date(startedAt - 10_000);
+		fs.utimesSync(target, old, old);
+		const full = Array.from(
+			{ length: SAME_HEAD_DIRTY_SET_CAP },
+			(_, i) => `/elsewhere/${i}.ts`,
+		);
+
+		await expect(
+			recoverOpaqueChangesViaGit(repoDir, startedAt, {
+				namedPaths: [target],
+				dirtyBefore: full,
+			}),
+		).resolves.toMatchObject({ verdict: "recovered", paths: [] });
+		await expect(
+			recoverOpaqueChangesViaGit(repoDir, startedAt, {
+				namedPaths: [target],
+				dirtyBefore: full.slice(1),
+			}),
+		).resolves.toMatchObject({
+			verdict: "recovered",
+			paths: [normalizeMapKey(target)],
+		});
 	});
 
 	it("recovers a fresh intent-to-add entry from git add -N", async () => {
@@ -783,6 +1050,36 @@ describe("partial-recognition recovery (#2000 PR-B)", () => {
 			fs.rmSync(scriptFile, { force: true });
 		}
 	});
+
+	// Recurrence prevented (#5552 review r1 F2): `tar x -C "$D"` fell back to the
+	// working directory with nothing on record, so a credit that rests on a
+	// guessed scope looked like one that rests on a named path. One record per
+	// root per session; a failed command credits no scope, so it records none.
+	it.each([
+		{ name: "a succeeding command", isError: false, rows: 1 },
+		{ name: "a failed command", isError: true, rows: 0 },
+	])(
+		"records an unreadable tar -C destination once for $name (#5552)",
+		async ({ isError, rows }) => {
+			resetDegradationLedger();
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = repoDir;
+			runtime.setTelemetryIdentity({ sessionId: "scope-guessed" });
+			const command = 'tar -xf a.tar -C "$D"';
+			for (let call = 0; call < 2; call += 1) {
+				await runHandlerExpectingNoThrow(() =>
+					handleToolCall(callDeps(runtime, command)),
+				);
+				await handleToolResult(depsFor(runtime, command, isError));
+			}
+			const guessedRows = getDegradationSummary().filter(
+				(group) => group.kind === "bash-write-scope-guessed",
+			);
+			expect(guessedRows.map((group) => group.count)).toEqual(
+				rows === 0 ? [] : [1],
+			);
+		},
+	);
 
 	it("recognized-only command without baseline emits explicit coverage-unknown", async () => {
 		// latency.log writes are guarded by PI_LENS_TEST_MODE; scope the opt-out
@@ -1465,9 +1762,11 @@ describe("parallel bash calls (#4137)", () => {
 	});
 
 	// A call with no recognized write keeps its own opaque recovery under
-	// parallelism. Its window also holds the recognized sibling's write, which it
-	// dispatches without authorship; the sibling's own dispatch of the same bytes
-	// still runs with authorship (the dedupe ranks authority).
+	// parallelism. #5616: both paths were clean before it and pi-lens recorded no
+	// other write to them before its result, so it is credited with both: its
+	// own file, and the sibling's write it cannot tell apart (both are the
+	// agent's calls). The sibling's claim on the same bytes then joins that
+	// authored analysis (the dedupe ranks authority).
 	it("an opaque sibling still recovers its own writes", async () => {
 		const runtime = new RuntimeCoordinator();
 		runtime.projectRoot = repoDir;
@@ -1500,10 +1799,10 @@ describe("parallel bash calls (#4137)", () => {
 			]);
 		// The opaque call's two paths come in git's listing order.
 		expect(dispatches.slice(0, 2).sort()).toEqual([
-			["opaque-out.ts", false],
-			["par-a.ts", false],
+			["opaque-out.ts", true],
+			["par-a.ts", true],
 		]);
-		expect(dispatches.slice(2)).toEqual([["par-a.ts", true]]);
+		expect(dispatches.slice(2)).toEqual([]);
 	});
 
 	// REVIEW_4159 F1: pi fires no tool_result for a call a tool_call handler
@@ -1524,8 +1823,10 @@ describe("parallel bash calls (#4137)", () => {
 			append("par-a.ts", `debugger; // ${id}\n`);
 			await handleToolResult(resultDeps(runtime, opaqueCommand(), id));
 		}
+		// #5616: the first opaque call found the file clean and is credited
+		// with it; each later one found it dirty already.
 		expect(await dispatchLog()).toEqual([
-			["par-a.ts", false],
+			["par-a.ts", true],
 			["par-a.ts", false],
 			["par-a.ts", false],
 		]);
@@ -1550,14 +1851,15 @@ describe("parallel bash calls (#4137)", () => {
 			sibling: "[ -f nope ] && echo 'x' >> par-a.ts; true",
 			siblingWrites: false,
 			siblingFails: false,
-			expected: [["par-a.ts", false]],
+			// #5616: the opaque call is the one writer of a clean file.
+			expected: [["par-a.ts", true]],
 		},
 		{
 			cell: "the sibling failed (P2e)",
 			sibling: "false && echo 'x' >> par-a.ts",
 			siblingWrites: false,
 			siblingFails: true,
-			expected: [["par-a.ts", false]],
+			expected: [["par-a.ts", true]],
 		},
 	])(
 		"dispatches an opaque write to a path a sibling named: $cell",
@@ -1586,6 +1888,8 @@ describe("parallel bash calls (#4137)", () => {
 	it("dispatches with authorship a recognized write of bytes an opaque run analysed", async () => {
 		await mockBlockingPipeline();
 		const runtime = newRuntime("opaque-first");
+		// #5616: dirty before the opaque call, so its run stays uncredited.
+		append("par-a.ts", "// dirty\n");
 		await runHandlerExpectingNoThrow(() =>
 			handleToolCall(callDeps(runtime, opaqueCommand(), "opaque")),
 		);
@@ -1659,6 +1963,8 @@ describe("parallel bash calls (#4137)", () => {
 			return NO_BLOCKERS;
 		});
 		const runtime = newRuntime("in-flight");
+		// #5616: dirty before the opaque call, so its run stays uncredited.
+		append("par-a.ts", "// dirty\n");
 		const recognized = "echo 'debugger;' >> par-a.ts";
 		await runHandlerExpectingNoThrow(() =>
 			handleToolCall(callDeps(runtime, opaqueCommand(), "opaque")),
@@ -1952,6 +2258,142 @@ describe("parallel bash calls (#4137)", () => {
 		expect(await dispatchLog()).toEqual([["par-a.ts", true]]);
 		expect(blockerFiles(runtime)).toEqual(["par-a.ts"]);
 	});
+
+	// #5616 review F6 (CodeRabbit): another tool's write that pi-lens records
+	// while the recovery waits on `git status` is another observed writer. The
+	// set was read before that await, so the bash call was credited with it.
+	it("does not credit a file another write recorded after the git status read", async () => {
+		const runtime = newRuntime("late-observed-writer");
+		(await pipelineMock()).mockClear();
+		await runHandlerExpectingNoThrow(() =>
+			handleToolCall(callDeps(runtime, opaqueCommand(), "opaque")),
+		);
+		append("par-a.ts", "debugger;\n");
+		const actual = await vi.importActual<
+			typeof import("../../clients/opaque-mutation-scan.js")
+		>("../../clients/opaque-mutation-scan.js");
+		// The write lands at the scan's own stat of the file, after the git
+		// status read, so an observed-writer read taken before that await
+		// (at the call site, or at the top of the scan) misses it.
+		const target = path.join(repoDir, "par-a.ts");
+		const realStat = fs.promises.stat.bind(fs.promises);
+		const stat = vi.spyOn(fs.promises, "stat");
+		let recordedAtStat = false;
+		vi.mocked(recoverOpaqueChangesViaGit).mockImplementationOnce(
+			async (root, startedAt, options) => {
+				stat.mockImplementation(async (file, opts) => {
+					if (String(file) === target) {
+						stat.mockRestore();
+						recordedAtStat = true;
+						runtime.recordProjectMutation({
+							filePath: target,
+							source: "agent-write",
+						});
+					}
+					return realStat(file, opts);
+				});
+				try {
+					return await actual.recoverOpaqueChangesViaGit(
+						root,
+						startedAt,
+						options,
+					);
+				} finally {
+					stat.mockRestore();
+				}
+			},
+		);
+		await handleToolResult(resultDeps(runtime, opaqueCommand(), "opaque"));
+		expect(recordedAtStat).toBe(true);
+		expect(await dispatchLog()).toEqual([["par-a.ts", false]]);
+	});
+
+	// #5616 review F10/F11 (Qodo 1, 5): the credit is for the blocker channel
+	// and the gate. Recurrence prevented: the credited path also queued the
+	// deferred format and autofix, whose agent_end drain stamps whole-file
+	// read-guard authorship over bytes no pre-write check covered.
+	it.each([
+		{
+			cell: "a credited script write queues nothing and gets no stamp",
+			command: () => opaqueCommand(),
+			dirtyBefore: false,
+			demoted: false,
+			authored: true,
+			bytes: false,
+			queued: 0,
+			stamped: [] as string[],
+		},
+		{
+			// The autofix queue opens for a write only once an edit of the same
+			// file this turn demoted its autofix (`recordMutationToolReceipt`).
+			cell: "a credited script write after a write and an edit this turn queues no autofix",
+			command: () => opaqueCommand(),
+			dirtyBefore: false,
+			demoted: true,
+			authored: true,
+			bytes: false,
+			queued: 0,
+			stamped: [] as string[],
+		},
+		{
+			cell: "control: a script write over a dirty file is unchanged",
+			command: () => opaqueCommand(),
+			dirtyBefore: true,
+			demoted: false,
+			authored: false,
+			bytes: false,
+			queued: 0,
+			stamped: [] as string[],
+		},
+		{
+			cell: "control: a named write queues the format and is stamped",
+			command: () => "echo 'debugger;' >> par-a.ts",
+			dirtyBefore: false,
+			demoted: false,
+			authored: true,
+			bytes: true,
+			queued: 1,
+			stamped: ["par-a.ts"],
+		},
+	])(
+		"$cell",
+		async ({
+			command,
+			dirtyBefore,
+			demoted,
+			authored,
+			bytes,
+			queued,
+			stamped,
+		}) => {
+			const runtime = newRuntime("credited-writers");
+			(await pipelineMock()).mockClear();
+			if (dirtyBefore) append("par-a.ts", "// dirty\n");
+			if (demoted)
+				for (const kind of ["write", "edit"] as const)
+					runtime.recordMutationToolReceipt(
+						normalizeMapKey(path.join(repoDir, "par-a.ts")),
+						kind,
+					);
+			await runHandlerExpectingNoThrow(() =>
+				handleToolCall(callDeps(runtime, command(), "call")),
+			);
+			append("par-a.ts", "debugger;\n");
+			await handleToolResult(resultDeps(runtime, command(), "call"));
+			expect(await dispatchLog()).toEqual([["par-a.ts", authored]]);
+			// What the handler hands the pipeline, whose own gates
+			// tests/clients/pipeline.test.ts drives.
+			expect(
+				(await pipelineMock()).mock.calls.map(([ctx]) => ctx?.bytesAuthored),
+			).toEqual([bytes]);
+			expect(runtime.pendingDeferredMutationCount).toBe(queued);
+			expect(
+				runtime.readGuard
+					.exportAuthorship()
+					.written.map((file) => path.basename(file)),
+			).toEqual(stamped);
+		},
+	);
 });
 
 // #4732: every tool call that is not known to be read-only or structured is

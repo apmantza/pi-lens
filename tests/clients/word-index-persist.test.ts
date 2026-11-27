@@ -52,12 +52,17 @@ function makeEnv() {
 	return env;
 }
 
-async function waitForFile(p: string, attempts = 40): Promise<boolean> {
-	for (let i = 0; i < attempts; i++) {
-		if (fs.existsSync(p)) return true;
-		await new Promise((r) => setTimeout(r, 25));
-	}
-	return fs.existsSync(p);
+/**
+ * Wait for a worker persist to land (#348, #958). Shape 86 (#4865): this was a
+ * 40 x 25 ms turn count, which holds idle and runs out under CPU load. The
+ * budget is the same wall clock, now a `waitFor` deadline that scales with
+ * `PI_LENS_TEST_TIMEOUT_SCALE` and names the caller when it gives up.
+ */
+async function waitForFile(p: string, timeoutMs = 1_000): Promise<boolean> {
+	return waitFor(() => fs.existsSync(p), Boolean, {
+		timeoutMs,
+		intervalMs: 25,
+	});
 }
 
 describe("word-index debounced persist (#348 phase 2)", () => {

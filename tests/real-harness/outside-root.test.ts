@@ -40,6 +40,9 @@ describe("real pi: out-of-root write notice and exemptions", () => {
 			path.join(bin, "jscpd.cmd"),
 			`@echo off\r\nnode "${fake}" %*\r\n`,
 		);
+		// The fake writes its marker in one write; plant the empty state a poll can
+		// see first, so the wait must read content, not existence (#5105).
+		writeFileSync(marker, "");
 		let reportDir = "";
 		try {
 			await withRealPi(
@@ -62,7 +65,11 @@ describe("real pi: out-of-root write notice and exemptions", () => {
 				},
 				async (pi) => {
 					await expect
-						.poll(() => existsSync(marker), { timeout: 30_000 })
+						.poll(
+							() =>
+								existsSync(marker) && readFileSync(marker, "utf8").length > 0,
+							{ timeout: 30_000 },
+						)
 						.toBe(true);
 					reportDir = readFileSync(marker, "utf8").trim();
 					expect(existsSync(reportDir)).toBe(true);

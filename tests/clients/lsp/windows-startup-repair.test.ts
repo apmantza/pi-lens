@@ -103,12 +103,23 @@ async function launchOnce(
 	candidate: string,
 	cwd: string,
 	managedToolId: string,
+	admitted = false,
 ): Promise<unknown> {
 	const { resolveAndLaunch } = await import("../../../clients/lsp/server.js");
-	return resolveAndLaunch(
-		{ candidates: [candidate], args: ["--stdio"], cwd, managedToolId },
-		true,
-	);
+	const launch = () =>
+		resolveAndLaunch(
+			{ candidates: [candidate], args: ["--stdio"], cwd, managedToolId },
+			true,
+		);
+	if (!admitted) return launch();
+	// #5674: a root admitted for project code (pi trusts the project and the
+	// root holds permission) may run a file cmd.exe finds in its cwd.
+	const { setProjectTrustState } =
+		await import("../../../clients/project-trust.js");
+	const { withLspProjectCodePermission } =
+		await import("../../../clients/lsp/launch.js");
+	setProjectTrustState("trusted");
+	return withLspProjectCodePermission(true, launch);
 }
 
 describe("Windows LSP startup repair classification (#4263)", () => {
@@ -143,14 +154,24 @@ describe("Windows LSP startup repair classification (#4263)", () => {
 		try {
 			const { resolveAndLaunch } =
 				await import("../../../clients/lsp/server.js");
-			await resolveAndLaunch(
-				{
-					candidates: ["missing-language-server"],
-					args: ["--stdio"],
-					cwd: "C:\\project",
-					managedToolId: "missing-language-server",
-				},
-				true,
+			// An admitted root: on a POSIX host `C:\project` is relative, so the
+			// runner's own `node_modules/.bin` on PATH would otherwise reach it and
+			// hold the repair to the tool store (#5674).
+			const { withLspProjectCodePermission } =
+				await import("../../../clients/lsp/launch.js");
+			const { setProjectTrustState } =
+				await import("../../../clients/project-trust.js");
+			setProjectTrustState("trusted");
+			await withLspProjectCodePermission(true, () =>
+				resolveAndLaunch(
+					{
+						candidates: ["missing-language-server"],
+						args: ["--stdio"],
+						cwd: "C:\\project",
+						managedToolId: "missing-language-server",
+					},
+					true,
+				),
 			);
 			expect(ensureTool).toHaveBeenCalledWith("missing-language-server");
 		} finally {
@@ -478,7 +499,7 @@ describe("Windows LSP startup repair classification (#4263)", () => {
 		spawnDouble.mockImplementation(() => new MockChildProcess());
 
 		try {
-			await launchOnce("server.cmd", project, "server");
+			await launchOnce("server.cmd", project, "server", true);
 			expect(spawnDouble).toHaveBeenCalledTimes(1);
 			expect(ensureTool).not.toHaveBeenCalled();
 		} finally {
@@ -500,9 +521,9 @@ describe("Windows LSP startup repair classification (#4263)", () => {
 		mockExit1Launch();
 
 		try {
-			await expect(launchOnce("server.cmd", project, "server")).rejects.toThrow(
-				/exited immediately with code 1/,
-			);
+			await expect(
+				launchOnce("server.cmd", project, "server", true),
+			).rejects.toThrow(/exited immediately with code 1/);
 			expect(ensureTool).not.toHaveBeenCalled();
 			expect(spawnDouble).toHaveBeenCalledTimes(1);
 		} finally {
@@ -510,6 +531,40 @@ describe("Windows LSP startup repair classification (#4263)", () => {
 			setPlatform(originalPlatform);
 		}
 	});
+
+	// #5674: the same cwd shim under a root NOT admitted for project code (an
+	// adopted root: pi trusts the session, the root holds no permission). cmd.exe
+	// would run the root's own file, so the lookup refuses it before any spawn.
+	// Windows only: the cwd lookup is cmd.exe's, which a POSIX host cannot
+	// simulate (its lookup does not search the cwd).
+	// lane: windows-vitest
+	it.runIf(process.platform === "win32")(
+		"refuses a bare .cmd command in the cwd of a root not admitted for project code (#5674)",
+		async () => {
+			const originalPlatform = process.platform;
+			setPlatform("win32");
+			const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-5674-cwd-"));
+			const project = path.join(root, "project");
+			fs.mkdirSync(project, { recursive: true });
+			fs.writeFileSync(path.join(project, "server.cmd"), "@echo off\r\n");
+			mockExit1Launch();
+			spawnDouble.mockImplementation(() => new MockChildProcess());
+
+			try {
+				const { setProjectTrustState } =
+					await import("../../../clients/project-trust.js");
+				setProjectTrustState("trusted");
+				await expect(
+					launchOnce("server.cmd", project, "server"),
+				).rejects.toThrow(/LSP lookup refused/);
+				expect(spawnDouble).not.toHaveBeenCalled();
+				expect(ensureTool).not.toHaveBeenCalled();
+			} finally {
+				fs.rmSync(root, { recursive: true, force: true });
+				setPlatform(originalPlatform);
+			}
+		},
+	);
 
 	// The cwd read must stay a read of the CHILD's cwd: a `server.cmd` in pi's own
 	// process.cwd() is not the shim cmd.exe runs for a child started elsewhere.
@@ -593,4 +648,105 @@ describe("Windows LSP startup repair classification (#4263)", () => {
 			setPlatform(originalPlatform);
 		}
 	});
+
+	// #5674 verify r4 V1: on Windows a Python venv yields `x.exe`, `x.cmd` and
+	// `x` (`pythonEnvironmentToolCandidates`), and pip writes only `x.exe`. The
+	// extensionless spelling is no file on disk, yet cmd.exe runs the `.exe`
+	// (or a `.cmd`) under PATHEXT, so a gate that read the literal spelling let
+	// the third candidate start the refused project binary. The classifier is
+	// real here.
+	// Two production entries: an adopted root (pi trusts the project, the root
+	// has no permission) and an exported VIRTUAL_ENV under unknown trust.
+	// On a POSIX host the Windows resolver stats the rooted Windows spelling
+	// (`\tmp\...`), which Linux reads as a relative name; the `statSync` double
+	// hands the stat back with `/` separators, as the Windows file system reads
+	// both. The Windows lane runs the cell without the double.
+	it.each([
+		{ trust: "trusted", entry: "adopted root", ext: ".exe" },
+		{ trust: "unknown", entry: "VIRTUAL_ENV", ext: ".cmd" },
+	] as const)(
+		"keeps a project venv $ext refused under its extensionless spelling ($entry)",
+		async ({ trust, entry, ext }) => {
+			const originalPlatform = process.platform;
+			const originalVirtualEnv = process.env.VIRTUAL_ENV;
+			if (originalPlatform !== "win32") {
+				vi.doMock("node:fs", async (importActual) => {
+					const actual = await importActual<typeof import("node:fs")>();
+					const statSync = ((target: fs.PathLike, ...rest: never[]) =>
+						actual.statSync(
+							typeof target === "string"
+								? target.replaceAll("\\", "/")
+								: target,
+							...rest,
+						)) as typeof actual.statSync;
+					return { ...actual, statSync, default: { ...actual, statSync } };
+				});
+			}
+			setPlatform("win32");
+			const root = fs.realpathSync.native(
+				fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-5674-venv-")),
+			);
+			const scripts = path.join(root, ".venv", "Scripts");
+			fs.mkdirSync(scripts, { recursive: true });
+			for (const name of ["python.exe", `pyright-langserver${ext}`]) {
+				fs.writeFileSync(path.join(scripts, name), "MZ\n");
+			}
+			if (entry === "VIRTUAL_ENV") {
+				process.env.VIRTUAL_ENV = path.join(root, ".venv");
+			}
+			mockExit1Launch();
+			vi.doMock(
+				"../../../clients/package-manager.js",
+				async (importActual) => ({
+					...(await importActual<
+						typeof import("../../../clients/package-manager.js")
+					>()),
+					findGlobalBinary,
+				}),
+			);
+			try {
+				const { PythonServer } = await import("../../../clients/lsp/server.js");
+				const { withLspProjectCodePermission } =
+					await import("../../../clients/lsp/launch.js");
+				const { setProjectTrustState } =
+					await import("../../../clients/project-trust.js");
+				setProjectTrustState(trust);
+				await withLspProjectCodePermission(false, () =>
+					PythonServer.spawn(root, { allowInstall: false }),
+				).catch(() => undefined);
+				// No spawn may name the planted file or the extensionless spelling
+				// cmd.exe completes to it. A shell spawn quotes the program.
+				const base = path.join(scripts, "pyright-langserver");
+				const programs = spawnDouble.mock.calls.map(([command]) => {
+					const line = String(command);
+					return line.startsWith('"')
+						? line.slice(1, line.indexOf('"', 1))
+						: line;
+				});
+				expect(
+					programs.filter(
+						(program) => program === base || program === base + ext,
+					),
+				).toEqual([]);
+				// An extensionless spelling with no file in any PATHEXT form is a
+				// miss, not a refusal: it reaches the spawn, which fails and runs
+				// nothing, so the launch reports it not found (#5674).
+				expect(programs).toContain(
+					path.join(scripts, "basedpyright-langserver"),
+				);
+				expect(logExtension).toHaveBeenCalledWith(
+					expect.objectContaining({
+						message:
+							"project-local LSP binary refused: mark the project trusted in pi or upgrade pi",
+					}),
+				);
+			} finally {
+				vi.doUnmock("node:fs");
+				if (originalVirtualEnv === undefined) delete process.env.VIRTUAL_ENV;
+				else process.env.VIRTUAL_ENV = originalVirtualEnv;
+				fs.rmSync(root, { recursive: true, force: true });
+				setPlatform(originalPlatform);
+			}
+		},
+	);
 });

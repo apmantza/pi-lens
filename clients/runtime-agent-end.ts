@@ -1,3 +1,4 @@
+import { hasToolConfig } from "./tool-config-presence.js";
 import { createHash } from "node:crypto";
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
@@ -44,25 +45,17 @@ import { queueAgentAdvisory } from "./agent-nudge.js";
 import { holdFileMutationQueue } from "./file-mutation-queue.js";
 import { renderFixRunLoss } from "./fix-run-restore.js";
 import { getAmbientAbortSignal } from "./safe-spawn.js";
-import { type ProjectChangeSource } from "./project-changes.js";
+import { recordMutationOutcome } from "./mutation-bridge.js";
+import { readFileContent } from "./dispatch/runners/utils.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import {
 	type LineageHandle,
-	recordDroppedRead,
 	sessionFencedFixedThisTurn,
 } from "./session-scope.js";
 import {
 	getAutofixPolicyForFile,
-	hasBiomeConfig,
-	hasDetektConfig,
-	hasEslintConfig,
-	hasGolangciConfig,
 	hasKtfmtConfig,
 	hasKtlintConfig,
-	hasOxlintConfig,
-	hasRubocopConfig,
-	hasSqlfluffConfig,
-	hasStylelintConfig,
 } from "./tool-policy.js";
 
 /**
@@ -143,26 +136,72 @@ export interface AgentEndFormatSummary {
 	unavailable: Array<{ filePath: string; formatter: string; reason: string }>;
 }
 
-function recordProjectChange(args: {
+/**
+ * #5551: a file the drain rewrote records through the bridge's one body as a
+ * `drain` writer (`MutationWriter`): the change-log row, the read-guard credit
+ * (#3525: bytes the agent never saw, so authorship and not FileTime) and the
+ * turn-state range land in the session that queued the file, and none of them
+ * once that session was replaced (#3528), whose dropped credit the seam counts
+ * under `deferred-<source>` (#3611 F1). Returns whether the session was live.
+ */
+function recordDrainWrite(args: {
 	runtime: RuntimeCoordinator;
-	cwd: string;
+	cacheManager: CacheManager;
+	session: LineageHandle;
 	filePath: string;
-	source: ProjectChangeSource;
-	dbg: (msg: string) => void;
+	/** The record's turn-state cwd, which the change-log row is appended in. */
+	turnStateCwd: string;
+	source: "autofix" | "format";
 	/** #4943: the draining session, which owns every record it claimed. */
 	sessionId: string | undefined;
-}): void {
-	// One mutation seam (#2000 phase 1): bump + receipt + change-log live in
-	// RuntimeCoordinator.recordProjectMutation; this wrapper only carries the
-	// legacy dbg shape.
-	(args.runtime as Partial<RuntimeCoordinator>).recordProjectMutation?.({
-		filePath: args.filePath,
-		source: args.source,
-		cwd: args.cwd,
-		sessionId: args.sessionId,
-		onAppendError: (err) =>
-			args.dbg(`project change log append failed for ${args.filePath}: ${err}`),
-	});
+	/** The epoch the record was queued at (#3521). */
+	branchEpoch: number;
+	getFlag: (name: string, filePath?: string) => boolean | string | undefined;
+	dbg: (msg: string) => void;
+}): boolean {
+	const { runtime, filePath } = args;
+	// An unreadable file is still recorded: it counts one line, as the other
+	// scans do, and it reports no import change.
+	const content = readFileContent(filePath);
+	recordMutationOutcome(
+		{
+			filePath,
+			kind: "write",
+			importsChanged: content !== undefined && /^import\s/m.test(content),
+			consumer: `deferred-${args.source}`,
+			lineage: args.session,
+			readGuardBranchEpoch: args.branchEpoch,
+			...(args.sessionId !== undefined && { sessionId: args.sessionId }),
+		},
+		{
+			// No `deferMutation`: the drain is the deferred pass and queues none.
+			getRuntime: () => ({
+				turnIndex: runtime.turnIndex,
+				telemetrySessionId: runtime.telemetrySessionId,
+				// Read only once the seam found the session live: a replaced
+				// session's guard must not be created for it (#3528).
+				get readGuard() {
+					return runtime.readGuardFor(args.sessionId);
+				},
+				recordProjectMutation: (mutation) =>
+					(runtime as Partial<RuntimeCoordinator>).recordProjectMutation?.call(
+						runtime,
+						mutation,
+					),
+			}),
+			getCacheManager: () => args.cacheManager,
+			getProjectRoot: () => args.turnStateCwd,
+			getDispatchCwd: () => args.turnStateCwd,
+			countFileLines: () =>
+				content === undefined ? 1 : content.split("\n").length,
+			// The drain's queue holds only files a recorded write put there.
+			isRecordable: () => true,
+			shouldStampReadGuard: () => !args.getFlag("no-read-guard"),
+			dbg: args.dbg,
+		},
+		{ writer: "drain", source: args.source },
+	);
+	return args.session.isCurrent();
 }
 
 /**
@@ -310,7 +349,7 @@ export async function handleAgentEnd({
 						),
 					},
 				});
-				runtime.requeueDeferredMutations(pending);
+				runtime.requeueDeferredMutations(pending, reason === "format-failed");
 			},
 		);
 	};
@@ -545,14 +584,14 @@ export async function handleAgentEnd({
 			continue;
 		}
 		const policy = getAutofixPolicyForFile(filePath, {
-			hasEslintConfig: hasEslintConfig(record.cwd),
-			hasStylelintConfig: hasStylelintConfig(record.cwd),
-			hasSqlfluffConfig: hasSqlfluffConfig(record.cwd),
-			hasRubocopConfig: hasRubocopConfig(record.cwd),
-			hasBiomeConfig: hasBiomeConfig(record.cwd),
-			hasGolangciConfig: hasGolangciConfig(record.cwd),
-			hasDetektConfig: hasDetektConfig(record.cwd),
-			hasOxlintConfig: hasOxlintConfig(record.cwd),
+			hasEslintConfig: hasToolConfig("eslint", record.cwd),
+			hasStylelintConfig: hasToolConfig("stylelint", record.cwd),
+			hasSqlfluffConfig: hasToolConfig("sqlfluff", record.cwd),
+			hasRubocopConfig: hasToolConfig("rubocop", record.cwd),
+			hasBiomeConfig: hasToolConfig("biome", record.cwd),
+			hasGolangciConfig: hasToolConfig("golangci-lint", record.cwd),
+			hasDetektConfig: hasToolConfig("detekt", record.cwd),
+			hasOxlintConfig: hasToolConfig("oxlint", record.cwd),
 			hasKtfmtConfig: hasKtfmtConfig(record.cwd),
 			hasKtlintConfig: hasKtlintConfig(record.cwd),
 		});
@@ -616,37 +655,18 @@ export async function handleAgentEnd({
 				// The loop index is in range; `!` keeps the strict-indexed spike
 				// count flat (tests/config/strictness-baseline.json).
 				const queuedBranchEpoch = record!.readGuardBranchEpoch;
-				// #3528: this session's change log, read guard and turn state only.
-				const landed = session.guardedWrite(changedPath, () => {
-					recordProjectChange({
-						runtime,
-						cwd: record.turnStateCwd,
-						filePath: changedPath,
-						source: "autofix",
-						dbg,
-						sessionId: currentSessionId,
-					});
-					// #3525: bytes the agent never saw; authorship, not FileTime.
-					if (!getFlag("no-read-guard"))
-						runtime.readGuardFor(currentSessionId).recordWritten(changedPath, {
-							authorship: "whole-file",
-							branchEpoch: queuedBranchEpoch,
-							stampFileTime: false,
-						});
-					const content = nodeFs.readFileSync(changedPath, "utf-8");
-					cacheManager.addModifiedRange(
-						changedPath,
-						{ start: 1, end: content.split("\n").length },
-						/^import\s/m.test(content),
-						record.turnStateCwd,
-						currentSessionId ?? runtime.telemetrySessionId,
-						"pi",
-					);
-					return true;
+				recordDrainWrite({
+					runtime,
+					cacheManager,
+					session,
+					filePath: changedPath,
+					turnStateCwd: record.turnStateCwd,
+					source: "autofix",
+					sessionId: currentSessionId,
+					branchEpoch: queuedBranchEpoch,
+					getFlag,
+					dbg,
 				});
-				// #3611 F1: the read guard lost this authorship; count it by reason.
-				if (landed === undefined && !getFlag("no-read-guard"))
-					recordDroppedRead(session, "deferred-autofix", queuedBranchEpoch);
 			}
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
@@ -1070,59 +1090,28 @@ export async function handleAgentEnd({
 				// turnStateCwd is required on DeferredFormatRecord (PR #114) — the
 				// previous fallback chain through ctxCwd / projectRoot / record.cwd
 				// could silently regress the monorepo cwd-mismatch fix from PR #105.
-				const bookkeepingCwd = record.turnStateCwd;
-				const queuedBranchEpoch = record.readGuardBranchEpoch;
-				// #3528: this session's change log, read guard, turn state and turn
-				// summary only.
-				const landed = session.guardedWrite(filePath, () => {
-					recordProjectChange({
-						runtime,
-						cwd: bookkeepingCwd,
-						filePath,
-						source: "format",
-						dbg,
-						sessionId: currentSessionId,
-					});
-					// #3525: bytes the agent never saw; authorship, not FileTime.
-					if (!getFlag("no-read-guard")) {
-						runtime.readGuardFor(currentSessionId).recordWritten(filePath, {
-							authorship: "whole-file",
-							branchEpoch: queuedBranchEpoch,
-							stampFileTime: false,
-						});
-					}
-					try {
-						const content = nodeFs.readFileSync(filePath, "utf-8");
-						const lineCount = content.split("\n").length;
-						const hasImports = /^import\s/m.test(content);
-						cacheManager.addModifiedRange(
-							filePath,
-							{ start: 1, end: lineCount },
-							hasImports,
-							bookkeepingCwd,
-							currentSessionId ?? runtime.telemetrySessionId,
-							"pi",
-						);
-					} catch (err) {
-						dbg(
-							`agent_end deferred_format modified-range tracking failed for ${filePath}: ${err}`,
-						);
-					}
-
-					// #484: opt-in per-turn summary — deferred format is the OTHER
-					// half of the format signal (immediate-mode is recorded at the
-					// runtime-tool-result.ts seam); same result.formattersUsed the
-					// latency phase below already logs, no new plumbing.
-					if (getFlag("lens-turn-summary")) {
-						for (const tool of result.formattersUsed) {
-							runtime.turnSummary.recordFormat(filePath, { tool });
-						}
-					}
-					return true;
+				const live = recordDrainWrite({
+					runtime,
+					cacheManager,
+					session,
+					filePath,
+					turnStateCwd: record.turnStateCwd,
+					source: "format",
+					sessionId: currentSessionId,
+					branchEpoch: record.readGuardBranchEpoch,
+					getFlag,
+					dbg,
 				});
-				// #3611 F1: the read guard lost this authorship; count it by reason.
-				if (landed === undefined && !getFlag("no-read-guard"))
-					recordDroppedRead(session, "deferred-format", queuedBranchEpoch);
+				// #484: opt-in per-turn summary — deferred format is the OTHER
+				// half of the format signal (immediate-mode is recorded at the
+				// runtime-tool-result.ts seam); same result.formattersUsed the
+				// latency phase below already logs, no new plumbing. #3528: the
+				// draining session's summary only.
+				if (live && getFlag("lens-turn-summary")) {
+					for (const tool of result.formattersUsed) {
+						runtime.turnSummary.recordFormat(filePath, { tool });
+					}
+				}
 			}
 
 			if (result.fileContent) {

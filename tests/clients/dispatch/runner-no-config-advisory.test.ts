@@ -1,7 +1,9 @@
 /**
  * The #2811 recurrence: a constant per-file advisory on a runner path
- * ("no config detected", the markdownlint spawn-timeout cooldown notice)
- * logged once PER FILE at error level — 17 lines in one session for one
+ * ("no config detected"; the markdownlint spawn-timeout cooldown notice until
+ * #5413 moved that skip into the dispatcher, whose once-per-session ledger
+ * record `dispatch/runner-spawn-timeout-cooldown.test.ts` pins) logged once
+ * PER FILE at error level — 17 lines in one session for one
  * tool. The guards here red when the once-per-(tool, resolved root)
  * throttle is dropped (two lines, error level) and when the debug level is
  * lost (a line lands at the sink's error default).
@@ -23,7 +25,6 @@ import {
 	RunnerRegistry,
 } from "../../../clients/dispatch/dispatcher.js";
 import { FactStore } from "../../../clients/dispatch/fact-store.js";
-import markdownlintRunner from "../../../clients/dispatch/runners/markdownlint.js";
 import sqlfluffRunner from "../../../clients/dispatch/runners/sqlfluff.js";
 import stylelintRunner from "../../../clients/dispatch/runners/stylelint.js";
 import yamllintRunner from "../../../clients/dispatch/runners/yamllint.js";
@@ -33,10 +34,6 @@ import {
 	getExtensionLogPath,
 } from "../../../clients/extension-log.js";
 import { setProjectTrustState } from "../../../clients/project-trust.js";
-import {
-	noteSpawnTimeout,
-	resetSpawnTimeoutCooldowns,
-} from "../../../clients/spawn-timeout-cooldown.js";
 
 interface AdvisoryLine {
 	level?: string;
@@ -102,7 +99,6 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-	resetSpawnTimeoutCooldowns();
 	if (savedEnv.PI_LENS_TEST_MODE === undefined) {
 		delete process.env.PI_LENS_TEST_MODE;
 	} else {
@@ -157,45 +153,6 @@ describe("runner per-file advisories throttle once per tool and root (#2811)", (
 			).toHaveLength(0);
 		}
 	}, 30_000);
-
-	// Skips on Windows with a stated reason: the cooldown shim is a POSIX
-	// shebang script, so on win32 the availability probe cannot resolve it and
-	// the runner skips before the cooldown branch (no Windows behavior pinned).
-	it.skipIf(process.platform === "win32")(
-		"logs the markdownlint spawn-timeout cooldown advisory once at debug level",
-		{ timeout: 30_000 },
-		async () => {
-			const registry = register(new RunnerRegistry(), [markdownlintRunner]);
-			const shimDir = path.join(tempRoot, "venv", "bin");
-			fs.mkdirSync(shimDir, { recursive: true });
-			// The availability checker probes "markdownlint-cli2", so the shim must
-			// carry that name to resolve.
-			const shimPath = path.join(shimDir, "markdownlint-cli2");
-			fs.writeFileSync(shimPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-			writeProjectFile("a.md", "# hello\n");
-			writeProjectFile("b.md", "# world\n");
-			writeProjectFile("c.md", "# again\n");
-
-			// First dispatch: the shim resolves and verifies, the cooldown is not
-			// armed, so the runner completes without the cooldown advisory.
-			await dispatchReal(registry, "markdownlint", "a.md");
-			// Arm the runtime cooldown the same way a spawn timeout would; the next
-			// two dispatches take the cooldown branch, which must not log per file.
-			noteSpawnTimeout({
-				tool: "markdownlint",
-				command: shimPath,
-				phase: "lint",
-				durationMs: 1,
-			});
-			await dispatchReal(registry, "markdownlint", "b.md");
-			await dispatchReal(registry, "markdownlint", "c.md");
-			await flushExtensionLog();
-
-			const lines = readDispatchLines("markdownlint: ");
-			expect(lines).toHaveLength(1);
-			expect(lines[0]?.level).toBe("debug");
-		},
-	);
 
 	it("re-arms the advisory after the session-start ledger reset", async () => {
 		const registry = register(new RunnerRegistry(), [yamllintRunner]);

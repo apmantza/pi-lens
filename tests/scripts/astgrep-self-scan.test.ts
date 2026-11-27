@@ -37,6 +37,10 @@ import {
 	writeBaseline,
 } from "../../scripts/lib/astgrep-self-scan.mjs";
 import { setProjectTrustState } from "../../clients/project-trust.js";
+import {
+	expectPlantedStaleRow,
+	rowsWithoutLiveMember,
+} from "../support/baseline-staleness.js";
 
 // #4530: the ast-grep CLI under test is this checkout's own devDependency, found
 // through the test runner's `node_modules/.bin` PATH entry. That entry is the
@@ -439,6 +443,23 @@ d("pi-lens self-scan (#1718)", () => {
 			});
 		});
 	});
+
+	// Recurrence: a self-scan baseline row whose finding was fixed stayed
+	// admitted, so a new hit with the same signature would pass silently. Only
+	// the governance suite asserted this (planted row: the wrapper printed
+	// "46 finding(s) ... (47 allowed entries)" and exited 0).
+	it("every self-scan baseline row has a live finding", () => {
+		const result = runSelfScan({});
+		const tracked = trackedSelfScanFileSet(
+			repoRoot(),
+			suiteByName("self-scan").scanPaths,
+		);
+		const live = new Set(
+			findingSignatures(findingsInTrackedFiles(result.findings, tracked)),
+		);
+		expect(rowsWithoutLiveMember(loadBaseline(), live)).toEqual([]);
+		expect(result.scannedFileCount).toBeGreaterThan(1000);
+	});
 });
 
 // #3886 r3: the wrapper passes the directory roots CI uses -- never a file
@@ -701,6 +722,19 @@ d("governance suite: turn-count-wait (#4865)", () => {
 		expect(out).toMatch(/PASS turn-count-wait-test-hook /);
 	});
 
+	// The awaited-loop rule ships disabled (rules-disabled/; 17 real-I/O waits
+	// among 669 members). Its rule tests still run, so the #5618 review's 35
+	// plants stay judged and the rule is correct on the day it is switched on.
+	it("the disabled awaited-loop-wait rule tests pass", () => {
+		const run = runRuleTests(repoRoot(), {
+			...governance,
+			sgConfig: "sgconfig-disabled.yml",
+		});
+		const out = `${run.stdout ?? ""}${run.stderr ?? ""}`;
+		expect(run.status, out).toBe(0);
+		expect(out).toMatch(/PASS awaited-loop-wait /);
+	});
+
 	it("the tree has no untriaged member, and every baseline row has a reason and a live member", () => {
 		const result = runSelfScan({ suite: governance });
 		const tracked = trackedSelfScanFileSet(repoRoot(), governance.scanPaths);
@@ -711,7 +745,7 @@ d("governance suite: turn-count-wait (#4865)", () => {
 		const untriaged = findings.filter((_f, i) => !baseline.has(signatures[i]));
 		expect(untriaged, JSON.stringify(untriaged, null, 2)).toEqual([]);
 		const live = new Set(signatures);
-		expect([...baseline].filter((sig) => !live.has(sig))).toEqual([]);
+		expect(rowsWithoutLiveMember(baseline, live)).toEqual([]);
 		expect(result.scannedFileCount).toBeGreaterThan(1000);
 	});
 
@@ -803,6 +837,34 @@ d("governance suite: turn-count-wait (#4865)", () => {
 		} finally {
 			removeTempDirSync(root);
 		}
+	});
+});
+
+// #5072: the row-without-producer direction of both ledgers, on a row each
+// cell plants. The two live-finding cases above run the same comparison over
+// the real scan; these run without the CLI, so the CI job that skips the
+// binary still checks the direction.
+describe("ast-grep baselines red on a planted row with no live finding (#5072)", () => {
+	it("self-scan: a planted row no finding produces is reported", () => {
+		const rows = loadBaseline();
+		const planted = "5072-gone-rule:tests/clients/5072-gone.test.ts:1";
+		expectPlantedStaleRow({
+			baseline: "rules/ast-grep-rules/self-scan-baseline.json",
+			rowKey: planted,
+			verdict: rowsWithoutLiveMember([...rows, planted], rows),
+		});
+	});
+
+	it("governance: a planted row no finding produces is reported", () => {
+		const governance = suiteByName("governance");
+		const rows = loadBaseline(repoRoot(), governance);
+		const planted =
+			"turn-count-wait::tests/clients/5072-gone.test.ts::000000000000#0";
+		expectPlantedStaleRow({
+			baseline: "scripts/governance-rules/baseline.json",
+			rowKey: planted,
+			verdict: rowsWithoutLiveMember([...rows, planted], rows),
+		});
 	});
 });
 

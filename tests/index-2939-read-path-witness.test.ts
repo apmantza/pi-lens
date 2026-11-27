@@ -160,4 +160,23 @@ describe("#2939 W3 — behaviour history survives an absent resident client", ()
 			}),
 		]);
 	});
+
+	// #5429: the handler forwards the result's own progress signal, so two reads
+	// of one file with different arguments are the agent moving through the file,
+	// not a stuck loop. Drop the `progress` forward in `index.ts` and this third
+	// call becomes the one that trips the threshold.
+	it("forwards the progress signal so two differing reads are not thrashing", async () => {
+		const pi = await activated();
+		agentBehaviorClient.reset();
+		await pi.emit("tool_result", readResult("rd-4"), makeCtx({ cwd: tmpDir }));
+		await pi.emit(
+			"tool_result",
+			{ ...readResult("rd-5"), input: { path: filePath, offset: 21 } },
+			makeCtx({ cwd: tmpDir }),
+		);
+
+		// The third, direct call carries no progress evidence, so it counts, but
+		// the streak behind it is one, not two.
+		expect(agentBehaviorClient.recordToolCall("read", filePath)).toEqual([]);
+	});
 });

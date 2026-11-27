@@ -1,10 +1,13 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
-import { logRunnerAdvisoryOnce, resolveRunnerCwd } from "../../tool-cwd.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import {
 	getLinterPolicyForCwd,
 	markdownlintConfigArgs,
+	optionSafeTargetArg,
 } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -13,23 +16,11 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import {
-	createAvailabilityChecker,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { markdownlintNoFixInvocation } from "./utils/markdownlint-api.js";
 import { parseToolRun } from "./utils/tool-failure.js";
-import {
-	isInSpawnTimeoutCooldown,
-	noteSpawnTimeout,
-} from "../../spawn-timeout-cooldown.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
-
-const markdownlint = createAvailabilityChecker("markdownlint-cli2", ".cmd", [
-	"--no-globs",
-	"-",
-]);
 
 // EXIT TABLE (markdownlint-cli2 0.17 README https://github.com/DavidAnson/markdownlint-cli2#exit-codes): 0 = no
 // findings, 1 = lint findings, 2 = unexpected error (unreadable config, bad
@@ -134,57 +125,44 @@ const markdownlintRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "markdownlint");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("markdownlint")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
-		let cmd: string | null = null;
-		if (await markdownlint.isAvailableAsync(cwd)) {
-			cmd = markdownlint.getCommand(cwd);
-		} else {
-			cmd = await resolveToolCommandWithInstallFallback(cwd, "markdownlint");
-		}
+		const cmd = await resolveToolCommandWithInstallFallback(
+			cwd,
+			"markdownlint",
+		);
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
-
-		// #1995: a command cooling down after a spawn timeout already consumed
-		// its budget in another lane (availability verify, autofix --fix). Skip
-		// without spawning — "not checked", never re-reported as clean.
-		if (isInSpawnTimeoutCooldown(cmd)) {
-			logRunnerAdvisoryOnce(
-				ctx,
-				"markdownlint",
-				cwd,
-				`markdownlint: ${cmd} is cooling down after a spawn timeout — skipping (one bounded failure budget per edit)`,
-			);
-			return { status: "skipped", diagnostics: [], semantic: "none" };
-		}
+		if (!cmd) return toolAbsentSkip(cwd, { id: "markdownlint" });
 
 		// Shared config-args seam (#1247): the autofix path consumes the same
 		// builder, so the package-owned fallback config can never drift.
 		const configArgs = markdownlintConfigArgs(cwd);
-		const args = [...configArgs, ctx.filePath];
+		// #5544: cli2 matches its config's `ignores` globs against the path string it
+		// is handed, so an absolute argument lets a glob that names an ANCESTOR of the
+		// file exclude the file from its own lint — a lane under
+		// `<scratch>/.claude/worktrees/lane1` with `ignores: ["**/.claude/**"]`
+		// selected no file, exited 0, and the runner reported a silent clean. The
+		// spawn cwd is the project, so the argument is the project-relative path,
+		// actionlint's form (clients/dispatch/runners/actionlint.ts); a dispatched
+		// file outside the project keeps today's absolute form, as it has no
+		// project-relative spelling. The builder also `./`-prefixes a relative name
+		// whose first character is outside a known-safe class, so cli2 cannot read it
+		// as a modifier (#5544 rounds 2-3), and is shared with the autofix surface,
+		// so the two cannot drift.
+		const args = [...configArgs, optionSafeTargetArg(cwd, ctx.filePath)];
 		// #5119: cli2's own `fix` option cannot be turned off from the CLI, and a
 		// project `"fix": true` rewrote the file on a diagnostics pass. Lint
 		// through its exported `main` with `optionsOverride: { fix: false }` in a
 		// package-owned child, under the same spawn budget and kill; the bare
 		// command is spawned (never with --fix) only when no package is found.
 		const invocation = markdownlintNoFixInvocation({ command: cmd, cwd, args });
+		// #5413: a timeout arms the cooldown in `safeSpawnAsync`, keyed by this
+		// runner's id (the dispatcher's runner scope), and the dispatcher skips
+		// the runner before it runs again this session.
 		const result = await safeSpawnAsync(invocation.command, invocation.args, {
 			timeout: 15000,
 			cwd,
 		});
-
-		// #1995: a timeout is negative runtime evidence. Arm the cooldown so
-		// the autofix and availability lanes cannot hand this command a second
-		// budget within the same session.
-		if (result.failure === "timeout") {
-			noteSpawnTimeout({
-				tool: "markdownlint",
-				command: cmd,
-				phase: "lint",
-				durationMs: 15000,
-				teardown: result.timeoutTeardown,
-			});
-		}
 
 		// #1816: this runner read `result.status` zero times, so an exit-2
 		// config error with an empty stdout parsed to zero diagnostics and was
@@ -196,6 +174,8 @@ const markdownlintRunner: RunnerDefinition = {
 		const run = parseToolRun(
 			"markdownlint",
 			{ result, output: raw, exitCodes: MARKDOWNLINT_EXIT_CODES },
+			// ADR 0009: the finding is attributed to the dispatched path; the parser
+			// resolves the tool's project-relative report against the spawn cwd.
 			(out) => parseMarkdownlintOutput(out, ctx.filePath, cwd),
 		);
 		if (run.skipped) return run.skipped;

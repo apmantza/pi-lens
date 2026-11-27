@@ -2,6 +2,7 @@
   "$comment": "Checked-in coverage map for #3802 rule 2, produced by the #3803 phase-1 audit (2026-09-30, master 1f41157ca), landed by #3802. Key = source glob relative to the repo root. Value = the formal/ families whose spec models behaviour in that file, or the string \"unmodelled\" for a lifecycle/timing/identity/concurrency file that no family models yet. A row is ANY-OF: a PR touching a mapped file must also touch a formal/<family>/*.tla or *.cfg file for ANY ONE of the row's families, or carry a `TLA+ unaffected: <family> — <reason>` line in the PR body for any one of them. A row listing 4 or more families (a hub file such as the LSP client) is too coarse for file-level matching, so an unmet hub row prints a note and never fails; a row written as {families, anchors} (index.ts) instead gates only on the families of a lifecycle hook handler a changed hunk lands in, and prints a note for a change outside every handler (#3878). `unmodelled` entries print an advisory and never gate; they keep the gap visible. Every formal/<dir> must be listed in `families` and named by at least one row; a TLA lane that adds a family adds its row in the same PR. `notes` explains the non-obvious rows and the hot files deliberately left out. Paths were checked to exist on master at audit time.",
   "version": 0,
   "families": [
+    "adopted-root-trust",
     "availability-latch",
     "dispatch-pipeline",
     "disk-change-publisher",
@@ -33,9 +34,12 @@
     "blocker-pending",
     "cascade-delivery",
     "test-runner-delivery",
-    "finding-delivery"
+    "finding-delivery",
+    "collect-later-flight",
+    "ipc-endpoint-identity"
   ],
   "map": {
+    "clients/package-manager.ts": ["availability-latch", "adopted-root-trust"],
     "clients/read-guard.ts": [
       "read-guard",
       "session-lifecycle"
@@ -153,13 +157,21 @@
     "clients/safe-spawn.ts": "unmodelled",
     "clients/installer/managed-tool-refresh.ts": "unmodelled",
     "clients/bootstrap.ts": "unmodelled",
-    "clients/project-trust.ts": "unmodelled",
+    "clients/project-trust.ts": ["adopted-root-trust"],
     "clients/deferred-lsp-work.ts": "unmodelled",
     "clients/event-loop-hold.ts": "unmodelled",
     "clients/recent-touches.ts": "unmodelled",
-    "mcp/server.ts": "unmodelled",
+    "mcp/server.ts": [
+      "ipc-endpoint-identity"
+    ],
+    "clients/mcp/ipc.ts": [
+      "ipc-endpoint-identity"
+    ],
     "clients/dispatch/dispatcher.ts": [
       "blocker-pending"
+    ],
+    "clients/dispatch/collect-later-tier.ts": [
+      "collect-later-flight"
     ],
     "clients/dispatch/pending-runner-findings.ts": [
       "pending-runner-store"
@@ -269,7 +281,8 @@
     ],
     "clients/lsp/client-registry.ts": [
       "lsp-crash",
-      "lsp-idle-reset"
+      "lsp-idle-reset",
+      "adopted-root-trust"
     ],
     "clients/lsp/client.ts": [
       "lsp-crash",
@@ -516,18 +529,19 @@
     "clients/runtime-turn.ts": "`handleTurnEnd`'s drains and the park of a cut advisory: modelled by session-lifecycle's `TurnEnd` (a turn_end drains only its own scope's work: `SecondaryTurnEnd` is master's open half of #3613 and #3758, `SecondaryTurnEndScoped` the proposed shape) and `park`/`ParkTake` (`ParkMerged`, `Pre4112ParkNoSessionKey`, `Mut4112ParkNoResetClear`, `MutParkNoFence`; the key and fence are also turn-end-delivery-holds'). The row is deliberately not given session-lifecycle: a fourth family would make it a hub and silence its gate (#3878). Its cascade sections (the registry peek, the pending and unresolved lines, the pending record) are cascade-delivery's `TurnEnd`, left off the row for the same reason.",
     "index.ts": "The hook handlers in index.ts: an edit inside one (session_start, session_shutdown, session_tree, turn_start, turn_end, agent_end, agent_settled, tool_call, tool_result, context, context_with_system) gates on that hook's families only, found by `findHookRanges` in scripts/lib/tla-coverage.mjs from the post-image the diff names (#3878). An edit outside every handler (activation setup, helpers) prints a note and never gates. `context_with_system` is the pi 0.87+ request hook that sees the full transcript; `context` injects on a pre-0.87 host and defers on 0.87+ (#4631). `model_select` re-plans the active tool set for the new model (#4687); it maps to session-lifecycle, whose LZ memory store is what the plan reads.",
     "clients/dispatch/runners/utils/availability-policy.ts": "The latch (`createAvailabilityLatch`): verdict, cooldowns, install attempts and the exhausted verdict, the trust stamp (#4530, #4776) and the install-generation sync, written by a probe's settle and read by a caller. Modelled as availability-latch's `Call`, `Settle`, `SessionStart`, `TrustAdopt` and `ExpireCooldown`. The transient cooldown ladder's lengths, the host-stall shortcut, the probe classification and the message split are not modelled.",
-    "clients/dispatch/runners/utils/runner-helpers.ts": "The probe flights that write the latch: `createCwdCachedProbe` and `createAvailabilityChecker` (a latch or cache replaced per generation: `CwdProbe`). The sg sweep (`isSgAvailableAsync`) was deleted in #5345 — no production caller, and it carried B1 — so the `SgSweep*` configs stand as the as-built record of that knob shape, not of live code. The latched-unavailable bookkeeping memo, the managed-shim verdict flights (`guardedWrite`) and the installer-backed resolvers are not modelled.",
-    "clients/out-of-band-changes.ts": "The look's per-root records and owed walks (both `BoundedFifoMap(MAX_ROOTS)`), the coalesced flight and its trailing pass, and the commit-before-publish order are modelled by disk-change-publisher (`Begin`, `Read`, `Commit`, `Next`; `NoLostChange`, `DemandServed`, `OneRestartPerInstall`). The FIFO eviction that loses a change is the accepted p3 B2a (`B2aEvictedInstall`, `B2aEvictedDeclaration`). Declaration-walk caps, unreadable subtrees, the HEAD baseline and the abort signal are not modelled.",
+    "clients/dispatch/runners/utils/runner-helpers.ts": "The probe flights that write the latch: `createCwdCachedProbe` and `createAvailabilityChecker` (a per-cwd latch replaced per generation: `CwdProbe`; the checker held a trust-blind cache until #5410, the `Pre4530ReadNoTrust` shape). The sg sweep (`isSgAvailableAsync`) was deleted in #5345 — no production caller, and it carried B1 — so the `SgSweep*` configs stand as the as-built record of that knob shape, not of live code. The latched-unavailable bookkeeping memo, the managed-shim verdict flights (`guardedWrite`) and the installer-backed resolvers are not modelled.",
+    "clients/out-of-band-changes.ts": "The look's per-root records and owed walks (both `BoundedFifoMap(MAX_ROOTS)`), the coalesced flight and its trailing pass, and the commit-before-publish order are modelled by disk-change-publisher (`Begin`, `Read`, `Commit`, `Next`; `NoLostChange`, `DemandServed`, `OneRestartPerInstall`), as are the epochs a first look names, a client root's for installs and configs and the session side's `liveClients` for configs only (`Closure`, `SessionFirstLookNoRestart`, #5501). The FIFO eviction that loses a change is the accepted p3 B2a (`B2aEvictedInstall`, `B2aEvictedDeclaration`). Declaration-walk caps, unreadable subtrees, the HEAD baseline and the abort signal are not modelled.",
     "clients/disk-changes.ts": "The publisher's sequence allocation before fan-out, awaited and isolated fan-out, the once-per-consumer failure record and the agent-only authorship write set are modelled by disk-change-publisher (`Alloc`, `FanOk`, `FanThrow`, `PubDone`; I2 to I5). The registry of subscribers and the per-origin policy are not modelled.",
     "clients/disk-change-subscribers.ts": "Registration order (the diagnostics cache, then the LSP consumer) is the fan-out order of disk-change-publisher's `FanOk`; what a subscriber does with a change (the cache clock, the client restart, the watched-files events) and its settled-sweep drain latch are not modelled.",
-    "clients/safe-spawn.ts": "Per-child teardown flags and timeout, abort, output-cap, close and escalation timers form a spawn lifecycle; child events and kill paths are unmodelled.",
+    "clients/safe-spawn.ts": "No formal family models safe-spawn.ts yet: per-child teardown flags and timeout, abort, output-cap, close and escalation timers form a spawn lifecycle; child events and kill paths remain unmodelled.",
     "clients/installer/managed-tool-refresh.ts": "Managed-tool refresh has an in-flight slot, session budget reservation and resettable tap points; session start, reset, stamp cadence and concurrent callers are unmodelled.",
     "clients/bootstrap.ts": "Analyzer bootstrap tracks resident clients, shutdown state, failure strikes, load attempts and a keyed flight; demand, session reset, shutdown and late build settlement are unmodelled.",
-    "clients/project-trust.ts": "Process-wide trust state and trustGeneration change on adoption at session_start and turn_start; availability, LSP and installer consumers read the generation, with no formal family.",
+    "clients/project-trust.ts": "Adopted project-code LSP admission uses the root decision rather than session trust, modelled by adopted-root-trust. Process-wide session trust generation remains outside that model.",
     "clients/deferred-lsp-work.ts": "One deferred LSP work slot moves idle to armed or aborted; turn_end, work settlement, session start/shutdown and idle reset are its actors.",
     "clients/event-loop-hold.ts": "A process-singleton hold map and re-armed timer change on hold/release, deadline reap, session reset and timer failure; the liveness machine is unmodelled.",
     "clients/recent-touches.ts": "Cross-process recent-touch append/read state combines a global mtime/size watermark with a per-CWD cursor; turn/session readers and concurrent producers are unmodelled.",
-    "mcp/server.ts": "MCP auto-session state and its in-flight self-heal change on tool calls, successful session start and failed retry; the host lifecycle is unmodelled.",
+    "mcp/server.ts": "ipc-endpoint-identity models startup endpoint admission and shared-name replacement. MCP auto-session state and its in-flight self-heal remain unmodelled.",
+    "clients/mcp/ipc.ts": "ipc-endpoint-identity models keeping versus shared endpoint names, client admission, and the workspace server's pre-unlink gate. Byte cuts, framing, and request deadlines remain runtime-test concerns.",
     "clients/lsp/workspace-sweep-hold.ts": "Workspace sweep holds, idle waiters and age-based reap change on LSP work completion, idle reads and session reset; modelled by lsp-idle-reset.",
     "clients/lsp/workspace-diagnostics-session.ts": "The diagnostics session clock (`_sessionStartedAt`), the bounded file-creation map (`_fileCreations`) and the all-files-changed watermark (`_allFilesChangedAt`) change on session start, file creation and eviction. The nearest family is store-freshness, which models a cache entry stamped against its file's mtime, size and dependency `scannedAt`; it does not model these three, so the file is unmodelled.",
     "clients/lsp/aggregation.ts": "Language and auxiliary completion counts plus grace timers change as LSP promises settle, in `raceToCompletion`, the result-aware race over multi-client diagnostics collection. The nearest family is late-aux-drain, which models `touchFile`'s aux-grace wait and the `turn_end` drain of late publishes; it does not model this race or its counts.",
@@ -538,7 +552,7 @@
     "clients/dispatch/runners/helm-render.ts": "The module-level path-keyed in-flight Promise map changes on render requests and settlement; concurrent runner ownership is unmodelled.",
     "clients/dispatch/runners/psscriptanalyzer.ts": "The module-level PowerShell availability latch changes on probe, cooldown and reset; runner callers and expiry are unmodelled.",
     "clients/hashline-anchor.ts": "The module-level bounded anchor-index cache changes on hashline indexing and eviction; index reuse and invalidation are unmodelled.",
-    "clients/lsp/jvm-runtime.ts": "The module-level Java availability latch changes on probe, cooldown and reset; LSP runtime callers and expiry are unmodelled.",
+    "clients/lsp/jvm-runtime.ts": "The module-level JVM environment cache (`_cachedEnv`) changes on probe and reset; the java-on-PATH verdict itself now lives in the registry checker's availability latch (runner-helpers, #5410). LSP runtime callers and expiry are unmodelled.",
     "clients/lsp/session-roots.ts": "The module-level bounded session-root registry changes on root admission and eviction; session ownership and expiry are unmodelled.",
     "clients/lsp/spawn-history.ts": "The module-level bounded successful-spawn history changes on LSP spawn completion and eviction; its retention lifecycle is unmodelled.",
     "clients/path-birth.ts": "The module-level bounded path-birth maps change on path replacement and appearance observations; eviction and session readers are unmodelled.",

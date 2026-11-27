@@ -25,10 +25,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+	boundUnixSocketPath,
 	ipcPathForCwd,
 	WARM_TURN_END_SCHEMA_VERSION,
 } from "../../clients/mcp/ipc.js";
 import { removeTempDirSync } from "../clients/test-utils.js";
+import { ambientSocketNameIsShared } from "../support/socket-identity.js";
 import { McpHarness } from "./harness.js";
 
 interface RouteReply {
@@ -43,7 +45,7 @@ function askLine(
 	timeoutMs = 30_000,
 ): Promise<RouteReply> {
 	return new Promise((resolve, reject) => {
-		const socket = net.createConnection(endpoint);
+		const socket = net.createConnection(boundUnixSocketPath(endpoint));
 		socket.setEncoding("utf8");
 		let buffer = "";
 		let settled = false;
@@ -97,7 +99,7 @@ function invertPathCase(p: string): string {
 
 function connects(endpoint: string): Promise<boolean> {
 	return new Promise((resolve) => {
-		const probe = net.createConnection(endpoint);
+		const probe = net.createConnection(boundUnixSocketPath(endpoint));
 		probe.on("connect", () => {
 			probe.destroy();
 			resolve(true);
@@ -112,235 +114,250 @@ function connects(endpoint: string): Promise<boolean> {
 // Spawns the MCP server as a real subprocess; like the other smokes it can lose
 // a CPU-starvation race in the full parallel suite (passes in isolation).
 // retry: 2 absorbs the transient spike (the established pattern here).
-describe("warm turn-end IPC route (real spawn)", { retry: 2 }, () => {
-	let harness: McpHarness;
-	let projectDir: string;
-	let endpoint: string;
-	let sampleFile: string;
+// lane: Unit tests (CI's short TMPDIR); where the cut makes the workspace
+// endpoint a shared name, the server never binds it, so the route is absent.
+describe.skipIf(ambientSocketNameIsShared())(
+	"warm turn-end IPC route (real spawn)",
+	{ retry: 2 },
+	() => {
+		let harness: McpHarness;
+		let projectDir: string;
+		let endpoint: string;
+		let sampleFile: string;
 
-	beforeAll(async () => {
-		projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-turn-route-"));
-		sampleFile = path.join(projectDir, "sample.ts");
-		fs.writeFileSync(
-			sampleFile,
-			"export function f(x) {\n\tconsole.log(x);\n}\n",
-		);
-		endpoint = ipcPathForCwd(projectDir);
-		harness = new McpHarness({
-			cwd: projectDir,
-			env: {
-				PILENS_DATA_DIR: path.join(projectDir, "data"),
-				// The gate short-circuits every request with an error reply when the
-				// build is older than its source, which would mask the route entirely.
-				PI_LENS_WARM_STALENESS_CHECK: "0",
-			},
-		});
-		await vi.waitFor(async () => expect(await connects(endpoint)).toBe(true), {
-			timeout: 20_000,
-			interval: 100,
-		});
-	}, 30_000);
+		beforeAll(async () => {
+			projectDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-turn-route-"),
+			);
+			sampleFile = path.join(projectDir, "sample.ts");
+			fs.writeFileSync(
+				sampleFile,
+				"export function f(x) {\n\tconsole.log(x);\n}\n",
+			);
+			endpoint = ipcPathForCwd(projectDir);
+			harness = new McpHarness({
+				cwd: projectDir,
+				env: {
+					PILENS_DATA_DIR: path.join(projectDir, "data"),
+					// The gate short-circuits every request with an error reply when the
+					// build is older than its source, which would mask the route entirely.
+					PI_LENS_WARM_STALENESS_CHECK: "0",
+				},
+			});
+			await vi.waitFor(
+				async () => expect(await connects(endpoint)).toBe(true),
+				{
+					timeout: 20_000,
+					interval: 100,
+				},
+			);
+		}, 30_000);
 
-	afterAll(() => {
-		harness.dispose();
-		removeTempDirSync(projectDir);
-	});
-
-	// The version gate is the server's ONLY protection against an old hook bin
-	// driving a schema it doesn't speak. Note the wire reason a real skew
-	// produces is `ipc-error` (an `{error}` reply), NOT the `schema-mismatch`
-	// the client-side validator returns for a versioned `{result}` — only a live
-	// server shows which one the bin actually reports.
-	it("rejects a turn-end request tagged with an unknown schema version", async () => {
-		const reply = await ask(endpoint, {
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION + 1,
-			cwd: projectDir,
+		afterAll(() => {
+			harness.dispose();
+			removeTempDirSync(projectDir);
 		});
 
-		expect(reply.result).toBeUndefined();
-		expect(reply.error).toContain("turn-end schema");
-	}, 25_000);
-
-	it("answers a valid turn-end request with a tagged result envelope", async () => {
-		const reply = await ask(endpoint, {
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION,
-			cwd: projectDir,
-		});
-
-		expect(reply.error).toBeUndefined();
-		// The tag the client validates on; an untagged/mis-tagged result is read as
-		// `schema-mismatch` and the whole pass is silently discarded.
-		expect(reply.result).toMatchObject({
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION,
-		});
-	}, 40_000);
-
-	// The tagged branch was inserted directly in front of the legacy analyze
-	// path, which has no `route` field — a mis-ordered or over-eager branch here
-	// breaks the PostToolUse hook on every workspace.
-	it("still serves an untagged analyze request on a server that knows the route", async () => {
-		const reply = await ask(endpoint, { file: sampleFile, cwd: projectDir });
-
-		expect(reply.error).toBeUndefined();
-		const result = reply.result as
-			| { filePath?: string; counts?: Record<string, number> }
-			| undefined;
-		expect(result?.filePath).toContain("sample.ts");
-		expect(result?.counts).toBeDefined();
-	}, 40_000);
-
-	it("answers both halves of an overlapping turn-end pair", async () => {
-		const request = {
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION,
-			cwd: projectDir,
-		};
-		// Serialized server-side (one RuntimeCoordinator/CacheManager): the second
-		// caller must still get its own reply rather than being dropped or coalesced
-		// into the first, or a Stop hook would hang to its 60 s timeout.
-		const [first, second] = await Promise.all([
-			ask(endpoint, request),
-			ask(endpoint, request),
-		]);
-
-		expect(first.result).toMatchObject({ route: "turn-end" });
-		expect(second.result).toMatchObject({ route: "turn-end" });
-	}, 40_000);
-
-	// #1273: the route took `parsed.cwd` on trust, called ensureReady on it, and
-	// ran THAT directory's configured test runner — arbitrary code execution for
-	// anything that could reach the endpoint (same-uid processes, a
-	// permissive-umask host, a Windows named pipe's more generous default DACL).
-	// Every legitimate client derived the socket path from the same cwd, so the
-	// guard costs nothing legitimate. Asserted on the wire, not on a unit-level
-	// predicate, because the reply is the only thing an attacker sees.
-	it("rejects a turn-end request for a cwd outside the server's workspace", async () => {
-		const foreign = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-foreign-"));
-		try {
+		// The version gate is the server's ONLY protection against an old hook bin
+		// driving a schema it doesn't speak. Note the wire reason a real skew
+		// produces is `ipc-error` (an `{error}` reply), NOT the `schema-mismatch`
+		// the client-side validator returns for a versioned `{result}` — only a live
+		// server shows which one the bin actually reports.
+		it("rejects a turn-end request tagged with an unknown schema version", async () => {
 			const reply = await ask(endpoint, {
 				route: "turn-end",
-				version: WARM_TURN_END_SCHEMA_VERSION,
-				cwd: foreign,
+				version: WARM_TURN_END_SCHEMA_VERSION + 1,
+				cwd: projectDir,
 			});
 
 			expect(reply.result).toBeUndefined();
-			expect(reply.error).toContain("outside this server's workspace");
-		} finally {
-			removeTempDirSync(foreign);
-		}
-	}, 25_000);
+			expect(reply.error).toContain("turn-end schema");
+		}, 25_000);
 
-	// The ack shares the map keyed by that same untrusted cwd, so it needs the
-	// same guard or the hole simply moves one route over.
-	it("rejects a turn-end ack for a cwd outside the server's workspace", async () => {
-		const foreign = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-foreign-"));
-		try {
-			const reply = await ask(endpoint, {
-				route: "turn-end-ack",
-				version: WARM_TURN_END_SCHEMA_VERSION,
-				cwd: foreign,
-				deliveryId: "00000000-0000-0000-0000-000000000000",
-			});
-
-			expect(reply.result).toBeUndefined();
-			expect(reply.error).toContain("outside this server's workspace");
-		} finally {
-			removeTempDirSync(foreign);
-		}
-	}, 25_000);
-
-	// A subdirectory of the server's own workspace is legitimate — the guard must
-	// not break a hook whose cwd is a package inside the repo.
-	it("accepts a turn-end request for a subdirectory of its workspace", async () => {
-		const nested = path.join(projectDir, "packages", "inner");
-		fs.mkdirSync(nested, { recursive: true });
-		const reply = await ask(endpoint, {
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION,
-			cwd: nested,
-		});
-
-		expect(reply.error).toBeUndefined();
-		expect(reply.result).toMatchObject({ route: "turn-end" });
-	}, 40_000);
-
-	// #2556 RECURRENCE GUARDED: the guard read `path.relative(DEFAULT_CWD, cwd)
-	// .startsWith("..")`, so a package directory named `..pkg` inside the
-	// workspace was rejected as foreign and its turn-end never ran.
-	it("accepts a turn-end request for a ..-named subdirectory of its workspace (#2556)", async () => {
-		const nested = path.join(projectDir, "..pkg");
-		fs.mkdirSync(nested, { recursive: true });
-		const reply = await ask(endpoint, {
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION,
-			cwd: nested,
-		});
-
-		expect(reply.error).toBeUndefined();
-		expect(reply.result).toMatchObject({ route: "turn-end" });
-	}, 40_000);
-
-	// Re-confirms the exact-same-string root is accepted now that the guard no
-	// longer special-cases it with a `target === DEFAULT_CWD` fast path — every
-	// acceptance (including this one) now flows through the `rel === ""` branch,
-	// on every OS. Runs on Linux CI as a meaningful check of that shared path,
-	// not just a skipped placeholder.
-	it("accepts a turn-end request for the literal workspace-root string", async () => {
-		const reply = await ask(endpoint, {
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION,
-			cwd: projectDir,
-		});
-
-		expect(reply.error).toBeUndefined();
-		expect(reply.result).toMatchObject({ route: "turn-end" });
-	}, 40_000);
-
-	// #1273 follow-up: on win32, `path.relative` is case-insensitive, so a cwd
-	// that differs from the server's DEFAULT_CWD only in case (drive letter or a
-	// path segment) still resolves to the exact same directory via
-	// `path.relative`, returning "". Claude Code's Stop-hook cwd can legitimately
-	// differ in case from how the server derived DEFAULT_CWD (see
-	// `ipcPathForCwd`/`workspaceHash` in clients/mcp/ipc.ts, which deliberately
-	// lowercases for exactly this reason). The pre-fix guard's `rel !== ""` term
-	// wrongly rejected this case as "outside this server's workspace" even
-	// though it names the literal workspace root — every turn-end at the root
-	// would silently no-op. Gated to win32: POSIX is case-sensitive, so a
-	// case-swapped string names a genuinely different (nonexistent) path there,
-	// and asserting acceptance would be meaningless / actively wrong.
-	// lane: windows-vitest
-	it.skipIf(process.platform !== "win32")(
-		"accepts a turn-end request whose cwd differs from the workspace root only in case",
-		async () => {
-			const caseVariantCwd = invertPathCase(projectDir);
-			expect(caseVariantCwd).not.toBe(projectDir);
-
+		it("answers a valid turn-end request with a tagged result envelope", async () => {
 			const reply = await ask(endpoint, {
 				route: "turn-end",
 				version: WARM_TURN_END_SCHEMA_VERSION,
-				cwd: caseVariantCwd,
+				cwd: projectDir,
+			});
+
+			expect(reply.error).toBeUndefined();
+			// The tag the client validates on; an untagged/mis-tagged result is read as
+			// `schema-mismatch` and the whole pass is silently discarded.
+			expect(reply.result).toMatchObject({
+				route: "turn-end",
+				version: WARM_TURN_END_SCHEMA_VERSION,
+			});
+		}, 40_000);
+
+		// The tagged branch was inserted directly in front of the legacy analyze
+		// path, which has no `route` field — a mis-ordered or over-eager branch here
+		// breaks the PostToolUse hook on every workspace.
+		it("still serves an untagged analyze request on a server that knows the route", async () => {
+			const reply = await ask(endpoint, { file: sampleFile, cwd: projectDir });
+
+			expect(reply.error).toBeUndefined();
+			const result = reply.result as
+				| { filePath?: string; counts?: Record<string, number> }
+				| undefined;
+			expect(result?.filePath).toContain("sample.ts");
+			expect(result?.counts).toBeDefined();
+		}, 40_000);
+
+		it("answers both halves of an overlapping turn-end pair", async () => {
+			const request = {
+				route: "turn-end",
+				version: WARM_TURN_END_SCHEMA_VERSION,
+				cwd: projectDir,
+			};
+			// Serialized server-side (one RuntimeCoordinator/CacheManager): the second
+			// caller must still get its own reply rather than being dropped or coalesced
+			// into the first, or a Stop hook would hang to its 60 s timeout.
+			const [first, second] = await Promise.all([
+				ask(endpoint, request),
+				ask(endpoint, request),
+			]);
+
+			expect(first.result).toMatchObject({ route: "turn-end" });
+			expect(second.result).toMatchObject({ route: "turn-end" });
+		}, 40_000);
+
+		// #1273: the route took `parsed.cwd` on trust, called ensureReady on it, and
+		// ran THAT directory's configured test runner — arbitrary code execution for
+		// anything that could reach the endpoint (same-uid processes, a
+		// permissive-umask host, a Windows named pipe's more generous default DACL).
+		// Every legitimate client derived the socket path from the same cwd, so the
+		// guard costs nothing legitimate. Asserted on the wire, not on a unit-level
+		// predicate, because the reply is the only thing an attacker sees.
+		it("rejects a turn-end request for a cwd outside the server's workspace", async () => {
+			const foreign = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-foreign-"),
+			);
+			try {
+				const reply = await ask(endpoint, {
+					route: "turn-end",
+					version: WARM_TURN_END_SCHEMA_VERSION,
+					cwd: foreign,
+				});
+
+				expect(reply.result).toBeUndefined();
+				expect(reply.error).toContain("outside this server's workspace");
+			} finally {
+				removeTempDirSync(foreign);
+			}
+		}, 25_000);
+
+		// The ack shares the map keyed by that same untrusted cwd, so it needs the
+		// same guard or the hole simply moves one route over.
+		it("rejects a turn-end ack for a cwd outside the server's workspace", async () => {
+			const foreign = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-foreign-"),
+			);
+			try {
+				const reply = await ask(endpoint, {
+					route: "turn-end-ack",
+					version: WARM_TURN_END_SCHEMA_VERSION,
+					cwd: foreign,
+					deliveryId: "00000000-0000-0000-0000-000000000000",
+				});
+
+				expect(reply.result).toBeUndefined();
+				expect(reply.error).toContain("outside this server's workspace");
+			} finally {
+				removeTempDirSync(foreign);
+			}
+		}, 25_000);
+
+		// A subdirectory of the server's own workspace is legitimate — the guard must
+		// not break a hook whose cwd is a package inside the repo.
+		it("accepts a turn-end request for a subdirectory of its workspace", async () => {
+			const nested = path.join(projectDir, "packages", "inner");
+			fs.mkdirSync(nested, { recursive: true });
+			const reply = await ask(endpoint, {
+				route: "turn-end",
+				version: WARM_TURN_END_SCHEMA_VERSION,
+				cwd: nested,
 			});
 
 			expect(reply.error).toBeUndefined();
 			expect(reply.result).toMatchObject({ route: "turn-end" });
-		},
-		40_000,
-	);
+		}, 40_000);
 
-	it("survives a malformed line and answers the next request", async () => {
-		// Raw, unparseable bytes — not `JSON.stringify("…")`, which would be a
-		// perfectly valid JSON string and never reach the parse failure.
-		const garbage = await askLine(endpoint, "not json at all");
-		expect(garbage.error).toBeDefined();
+		// #2556 RECURRENCE GUARDED: the guard read `path.relative(DEFAULT_CWD, cwd)
+		// .startsWith("..")`, so a package directory named `..pkg` inside the
+		// workspace was rejected as foreign and its turn-end never ran.
+		it("accepts a turn-end request for a ..-named subdirectory of its workspace (#2556)", async () => {
+			const nested = path.join(projectDir, "..pkg");
+			fs.mkdirSync(nested, { recursive: true });
+			const reply = await ask(endpoint, {
+				route: "turn-end",
+				version: WARM_TURN_END_SCHEMA_VERSION,
+				cwd: nested,
+			});
 
-		const reply = await ask(endpoint, {
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION,
-			cwd: projectDir,
-		});
-		expect(reply.result).toMatchObject({ route: "turn-end" });
-	}, 40_000);
-});
+			expect(reply.error).toBeUndefined();
+			expect(reply.result).toMatchObject({ route: "turn-end" });
+		}, 40_000);
+
+		// Re-confirms the exact-same-string root is accepted now that the guard no
+		// longer special-cases it with a `target === DEFAULT_CWD` fast path — every
+		// acceptance (including this one) now flows through the `rel === ""` branch,
+		// on every OS. Runs on Linux CI as a meaningful check of that shared path,
+		// not just a skipped placeholder.
+		it("accepts a turn-end request for the literal workspace-root string", async () => {
+			const reply = await ask(endpoint, {
+				route: "turn-end",
+				version: WARM_TURN_END_SCHEMA_VERSION,
+				cwd: projectDir,
+			});
+
+			expect(reply.error).toBeUndefined();
+			expect(reply.result).toMatchObject({ route: "turn-end" });
+		}, 40_000);
+
+		// #1273 follow-up: on win32, `path.relative` is case-insensitive, so a cwd
+		// that differs from the server's DEFAULT_CWD only in case (drive letter or a
+		// path segment) still resolves to the exact same directory via
+		// `path.relative`, returning "". Claude Code's Stop-hook cwd can legitimately
+		// differ in case from how the server derived DEFAULT_CWD (see
+		// `ipcPathForCwd`/`workspaceHash` in clients/mcp/ipc.ts, which deliberately
+		// lowercases for exactly this reason). The pre-fix guard's `rel !== ""` term
+		// wrongly rejected this case as "outside this server's workspace" even
+		// though it names the literal workspace root — every turn-end at the root
+		// would silently no-op. Gated to win32: POSIX is case-sensitive, so a
+		// case-swapped string names a genuinely different (nonexistent) path there,
+		// and asserting acceptance would be meaningless / actively wrong.
+		// lane: windows-vitest
+		it.skipIf(process.platform !== "win32")(
+			"accepts a turn-end request whose cwd differs from the workspace root only in case",
+			async () => {
+				const caseVariantCwd = invertPathCase(projectDir);
+				expect(caseVariantCwd).not.toBe(projectDir);
+
+				const reply = await ask(endpoint, {
+					route: "turn-end",
+					version: WARM_TURN_END_SCHEMA_VERSION,
+					cwd: caseVariantCwd,
+				});
+
+				expect(reply.error).toBeUndefined();
+				expect(reply.result).toMatchObject({ route: "turn-end" });
+			},
+			40_000,
+		);
+
+		it("survives a malformed line and answers the next request", async () => {
+			// Raw, unparseable bytes — not `JSON.stringify("…")`, which would be a
+			// perfectly valid JSON string and never reach the parse failure.
+			const garbage = await askLine(endpoint, "not json at all");
+			expect(garbage.error).toBeDefined();
+
+			const reply = await ask(endpoint, {
+				route: "turn-end",
+				version: WARM_TURN_END_SCHEMA_VERSION,
+				cwd: projectDir,
+			});
+			expect(reply.result).toMatchObject({ route: "turn-end" });
+		}, 40_000);
+	},
+);

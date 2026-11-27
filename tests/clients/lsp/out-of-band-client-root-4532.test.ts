@@ -51,6 +51,7 @@ import {
 } from "../../../clients/latency-logger.js";
 import { RuntimeCoordinator } from "../../../clients/runtime-coordinator.js";
 import { handleToolResult } from "../../../clients/runtime-tool-result.js";
+import { createLspDiagnosticsTool } from "../../../tools/lsp-diagnostics.js";
 import { makeLspServiceDouble } from "../../support/lsp-service-double.js";
 import { installLspService } from "../../support/lsp-service-seam.js";
 import { setupTestEnvironment } from "../test-utils.js";
@@ -60,6 +61,7 @@ let main: string;
 let worktree: string;
 let runtime: RuntimeCoordinator;
 let restarts: string[];
+let forwarded: Array<{ filePath: string; type: number }>;
 let clientRoots: Array<{ root: string; spawnedAt: number }>;
 
 function installService(): void {
@@ -72,6 +74,11 @@ function installService(): void {
 				return 1;
 			},
 			getOpenDocumentPaths: () => [],
+			notifyOutOfBandFileChanges: (
+				events: ReadonlyArray<{ filePath: string; type: number }>,
+			) => {
+				forwarded.push(...events);
+			},
 		}),
 	);
 	// The look under test reads the LIVE service through `peekLSPService`, so the
@@ -136,6 +143,7 @@ beforeEach(() => {
 	runtime.setTelemetryIdentity({ sessionId: "pi-lens-4532-client-root" });
 	runtime.beginTurn();
 	restarts = [];
+	forwarded = [];
 	clientRoots = [];
 	resetDegradationLedger();
 	// The recent-phase ring is process-wide and `resetDegradationLedger` does
@@ -179,6 +187,36 @@ describe("the install look at a live client root (#4532 gap 7)", () => {
 				() => true,
 			),
 		).toBeGreaterThan(0);
+	});
+
+	// Recurrence (#5501 r3, F3): the root's first look recorded the manifests it
+	// found and forwarded none, so a `Cargo.toml` fixed after the client spawned
+	// but before this root's first look never reached rust-analyzer (real
+	// service and server: 4 of 4 touches `server-load-failed`).
+	it("forwards a manifest edited after the client spawned, at the client root's first look", async () => {
+		const manifest = path.join(worktree, "Cargo.toml");
+		fs.writeFileSync(manifest, '[package]\nname = "w"\n');
+		clientRoots = [{ root: worktree, spawnedAt: Date.now() - 10_000 }];
+		installService();
+
+		await bashResult("true");
+
+		expect(forwarded).toEqual([{ filePath: manifest, type: 2 }]);
+		// A config is no install: the client is not restarted for it.
+		expect(restarts).toEqual([]);
+	});
+
+	it("only records a manifest the client's spawn already followed", async () => {
+		const manifest = path.join(worktree, "Cargo.toml");
+		fs.writeFileSync(manifest, '[package]\nname = "w"\n');
+		const past = new Date(Date.now() - 60_000);
+		fs.utimesSync(manifest, past, past);
+		clientRoots = [{ root: worktree, spawnedAt: Date.now() - 10_000 }];
+		installService();
+
+		await bashResult("true");
+
+		expect(forwarded).toEqual([]);
 	});
 
 	// The gate the look asks: the session root and its repository's linked
@@ -506,6 +544,154 @@ describe("the install look at a live client root (#4532 gap 7)", () => {
 				delete process.env.PI_LENS_DECLARATION_LOOK_MS;
 			else process.env.PI_LENS_DECLARATION_LOOK_MS = previousLookMs;
 		}
+	});
+});
+
+/**
+ * #5501: the session root's look (`resyncHeadMove`, every tool_call and bash
+ * result) and the MCP cwd's look (the `lsp_diagnostics` body) named no client
+ * epoch, so their FIRST look only recorded the manifests it found. A
+ * `Cargo.toml` fixed after rust-analyzer spawned, and before that first look,
+ * never reached the server: real rust-analyzer through the MCP tool layer, a
+ * hover then `pilens_diagnostics`, read `workspace failed to load` 4 of 4
+ * times. These looks now name the earliest launch of the live primary clients
+ * whose root overlaps theirs, and that epoch judges config files only: an
+ * install there is recorded as before, so no client restarts at these first
+ * looks (the restart cell #5593 named).
+ */
+describe("the session root's and the MCP cwd's first look (#5501)", () => {
+	const writeManifest = (root: string, rel = "Cargo.toml"): string => {
+		const manifest = path.join(root, rel);
+		fs.mkdirSync(path.dirname(manifest), { recursive: true });
+		fs.writeFileSync(manifest, '[package]\nname = "m"\n');
+		return manifest;
+	};
+
+	/** One `lsp_diagnostics` answer with `cwd` as the MCP server passes it. */
+	async function diagnoseAt(cwd: string): Promise<void> {
+		const file = path.join(cwd, "src", "lib.rs");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, "pub fn f() {}\n");
+		await createLspDiagnosticsTool().execute(
+			"5501-mcp-cwd",
+			{ path: file, serverScope: "primary", waitMs: 0 },
+			undefined,
+			null,
+			{ cwd },
+		);
+	}
+
+	it("forwards a manifest edited after the client spawned, at the session root's first look", async () => {
+		const manifest = writeManifest(main);
+		clientRoots = [{ root: main, spawnedAt: Date.now() - 10_000 }];
+		installService();
+
+		await bashResult("true");
+
+		expect(forwarded).toEqual([{ filePath: manifest, type: 2 }]);
+	});
+
+	// The restart cell: `beforeEach` planted `main`'s install markers after this
+	// epoch, which a client root's look restarts for (#4532). The session root's
+	// first look restarted nothing for it before #5501, and must not start now:
+	// rust-analyzer's own `cargo metadata` writes `Cargo.lock` after its spawn
+	// (measured), which would read as an install here.
+	it("restarts no client for an install at the session root's first look", async () => {
+		const manifest = writeManifest(main);
+		clientRoots = [{ root: main, spawnedAt: Date.now() - 10_000 }];
+		installService();
+
+		await bashResult("true");
+
+		expect(restarts).toEqual([]);
+		expect(forwarded).toEqual([{ filePath: manifest, type: 2 }]);
+	});
+
+	it("forwards a manifest edited after the client spawned, at the MCP cwd's first look", async () => {
+		const cwd = path.join(env.tmpDir, "mcp-cwd");
+		const manifest = writeManifest(cwd);
+		clientRoots = [{ root: cwd, spawnedAt: Date.now() - 10_000 }];
+		installService();
+
+		await diagnoseAt(cwd);
+
+		expect(forwarded).toEqual([{ filePath: manifest, type: 2 }]);
+	});
+
+	// The MCP route has no client-root look, so a server rooted in a subdirectory
+	// of the cwd (a crate in a monorepo) is reached only through the cwd's walk,
+	// with the epoch of the client whose root sits below it.
+	it("forwards a member manifest when the client is rooted below the MCP cwd", async () => {
+		const cwd = path.join(env.tmpDir, "mcp-monorepo");
+		const crate = path.join(cwd, "svc", "api");
+		const manifest = writeManifest(crate);
+		clientRoots = [{ root: crate, spawnedAt: Date.now() - 10_000 }];
+		installService();
+
+		await diagnoseAt(cwd);
+
+		expect(forwarded).toEqual([{ filePath: manifest, type: 2 }]);
+	});
+
+	// The cwd sits inside a crate whose server is rooted at the workspace above
+	// it: that client reads the cwd's manifest as a member's.
+	it("forwards the cwd's manifest when the client is rooted above the MCP cwd", async () => {
+		const workspace = path.join(env.tmpDir, "mcp-workspace");
+		const cwd = path.join(workspace, "crates", "a");
+		const manifest = writeManifest(cwd);
+		clientRoots = [{ root: workspace, spawnedAt: Date.now() - 10_000 }];
+		installService();
+
+		await diagnoseAt(cwd);
+
+		expect(forwarded).toEqual([{ filePath: manifest, type: 2 }]);
+	});
+
+	// A client that spawned after the fix read it; one that spawned before did
+	// not, and the event must reach it: the earliest launch decides.
+	it("names the earliest launch among the clients overlapping the MCP cwd", async () => {
+		const cwd = path.join(env.tmpDir, "mcp-cwd");
+		const manifest = writeManifest(cwd);
+		const past = new Date(Date.now() - 30_000);
+		fs.utimesSync(manifest, past, past);
+		clientRoots = [
+			{ root: cwd, spawnedAt: Date.now() - 10_000 },
+			{ root: path.join(cwd, "svc"), spawnedAt: Date.now() - 60_000 },
+		];
+		installService();
+
+		await diagnoseAt(cwd);
+
+		expect(forwarded).toEqual([{ filePath: manifest, type: 2 }]);
+	});
+
+	it("names no epoch from a client of an unrelated root", async () => {
+		const cwd = path.join(env.tmpDir, "mcp-cwd");
+		writeManifest(cwd);
+		clientRoots = [
+			{
+				root: path.join(env.tmpDir, "mcp-cwd-sibling"),
+				spawnedAt: Date.now() - 10_000,
+			},
+		];
+		installService();
+
+		await diagnoseAt(cwd);
+
+		expect(forwarded).toEqual([]);
+	});
+
+	it("restarts no client for an install at the MCP cwd's first look", async () => {
+		const cwd = path.join(env.tmpDir, "mcp-cwd");
+		const manifest = writeManifest(cwd);
+		plantInstall(cwd);
+		clientRoots = [{ root: cwd, spawnedAt: Date.now() - 10_000 }];
+		installService();
+
+		await diagnoseAt(cwd);
+
+		expect(restarts).toEqual([]);
+		expect(forwarded).toEqual([{ filePath: manifest, type: 2 }]);
 	});
 });
 

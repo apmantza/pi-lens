@@ -13,7 +13,16 @@
 // evidence, not diff noise, so they go to the run's step log, its job summary
 // and the JSON summary.
 
-import { compareStableStrings, parseTable } from "./md-matrix.mjs";
+import {
+	compareStableStrings,
+	holdSettledCell,
+	IDLE_EVICTION_DOC_KEY,
+	parseRefreshState,
+	parseTable,
+	sanitizePendingFlips,
+	setRefreshStateKey,
+	TIER_CHANGE_AGREE_RUNS,
+} from "./md-matrix.mjs";
 
 /**
  * Bounded vocabulary for a row's reason. The document never renders free text
@@ -73,9 +82,10 @@ export function summarizeRows(rows) {
  * Declared-versus-measured findings. `declared` maps a server id to its
  * registry `idleEviction`; `rows` are this run's measurements.
  *
- * Only `transparent-vetoed` is drift: the registry evicts a server the
- * measurement says breaks. Everything else is a proposal or a note for a
- * human, because the measurement proposes and a follow-up flips the policy.
+ * Drift is a vetoed server the registry evicts: since #5700 that is every
+ * server not declared `resident` (`transparent-vetoed`, `unmeasured-vetoed`).
+ * Everything else is a proposal or a note for a human, because the
+ * measurement proposes and a follow-up flips the policy.
  *
  * @returns {{ serverId: string, kind: string, severity: "drift" | "proposal" | "info", detail: string }[]}
  */
@@ -120,11 +130,12 @@ export function idleEvictionDrift(rows, declared) {
 					"declared unmeasured but eviction and respawn preserved its findings",
 			});
 		} else if (policy === "unmeasured" && row.result === "vetoed") {
+			// #5700: `unmeasured` is evicted like `transparent`, so a veto is drift.
 			findings.push({
 				serverId: row.serverId,
 				kind: "unmeasured-vetoed",
-				severity: "proposal",
-				detail: `declared unmeasured and the measurement vetoes eviction${why}; consider declaring resident`,
+				severity: "drift",
+				detail: `declared unmeasured and the measurement vetoes eviction${why}; the registry evicts it, so declare it resident or fix the respawn`,
 			});
 		} else if (policy === "resident" && row.result === "eligible") {
 			findings.push({
@@ -158,7 +169,7 @@ export function buildIdleEvictionDriftBody(findings, options = {}) {
 	const lines = [
 		"Auto-filed by the nightly `tool-smoke` idle-eviction measurement (#3645).",
 		"",
-		'The registry declares these servers `idleEviction: "transparent"`, so the shared idle timer releases them, but this run\'s respawn of each one failed or reported fewer findings than before eviction. Declare them `resident` (with a reason in `tests/config/lsp-idle-eviction-reasons.json`) or fix the respawn. The per-server rows are in `docs/lsp-idle-eviction.md`.',
+		"The registry does not declare these servers `idleEviction: \"resident\"`, so the shared idle timer releases them (#5700), but this run's respawn of each one failed or reported fewer findings than before eviction. Declare them `resident` (with a reason in `tests/config/lsp-idle-eviction-reasons.json`) or fix the respawn. This run's measurement is in its step log and job summary; `docs/lsp-idle-eviction.md` shows the prior row until two nights agree.",
 		"",
 		...drift.map((f) => `- **${f.serverId}**: ${f.detail}`),
 	];
@@ -172,12 +183,13 @@ export function buildIdleEvictionDriftBody(findings, options = {}) {
 
 /**
  * What the tracking issue should do. `drift`: at least one server the registry
- * declares `transparent` is vetoed. `clean`: EVERY transparent server has an
- * `eligible` row this run. `unknown`: anything else (a transparent server that
- * is unavailable, budget-exhausted, client-died, not-evicted, no-baseline, or
- * absent from a filtered run): no evidence either way, so the issue is left
- * as it is. Closing on the absence of drift would close it exactly when the
- * measurement could not see (review round 1 F3).
+ * evicts (any policy but `resident`, #5700) is vetoed. `clean`: no such veto,
+ * and EVERY evicted server (`transparent` or `unmeasured`, #5737) has an
+ * `eligible` row this run. `unknown`: anything else (an evicted server that
+ * is unavailable, inconclusive, budget-exhausted, client-died, not-evicted,
+ * no-baseline, or absent from a filtered run): no evidence either way, so the
+ * issue is left as it is. Closing on the absence of drift would close it
+ * exactly when the measurement could not see (review round 1 F3).
  *
  * @returns {"drift" | "clean" | "unknown"}
  */
@@ -185,9 +197,11 @@ export function driftIssueState(rows, declared) {
 	const byId = new Map(rows.map((row) => [row.serverId, row]));
 	let clean = true;
 	for (const [serverId, policy] of declared) {
-		if (policy !== "transparent") continue;
+		if (policy === "resident") continue;
 		const row = byId.get(serverId);
 		if (row?.result === "vetoed") return "drift";
+		// #5737 (thread X): `unmeasured` is evicted like `transparent`, so it too
+		// needs an eligible row before the issue may close.
 		if (row?.result !== "eligible") clean = false;
 	}
 	return clean ? "clean" : "unknown";
@@ -246,6 +260,12 @@ export function renderIdleEvictionDoc({ rows, declared, date, platform }) {
 		"measured, never zero: **respawn** is whether the next request after eviction",
 		"brought the server back, **coverage** is whether the respawned server kept",
 		"every baseline finding.",
+		"",
+		"The rows are the published answer, not one night's reading (#5667): a row's",
+		"`result`, `reason`, `respawn` and `coverage` change together, and only after",
+		"two consecutive nights measure the same new row. A night that could not spawn",
+		"a server (`unavailable`) leaves its row as it was. The pending night is kept",
+		"in the capability matrix's refresh-state block (`idle-eviction-doc`).",
 		"",
 		"A server that reports extra findings after the respawn (`widened`) still reads",
 		"`preserved`, because nothing was lost, but a first scan that grows on respawn",
@@ -330,5 +350,166 @@ export function parseIdleEvictionDoc(text) {
 		declared: cells[index("declared")],
 		result: cells[index("result")],
 		reason: cells[index("reason")] === "·" ? undefined : cells[index("reason")],
+		respawn: cells[index("respawn")],
+		coverage: cells[index("coverage")],
 	}));
+}
+
+// The cells the hold moves together, as one comparable string: a row's
+// `result`, `reason`, `respawn` and `coverage` are one measurement (a vetoed
+// result without its reason or coverage is a different claim), so they flip or
+// hold as a group. `role` and `declared` are registry facts and never held.
+const cellsOf = (row) =>
+	[row.result, row.reason ?? "·", cell(row.respawn), cell(row.coverage)].join(
+		"|",
+	);
+
+// `unavailable` is a night that could not tell (the host cannot spawn the
+// server, no fixture routes to it, the budget ended), never a finding.
+const isMeasured = (cells) => !cells.startsWith("unavailable|");
+
+/**
+ * The one entry the measurement script publishes through (#5667): tonight's
+ * measured rows in, the document text and the refresh-state text out.
+ *
+ * The document is the published answer, not one night's reading. A server this
+ * host could not spawn keeps its prior row (#390's merge guard, as for the
+ * capability matrix), and a measured row that differs from the published one,
+ * `unavailable` included, changes only after two agreeing nights
+ * (`holdSettledCell`, the seam the save-verdict column uses). A server with no
+ * prior row at all publishes on its first night. The pending night is kept in
+ * the capability matrix's refresh-state block under `idle-eviction-doc`, which
+ * this returns rewritten; `matrixText` absent means there is nowhere to keep it, so the
+ * night publishes unheld rather than never committing. The caller keeps the
+ * measured rows for the summary, the drift issue and the evaluated floor.
+ *
+ * @param {{ rows: object[], declared: Map<string, string>, date: string, platform: string, priorDoc?: string, matrixText?: string }} night
+ * @returns {{ doc: string, matrixText: string | undefined, held: Array<{ serverId: string, prior: string, measured: string, pendingRuns?: number }> }}
+ */
+export function publishIdleEvictionDoc({
+	rows,
+	declared,
+	date,
+	platform,
+	priorDoc,
+	matrixText,
+}) {
+	const render = (published) =>
+		renderIdleEvictionDoc({ rows: published, declared, date, platform });
+	if (matrixText === undefined)
+		return { doc: render(rows), matrixText, held: [] };
+	// A prior row counts only when every held cell is present and its result is
+	// a state this module renders; anything else has nothing to protect.
+	const priorRows = new Map();
+	for (const r of parseIdleEvictionDoc(priorDoc ?? "") ?? []) {
+		if (
+			RESULT_STATES.includes(r.result) &&
+			r.respawn !== undefined &&
+			r.coverage !== undefined
+		)
+			priorRows.set(r.serverId, { ...r, cells: cellsOf(r) });
+	}
+	const priorPending = sanitizePendingFlips(
+		parseRefreshState(matrixText)[IDLE_EVICTION_DOC_KEY],
+		"pendingCells",
+	);
+	const nextPending = {};
+	const published = [];
+	const held = [];
+	for (const row of rows) {
+		const prior = priorRows.get(row.serverId);
+		const observed = cellsOf(row);
+		if (!prior) {
+			published.push(row);
+			continue;
+		}
+		const pending = priorPending[row.serverId];
+		const decision = isMeasured(observed)
+			? holdSettledCell({
+					prior: prior.cells,
+					observed,
+					pending: pending && {
+						value: pending.pendingCells,
+						runs: pending.runs,
+					},
+					// Every published row is an answer worth protecting, an `unavailable`
+					// one too (a751c7a65: csharp, dart and elixir moved between
+					// `unavailable` and `eligible` on one night); only a night that could
+					// not spawn the server is not one, and it is handled below.
+					isSettled: () => true,
+				})
+			: // A night that could not tell neither advances nor clears a pending flip.
+				{
+					publish: false,
+					pending: pending && {
+						value: pending.pendingCells,
+						runs: pending.runs,
+					},
+				};
+		if (decision.publish) {
+			published.push(row);
+			continue;
+		}
+		published.push({
+			...row,
+			result: prior.result,
+			reason: prior.reason,
+			respawn: prior.respawn,
+			coverage: prior.coverage,
+		});
+		if (decision.pending)
+			nextPending[row.serverId] = {
+				pendingCells: decision.pending.value,
+				runs: decision.pending.runs,
+			};
+		// Two unavailable rows differing only in their reason are host noise, not
+		// a held answer: the prior row stands and nothing is recorded.
+		if (!(row.result === "unavailable" && prior.result === "unavailable"))
+			held.push({
+				serverId: row.serverId,
+				prior: prior.cells,
+				measured: observed,
+				...(decision.held === "pending" && {
+					pendingRuns: decision.pending.runs,
+				}),
+			});
+	}
+	// Rewrite the block only when a pending flip moved, so a night that holds,
+	// flips or clears nothing leaves the matrix's bytes alone.
+	const next = sanitizePendingFlips(nextPending, "pendingCells");
+	return {
+		doc: render(published),
+		matrixText:
+			JSON.stringify(priorPending) === JSON.stringify(next)
+				? matrixText
+				: setRefreshStateKey(matrixText, IDLE_EVICTION_DOC_KEY, next),
+		held,
+	};
+}
+
+/**
+ * The run-log record of the cells the hold kept (#5667): one line per server
+ * per run, however often a row repeats, and under GitHub Actions one
+ * `::warning::` annotation naming them all. A held night leaves the document
+ * unchanged, so the refresh PR shows nothing; the log is where it is recorded.
+ *
+ * @param {Array<{ serverId: string, prior: string, measured: string, pendingRuns?: number }>} held
+ * @param {{ env: Record<string, string | undefined>, log: (line: string) => void }} sink
+ */
+export function reportIdleEvictionHeld(held, { env, log }) {
+	const seen = new Set();
+	for (const h of held) {
+		if (seen.has(h.serverId)) continue;
+		seen.add(h.serverId);
+		const why = h.pendingRuns
+			? `flip pending, night ${h.pendingRuns} of ${TIER_CHANGE_AGREE_RUNS}`
+			: "server not spawned";
+		log(
+			`idle-eviction doc: held back ${h.serverId}: kept "${h.prior}", this night measured "${h.measured}" (${why})`,
+		);
+	}
+	if (seen.size > 0 && env.GITHUB_ACTIONS)
+		log(
+			`::warning::idle-eviction doc: held back ${seen.size} server(s): ${[...seen].join(", ")}`,
+		);
 }

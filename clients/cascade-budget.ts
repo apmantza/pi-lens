@@ -47,7 +47,7 @@
  */
 
 import { recordDegradationOnce } from "./degradation-ledger.js";
-import { toPositiveFinite } from "./env-utils.js";
+import { nonNegativeIntEnv, toPositiveFinite } from "./env-utils.js";
 // The knobs only, never the scheduler — this module is arithmetic and has no
 // business depending on a task registry to read two numbers (#1462 review N4).
 // Note it buys nothing at load time: `runtime-config.js` below already reaches
@@ -67,8 +67,7 @@ import { RUNTIME_CONFIG } from "./runtime-config.js";
  * restore the 5000 ms default.
  */
 export function cascadeSettleWaitMs(): number {
-	const raw = Number(process.env.PI_LENS_CASCADE_SETTLE_WAIT_MS);
-	return Number.isFinite(raw) && raw >= 0 ? raw : 5000;
+	return nonNegativeIntEnv("PI_LENS_CASCADE_SETTLE_WAIT_MS", 5000);
 }
 
 /** The budget floor, and the minimum any env override of the cap can produce. */

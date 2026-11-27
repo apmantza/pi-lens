@@ -1,11 +1,11 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
+import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { logRunnerAdvisoryOnce, resolveRunnerCwd } from "../../tool-cwd.js";
-import {
-	getLinterPolicyForCwd,
-	hasStylelintConfig,
-} from "../../tool-policy.js";
+import { getLinterPolicyForCwd } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -13,16 +13,11 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import {
-	createAvailabilityChecker,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-const stylelint = createAvailabilityChecker("stylelint", ".cmd");
 
 // stylelint exit codes (its "Exit codes" docs page): 0 = no problems, 1 = a
 // fatal error, 2 = lint problems found, 78 = a configuration error.
@@ -169,10 +164,11 @@ const stylelintRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "stylelint");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("stylelint")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 		const fileDir = path.dirname(path.resolve(cwd, ctx.filePath));
-		const hasConfig = hasStylelintConfig(fileDir) || hasStylelintConfig(cwd);
+		const hasConfig =
+			hasToolConfig("stylelint", fileDir) || hasToolConfig("stylelint", cwd);
 		if (!hasConfig) {
 			logRunnerAdvisoryOnce(
 				ctx,
@@ -182,14 +178,9 @@ const stylelintRunner: RunnerDefinition = {
 			);
 		}
 
-		let cmd: string | null = null;
-		if (await stylelint.isAvailableAsync(cwd)) {
-			cmd = stylelint.getCommand(cwd);
-		} else {
-			cmd = await resolveToolCommandWithInstallFallback(cwd, "stylelint");
-		}
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "stylelint");
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip(cwd, { id: "stylelint" });
 
 		const result = await safeSpawnAsync(
 			cmd,

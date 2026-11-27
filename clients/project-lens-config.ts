@@ -94,12 +94,14 @@ import {
 	CANONICAL_PROJECT_CONFIG_FILE,
 	configSearchDirs,
 	getPiLensGlobalConfigPath,
+	holdsCanonicalProjectConfig,
 	isResolvedGlobalConfigPath,
 	PROJECT_CONFIG_BASENAMES,
 	PROJECT_CONFIG_LOCATIONS,
 } from "./config-locations.js";
 import {
 	type ConfigDocument,
+	type ConfigReadFailure,
 	deprecationRecords,
 	ignoredRecordCollector,
 	type NoteIgnored,
@@ -204,6 +206,12 @@ export interface PiLensProjectConfig {
 		autoFix?: PiLensProjectMutationConfig;
 	};
 	/**
+	 * #5793: tool names this repository declares never write. A cloned repo's
+	 * say-so, so a consumer honors it only under host project trust
+	 * (`clients/opaque-mutation-scan.ts`); this loader only carries it.
+	 */
+	opaqueScan?: { nonWriterTools?: string[] };
+	/**
 	 * Base project-size scale knob (#776) — see `clients/project-scale.ts`.
 	 * `undefined` means "use the env override / default chain".
 	 */
@@ -291,6 +299,13 @@ interface DiscoveryCacheEntry {
 	 */
 	canonicalSources: readonly FileStamp[];
 	/**
+	 * The legacy documents the walk could not read. The fill never reports them
+	 * itself: a quiet read (`peekPiLensProjectConfig`) may be the one that fills
+	 * the entry, and a failure it consumed would never reach the session's loader.
+	 * Every loud load reports them, through the once-a-session latch.
+	 */
+	readFailures: readonly ConfigReadFailure[];
+	/**
 	 * The layered read's parse cache (#5291), keyed on every CONTRIBUTING
 	 * document's (mtime, size): the single-file `configCache` is keyed by one
 	 * path and cannot carry a result derived from several files.
@@ -311,6 +326,8 @@ interface LayeredEntry {
 	config: PiLensProjectConfig;
 	records: readonly MigrationRecord[];
 	ignored: readonly MigrationRecord[];
+	/** Documents the fill could not read: reported by every LOUD load. */
+	readFailures: readonly ConfigReadFailure[];
 }
 
 /** Cache by absolute config path; we read each candidate's mtime before reuse. */
@@ -328,10 +345,11 @@ const discoveryCache = new Map<string, DiscoveryCacheEntry>();
  */
 function loadCachedConfigFile(
 	info: PiLensProjectConfigFileInfo,
+	report = true,
 ): PiLensProjectConfig {
 	const cached = configCache.get(info.path);
 	if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) {
-		replayConfigNotices(cached);
+		if (report) replayConfigNotices(cached);
 		return cached.config;
 	}
 
@@ -344,7 +362,7 @@ function loadCachedConfigFile(
 		ignored: parsed.ignored,
 	};
 	configCache.set(info.path, entry);
-	replayConfigNotices(entry);
+	if (report) replayConfigNotices(entry);
 	return parsed.config;
 }
 
@@ -373,6 +391,10 @@ function replayConfigNotices(entry: {
 	}
 }
 
+function reportReadFailures(failures: readonly ConfigReadFailure[]): void {
+	for (const failure of failures) reportConfigReadFailure(failure);
+}
+
 /**
  * Walk up from `startDir` looking for a `.pi-lens.json` or `pi-lens.json`.
  * Returns the parsed config, or an empty config if none was found.
@@ -380,6 +402,27 @@ function replayConfigNotices(entry: {
 export function loadPiLensProjectConfig(
 	startDir: string,
 	preloadedInfo?: PiLensProjectConfigFileInfo,
+): PiLensProjectConfig {
+	return readProjectConfig(startDir, preloadedInfo, true);
+}
+
+/**
+ * The value {@link loadPiLensProjectConfig} returns for `startDir`, with none
+ * of its reports: no deprecation notice, no ignored-key warning, no read
+ * failure, and nothing taken from the warn-once latch (#5739). For a surface
+ * that answers "what would the runtime read" and must not warn the user while
+ * it does (`effective_config`, #2427 rule 2). The caches fill as usual; every
+ * report the fill withheld is still owed to the next loud load, which is why
+ * the fill records the read failures instead of reporting them.
+ */
+export function peekPiLensProjectConfig(startDir: string): PiLensProjectConfig {
+	return readProjectConfig(startDir, undefined, false);
+}
+
+function readProjectConfig(
+	startDir: string,
+	preloadedInfo: PiLensProjectConfigFileInfo | undefined,
+	report: boolean,
 ): PiLensProjectConfig {
 	// ONE discovery per load (#2426 review round 5, F-C). The legacy-document
 	// enumeration below and the config-file lookup are two READS of the same
@@ -396,7 +439,7 @@ export function loadPiLensProjectConfig(
 	// (#2426). A single canonical file that IS the nearest file layers against
 	// nothing, so it keeps the byte-identical single-file read below.
 	if (layeredReadApplies(entry)) {
-		return loadLayeredProjectConfig(entry, path.resolve(startDir));
+		return loadLayeredProjectConfig(entry, path.resolve(startDir), report);
 	}
 	// #2426 review round 4, F4. The half-migrated notices — a legacy
 	// `pi-lens.json` sitting BESIDE or ABOVE the canonical `.pi-lens.json` this
@@ -415,11 +458,16 @@ export function loadPiLensProjectConfig(
 	// record populations. Keep discovery-only documents here; the selected file
 	// is reported by `loadCachedConfigFile`.
 	const selectedLegacyPath = configInfo?.path;
-	reportPiLensConfigRecords(
-		entry.legacyRecords.filter((record) => record.file !== selectedLegacyPath),
-	);
+	if (report) {
+		reportReadFailures(entry.readFailures);
+		reportPiLensConfigRecords(
+			entry.legacyRecords.filter(
+				(record) => record.file !== selectedLegacyPath,
+			),
+		);
+	}
 	if (!configInfo) return EMPTY_PROJECT_CONFIG;
-	return loadCachedConfigFile(configInfo);
+	return loadCachedConfigFile(configInfo, report);
 }
 
 /**
@@ -454,31 +502,41 @@ function layeredReadApplies(entry: DiscoveryCacheEntry): boolean {
 function loadLayeredProjectConfig(
 	entry: DiscoveryCacheEntry,
 	startDir: string,
+	report: boolean,
 ): PiLensProjectConfig {
 	// Unlike the single-file path there is no "selected" legacy document whose
 	// records `loadCachedConfigFile` replays: layered mode loads no legacy
 	// document whole, so EVERY legacy document in the chain reports its
 	// migration records here, every load, through the once-a-session latch.
-	reportPiLensConfigRecords(entry.legacyRecords);
+	if (report) {
+		reportReadFailures(entry.readFailures);
+		reportPiLensConfigRecords(entry.legacyRecords);
+	}
 	const cached = entry.layered;
 	if (
 		cached &&
 		cached.sources.length > 0 &&
 		fileStampsStillFresh(cached.sources)
 	) {
-		replayConfigNotices(cached);
+		if (report) {
+			reportReadFailures(cached.readFailures);
+			replayConfigNotices(cached);
+		}
 		return cached.config;
 	}
+	const readFailures: ConfigReadFailure[] = [];
 	const resolution = resolvePiLensConfig({
 		cwd: startDir,
 		excludeLegacyProjectDocuments: true,
 		stopAtGitRoot: true,
-		onReadError: reportConfigReadFailure,
+		onReadError: (failure) => readFailures.push(failure),
 	});
+	if (report) reportReadFailures(readFailures);
 	if (resolution.documents.length === 0) {
 		// Every candidate raced a delete or failed to parse. The read-error
-		// half already went through `reportConfigReadFailure`; a delete moves
-		// its directory's mtime and re-discovers on the next load. Do not
+		// half is reported above on a loud load, and not cached here, so a
+		// quiet load that met it leaves it owed to the next loud one; a delete
+		// moves its directory's mtime and re-discovers on the next load. Do not
 		// cache: an empty `sources` list would read as permanently fresh and
 		// pin an empty config for the process.
 		return EMPTY_PROJECT_CONFIG;
@@ -501,8 +559,9 @@ function loadLayeredProjectConfig(
 		config: parsed.config,
 		records: parsed.records,
 		ignored: parsed.ignored,
+		readFailures,
 	};
-	replayConfigNotices(entry.layered);
+	if (report) replayConfigNotices(entry.layered);
 	return parsed.config;
 }
 
@@ -618,6 +677,17 @@ export function findNestedProjectMutationValue(
 export function loadPiLensConfigInDir(dir: string): PiLensProjectConfig {
 	const info = findPiLensConfigInDir(dir);
 	if (!info) return EMPTY_PROJECT_CONFIG;
+	// The legacy rule (#5740): a legacy `pi-lens.json` is read whole only when no
+	// canonical file is in this directory's chain, as `loadPiLensProjectConfig`
+	// reads it. The marker prefers the canonical file, so a non-canonical name
+	// here is a directory holding only the legacy one. The nested flag reader
+	// and the nested `ignore` layer both come through here.
+	if (
+		path.basename(info.path) !== CANONICAL_PROJECT_CONFIG_FILE &&
+		holdsCanonicalProjectConfig(dir)
+	) {
+		return EMPTY_PROJECT_CONFIG;
+	}
 	return loadCachedConfigFile(info);
 }
 
@@ -725,6 +795,7 @@ function discoverPiLensProjectConfig(startDir: string): DiscoveryCacheEntry {
 	const legacyDocuments: ConfigDocument[] = [];
 	const legacySources: FileStamp[] = [];
 	const canonicalSources: FileStamp[] = [];
+	const readFailures: ConfigReadFailure[] = [];
 	let info: PiLensProjectConfigFileInfo | undefined;
 	// #2426: ceiling-bounded, same rule and same shared primitive as the LSP
 	// loader and as `findNestedProjectMutationValue` below. This walk ran to the
@@ -794,7 +865,7 @@ function discoverPiLensProjectConfig(startDir: string): DiscoveryCacheEntry {
 			});
 			const outcome = readConfigDocument(file);
 			if (outcome.status === "error") {
-				reportConfigReadFailure({
+				readFailures.push({
 					file,
 					location,
 					tier: "project",
@@ -818,6 +889,7 @@ function discoverPiLensProjectConfig(startDir: string): DiscoveryCacheEntry {
 		legacyRecords: legacyDeprecationRecords(legacyDocuments),
 		legacySources,
 		canonicalSources,
+		readFailures,
 		checkedAtMs: Date.now(),
 	};
 }
@@ -1022,6 +1094,15 @@ function parseProjectConfigFields(
 		assignFlagConfigSection(obj, mutations, spec.configKey, note);
 	}
 	const toolConfig = readToolConfig(obj, note);
+	// #5793: the schema (`config-schema.ts`) already dropped a non-array and a
+	// non-string member with a record, so only a typed list reaches here.
+	const opaqueScanSection = obj.opaqueScan;
+	const nonWriterTools =
+		opaqueScanSection &&
+		typeof opaqueScanSection === "object" &&
+		!Array.isArray(opaqueScanSection)
+			? (opaqueScanSection as Record<string, unknown>).nonWriterTools
+			: undefined;
 
 	const rules: Record<string, PiLensProjectRuleConfig> = {};
 	if (obj.rules && typeof obj.rules === "object" && !Array.isArray(obj.rules)) {
@@ -1314,6 +1395,9 @@ function parseProjectConfigFields(
 	return {
 		...(toolConfig === undefined ? {} : { tools: toolConfig }),
 		...(startup === undefined ? {} : { startup }),
+		...(Array.isArray(nonWriterTools)
+			? { opaqueScan: { nonWriterTools: nonWriterTools as string[] } }
+			: {}),
 		ignore,
 		rules,
 		...(mutations as Pick<

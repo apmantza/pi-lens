@@ -6,6 +6,7 @@ import {
 	scanInFlightDeclarations,
 	scanInFlightSpellings,
 } from "../../tests/support/single-flight-scan.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 /**
  * Every hand-rolled in-flight declaration `clients/` still carries, and why.
@@ -42,14 +43,11 @@ const EXEMPTIONS: Record<string, string> = {
 		"backlog: per-chart-root dedupe, #1753",
 	"dispatch/runners/helm-render.ts:inFlightByChartRoot":
 		"backlog: per-chart-root dedupe, #1753",
-	"dispatch/runners/utils/lazy-installer.ts:inFlight":
-		"backlog: per-tool install dedupe, #1753",
 	"dispatch/runners/utils/runner-helpers.ts:managedVerifyInFlight":
 		"backlog: #1674's generation-guarded verify map, #1753",
 	"dispatch/runners/utils/runner-helpers.ts:resolveInstallInFlightByCwd":
 		"backlog: #1674's per-cwd install map, #1753",
 	"lsp/config.ts:configInFlight": "backlog: per-workspace config load, #1753",
-	"lsp/jvm-runtime.ts:inFlightJavaProbe": "backlog: single JVM probe, #1753",
 	"mcp/session.ts:inFlightIpcTurnEnds":
 		"backlog: per-cwd Stop-hook pass (#1274), #1753",
 	"installer/index.ts:_probeCacheWriteInFlight":
@@ -129,42 +127,58 @@ const EXEMPTIONS: Record<string, string> = {
 const FORWARD_DECLARED = new Set<string>([]);
 
 describe("singleFlight ratchet (#1753)", () => {
-	it("flags every hand-rolled in-flight declaration outside the primitive", () => {
-		const unexplained = scanInFlightDeclarations().filter(
-			(d) => !EXEMPTIONS[d.key],
-		);
-		expect(
-			unexplained.map((d) => `${d.file}:${d.line} ${d.symbol}`),
-			"New at-most-one-in-flight state must use createSingleFlight() from " +
-				"clients/single-flight.ts (#1753). If it genuinely is not that shape, " +
-				"add it to EXEMPTIONS in this file with a reason that says why.",
-		).toEqual([]);
-	});
+	it(
+		"flags every hand-rolled in-flight declaration outside the primitive",
+		() => {
+			const unexplained = scanInFlightDeclarations().filter(
+				(d) => !EXEMPTIONS[d.key],
+			);
+			expect(
+				unexplained.map((d) => `${d.file}:${d.line} ${d.symbol}`),
+				"New at-most-one-in-flight state must use createSingleFlight() from " +
+					"clients/single-flight.ts (#1753). If it genuinely is not that shape, " +
+					"add it to EXEMPTIONS in this file with a reason that says why.",
+			).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("classifies every inFlight spelling in clients/ (#4429)", () => {
-		// Recurrence: #4411 review F3, a population scanner that skipped five
-		// spellings it did not recognise and passed. Every needle hit must land
-		// in a role (single-flight-scan.ts); an unknown position reds here.
-		expect(scanInFlightSpellings().unclassified).toEqual([]);
-	});
+	it(
+		"classifies every inFlight spelling in clients/ (#4429)",
+		() => {
+			// Recurrence: #4411 review F3, a population scanner that skipped five
+			// spellings it did not recognise and passed. Every needle hit must land
+			// in a role (single-flight-scan.ts); an unknown position reds here.
+			expect(scanInFlightSpellings().unclassified).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("has no stale exemptions", () => {
-		// A site that gets migrated (or deleted) must take its entry with it.
-		// Otherwise the list rots into a lie, and the next reader trusts it.
-		const live = new Set(scanInFlightDeclarations().map((d) => d.key));
-		const stale = Object.keys(EXEMPTIONS).filter(
-			(key) => !live.has(key) && !FORWARD_DECLARED.has(key),
-		);
-		expect(stale, "these exemptions no longer match any declaration").toEqual(
-			[],
-		);
-	});
+	it(
+		"has no stale exemptions",
+		() => {
+			// A site that gets migrated (or deleted) must take its entry with it.
+			// Otherwise the list rots into a lie, and the next reader trusts it.
+			const live = new Set(scanInFlightDeclarations().map((d) => d.key));
+			const stale = Object.keys(EXEMPTIONS).filter(
+				(key) => !live.has(key) && !FORWARD_DECLARED.has(key),
+			);
+			expect(stale, "these exemptions no longer match any declaration").toEqual(
+				[],
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("retires a forward declaration once its declaration lands", () => {
-		const live = new Set(scanInFlightDeclarations().map((d) => d.key));
-		const landed = [...FORWARD_DECLARED].filter((key) => live.has(key));
-		expect(landed, "move these out of FORWARD_DECLARED").toEqual([]);
-	});
+	it(
+		"retires a forward declaration once its declaration lands",
+		() => {
+			const live = new Set(scanInFlightDeclarations().map((d) => d.key));
+			const landed = [...FORWARD_DECLARED].filter((key) => live.has(key));
+			expect(landed, "move these out of FORWARD_DECLARED").toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("keeps the forward-declaration set small", () => {
 		// A forward declaration is a merge-window device: it exists only while a

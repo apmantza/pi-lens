@@ -13,18 +13,16 @@
  * `[rubocop, standardrb]` in that priority order, and both `detect()`s gate on
  * `which`.
  *
- * The second half of the file covers the guard's `command[0]` approximation.
- * `command[0]` is not the only binary a `detect()` consults, and the extras were
- * assumed harmless because "they are reached only after the primary already
- * answered". That is false when the primary answered a GENUINE absence and the
- * fallback is what stalled: `rustfmt` missing plus a stalled `which rustup`
- * skips the lazy install and caches the empty result for the session.
+ * The second half of the file covers the guard's `command[0]` approximation:
+ * the stall verdict is read off the binaries a pass actually probed, never off
+ * a formatter's `command[0]`. (A stalled `which rustup` once hid an install
+ * fallback; the lazy installs were deleted by #5410 D9, so that case has no
+ * live member left.)
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withEnv } from "../support/with-env.js";
 import { TRANSIENT_BASE_COOLDOWN_MS } from "../../clients/dispatch/runners/utils/availability-policy.js";
 
 const { safeSpawnAsync, logLatencySpy } = vi.hoisted(() => ({
@@ -32,7 +30,8 @@ const { safeSpawnAsync, logLatencySpy } = vi.hoisted(() => ({
 	logLatencySpy: vi.fn(),
 }));
 
-vi.mock("../../clients/safe-spawn.js", () => ({
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
 	safeSpawnAsync,
 	safeSpawn: vi.fn(),
 	getAmbientAbortSignal: () => undefined,
@@ -69,9 +68,8 @@ const foundResult = (binary: string) => ({
 const finder = () => (process.platform === "win32" ? "where" : "which");
 
 /**
- * Route by the binary being looked up. Anything that is not a PATH lookup (the
- * `gem install rubocop` lazy install, say) fails: a SUCCESSFUL install resets
- * every which latch, which would erase the very transient verdict under test.
+ * Route by the binary being looked up. Anything that is not a PATH lookup
+ * fails.
  */
 function pathLookups(verdicts: Record<string, "found" | "missing" | "stall">) {
 	return async (cmd: string, args: string[]) => {
@@ -114,7 +112,7 @@ function rubyProject(): { cwd: string; filePath: string } {
 	return { cwd, filePath };
 }
 
-/** A Rust project, so rustfmt's `rustup` install fallback is reachable. */
+/** A Rust project, for rustfmt's PATH probe. */
 function rustProject(): { cwd: string; filePath: string } {
 	const cwd = setupTestEnvironment("pi-lens-degraded-rs-").tmpDir;
 	fs.writeFileSync(path.join(cwd, "Cargo.toml"), "[package]\nname='a'\n");
@@ -133,12 +131,8 @@ beforeEach(() => {
 	safeSpawnAsync.mockReset();
 	logLatencySpy.mockReset();
 	clearFormatterCache();
-	// #5231: the lazy installer honours PI_LENS_DISABLE_TOOL_INSTALL, which
-	// vitest-setup defaults to "1"; the stalled-install case drives its spawn.
-	const restoreInstallSwitch = withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" });
 	vi.useFakeTimers({ toFake: ["Date"] });
 	return () => {
-		restoreInstallSwitch();
 		vi.useRealTimers();
 	};
 });
@@ -201,43 +195,6 @@ describe("a degraded formatter selection is not cached (#1539)", () => {
 });
 
 describe("the poison guard sees every binary a detect probed (#1539)", () => {
-	it("covers a stalled install fallback, not just command[0]", async () => {
-		// rustfmt is genuinely absent, so "rustfmt" is NOT in the transient set and
-		// the `command[0]` guard saw nothing. But `which rustup` stalled, so the
-		// lazy `rustup component add rustfmt` never ran: this empty result is a
-		// verdict about the probe, not about the project.
-		const { cwd, filePath } = rustProject();
-		safeSpawnAsync.mockImplementation(
-			pathLookups({ rustfmt: "missing", rustup: "stall" }),
-		);
-
-		expect(await names(cwd, filePath)).toEqual([]);
-		expect(selections()[0]?.metadata).toMatchObject({
-			formatter: null,
-			reason: "probe-timeout",
-			cached: false,
-		});
-		expect(selections()[0]?.metadata?.stalledProbes).toContain("rustup");
-
-		// And the recovery this used to foreclose: once `which rustup` answers, the
-		// lazy `rustup component add rustfmt` runs, which resets every PATH latch.
-		// Pre-fix the empty result was already cached, so this pass never happened.
-		vi.setSystemTime(new Date(Date.now() + TRANSIENT_BASE_COOLDOWN_MS + 1));
-		let installed = false;
-		safeSpawnAsync.mockImplementation(async (cmd: string, args: string[]) => {
-			if (cmd === "rustup") {
-				installed = true;
-				return { stdout: "", stderr: "", status: 0 };
-			}
-			if (cmd !== finder()) return notFoundResult;
-			const command = args[0] ?? "";
-			if (command === "rustup") return foundResult("rustup");
-			if (command === "rustfmt" && installed) return foundResult("rustfmt");
-			return notFoundResult;
-		});
-		expect(await names(cwd, filePath)).toEqual(["rustfmt"]);
-	});
-
 	it("does not claim a stall for a candidate this pass never probed", async () => {
 		// The binding case for replacing the `command[0]` derivation, and the one
 		// an earlier version of this test missed: its scenario produced a NON-empty

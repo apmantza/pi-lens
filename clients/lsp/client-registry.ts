@@ -1,3 +1,4 @@
+import { getTurnId } from "../turn-context.js";
 /**
  * ClientRegistry: LSP client identity and lifecycle, extracted from
  * LSPService (#2372 slice 3, #277 R3). It owns the client map and its key
@@ -27,9 +28,11 @@ import {
 	findLocalBinUpwards,
 	isProjectLocalBinPath,
 } from "../package-manager.js";
-import { isWithinForm, normalizeMapKey } from "../path-utils.js";
+import { isWithinForm, normalizeMapKey, rootsOverlap } from "../path-utils.js";
 import {
 	assertInstallAllowed,
+	readAdoptedProjectTrust,
+	type ProjectTrustState,
 	isLspSpawnAllowedByTrust,
 	projectTrustDenialReason,
 } from "../project-trust.js";
@@ -60,6 +63,7 @@ import {
 	isSameOrWithin,
 	resolveLspServerCwd,
 	type LSPServerInfo,
+	type LSPSpawnResult,
 } from "./server.js";
 import { isAuxiliary } from "./server-traits.js";
 import {
@@ -177,12 +181,13 @@ const OPTIONAL_LSP_RETRY_COOLDOWN_MS = 5 * 60_000;
 const OPTIONAL_LSP_SERVER_IDS = new Set<string>();
 
 const DEFAULT_LSP_CLIENT_CEILING = 24;
+const DEFAULT_LSP_OPEN_DOCUMENT_CAP = 256;
 const DEFAULT_IDLE_EVICT_MS = 20 * 60_000;
 const DEFAULT_EPHEMERAL_IDLE_EVICT_MS = 60_000;
 
 /**
- * #3645: the idle window shared by every server whose registry policy is
- * `transparent`. `PI_LENS_LSP_IDLE_EVICT_MS` is the generic spelling; the
+ * #3645: the idle window shared by every server whose registry policy is not
+ * `resident` (#5700). `PI_LENS_LSP_IDLE_EVICT_MS` is the generic spelling; the
  * original `PI_LENS_TS_IDLE_EVICT_MS` keeps its meaning and is consulted when
  * the generic one is unset or invalid.
  */
@@ -221,6 +226,23 @@ export function getLspClientCeiling(): number {
 	return Number.isSafeInteger(parsed) && parsed > 0
 		? parsed
 		: DEFAULT_LSP_CLIENT_CEILING;
+}
+
+/**
+ * #5700: how many documents one client keeps open on its server. Past it the
+ * client closes its least recently sent document (`didClose`); the server then
+ * drops that document's text and syntax tree, and a later touch opens it
+ * again. The registry owns the number and hands it to every client it creates.
+ * Well above the workspace sweep's in-flight width (8 groups x 8 pre-opens).
+ */
+export function getLspOpenDocumentCap(): number {
+	const parsed = Number.parseInt(
+		process.env.PI_LENS_LSP_OPEN_DOCUMENT_CAP ?? "",
+		10,
+	);
+	return Number.isSafeInteger(parsed) && parsed > 0
+		? parsed
+		: DEFAULT_LSP_OPEN_DOCUMENT_CAP;
 }
 
 export interface SpawnedServer {
@@ -401,6 +423,7 @@ export class ClientRegistry {
 	private clientSpawnGate: Promise<void> = Promise.resolve();
 	/** True after shutdown() has been called; blocks new operations */
 	private isDestroyed = false;
+	private readonly trustShutdown = new AbortController();
 	/**
 	 * #850: teardown completion for every singleton generation retired before
 	 * this service was published. Only replacement services receive one; direct
@@ -429,6 +452,8 @@ export class ClientRegistry {
 	/** The first step of `LSPService.shutdown`: block new operations. */
 	markDestroyed(): void {
 		this.isDestroyed = true;
+		this.trustShutdown.abort();
+		this.adoptedTrust.clear();
 	}
 
 	/** The notify-stall demotion's breaker cooldown (`LSPService.demoteForNotifyStall`). */
@@ -738,14 +763,17 @@ export class ClientRegistry {
 	}
 
 	scheduleIdleEviction(key: string, server: LSPServerInfo): void {
-		// The registry owns this policy. Unmeasured and resident servers stay resident.
+		// The registry owns this policy. #5700: every server is released after the
+		// idle window unless it is declared `resident`, which needs a reason row
+		// (tests/config/lsp-idle-eviction-reasons.json). `unmeasured` used to stay
+		// too, so 32 built-ins and every config-declared server never left.
 		if (
-			server.idleEviction !== "transparent" &&
+			server.idleEviction === "resident" &&
 			!this.adoptedClientKeys.has(key)
 		) {
 			// #3952: say why no timer was scheduled. Without this row a caller
-			// that ARMS an `unmeasured` server and waits for the eviction (the
-			// nightly probe's whole protocol) sees the same "nothing happened" as
+			// that waits for a `resident` server's eviction (the nightly
+			// probe's protocol, before it arms the server) sees the same "nothing happened" as
 			// a server whose timer is merely slow, and the two are opposite
 			// verdicts: `not-evicted` here means the policy was never read off the
 			// object the service holds, which is a pi-lens defect, not a slow
@@ -754,7 +782,7 @@ export class ClientRegistry {
 			recordDegradationOnce({
 				kind: "lsp-idle-eviction-declined",
 				subject: server.id,
-				reason: `no idle-eviction timer: declared ${server.idleEviction ?? "unmeasured"}`,
+				reason: "no idle-eviction timer: declared resident",
 			});
 			return;
 		}
@@ -820,8 +848,6 @@ export class ClientRegistry {
 	 */
 	async restartPrimaryClientsUnder(root: string): Promise<string[]> {
 		const rootKey = normalizeMapKey(root);
-		const overlaps = (clientRoot: string) =>
-			isWithinForm(clientRoot, rootKey) || isWithinForm(rootKey, clientRoot);
 		return this.withClientSpawnGate(async () => {
 			if (this.isDestroyed) return [];
 			const victims: Array<[string, LSPClientInfo]> = [];
@@ -830,7 +856,7 @@ export class ClientRegistry {
 				if (
 					client.isAlive() &&
 					!isAuxiliary(getServerById(serverId)) &&
-					overlaps(clientRoot)
+					rootsOverlap(clientRoot, rootKey)
 				)
 					victims.push([key, client]);
 			}
@@ -1372,9 +1398,27 @@ export class ClientRegistry {
 		return !isLspInstallDisabled();
 	}
 
-	/**
-	 * Internal: spawn a client for a server/root combination
-	 */
+	/** Per-turn reads belong to this registry, never to a workspace store. */
+	private adoptedTrustTurn: string | undefined;
+	private readonly adoptedTrust = new Map<string, Promise<ProjectTrustState>>();
+
+	private trustForAdoptedRoot(root: string): Promise<ProjectTrustState> {
+		const turn = getTurnId();
+		// Detached tools/background work have no turn that can expire a memo.
+		if (turn === "turn:0")
+			return readAdoptedProjectTrust(root, this.trustShutdown.signal);
+		if (this.adoptedTrustTurn !== turn) {
+			this.adoptedTrust.clear();
+			this.adoptedTrustTurn = turn;
+		}
+		const key = normalizeMapKey(root);
+		const prior = this.adoptedTrust.get(key);
+		if (prior) return prior;
+		const pending = readAdoptedProjectTrust(root, this.trustShutdown.signal);
+		this.adoptedTrust.set(key, pending);
+		return pending;
+	}
+
 	private async spawnClient(
 		server: LSPServerInfo,
 		root: string,
@@ -1382,13 +1426,17 @@ export class ClientRegistry {
 		filePath: string,
 		allowInstall: boolean,
 	): Promise<SpawnedServer | undefined> {
+		const adopted = this.analysisRootModeForFile(filePath) === "adopted";
 		try {
 			if (server.executesProjectCode === true) {
-				refuseUntrustedLspExecution({
-					kind: "project-code-server",
-					serverId: server.id,
-					root,
-				});
+				refuseUntrustedLspExecution(
+					{
+						kind: "project-code-server",
+						serverId: server.id,
+						root,
+					},
+					adopted ? await this.trustForAdoptedRoot(root) : undefined,
+				);
 			}
 		} catch (error) {
 			logSessionStart(
@@ -1429,22 +1477,21 @@ export class ClientRegistry {
 		try {
 			const projectCodeAllowed =
 				this.analysisRootModeForFile(filePath) !== "adopted";
-			const spawned = await withLspProjectCodePermission(
-				projectCodeAllowed,
-				() =>
+			let spawned: LSPSpawnResult | undefined =
+				await withLspProjectCodePermission(projectCodeAllowed, () =>
 					server.spawn(root, {
 						allowInstall,
 						projectCodeAllowed,
 						sessionRoot: this.sessionCwd ?? process.cwd(),
 					}),
-			);
+				);
 
-			// Guard 1: service was shut down while we were waiting for the spawn.
-			// Kill the raw process — no LSPClient exists yet — and bail out without
-			// marking the key broken (this is not a server failure).
-			if (this.isDestroyed) {
+			// The service was shut down while a launch was in flight. Kill the raw
+			// process — no LSPClient exists yet — and bail out without marking the
+			// key broken (this is not a server failure).
+			const abortSpawn = (launched: LSPSpawnResult | undefined): undefined => {
 				try {
-					spawned?.process?.process?.kill();
+					launched?.process?.process?.kill();
 				} catch {
 					// pi-lens-ignore: missing-error-propagation — best-effort kill on aborted spawn
 				}
@@ -1453,7 +1500,10 @@ export class ClientRegistry {
 				);
 				this.noteSpawnVerdict(key, "declined");
 				return undefined;
-			}
+			};
+
+			// Guard 1: service was shut down while we were waiting for the spawn.
+			if (this.isDestroyed) return abortSpawn(spawned);
 
 			if (!spawned) {
 				logSessionStart(
@@ -1508,44 +1558,71 @@ export class ClientRegistry {
 				return undefined;
 			}
 
-			const override = getServerInitOverride(server.id, filePath);
-			// #4299: the compiler owner's admitted path must survive config
-			// merging; otherwise the wrapper can fork a different compiler.
-			const mergedInit =
-				spawned.launchVariant === "classic"
-					? mergeInitializationOptions(
-							override?.initializationOptions,
-							spawned.initialization,
-						)
-					: mergeInitializationOptions(
-							spawned.initialization,
-							override?.initializationOptions,
-						);
-			// A replacement process is a new first-contact identity even when the
-			// configured server id is unchanged. Re-arm both capability latches before
-			// the replacement can publish a snapshot.
-			this.hooks.rearmFirstContact(server.id);
+			const connect = (launched: LSPSpawnResult) => {
+				const override = getServerInitOverride(server.id, filePath);
+				// #4299: the compiler owner's admitted path must survive config
+				// merging; otherwise the wrapper can fork a different compiler.
+				const mergedInit =
+					launched.launchVariant === "classic"
+						? mergeInitializationOptions(
+								override?.initializationOptions,
+								launched.initialization,
+							)
+						: mergeInitializationOptions(
+								launched.initialization,
+								override?.initializationOptions,
+							);
+				// A replacement process is a new first-contact identity even when the
+				// configured server id is unchanged. Re-arm both capability latches before
+				// the replacement can publish a snapshot.
+				this.hooks.rearmFirstContact(server.id);
 
-			const client = await createLSPClient({
-				serverId: server.id,
-				process: spawned.process,
-				root,
-				sessionCwd: this.sessionCwd,
-				initialization: mergedInit,
-				initializeTimeoutMs: server.initializeTimeoutMs,
-				launchVariant: spawned.launchVariant,
-				settingsSection: server.settingsSection,
-				// #4764: the declared role travels with the client, so a failed server
-				// config can gate an auxiliary scanner's empty publications only.
-				role: server.role,
-				// #5131 round 2: the config-declared flag gates the echo hold; a
-				// built-in row with the same behaviour declares `echoesOwnNotice`.
-				custom: server.custom,
-				echoesOwnNotice: server.echoesOwnNotice,
-				onDiagnosticsPublished: (serverId) => {
-					this.hooks.noteDiagnosticsPublished(serverId);
-				},
-			});
+				return createLSPClient({
+					serverId: server.id,
+					process: launched.process,
+					root,
+					sessionCwd: this.sessionCwd,
+					initialization: mergedInit,
+					initializeTimeoutMs: server.initializeTimeoutMs,
+					launchVariant: launched.launchVariant,
+					settingsSection: server.settingsSection,
+					// #4764: the declared role travels with the client, so a failed server
+					// config can gate an auxiliary scanner's empty publications only.
+					role: server.role,
+					// #5131 round 2: the config-declared flag gates the echo hold; a
+					// built-in row with the same behaviour declares `echoesOwnNotice`.
+					custom: server.custom,
+					echoesOwnNotice: server.echoesOwnNotice,
+					onDiagnosticsPublished: (serverId) => {
+						this.hooks.noteDiagnosticsPublished(serverId);
+					},
+					// #5700: the registry's resident budget, read per spawn.
+					openDocumentCap: getLspOpenDocumentCap(),
+				});
+			};
+
+			let client: Awaited<ReturnType<typeof createLSPClient>>;
+			try {
+				client = await connect(spawned);
+			} catch (err) {
+				// none: #5504, a launch with a known-good sibling (effect-tsgo ->
+				// native) exited or failed `initialize`; its fallback writes the
+				// record and runs once, inside the spawn's project-code permission.
+				// No fallback, or one that answers nothing, rethrows into the ladder.
+				const fallback = spawned.initializeFallback;
+				if (!fallback) throw err;
+				// Shut down during the first handshake: nothing to fall back for, and
+				// no launch after shutdown (the first child is already killed).
+				if (this.isDestroyed) return abortSpawn(undefined);
+				const replacement = await withLspProjectCodePermission(
+					projectCodeAllowed,
+					() => fallback(err),
+				);
+				if (!replacement) throw err;
+				if (this.isDestroyed) return abortSpawn(replacement);
+				spawned = replacement;
+				client = await connect(spawned);
+			}
 
 			// Guard 2: service was shut down while we were completing the initialize
 			// handshake. Shut down the live client best-effort and do not register it.

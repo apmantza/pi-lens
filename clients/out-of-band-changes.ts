@@ -24,25 +24,28 @@
  * an install are refused. This module names no consumer.
  *
  * The same look compares the config files a server reads once and keeps
- * (`pyrightconfig.json`, `pyproject.toml`: the closed list in
- * `clients/lsp/server-config-files.ts`) at the root only (a config below it is
- * a declared p3 residual: the look stats the root's names, it does not walk),
- * and publishes a created, edited or deleted one as a `config` change (#4532
- * gap 12). A config born after the server answered never reached it before:
- * pyright kept its "could not be resolved" findings for the server's life until
- * a watched-files event named the file.
+ * (`pyrightconfig.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `go.work`:
+ * the closed list in `clients/lsp/server-config-files.ts`) at the root, and a
+ * workspace member's `Cargo.toml` or `go.mod` below it (found by the same
+ * declaration walk, #5501 r3), and publishes a created, edited or deleted one
+ * as a `config` change (#4532 gap 12). A config born after the server answered
+ * never reached it before: pyright kept its "could not be resolved" findings
+ * for the server's life until a watched-files event named the file.
  *
  * The records are process-wide per root, as the servers are (two sessions on
  * one root share them, so one install restarts once). They describe the disk,
  * not a session, so a session boundary keeps them: an install made between
  * sessions is still seen. A root's first look records and changes nothing
  * unless the caller names the epoch of the live server rooted there (#4532):
- * an install fresher than that epoch is the change the server missed, so it is
- * published instead of recorded as a baseline the server never read.
+ * an install, or a config file (#5501 r3), fresher than that epoch is the
+ * change the server missed, so it is published instead of recorded as a
+ * baseline the server never read. The session root's and the MCP cwd's looks
+ * hand over the live clients instead, whose epoch judges config files only
+ * (#5501), so those first looks still restart no client for an install.
  */
 import { promises as fsp } from "node:fs";
 import * as os from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, relative } from "node:path";
 import { BoundedFifoMap } from "./bounded-cache.js";
 import {
 	incrementDegradationCount,
@@ -58,6 +61,7 @@ import {
 	LSP_CONSUMER,
 } from "./disk-change-subscribers.js";
 import { untilAborted } from "./deadline-utils.js";
+import { nonNegativeIntEnv } from "./env-utils.js";
 import { isExcludedDirName } from "./file-utils.js";
 import { logLatency } from "./latency-logger.js";
 import {
@@ -65,8 +69,12 @@ import {
 	isUnderDir,
 	normalizeMapKey,
 	realpathOrResolve,
+	rootsOverlap,
 } from "./path-utils.js";
-import { SERVER_CONFIG_FILE_NAMES } from "./lsp/server-config-files.js";
+import {
+	BELOW_ROOT_CONFIG_FILE_NAMES,
+	SERVER_CONFIG_FILE_NAMES,
+} from "./lsp/server-config-files.js";
 import { PROJECT_VENV_DIR_NAMES } from "./python-environment.js";
 import { createSingleFlight } from "./single-flight.js";
 import { compareOrdinal } from "./string-utils.js";
@@ -130,9 +138,8 @@ const DECLARATION_FILE = /(?:\.d\.[cm]?ts|\.pyi)$/i;
 const MAX_ROOTS = 64;
 
 /** Least time between two tool_call walks of one root (bash results always walk). */
-function declarationLookIntervalMs(): number {
-	const raw = Number(process.env.PI_LENS_DECLARATION_LOOK_MS);
-	return Number.isFinite(raw) && raw >= 0 ? raw : 2000;
+export function declarationLookIntervalMs(): number {
+	return nonNegativeIntEnv("PI_LENS_DECLARATION_LOOK_MS", 2000);
 }
 
 interface RootRecord {
@@ -206,6 +213,14 @@ const fingerprint = (stat: {
 	size: number;
 	mtimeMs: number;
 }): string => `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+
+/** The mtime a {@link fingerprint} carries (its last field). */
+const fingerprintChangedAt = (print: string): number =>
+	Number(print.slice(print.lastIndexOf(":") + 1));
+
+/** `filePath` is a workspace member's manifest the walk records (#5501 r3). */
+const isBelowRootConfig = (filePath: string): boolean =>
+	BELOW_ROOT_CONFIG_FILE_NAMES.has(basename(filePath));
 
 /** Created, changed and deleted server config files between two looks. */
 function diffServerConfigs(
@@ -451,7 +466,10 @@ interface DeclarationWalk {
 /**
  * The declaration files under `root`, outside the shared excluded directories
  * (gitignored ones included: codegen writes there), in a deterministic order;
- * `undefined` when the walk hit a cap.
+ * `undefined` when the walk hit a cap. A workspace member's server config file
+ * below the root (`BELOW_ROOT_CONFIG_FILE_NAMES`) rides the same map, caps,
+ * unreadable-subtree carry and order (#5501 r3); `lookOnce` tells the two
+ * apart by name.
  *
  * #4596: a directory that cannot be listed is REPORTED, not skipped. Skipping
  * it left the walk's map looking complete, so the diff below read every
@@ -495,7 +513,13 @@ async function walkDeclarations(
 			for (const entry of entries) {
 				if (entry.isDirectory()) {
 					if (!isExcludedDirName(entry.name)) queue.push(join(dir, entry.name));
-				} else if (entry.isFile() && DECLARATION_FILE.test(entry.name)) {
+				} else if (
+					entry.isFile() &&
+					(DECLARATION_FILE.test(entry.name) ||
+						// #5501 r3: a member manifest below the root. The root's own are
+						// statted with the install stamp, so the walk skips them.
+						(dir !== root && BELOW_ROOT_CONFIG_FILE_NAMES.has(entry.name)))
+				) {
 					found.push(join(dir, entry.name));
 				}
 			}
@@ -620,6 +644,54 @@ function diffDeclarations(
 }
 
 /**
+ * The config files a root's FIRST look forwards (#5501 r3): those whose mtime
+ * is at or after the epoch of the live client that has to read them, the root's
+ * own and the walk's member manifests, as `Changed`. `since` absent or 0 names
+ * no client, so a first look keeps recording only. The same coarse-clock slack
+ * as {@link firstLookSawInstall}, and the same safe direction: a manifest
+ * written the instant the client spawned costs it one extra reload.
+ */
+function firstLookFreshConfigs(
+	root: string,
+	rootConfigs: ReadonlyMap<string, string> | undefined,
+	walked: ReadonlyMap<string, string> | undefined,
+	since: number | undefined,
+): Array<{ filePath: string; type: number }> {
+	if (since === undefined || since <= 0) return [];
+	const floor = since - COARSE_MTIME_SLACK_MS;
+	const fresh: Array<{ filePath: string; type: number }> = [];
+	for (const [name, print] of rootConfigs ?? [])
+		if (fingerprintChangedAt(print) >= floor)
+			fresh.push({ filePath: join(root, name), type: 2 });
+	for (const [filePath, print] of walked ?? [])
+		if (isBelowRootConfig(filePath) && fingerprintChangedAt(print) >= floor)
+			fresh.push({ filePath, type: 2 });
+	return fresh;
+}
+
+/**
+ * #5501: the epoch a first look at `root` names for its config files when the
+ * caller hands it the live clients (`liveClients`): the earliest launch among
+ * the clients whose root overlaps `root`, 0 (no epoch) when none does. A
+ * client with no launch stamp reports 0 (`livePrimaryClientRoots`), so the
+ * root then names no epoch, as at a client root.
+ */
+function earliestOverlappingLaunch(
+	root: string,
+	clients: ReadonlyArray<{ root: string; spawnedAt: number }>,
+): number {
+	const rootKey = normalizeMapKey(root);
+	let earliest: number | undefined;
+	for (const client of clients)
+		if (rootsOverlap(normalizeMapKey(client.root), rootKey))
+			earliest =
+				earliest === undefined
+					? client.spawnedAt
+					: Math.min(earliest, client.spawnedAt);
+	return earliest ?? 0;
+}
+
+/**
  * What a look needs to know beyond its root (#4532).
  */
 export interface OutOfBandLookOptions {
@@ -631,6 +703,19 @@ export interface OutOfBandLookOptions {
 	 * a first look records and changes nothing.
 	 */
 	since?: number;
+	/**
+	 * #5501: the live primary clients, for a caller that looks at one root for
+	 * every client under or above it (the session root, the MCP cwd) rather
+	 * than per client root. Read only at a FIRST look of this root: the earliest
+	 * launch among the clients whose root overlaps it (the set an install there
+	 * would restart) is the epoch that judges this look's config files, the
+	 * root's own and the walk's member manifests. It never judges an install:
+	 * these looks restarted no client at a first look before, and a lockfile a
+	 * server's own start writes (rust-analyzer's `cargo metadata` creates
+	 * `Cargo.lock`, measured) would read as one. `since` keeps that, at a client
+	 * root. A function, so a later look pays nothing for it.
+	 */
+	liveClients?: () => ReadonlyArray<{ root: string; spawnedAt: number }>;
 	/**
 	 * When the declaration walk runs. `"trigger"` (the default) keeps #4476's
 	 * rule: a `tool_result` always walks, a `tool_call` walks at most once per
@@ -668,10 +753,11 @@ export interface OutOfBandLookOptions {
  * sequence through; without it the change still reaches every subscriber, but
  * no sequence is allocated.
  *
- * `options.since` is the one way a FIRST look of a root publishes (#4532): it
- * names the epoch of the server that has to re-read the root, so an install
- * that appeared after that server spawned is not mistaken for state it already
- * read.
+ * `options.since` is the one way a FIRST look of a root publishes an install
+ * (#4532): it names the epoch of the server that has to re-read the root, so
+ * an install that appeared after that server spawned is not mistaken for state
+ * it already read. `options.liveClients` names one for config files only
+ * (#5501).
  */
 export function lookForOutOfBandChanges(
 	root: string,
@@ -854,17 +940,40 @@ async function lookOnce(
 		prior === undefined
 			? firstLookSawInstall(install, options.since)
 			: install.stamp !== prior.stamp;
-	if (prior === undefined && !installed) return;
+	// #5501 r3: a config file takes the same test, and goes out as Changed (its
+	// birth is not knowable from one look). #5501: a caller that names no
+	// `since` but hands the live clients names their epoch for configs only.
+	const firstLookConfigs =
+		prior === undefined
+			? firstLookFreshConfigs(
+					root,
+					install.configs,
+					observed?.declarations,
+					options.since ??
+						(options.liveClients
+							? earliestOverlappingLaunch(root, options.liveClients())
+							: undefined),
+				)
+			: [];
+	if (prior === undefined && !installed && firstLookConfigs.length === 0)
+		return;
 	// An incomplete walk (`incomplete`) leaves the record's own map in place, so
 	// there is nothing to diff this round.
-	const changes =
+	const walkChanges =
 		walkDue && !incomplete && declarations && prior?.declarations
 			? diffDeclarations(prior.declarations, declarations)
 			: [];
-	const configChanges =
-		install.configs && prior?.configs
+	// A member manifest is a config change, not a declaration one: it refuses the
+	// cache for the whole root and names no declaration path.
+	const changes: Array<{ filePath: string; type: number }> = [];
+	const configChanges = [
+		...(install.configs && prior?.configs
 			? diffServerConfigs(root, prior.configs, install.configs)
-			: [];
+			: []),
+		...firstLookConfigs,
+	];
+	for (const change of walkChanges)
+		(isBelowRootConfig(change.filePath) ? configChanges : changes).push(change);
 	if (!installed && changes.length === 0 && configChanges.length === 0) return;
 	const at = Date.now();
 	// I1: the per-root record is committed above, before any consumer runs.
@@ -900,7 +1009,8 @@ async function lookOnce(
 			trigger,
 			restarted,
 			// Which look produced this row: the root's FIRST look (no record yet,
-			// so only `since` can make it publish — the #4532 live-client epoch)
+			// so only a live-client epoch can make it publish: `since`, #4532, or
+			// `liveClients` for configs, #5501)
 			// or a later look compared against the recorded stamp. Both the
 			// session-cwd root and a live client's root write the same record,
 			// so this names the look, not the caller.
@@ -911,10 +1021,12 @@ async function lookOnce(
 			created: count(1),
 			changed: count(2),
 			deleted: count(3),
-			// The server config files this look forwarded (#4532), by name.
+			// The server config files this look forwarded (#4532), by path from the
+			// root: a member manifest below it (#5501 r3) is told apart by its
+			// directory.
 			configs: configChanges.map(
 				(change) =>
-					`${CHANGE_TYPE[change.type as 1 | 2 | 3]}:${basename(change.filePath)}`,
+					`${CHANGE_TYPE[change.type as 1 | 2 | 3]}:${relative(root, change.filePath).replaceAll("\\", "/")}`,
 			),
 		},
 	});

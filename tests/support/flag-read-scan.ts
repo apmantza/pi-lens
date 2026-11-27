@@ -290,8 +290,10 @@ const isFlagFieldName = (name: string | undefined): name is string =>
  * identifier or string is the slot itself). Anything else returns undefined:
  * a value, a callee, a local variable.
  */
-function fieldNameAt(node: SgNode): { name: string; slot: SgNode } | undefined {
-	const kind = kindOf(node);
+function fieldNameAt(
+	node: SgNode,
+	kind: string,
+): { name: string; slot: SgNode } | undefined {
 	if (
 		kind === "property_identifier" ||
 		kind === "shorthand_property_identifier" ||
@@ -380,12 +382,17 @@ export function scanFlagReads(
 	admitted: FlagReadAdmission = {},
 ): FlagReadScan {
 	const parsed = Object.entries(files).map(([file, raw]) => {
-		return { file, text: raw, nodes: parseNodes(raw) };
+		const nodes = parseNodes(raw);
+		// Each node's kind is asked once here; every pass below reads this array
+		// (`node.kind()` is a native call plus a string allocation, and three
+		// whole-file passes ask the same node the same question).
+		const kinds = nodes.map(kindOf);
+		const calls = nodes.filter((_, i) => kinds[i] === "call_expression");
+		return { file, text: raw, nodes, kinds, calls };
 	});
 	const registered = new Set(registeredByRegistry);
-	for (const { nodes } of parsed)
-		for (const node of nodes) {
-			if (kindOf(node) !== "call_expression") continue;
+	for (const { calls } of parsed)
+		for (const node of calls) {
 			const { name } = calleeName(node.field("function") as SgNode);
 			if (name !== "registerFlag") continue;
 			const first = firstArgument(node);
@@ -400,9 +407,8 @@ export function scanFlagReads(
 	// R3 fixpoint: a forwarder bound to a bare name is a reader too.
 	for (let grew = true; grew;) {
 		grew = false;
-		for (const { nodes } of parsed)
-			for (const node of nodes) {
-				if (kindOf(node) !== "call_expression") continue;
+		for (const { calls } of parsed)
+			for (const node of calls) {
 				const { name } = calleeName(node.field("function") as SgNode);
 				if (!isReader(name)) continue;
 				const first = firstArgument(node);
@@ -506,9 +512,9 @@ export function scanFlagReads(
 		refuse(file, text, slot, `${name} as form \`${kind}\``);
 	};
 
-	for (const { file, text, nodes } of parsed)
-		for (const node of nodes) {
-			const kind = kindOf(node);
+	for (const { file, text, nodes, kinds } of parsed)
+		for (const [at, node] of nodes.entries()) {
+			const kind = kinds[at] as string;
 			if (kind === "call_expression") {
 				const callee = node.field("function") as SgNode;
 				const { name, computed } = calleeName(callee);
@@ -551,7 +557,7 @@ export function scanFlagReads(
 						refuse(file, text, node, `computed reader \`[${value}]\``);
 				}
 			}
-			const field = fieldNameAt(node);
+			const field = fieldNameAt(node, kind);
 			if (field === undefined || !isFlagFieldName(field.name)) continue;
 			checkField(file, text, field.name, field.slot);
 		}

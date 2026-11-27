@@ -170,8 +170,11 @@ describe("#4782: a later receipt in the quiet window outranks the stored answer"
 	// with a stored empty answer and a finding pending; its #4764 config failure
 	// retracts the empty store and keeps the timer; the next publish seeds.
 	it("a seed-first store supersedes the receipt pending before it", async () => {
+		// `zizmor` is a registry auxiliary whose strategy row sets
+		// `seedFirstPush: true` (wait-policy/strategies.ts). This test first used
+		// `eslint`, a runner id, not a server; its strategy row was deleted (#5485).
 		const { state, publish } = harness({
-			serverId: "eslint",
+			serverId: "zizmor",
 			serverRole: "auxiliary",
 		});
 		const NEW: LSPDiagnostic = { ...STALE, message: "the newest answer" };

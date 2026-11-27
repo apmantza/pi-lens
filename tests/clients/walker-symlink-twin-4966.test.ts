@@ -528,6 +528,11 @@ const EXEMPT: Readonly<Record<string, { reason: string; pinnedBy: string }>> = {
 			"the git checkout's `spelledRoot` stays on the spelling: the graph reports roots beside the spelled cwd",
 		pinnedBy: "tests/clients/walk-identity-4689.test.ts",
 	},
+	"clients/dispatch/integration.ts": {
+		reason:
+			"`existingDirOf` (moved here from clients/staged-delta.ts, #5621) climbs the SPELLING by design (`spelling: true`) to the nearest existing directory of a moved file's destination, where the seed copy is written; it places a temp file and answers no owner",
+		pinnedBy: "tests/index-5553-staged-delta-gate.test.ts",
+	},
 	"clients/gitleaks-client.ts": {
 		reason:
 			"nested-checkout test between a finding's spelled file and the caller's spelled cwd; both ends are spellings by design (`spelling: true`)",
@@ -562,6 +567,11 @@ const EXEMPT: Readonly<Record<string, { reason: string; pinnedBy: string }>> = {
 		reason:
 			"`getCurrentCommit` looks up a git repo for a spawn cwd and is private; its file-link start is pinned through `captureSnapshots` with a real repository beside the link",
 		pinnedBy: "tests/clients/metrics-history-stderr.test.ts",
+	},
+	"clients/metrics/complexity-baseline.ts": {
+		reason:
+			"`existingDir` finds the nearest existing directory of a file's real path as the cwd of its default-branch git read (#5087); it answers a spawn cwd, not a root, and its file-link start is pinned with a link outside the repository",
+		pinnedBy: "tests/clients/metrics/complexity-baseline.test.ts",
 	},
 	"clients/tree-sitter-client.ts": {
 		reason:
@@ -601,16 +611,6 @@ const EXEMPT: Readonly<Record<string, { reason: string; pinnedBy: string }>> = {
 	"clients/test-runner-client.ts": {
 		reason:
 			"the checkout-ownership walks start at the file's `realTarget` and the `realCwd` through `findNearestMarkerRootDetailed` (registered)",
-		pinnedBy: "tests/clients/walk-identity-4689.test.ts",
-	},
-	"clients/dispatch/runners/shellcheck.ts": {
-		reason:
-			"`findLocalToolConfig` (registered) from the dispatch context's cwd, an identity",
-		pinnedBy: "tests/clients/walk-identity-4689.test.ts",
-	},
-	"clients/dispatch/runners/vale.ts": {
-		reason:
-			"`findLocalToolConfig` (registered) from the dispatch context's cwd, an identity",
 		pinnedBy: "tests/clients/walk-identity-4689.test.ts",
 	},
 };

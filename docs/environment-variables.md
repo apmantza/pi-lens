@@ -1,8 +1,18 @@
 # Environment Variables
 
-The complete pi-lens environment-variable reference. Every variable here is read
-at process start; set it in the shell that launches pi (`export …` in bash,
+The complete pi-lens environment-variable reference. Most variables here are read
+once, at process start; set them in the shell that launches pi (`export …` in bash,
 `$env:VAR = "…"` / `setx …` in PowerShell), your process manager, or CI config.
+The variables read on each use (`PI_LENS_CASCADE_SETTLE_WAIT_MS`, `PI_LENS_LSP_DRIFT_CHECK_MS`,
+`PI_LENS_DECLARATION_LOOK_MS`, `PI_LENS_REVERSE_DEPS_REUSE`, `PI_LENS_GRAPH_SEQ_FASTPATH`,
+`PI_LENS_SNAPSHOT_PERSIST_SYNC`, `PI_LENS_GRAPH_PERSIST_DEBOUNCE_MS`,
+`PI_LENS_GRAPH_CHECKPOINT_MIN_INTERVAL_MS`, `PI_LENS_WORD_INDEX_PERSIST_DEBOUNCE_MS`,
+`PI_LENS_TOOL_REFRESH_INTERVAL_MS`, `PI_LENS_TOOL_REFRESH_RETRY_MS`,
+`PI_LENS_TOOL_REFRESH_MAX_PER_SESSION`, `PI_LENS_TOOL_REFRESH_DELAY_MS`,
+`PI_LENS_INSTALL_TIMEOUT_MS`, `PI_LENS_REVIEW_GRAPH_MAX_FILES` and
+`PI_LENS_WARMUP_DELAY_MS` (read when the warmup is scheduled: once per process,
+unless a warmup fails) also apply a value a host sets on `process.env`
+after start.
 
 Boolean-style variables are compared literally against `"1"` or `"0"` — only the
 exact string flips the switch.
@@ -186,12 +196,11 @@ Set to `1` to skip auto-installing language servers. Off by default.
 ### `PI_LENS_DISABLE_TOOL_INSTALL`
 
 Set to `1` to skip auto-installing managed tools (formatters, linters,
-scanners). Off by default. It stops four things: the managed installer, the
-lazy installer (`gem install rubocop`, `rustup component add clippy|rustfmt`),
+scanners). Off by default. It stops three things: the managed installer,
 govulncheck's `go install`, and any `npx` package-runner spawn, which runs
 offline (`npm_config_offline=true`): it uses npm's cache or fails, and never
-downloads. A refused lazy or govulncheck install records one `install-disabled`
-degradation row per tool per session. It does not cover `bunx` (which ignores
+downloads. A refused govulncheck install records one `install-disabled`
+degradation row per session. It does not cover `bunx` (which ignores
 that variable; pi-lens never spawns it) or language-server installs (see
 `PI_LENS_DISABLE_LSP_INSTALL`).
 
@@ -343,14 +352,24 @@ complete field definitions are in
 
 ### `PI_LENS_LSP_IDLE_EVICT_MS`
 
-Shared idle window (ms) after which every language-service client whose registry
-`idleEviction` is `transparent` releases its hydrated program and shuts down,
-rebuilding transparently on the next request. Servers declared `resident` or
-`unmeasured` are never evicted. Which servers are declared which way, and the
-nightly measurement behind each declaration, is in
+Shared idle window (ms) after which every language-service client releases its
+hydrated program and shuts down, rebuilding on the next request, on the pi host
+and the MCP host alike. Only servers declared `resident` stay (#5700): today
+the five project indexers held by #3952 (expert, kotlin, powershell, rust,
+svelte). Which servers are declared which way, and the nightly measurement
+behind each declaration, is in
 [`lsp-idle-eviction.md`](lsp-idle-eviction.md).
 When unset or invalid, `PI_LENS_TS_IDLE_EVICT_MS` (below) is read.
 **Default:** 20 minutes (`1200000`).
+
+### `PI_LENS_LSP_OPEN_DOCUMENT_CAP`
+
+How many documents one language-server client keeps open (#5700). Past it the
+client closes its least recently sent document with `didClose`, so the server
+drops its text and syntax tree. The closed file's last findings stay readable,
+marked `closed: true` in the `lsp_navigation` workspace snapshot, and the next
+touch opens the file again.
+**Default:** `256`.
 
 ### `PI_LENS_EPHEMERAL_LSP_IDLE_EVICT_MS`
 
@@ -419,7 +438,20 @@ entry for what's still holding the loop open.
 
 ### `PI_LENS_LOG_RETENTION_DAYS`
 
-Days to keep rotated logs before cleanup. **Default:** `7`.
+How many days the session-start cleanup keeps these files before it removes them:
+the daily `logs/*.jsonl` files, rotated log backups, oversized tool-result spill
+logs (`tool-result-<id>.log`), and per-session state snapshots. The current
+session's snapshot stays whatever its age. **Default:** `7`. Cleanup reads the value as a
+leading integer, so `1garbage` reads as `1`; a value that yields `0` or no leading
+integer reads as `7`, and a negative one as `1`.
+
+The same cleanup also removes two things this variable does not tune. An MCP
+endpoint socket in the temp directory goes after one day, and only when its
+owner process has exited or nothing answers on it. A project data directory goes after 30 days, and only
+when no path on disk can still be the project the directory name encodes. The cleanup
+never removes a project data directory on Windows, and it keeps any entry it
+cannot judge. It runs once per session start, off the startup path, and shows
+a `🧹` notice when it removed something.
 
 ### `PI_LENS_MAX_LOG_SIZE_MB`
 

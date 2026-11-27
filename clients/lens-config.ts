@@ -111,9 +111,21 @@ export interface PiLensGlobalConfig {
 		 */
 		runnerTimeoutFloorMs?: number;
 	};
+	/**
+	 * #5793: tool names the user declares never write, so the opaque
+	 * before/after diff skips them. Always honored from this file; a project
+	 * `.pi-lens.json` carries the same key, honored only when pi trusts the
+	 * project. Entries are checked where they are used
+	 * (`clients/opaque-mutation-scan.ts`), not here.
+	 */
+	opaqueScan?: { nonWriterTools?: string[] };
 	widget?: {
 		/** Whether the diagnostics widget is visible when a session starts. */
 		visible?: boolean;
+		/** Where the widget draws: above or below the input editor. Default `belowEditor`. */
+		position?: "aboveEditor" | "belowEditor";
+		/** Draw nothing while no error, warning or unchecked file is outstanding. */
+		hideWhenClean?: boolean;
 	};
 	/** Whether pi-lens runs at all this session (`--no-lens`). */
 	lens?: PiLensToggleConfig;
@@ -475,6 +487,12 @@ export function loadPiLensGlobalConfig(
 			}
 		}
 
+		// #5793: the schema (`config-schema.ts`) already dropped a non-array and a
+		// non-string member with a record, so only a typed list reaches here.
+		const nonWriterTools = asConfigObject(raw.opaqueScan)?.nonWriterTools;
+		if (Array.isArray(nonWriterTools))
+			config.opaqueScan = { nonWriterTools: nonWriterTools as string[] };
+
 		const autoFix = asConfigObject(
 			asConfigObject(raw.actionableWarnings)?.autoFix,
 		);
@@ -518,15 +536,33 @@ export function loadPiLensGlobalConfig(
 
 		const widget = asConfigObject(raw.widget);
 		if (widget) {
+			const widgetConfig: NonNullable<PiLensGlobalConfig["widget"]> = {};
 			if (typeof widget.visible === "boolean") {
-				config.widget = { visible: widget.visible };
-			} else {
+				widgetConfig.visible = widget.visible;
+			} else if ("visible" in widget) {
 				// #533: present-but-wrong-type warns; absent stays silent.
-				if ("visible" in widget) {
-					warnInvalid("widget.visible must be a boolean", "PILENS_CFG_0005");
-				}
-				config.widget = { visible: undefined };
+				warnInvalid("widget.visible must be a boolean", "PILENS_CFG_0005");
 			}
+			if (
+				widget.position === "aboveEditor" ||
+				widget.position === "belowEditor"
+			) {
+				widgetConfig.position = widget.position;
+			} else if ("position" in widget) {
+				warnInvalid(
+					'widget.position must be "aboveEditor" or "belowEditor"',
+					"PILENS_CFG_0005",
+				);
+			}
+			if (typeof widget.hideWhenClean === "boolean") {
+				widgetConfig.hideWhenClean = widget.hideWhenClean;
+			} else if ("hideWhenClean" in widget) {
+				warnInvalid(
+					"widget.hideWhenClean must be a boolean",
+					"PILENS_CFG_0005",
+				);
+			}
+			config.widget = widgetConfig;
 		}
 
 		const format = asConfigObject(raw.format);

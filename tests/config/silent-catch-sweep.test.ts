@@ -138,11 +138,13 @@ const SHARP_HOST =
  * count and by the content identity of its admitted set. Shrink only.
  */
 const BASELINE: Readonly<Record<string, Admission>> = {
+	// #5258 re-pins the identity, count unchanged: the codeAction catch (:1363)
+	// now records the lookup as unanswered, which the persistent re-verify reads.
 	"clients/actionable-warnings.ts": {
 		silent: 6,
-		identities: "e926d3cd1c334a07",
+		identities: "cda88059e5e00d3d",
 		reason: PRE_RULE,
-	}, // :347, :360, :1169, :1340, :2061, :2272
+	}, // :352, :365, :1184, :1363, :2085, :2299
 	"clients/advisory-provenance.ts": {
 		silent: 4,
 		identities: "4be1802a08b42400",
@@ -355,10 +357,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 			"#4535 slice 2 moved both here verbatim from `clients/runtime-tool-result.ts`'s held-primary pass, and they are the same two best-effort reads they were there: a document whose disk bytes cannot be read is still a held document whose server view may be stale (the caller reports it as a target), and a primary send that throws is reported to the detector as `failed: true`, which is the row that surfaces it (`bash_write_primary_resync`, `opaque_mutation_head_moved`). Neither is a dropped failure: the first arms the delivery, the second is a classification the caller reads.",
 	}, // :193, :207
 	"clients/dispatch/dispatcher.ts": {
-		silent: 7,
-		identities: "0cbf028fed5fa5bf",
+		silent: 6,
+		identities: "1a6f3d3e73b42750",
 		reason: PRE_RULE,
-	}, // :316, :331, :337, :1102, :1807, :1815, :2039
+	}, // :229, :235, :1201, :1927, :1935, :2192 (#5410 removed the hasTool probe's catch)
 	"clients/dispatch/facts/file-content.ts": {
 		silent: 1,
 		identities: "f187250a34b04dec",
@@ -366,9 +368,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :15
 	"clients/dispatch/integration.ts": {
 		silent: 7,
-		identities: "07e8090abd2c7f84",
+		identities: "33888a63294fe35f",
 		reason: PRE_RULE,
-	}, // :323, :976, :1625, :1635, :2320, :3345, :3371
+	}, // :347, :1039, :1735, :1745, :2481, :3579, :3660 (#5553: the unreadable-file handler moved into prepareSeedLaneRun; same seven handlers)
 	"clients/dispatch/pending-runner-findings.ts": {
 		silent: 2,
 		identities: "6376b0d0a47313f2",
@@ -529,16 +531,11 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		identities: "a044ae359f31afb8",
 		reason: PRE_RULE,
 	}, // :102
-	"clients/dispatch/runners/utils/lazy-installer.ts": {
-		silent: 1,
-		identities: "abe2d56914cef611",
-		reason: PRE_RULE,
-	}, // :239
 	"clients/dispatch/runners/utils/runner-helpers.ts": {
 		silent: 7,
-		identities: "711a4b4207c2affe",
+		identities: "82100b8d3097c468",
 		reason: PRE_RULE,
-	}, // :334, :382, :506, :545, :698, :1328, :1638
+	}, // :416, :464, :588, :627, :841, :1518, :1880
 	"clients/dispatch/runners/vale.ts": {
 		silent: 1,
 		identities: "e8e154dc40dff426",
@@ -580,10 +577,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :168 (2 -> 1, #5120: the write lock's swallow went with withLock)
 	"clients/file-utils.ts": {
-		silent: 10,
-		identities: "6ae9ab1bab948b4e",
+		silent: 9,
+		identities: "158d7e24bb01d82f",
 		reason: PRE_RULE,
-	}, // :339, :359, :377, :381, :384, :511, :939, :1399, :1686, :1717 (#4689 batch 8: dataDirCanonicalRoot's realpath-probe catch is gone with the probe; the adoption's handlers declare their none)
+	}, // :341, :361, :379, :383, :386, :513, :1010, :1455, :1764 (#4689 batch 8: dataDirCanonicalRoot's realpath-probe catch is gone with the probe; the adoption's handlers declare their none; 10 -> 9 #5417: detectFileChangedAfterCommand's read-back declares its none)
 	"clients/fix-run-restore.ts": {
 		silent: 10,
 		identities: "24b4689d533166d4",
@@ -625,10 +622,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :108, :205
 	"clients/gitleaks-client.ts": {
-		silent: 7,
-		identities: "b7d8104671a0bad6",
+		silent: 6,
+		identities: "98091fc66b02229a",
 		reason: PRE_RULE,
-	}, // :156, :267, :285, :299, :321, :489, :556
+	}, // :162, :273, :291, :305, :327, :501
 	"clients/govulncheck-client.ts": {
 		silent: 5,
 		identities: "e7742f12d2580226",
@@ -659,11 +656,19 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		identities: "077a81da84ea60c4",
 		reason: PRE_RULE,
 	}, // :63, :176
+	"clients/installer/download.ts": {
+		silent: 2,
+		identities: "aa070ad0a95be3d3",
+		reason:
+			"Both rejection callbacks call the typed download failure path, which removes the partial file and rejects the caller; the lexical sweep cannot follow that shared propagation helper.",
+	},
+	// #5561 r3 re-pins the identity, count unchanged: the npm and gem install
+	// catches (:6033, :6479) now pass `InstallLockLostError` to the shared helper.
 	"clients/installer/index.ts": {
-		silent: 54,
-		identities: "683c0bafc1e0070e",
+		silent: 55,
+		identities: "c9b7e2c8dc3fbe38",
 		reason: PRE_RULE,
-	}, // :201, :206, :216, :227, :240, :297, :2264, :2593, :2677, :2812, :2824, :2850, :3190, :3231, :3266, :3278, :3400, :3423, :3445, :3615, :3712, :3808, :3967, :3975, :4643, :4696, :4887, :4927, :5411, :5446, :5599, :5616, :5642, :5673, :5676, :5682, :5698, :5741, :5744, :5829, :5916, :6017, :6024, :6216, :6239, :6297, :6307, :6311, :6391, :6427, :6464, :6582, :6741, :6811
+	}, // :202, :207, :217, :228, :241, :298, :2265, :2594, :2678, :2813, :2825, :2851, :3191, :3232, :3267, :3279, :3401, :3424, :3446, :3616, :3713, :3809, :3968, :3976, :4644, :4697, :4888, :4928, :5412, :5447, :5600, :5617, :5643, :5674, :5677, :5683, :5699, :5742, :5745, :5838, :5925, :6026, :6033, :6266, :6289, :6347, :6357, :6361, :6443, :6479, :6517, :6635, :6794, :6864
 	"clients/installer/managed-tool-refresh.ts": {
 		silent: 4,
 		identities: "dbbc0961e686ccc4",
@@ -695,10 +700,13 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :362, :477, :521, :528, :611
 	"clients/jscpd-client.ts": {
-		silent: 5,
-		identities: "3950a10dc006ea1a",
+		// 5 -> 2 (#5411): its parse no longer swallows a broken report and the report
+		// directory is the shared lifecycle's, so three of its five silent handlers are
+		// gone; what is left predates this round.
+		silent: 2,
+		identities: "4499d017be2fe10b",
 		reason: PRE_RULE,
-	}, // :107, :118, :507, :513, :571
+	}, // :111, :122
 	"clients/json-cache-read.ts": {
 		silent: 4,
 		identities: "83a11b3167dae771",
@@ -725,10 +733,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :500
 	"clients/log-cleanup.ts": {
-		silent: 6,
-		identities: "a96b760c3e0e1558",
+		silent: 4,
+		identities: "e7bbd284be93893b",
 		reason: PRE_RULE,
-	}, // :73, :117, :126, :160, :165, :199
+	}, // :93, :168, :177, :335 (6 -> 4, #5707 r2: the dead cleanupOldLogs left with its two handlers)
 	"clients/lsp-budget.ts": {
 		silent: 1,
 		identities: "288709348a380874",
@@ -740,10 +748,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :62
 	"clients/lsp-mutation.ts": {
-		silent: 3,
-		identities: "717faab25bd5e210",
+		silent: 2,
+		identities: "b6057326211a2668",
 		reason: PRE_RULE,
-	}, // :404, :495, :540
+	}, // :546, :598
 	"clients/lsp/aggregation.ts": {
 		silent: 1,
 		identities: "6c214f59992042fc",
@@ -761,7 +769,7 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :483, :777, :767, :818, :1034, :1369, :1466, :1782
 	"clients/lsp/client.ts": {
 		silent: 34,
-		identities: "bf780f9a41c81ff1",
+		identities: "e26c7c06ae5ca254",
 		reason: PRE_RULE,
 	}, // :1559, :1617, :1680, :1687, :1775, :3444, :3712, :4105, :4198, :4222, :4268, :4957, :5150, :5350, :5575, :5748, :5815, :5829, :5932, :5982, :6116, :6137, :6259, :6269, :6358, :6431, :6573, :7718, :7721, :7735, :7821, :8104, :8116, :8125, :8139
 	"clients/lsp/config.ts": {
@@ -805,11 +813,16 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		identities: "53f0ed4e5a760b9e",
 		reason: PRE_RULE,
 	}, // :65
+	// #5694 re-pins the identity, count unchanged: the try bodies of the ps1
+	// bypass catch (:564) and the spawn fallback catch (:1199) no longer carry
+	// the deleted `needsShell` value; no handler was added or removed.
+	// #5689 changes the global lookup arguments in the existing fallback;
+	// the same eight handlers remain, with no new silent handler admitted.
 	"clients/lsp/launch.ts": {
 		silent: 8,
-		identities: "28c8d9743bb92359",
+		identities: "4fee9037ac58efe8",
 		reason: PRE_RULE,
-	}, // :110, :418, :772, :778, :1031, :1256, :1267, :1278
+	}, // :244, :564, :942, :948, :1199, :1424, :1435, :1446
 	"clients/lsp/lombok.ts": {
 		silent: 6,
 		identities: "a076d98b1826881f",
@@ -865,10 +878,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :207, :382, :630, :696, :743, :922
 	"clients/mcp/review.ts": {
-		silent: 3,
-		identities: "fd3a6c2269932b0b",
+		silent: 1,
+		identities: "d4831a54c80fb2ff",
 		reason: PRE_RULE,
-	}, // :77, :124, :149
+	}, // :92
 	"clients/mcp/session.ts": {
 		silent: 1,
 		identities: "7a22e287f518528b",
@@ -925,10 +938,12 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :224, :257, :843
 	"clients/opengrep-client.ts": {
-		silent: 3,
-		identities: "2062917950cbdb52",
+		// 3 -> 2 (#5411): its report-directory cleanup moved into the shared
+		// lifecycle, which carries its own admitted row.
+		silent: 2,
+		identities: "a8f5da5afab7117a",
 		reason: PRE_RULE,
-	}, // :291, :328, :387
+	}, // :352, :411
 	"clients/out-of-band-changes.ts": {
 		silent: 3,
 		identities: "f6a8dcd9fdd0254e",
@@ -969,11 +984,11 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		identities: "c6617487a0244394",
 		reason: PRE_RULE,
 	}, // :194, :216, :877, :1520, :1550, :1621, :1847, :2203, :2357, :2767
-	"clients/probe-home-state.ts": {
+	"clients/pre-edit-capture.ts": {
 		silent: 1,
-		identities: "0c038fd772637ccb",
+		identities: "2e966e69e019a6fa",
 		reason: PRE_RULE,
-	}, // :281
+	}, // :131 (#5616: the capture's catch moved here from runtime-tool-call.ts with `captureWriterSeeds`)
 	"clients/process-snapshot.ts": {
 		silent: 1,
 		identities: "d86d2439be475af1",
@@ -1076,10 +1091,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :1254, :1303, :1399, :1989, :2019, :2025, :2040, :2046, :2138, :2503, :2601, :2727, :2769, :3200, :4676, :5529, :5608, :6031, :6363
 	"clients/review-graph/git-identity.ts": {
-		silent: 10,
-		identities: "719b257b5989f9db",
+		silent: 9,
+		identities: "b7a627187ea9629a",
 		reason: PRE_RULE,
-	}, // :67, :82, :107, :122, :137, :204, :217, :247, :261, :292
+	}, // :68, :88, :117, :132, :216, :229, :259, :273, :304
 	"clients/review-graph/import-resolvers.ts": {
 		silent: 5,
 		identities: "11acf9263a41f8fa",
@@ -1101,10 +1116,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :182, :247
 	"clients/runtime-agent-end.ts": {
-		silent: 4,
-		identities: "38ca64e7de6ced49",
+		silent: 3,
+		identities: "71ea6a3be5f5074e",
 		reason: PRE_RULE,
-	}, // :604, :864, :880, :1030
+	}, // :677, :965, :981
 	"clients/runtime-coordinator.ts": {
 		silent: 4,
 		identities: "4fdad997e8135617",
@@ -1116,10 +1131,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :403, :648, :901, :949, :956, :1042, :1069, :1146, :1181, :1183, :1208, :1238, :1371, :1422, :1592, :2189, :2782, :2814, :2922, :2999, :3004, :3414, :3428, :3501
 	"clients/runtime-tool-call.ts": {
-		silent: 10,
-		identities: "042e838b36502579",
+		silent: 9,
+		identities: "f53bc2b53b2f0a4f",
 		reason: PRE_RULE,
-	}, // :269, :502, :526, :1049, :1216, :1441, :1832 and the rest (11 -> 10, #5120: the partial-apply rejection catch went with the in-tool_call writer)
+	}, // :282, :525, :549, :934, :1095, :1101, :1306, :1565, :1963 (11 -> 10, #5120: the partial-apply rejection catch went with the in-tool_call writer; 10 -> 9, #5616: the pre-edit capture's catch moved to clients/pre-edit-capture.ts)
 	"clients/runtime-tool-result.ts": {
 		silent: 9,
 		identities: "b34b5e082d0b70b8",
@@ -1130,11 +1145,13 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		identities: "d3c52ebe36413a9f",
 		reason: PRE_RULE,
 	}, // :393, :413, :438, :696, :761, :773, :840, :1066, :3342, :3348, :3354, :4720, :4547, :4668, :4701, :4922, :5055, :5375, :5416, :5671
+	// #5699: same 18 handlers; the `/proc` read's handler now reads the held
+	// store through `heldChildren()` (it moved onto the process singleton).
 	"clients/safe-spawn.ts": {
-		silent: 18,
-		identities: "e64267868c7a0d5b",
+		silent: 20,
+		identities: "37218d2e9b5b69cc",
 		reason: PRE_RULE,
-	}, // :192, :201, :229, :465, :511, :603, :660, :674, :677, :1157, :1397, :1866, :1936, :1966, :2012, :2045, :2192, :2249
+	}, // :209, :218, :246, :499, :562, :708, :765, :779, :782, :1276, :1765, :2257, :2327, :2357, :2397, :2403, :2433, :2436, :2583, :2640
 	"clients/search-read-registration.ts": {
 		silent: 1,
 		identities: "a37a1b3a1638df7c",
@@ -1186,10 +1203,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :48, :73
 	"clients/test-runner-client.ts": {
-		silent: 14,
-		identities: "4cdcaf420967db23",
+		silent: 13,
+		identities: "56ba424651013754",
 		reason: PRE_RULE,
-	}, // :358, :1071, :1121, :1137, :1181, :1211, :1256, :1355, :1556, :1962, :2043, :2310, :3458, :3467
+	}, // :367, :1138, :1154, :1198, :1228, :1273, :1372, :1573, :1982, :2063, :2330, :3492, :3501
 	"clients/test-runner-delivery.ts": {
 		silent: 3,
 		identities: "4cdd627d04c0d6e1",
@@ -1212,10 +1229,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :162
 	"clients/tool-policy.ts": {
-		silent: 18,
-		identities: "1658ee10420ff18e",
+		silent: 9,
+		identities: "d7643e90f6364361",
 		reason: PRE_RULE,
-	}, // :1946, :1962, :1986, :2024, :2076, :2088, :2104, :2124, :2151, :2669, :2725, :2751, :2771, :2807, :2866, :2883, :2902, :2910
+	}, // :1903, :1953, :1965, :2309, :2365, :2391, :2411, :2447, :2487
 	"clients/tool-render.ts": {
 		silent: 2,
 		identities: "bf1a83100ccaa695",
@@ -1242,10 +1259,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :848
 	"clients/trivy-client.ts": {
-		silent: 6,
-		identities: "7437ffe9ed1a72cd",
+		silent: 3,
+		identities: "6dfcef6e98de4d57",
 		reason: PRE_RULE,
-	}, // :163, :184, :218, :407, :461, :504
+	}, // :182, :240, :274
 	"clients/tui-fit.ts": {
 		silent: 1,
 		identities: "bdb9736abc0aae9d",
@@ -1287,10 +1304,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :196, :204, :228, :333, :572
 	"index.ts": {
-		silent: 49,
-		identities: "b48916790863d67b",
+		silent: 50,
+		identities: "23b249be99003620",
 		reason: SHARP_HOST,
-	}, // :522, :673, :779, :783, :1118, :1141, :1454, :1604, :1761, :1780, :1789, :1832, :1899, :2143, :2154, :2187, :2238, :2268, :2401, :2453, :2543, :2571, :2644, :2745, :2757, :2814, :2820, :2946, :2970, :3047, :3222, :3270, :3369, :3495, :3527, :3603, :3777, :3854, :3959, :3992, :4079, :4116, :4131, :4158, :4193, :4204, :4537, :4544, :4877
+	}, // :543, :704, :810, :814, :1097, :1207, :1230, :1549, :1699, :1856, :1875, :1884, :1925, :1992, :2247, :2258, :2292, :2343, :2387, :2534, :2586, :2702, :2730, :2803, :2908, :2920, :2977, :2983, :3114, :3170, :3247, :3486, :3537, :3643, :3792, :3827, :3908, :4086, :4170, :4275, :4308, :4395, :4432, :4447, :4474, :4513, :4524, :4859, :4866, :5231
 	"mcp/analyze-cli.ts": {
 		silent: 1,
 		identities: "e823b8d7883207bc",
@@ -1333,9 +1350,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :517, :524
 	"tools/lens-diagnostic-mark.ts": {
 		silent: 6,
-		identities: "1af53558e8a5be76",
+		identities: "c6e91437fd931389",
 		reason: PRE_RULE,
-	}, // :110, :188, :222, :337, :387, :412
+	}, // :115, :193, :227, :377, :417, :439 (#5417: same six handlers, re-indented into the queued read-verify-write)
 	"tools/lens-diagnostics.ts": {
 		// 7 -> 6 (#5041): the `paths` cap guard's try/catch is gone, because the
 		// shared reader refuses an over-cap list before the scope is built.
@@ -1350,10 +1367,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :280, :1016, :1612, :1672, :2400
 	"tools/lsp-diagnostics.ts": {
-		silent: 10,
-		identities: "2e5c32f96dcee285",
+		silent: 8,
+		identities: "d7917f8d652d88ff",
 		reason: PRE_RULE,
-	}, // :371, :405, :628, :861, :1026, :1084, :1184, :1405, :1452, :2477
+	}, // :472, :506, :786, :1088, :1418, :1651, :1698, :2839
 	"tools/lsp-navigation.ts": {
 		silent: 9,
 		identities: "0ea45645359d3e6d",
@@ -1407,7 +1424,16 @@ const BASELINE: Readonly<Record<string, Admission>> = {
  * 1,169.
  * It moves only downward from here.
  */
-const PINNED_TOTAL = 1169;
+// 1169 -> 1166 (#5411): jscpd gave up three silent handlers and opengrep one
+// when their report lifecycles moved into `clients/report-scan.ts`, which
+// admits one of its own.
+// 1166 -> 1165 (#5440 r2): that crash guard records at its own top level now,
+// so the sweep reads it as recorded and `report-scan.ts` admits no row.
+// 1165 -> 1163 (refs #4907): the raw-realpath fold deleted `toRealPath`'s handler
+// in `probe-home-state.ts` and `canonicalDirectory`'s in `git-identity.ts`.
+// 1163 -> 1162 (#5410 D2): `detectRunner`'s `which pytest` spawn and its
+// handler became a PATH walk that does not throw.
+const PINNED_TOTAL = 1162;
 
 interface Census {
 	byFile: Map<string, CatchSite[]>;

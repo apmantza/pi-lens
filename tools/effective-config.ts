@@ -59,7 +59,7 @@ export function createEffectiveConfigTool(
 		name: "effective_config" as const,
 		label: "Effective Config",
 		description:
-			"Explain resolved configuration and provenance. Response is redacted by construction: it contains no environment values, no command arguments beyond the binary, and home-relative paths; a tier-denied LSP decision cannot be lifted by a nearer config. Example: pass `file` to see why its LSP server is selected.",
+			"Explain resolved configuration and provenance. Response is redacted by construction: it contains no environment values, no command arguments beyond the binary, and home-relative paths; a tier-denied LSP decision cannot be lifted by a nearer config. Example: pass `path` to see why its LSP server is selected.",
 		promptSnippet: "Explain resolved configuration",
 		renderResult: compactRenderResult<{ summary?: string }>(
 			({ details, isError }) =>
@@ -78,17 +78,18 @@ export function createEffectiveConfigTool(
 						"re-query with `cwd` set to that file's own workspace instead.",
 				}),
 			),
-			file: Type.Optional(Type.String({ description: "Alias for `path`." })),
 		}),
 		async execute(
 			_toolCallId: string,
-			params: { path?: string; file?: string },
+			params: { path?: string },
 			_signal: AbortSignal | undefined,
 			_onUpdate: unknown,
 			ctx: { cwd?: string },
 		) {
 			const cwd = getProjectRoot() || ctx.cwd || ".";
-			// #5041: `path` is canonical, `file` the older spelling.
+			// #5041/#5138: `path` is the one advertised spelling. The shared reader
+			// still understands a legacy `file` send at runtime, which is why the
+			// schema can stop declaring it without changing what a call does.
 			const fileRead = readFilePath(params);
 			if (fileRead.refusal) {
 				return {

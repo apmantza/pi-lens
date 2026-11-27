@@ -1678,3 +1678,75 @@ function run(ctx) { s("tool", [], { cwd: ctx.cwd }); }`;
 		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
 	});
 });
+
+// ── The admitted resolver source is tool-cwd.js alone (#4907) ──────────────
+//
+// Recurrence this prevents: `runner-helpers.ts` exported a second
+// `resolveRunnerCwd` and this scan admitted that import source beside the
+// seam's own. yamllint, ruff, biome-check and spellcheck imported the copy, so
+// a mutation of `tool-cwd.ts`'s `resolveRunnerCwd` reddened only the owner's
+// unit test and none of those four runners' cwd cells, and the sweep still read
+// all four as conforming. Each plant below reaches a resolver by a spelling the
+// fold did not design for.
+
+describe("a resolver name imported from any module but tool-cwd.js is not the seam (#4907)", () => {
+	const SPAWN = `await safeSpawnAsync("t", [], { cwd });`;
+
+	it("rejects the named import from runner-helpers (plant: the old admitted form)", async () => {
+		const source = `import { resolveRunnerCwd } from "./utils/runner-helpers.js";
+			async function run(ctx) {
+				const cwd = resolveRunnerCwd(ctx, "yamllint");
+				${SPAWN}
+			}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites.map((site) => site.resolvedFromToolCwd)).toEqual([false]);
+	});
+
+	it("rejects an aliased import from runner-helpers (plant 1: alias)", async () => {
+		const source = `import { resolveRunnerCwd as rc } from "./utils/runner-helpers.js";
+			async function run(ctx) {
+				const cwd = rc(ctx, "yamllint");
+				${SPAWN}
+			}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites.map((site) => site.resolvedFromToolCwd)).toEqual([false]);
+	});
+
+	it("rejects a namespace import member call (plant 2: indirect call)", async () => {
+		const source = `import * as helpers from "./utils/runner-helpers.js";
+			async function run(ctx) {
+				const cwd = helpers.resolveRunnerCwd(ctx, "yamllint");
+				${SPAWN}
+			}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites.map((site) => site.resolvedFromToolCwd)).toEqual([false]);
+	});
+
+	it("rejects a value reached through another binding (plant 3)", async () => {
+		const source = `import { resolveRunnerCwd } from "./utils/runner-helpers.js";
+			async function run(ctx) {
+				const resolved = resolveRunnerCwd(ctx, "yamllint");
+				const cwd = resolved;
+				${SPAWN}
+			}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites.map((site) => site.resolvedFromToolCwd)).toEqual([false]);
+	});
+
+	it("still accepts the same call imported from tool-cwd.js, aliased or not (control)", async () => {
+		for (const [clause, call] of [
+			["resolveRunnerCwd", 'resolveRunnerCwd(ctx, "yamllint")'],
+			["resolveRunnerCwd as rc", 'rc(ctx, "yamllint")'],
+		]) {
+			const source = `import { ${clause} } from "../../tool-cwd.js";
+				async function run(ctx) {
+					const cwd = ${call};
+					${SPAWN}
+				}`;
+			const scan = await scanSpawnCwd("fixture.ts", source);
+			expect(scan.sites.map((site) => site.resolvedFromToolCwd)).toEqual([
+				true,
+			]);
+		}
+	});
+});

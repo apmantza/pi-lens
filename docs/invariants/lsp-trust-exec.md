@@ -29,6 +29,37 @@
   and a pinned site count. Extend the seam; never add a per-caller guard. A
   non-pi maintenance host that starts the checkout's own tools adopts trust at
   its entry, as the MCP entry points do.
+- An LSP root not admitted for project code (an adopted root without
+  permission, or pi trust other than `trusted`) never executes or
+  version-probes a file whose real path is inside it (#5674). One judge,
+  `projectSearchJudge` in `clients/session-repository.ts`, decides what reaches
+  the root:
+  - a relative or (POSIX) empty PATH entry;
+  - an entry at or under the root, or under a project-local bin dir of the root
+    or an ancestor;
+  - an answer, judged by its real directory.
+  The judge walks the bin dirs once per scan, never once per entry. It is
+  applied in three places:
+  - `launchLSP` drops such entries from its lookup and from the child's PATH,
+    and refuses an answer in the root, such as a global link or the Windows
+    cwd search.
+  - `lookupManagedTool`, the one home of every LSP managed lookup, reads only
+    the tool store when the process PATH reaches the root, and the runtime
+    install is skipped on the same predicate.
+  - Otherwise both run inside `withUnadmittedRootSpawns`, so the spawn
+    chokepoint refuses a bare name that resolves into the root. An absolute
+    path skips that lookup judgment, so the installer's global-bin rung
+    (`firstVerifiedBinary`) and `findGlobalBinary` judge each candidate's real
+    directory with the same judge before returning or running it.
+  An admitted root is unchanged.
+  Global manager discovery (`allAvailableGlobalBinDirs`) derives admission by
+  default, including its session-start prime. Its finder and query share the
+  scoped environment and refused-root spawn scope; availability and directory
+  evidence are reused only for the same trust, root, cwd, and environment.
+  `tests/clients/session-repository-trust-4530.test.ts` pins the file-link,
+  planted-finder, warm-answer, and concurrent-root controls.
+  `tests/clients/lsp/managed-fallback-after-trust-refusal-4515.test.ts` and
+  `tests/clients/project-search-judge-5674.test.ts` pin it.
 - Under pi, project trust is consumed through `isProjectTrusted`; pi-lens never
   registers the host's trust-answer handler. `compileLspRegistry` is the one admission
   seam for LSP executable fields: global config and built-ins remain allowed,
@@ -44,6 +75,13 @@
   fail-closed for those project fields with one bounded notice; installs keep
   their existing compatibility policy. `tests/clients/lsp/lsp-registry-trust.test.ts`
   and the LSP config/service suites pin the boundary.
+  Adopted roots resolve their own pi decision through the host's exported
+  `ProjectTrustStore.get`, resource classifier and global `defaultProjectTrust`;
+  missing exports refuse project-code servers. The registry reads each root once
+  per owning turn; detached acquisitions reread. SDK loading is deadline-bound
+  and abandoned on registry retirement. It never answers or writes pi trust. Inert servers keep their
+  existing adopted-root admission. `tests/clients/lsp/adopted-root-trust-5469.test.ts`
+  pins the host/session/root matrix.
   Non-pi process entry points (`mcp/server.ts`, `mcp/worker.ts`,
   `mcp/analyze-cli.ts`, and `mcp/cli.ts`) declare trusted execution once at
   startup through `setProjectTrustState`: workspace trust belongs to their
@@ -113,7 +151,13 @@
   `.oxlintrc.json` (`npm run lint:js`, #2372/#277; it replaced the
   `lsp-capabilities-import-sweep` test in #4865).
 - Idle-eviction policy is the registry's `idleEviction` field, declared per
-  server. The nightly (`scripts/measure-lsp-idle-eviction.mjs`) measures every
+  server. Every client whose server is not declared `resident` arms the shared
+  idle timer, on the pi host and the MCP host alike; `resident` is the only
+  opt-out and needs a reason row (#5700). Each client also caps its open
+  documents (`PI_LENS_LSP_OPEN_DOCUMENT_CAP`, default 256) and closes the least
+  recently sent one with an ordinary queued `didClose`, never beside a live
+  notify queue; the closed file's last findings stay readable, marked
+  `closed`. The nightly (`scripts/measure-lsp-idle-eviction.mjs`) measures every
   registry server's eviction cost and respawn safety into
   `docs/lsp-idle-eviction.md` and changes no policy; a declaration change is a
   follow-up that cites its row, or the nightly's draft promotion PR
@@ -124,7 +168,8 @@
   the registry test's `TRANSPARENT_IDS`; night memory in the matrix doc's
   refresh-state block; never auto-merged, never demotes). `tests/config/lsp-idle-eviction-measurement.test.ts`
   fails when a registry server can go unmeasured without an admission or when
-  the committed measurement vetoes a server declared `transparent`.
+  the committed measurement vetoes a server the registry evicts (any
+  declaration but `resident`, #5700).
 - The compiled registry holds the CATALOG ENTRY for every built-in with no
   command override (`compileLspRegistry`), so the object the client registry
   keeps (`SpawnedServer.info`) is the object `LSP_SERVERS`/`getServerById`
@@ -134,7 +179,7 @@
   first (history: `HISTORY.md`, 2026-10-19).
   `tests/clients/lsp/lsp-registry-trust.test.ts` pins both directions;
   `scheduleIdleEviction` records `lsp-idle-eviction-declined` once per server
-  per session when it arms no timer.
+  per session when it arms no timer (a `resident` server).
 - The server-role vocabulary and the declared trait table have one owner,
   `clients/lsp/server-traits.ts` (#1488, #1756 stage 1). Ask `isAuxiliary`,
   never a comparison against the role literal, and read `notifyInflightLimit`
@@ -208,6 +253,25 @@
   confirm, or a server that republished for the file after the edit) keeps its
   verdict. A client that cannot date its cache reports no reuse and keeps the
   pre-#5040 verdict.
+- A server that announces its readiness is not asked for a verdict before it
+  is ready. The client advertises `experimental.serverStatusNotification` and
+  records the `quiescent` flag with a change revision (`LSPClientState.serverStatus`,
+  `clients/lsp/client.ts`). An empty pull report from a server that was loading
+  when the request left, or whose readiness changed while it was in flight, is
+  never stored as an answer (`pullDiagnosticSource`, the one primitive touch,
+  refresh re-pulls and sweeps share); an empty `publishDiagnostics` received
+  while `quiescent` is false is dropped; the touch's first pull waits for
+  quiescence inside the touch budget (`pullDiagnosticsWhenReady`). A touch whose
+  budget lapses on a loading server is inconclusive with reason `server-loading`
+  (`resolveTouchVerdict`), never clean. A workspace the server says failed to
+  load (`health: "error"`) is not ready either: its touch is inconclusive with
+  reason `server-load-failed` and the server's message, at once, because no
+  wait fixes it; `health: "warning"` stays ready. A server that announces
+  nothing, or a notice without a boolean `quiescent`, is unchanged: the gate
+  keys on what the server announced, never on a server id or a strategy row.
+  The diagnostics tool names either cause and its next step, never a timeout
+  (`serverNotReadyText`, `tools/lsp-diagnostics.ts`); a server that died while
+  loading lapses as a plain diagnostics wait (`readinessBlockOf`).
 - Document line addressing has one owner, `clients/lsp/content-scan.ts`: the
   `\n` count behind the `lsp_document_send` record's `contentLineCount` and the
   LSP sync bound (`countLfNewlines`), the last LSP-addressable line an

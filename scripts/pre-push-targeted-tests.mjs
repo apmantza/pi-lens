@@ -52,16 +52,27 @@
 // skips the build too.
 import { execFileSync, spawn } from "node:child_process";
 import {
+	claimScratchDir,
+	ownerAlive,
+	SCRATCH_OWNER_FILE,
+} from "./lib/scratch-dir.mjs";
+import { nestedDestinationError } from "./lib/pr-worktree.mjs";
+import { windowsExe } from "./lib/process-scan.mjs";
+import {
 	appendFileSync,
+	lstatSync,
 	existsSync,
 	mkdirSync,
+	rmSync,
 	readFileSync,
 	readdirSync,
+	realpathSync,
 	renameSync,
 	statSync,
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { parseVitestSummary } from "./lib/vitest-summary.mjs";
 import { getLockPath, getSlotPath } from "./lib/suite-lock.mjs";
@@ -119,14 +130,14 @@ let recordWriteWarningEmitted = false;
 // collection, #3215), and `--include-ci-only` admits them in a local run. The
 // governance suite pins this table, the exclusion, and the CI row.
 const REAL_HARNESS_CI_ONLY =
-	"real pi sessions in the serialized real-harness lane (maxWorkers 1, its own phase), and any tests/ change arms all 12 registered suites: 105 s of CI time together (scripts/test-shard-weights.json), and 117 s locally with the route matrix on 2026-10-21, the whole 120s pre-push budget (#4724). Runs in the gating Unit tests job (the default vitest collection; the advisory CI job that also admitted it via --include-ci-only was removed in #3215) and, with --include-ci-only, in a local run.";
+	"real pi sessions in the serialized real-harness lane (maxWorkers 1, its own phase), and any tests/ change arms all 14 registered suites: 134 s of CI time together (the 14 rows of scripts/test-shard-weights.json), and 117 s locally with the route matrix on 2026-10-21, the whole 120s pre-push budget (#4724). Runs in the gating Unit tests job (the default vitest collection; the advisory CI job that also admitted it via --include-ci-only was removed in #3215) and, with --include-ci-only, in a local run.";
 const ROUTE_MATRIX_COLUMNS_CI_ONLY =
 	"real LSP handshakes in the serialized lsp-spawn-heavy lane (maxWorkers 1, its own phase): three columns of the diagnostics route matrix, split out of tests/tools/diagnostics-route-switch-matrix.test.ts (#3801), 20 to 29 s each locally on 2026-10-31, and any production change arms them through their imports. Runs in the gating Unit tests job (the default vitest collection) and, with --include-ci-only, in a local run.";
 export const CI_ONLY_PRE_PUSH_TESTS = {
 	"tests/scripts/guard-bash-hook.test.ts":
 		"spawns ~1,270 real hook child processes: the transcript corpus alone measured 169s and the file measured 211s end to end, over the 120s pre-push budget. Runs in the gating Unit tests job (the default vitest collection; the advisory CI job that also admitted it via --include-ci-only was removed in #3215) and, with --include-ci-only, in a local run.",
 	"tests/tools/diagnostics-route-switch-matrix.test.ts":
-		"real LSP handshakes in the serialized lsp-spawn-heavy lane (maxWorkers 1, its own phase), and any production change arms it: 60 s of CI time (scripts/test-shard-weights.json) and 50 s locally alone on 2026-10-21 (#4724). Runs in the gating Unit tests job (the default vitest collection; the advisory CI job that also admitted it via --include-ci-only was removed in #3215) and, with --include-ci-only, in a local run.",
+		"real LSP handshakes in the serialized lsp-spawn-heavy lane (maxWorkers 1, its own phase), and any production change arms it: 12.4 s of CI time (scripts/test-shard-weights.json) and 50 s locally alone on 2026-10-21 (#4724). Runs in the gating Unit tests job (the default vitest collection; the advisory CI job that also admitted it via --include-ci-only was removed in #3215) and, with --include-ci-only, in a local run.",
 	"tests/tools/diagnostics-route-switch-matrix-cols-1.test.ts":
 		ROUTE_MATRIX_COLUMNS_CI_ONLY,
 	"tests/tools/diagnostics-route-switch-matrix-cols-2.test.ts":
@@ -144,9 +155,11 @@ export const CI_ONLY_PRE_PUSH_TESTS = {
 	"tests/real-harness/unchecked-report.test.ts": REAL_HARNESS_CI_ONLY,
 	"tests/real-harness/diagnostic-provenance.test.ts": REAL_HARNESS_CI_ONLY,
 	"tests/real-harness/lifecycle.test.ts": REAL_HARNESS_CI_ONLY,
+	"tests/real-harness/lsp-host-exit-5699.test.ts": REAL_HARNESS_CI_ONLY,
 	"tests/real-harness/negative.test.ts": REAL_HARNESS_CI_ONLY,
 	"tests/real-harness/provider-compatibility.test.ts": REAL_HARNESS_CI_ONLY,
 	"tests/real-harness/read-guard-moves.test.ts": REAL_HARNESS_CI_ONLY,
+	"tests/real-harness/runner-host-exit-5703.test.ts": REAL_HARNESS_CI_ONLY,
 	"tests/real-harness/scenario-1.test.ts": REAL_HARNESS_CI_ONLY,
 	"tests/real-harness/scenario-2.test.ts": REAL_HARNESS_CI_ONLY,
 	"tests/real-harness/scenario-3.test.ts": REAL_HARNESS_CI_ONLY,
@@ -167,6 +180,10 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	"tests/config/glossary-synonym-sweep.test.ts",
 	// #4312: literal runner references must resolve after registry renames.
 	"tests/config/runner-group-id-census.test.ts",
+	// #5418: walks clients/dispatch/runners for every CLI a runner probes through
+	// `createAvailabilityChecker`, so a probe with no installer entry and no
+	// written reason reds (the same registry-parity guard also reads the docs).
+	"tests/config/registry-parity.test.ts",
 	// #5408: walks clients/dispatch/runners for modules that read the
 	// filesystem or climb directories instead of asking the config-presence seam.
 	"tests/config/runner-config-presence-census.test.ts",
@@ -203,6 +220,9 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	"tests/clients/abort-listener-release-sweep.test.ts",
 	"tests/clients/single-flight-ratchet.test.ts",
 	"tests/config/bounded-container-guard.test.ts",
+	// #5410: walks clients/tools/mcp for client-owned binary-lookup primitives, so a
+	// new stray availability ladder reds until it is folded or admitted.
+	"tests/config/client-ladder-census.test.ts",
 	// #4239: walks scripts/lib for static dist/ imports and checks each is in
 	// DIST_IMPORTS, so a new governance import of dist/ cannot dodge the rebuild.
 	"tests/scripts/dist-freshness.test.ts",
@@ -224,6 +244,10 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	// hand-rolled `..` containment test over a `path.relative` result, so it is
 	// a both-tree scanner and is registered in TEST_TREE_GOVERNANCE_TESTS too.
 	"tests/config/path-containment-sweep.test.ts",
+	// Shape 25 (#2146): walks clients/, tools/, mcp/ and index.ts for a
+	// hand-rolled process-wide slot outside `getProcessSingleton`; production
+	// trees only, so it is not in TEST_TREE_GOVERNANCE_TESTS.
+	"tests/config/process-slot-sweep.test.ts",
 	// #4590: the one scanner that walks BOTH trees (clients/, scripts/ AND
 	// tests/), so it is registered in both lists: a production change arms it
 	// here, a tests/ change through TEST_TREE_GOVERNANCE_TESTS below.
@@ -232,6 +256,14 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	// identity writes (its own walkFiles helper), so it is registered in both
 	// lists, as the #4590 rule requires for a both-tree scanner.
 	"tests/config/git-fixture-governance.test.ts",
+	// #5072: takes every tracked path (`git ls-files`) for baseline ledgers in
+	// clients/, scripts/ AND tests/, and their owner tests and cells, so it is
+	// a both-tree scanner registered in both lists.
+	"tests/config/baseline-owner-governance.test.ts",
+	// #5753 (review 5754 F3): takes every tracked path (`git ls-files`) to
+	// validate each catalog trigger glob, so a production change and a tests/
+	// change can both move it: a both-tree scanner registered in both lists.
+	"tests/config/agents-governance.test.ts",
 	// #4946: walks clients/, tools/, mcp/ and index.ts for flag names the code
 	// reads, against the flag registry; a production change arms it.
 	"tests/config/flag-read-registry-sweep.test.ts",
@@ -239,6 +271,9 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	// callers, so a production change that passes the option to another walk
 	// consumer arms it.
 	"tests/clients/source-filter-named-files.test.ts",
+	// #5308: walks scripts/ and clients/lsp/ for child-process spawn sites, so a
+	// production change that adds or re-routes a spawn there arms it.
+	"tests/clients/dispatch/runners/run-outcome-ratchet.test.ts",
 ];
 
 // Suites that scan the TESTS tree for a test shape (a real spawn, a raw timer
@@ -261,9 +296,11 @@ export const TEST_TREE_GOVERNANCE_TESTS = [
 	"tests/real-harness/unchecked-report.test.ts",
 	"tests/real-harness/diagnostic-provenance.test.ts",
 	"tests/real-harness/lifecycle.test.ts",
+	"tests/real-harness/lsp-host-exit-5699.test.ts",
 	"tests/real-harness/negative.test.ts",
 	"tests/real-harness/provider-compatibility.test.ts",
 	"tests/real-harness/read-guard-moves.test.ts",
+	"tests/real-harness/runner-host-exit-5703.test.ts",
 	"tests/real-harness/scenario-1.test.ts",
 	"tests/real-harness/scenario-2.test.ts",
 	"tests/real-harness/scenario-3.test.ts",
@@ -286,6 +323,12 @@ export const TEST_TREE_GOVERNANCE_TESTS = [
 	// #4104 F4 fold: the both-tree scanner (tests/ and scripts/), armed by a
 	// tests/ change here as well as by a production change above.
 	"tests/config/git-fixture-governance.test.ts",
+	// #5072: the tests/ half of the baseline census; its production half is the
+	// same file, registered in TREE_SCANNING_GOVERNANCE_TESTS above.
+	"tests/config/baseline-owner-governance.test.ts",
+	// #5753: the tests/ half of the trigger-glob gate; its production half is
+	// the same file, registered in TREE_SCANNING_GOVERNANCE_TESTS above.
+	"tests/config/agents-governance.test.ts",
 	// #4789: walks tests/ for files that read the real home outside the named
 	// opt-out registry.
 	"tests/config/real-home-reader-registry.test.ts",
@@ -442,6 +485,33 @@ export function resolveDiffRange(
 	}
 	// Unreadable stdin: diff HEAD against the base, as CI does.
 	return [`${base}...HEAD`];
+}
+
+// The gate's own temp root (#5439). Inheriting the caller's TMPDIR is what reds
+// path-sensitive tests on a macOS default root, whose `/private/var/folders/...`
+// spelling is long and reaches fixtures through a `/var` symlink. Each run
+// creates its own disposable directory beneath this base, resolved so the
+// symlinked spelling cannot recur. The default sits under the XDG data
+// convention (`~/.local/share/pi-lens-prepush`), NOT under `~/.pi-lens`: the
+// tests build fixtures under `os.tmpdir()`, which is this root, and
+// `isPiLensInternalPath` drops every file under `~/.pi-lens` and `~/.pi`, so
+// the turn-scenarios gitleaks cell read no finding on every push (#5536).
+// `PI_LENS_HOME` stays the machine-state parent for a probe that pins it.
+// `PI_LENS_PREPUSH_TMPDIR` is the operator escape hatch, and the lever a probe
+// uses to reproduce the unpinned behaviour.
+export function resolvePrePushTmpRoot(env = process.env) {
+	const explicit = env.PI_LENS_PREPUSH_TMPDIR?.trim();
+	if (explicit) return path.resolve(explicit);
+	const override = env.PI_LENS_HOME?.trim();
+	return override
+		? path.join(path.resolve(override), "prepush-tmp")
+		: path.join(os.homedir(), ".local", "share", "pi-lens-prepush");
+}
+
+/** Create the temp root and answer its kernel-real path. */
+export function ensurePrePushTmpRoot(root) {
+	mkdirSync(root, { recursive: true });
+	return realpathSync(root);
 }
 
 /**
@@ -957,7 +1027,7 @@ function matchLockTimeout(stderr) {
 // .husky/pre-push) apart from "the tests actually failed". A lock timeout
 // fails the push unless the named opt-out is explicit; a real test failure
 // always blocks the push.
-function runTargetedTests(selected) {
+function runTargetedTests(selected, lifecycle) {
 	return new Promise((resolve) => {
 		const started = performance.now();
 		const child = spawn(
@@ -972,8 +1042,52 @@ function runTargetedTests(selected) {
 			],
 			{
 				stdio: ["ignore", "pipe", "pipe"],
+				detached: process.platform !== "win32",
 			},
 		);
+		let drainTimer;
+		const stop = () => {
+			// The wrapper and Vitest share this owned process group. Killing only
+			// the wrapper leaves a worker able to recreate the removed run root.
+			try {
+				if (process.platform === "win32") {
+					execFileSync(
+						windowsExe("taskkill.exe"),
+						["/F", "/T", "/PID", String(child.pid)],
+						{
+							timeout: 3000,
+							stdio: "ignore",
+						},
+					);
+				} else {
+					process.kill(-child.pid, "SIGKILL");
+				}
+			} catch (error) {
+				if (error.code !== "ESRCH")
+					console.warn(
+						`[pre-push] child termination failed: ${String(error).replace(/[\r\n]+/g, " ")}`,
+					);
+			}
+			drainTimer = setTimeout(() => {
+				lifecycle.drained = false;
+				console.warn(
+					"[pre-push] child drain timed out; preserving temp directory",
+				);
+				child.stdout.destroy();
+				child.stderr.destroy();
+				child.unref();
+				resolve({
+					code: 1,
+					lockTimeout: null,
+					wallTimeMs: performance.now() - started,
+				});
+			}, 5000);
+		};
+		lifecycle.controller.signal.addEventListener("abort", stop, { once: true });
+		const settled = () => {
+			clearTimeout(drainTimer);
+			lifecycle.controller.signal.removeEventListener("abort", stop);
+		};
 		let stdoutBuffer = "";
 		let stderrBuffer = "";
 		child.stdout.on("data", (chunk) => {
@@ -985,6 +1099,7 @@ function runTargetedTests(selected) {
 			stderrBuffer += chunk.toString();
 		});
 		child.on("error", (error) => {
+			settled();
 			resolve({
 				code: 1,
 				lockTimeout: null,
@@ -994,6 +1109,7 @@ function runTargetedTests(selected) {
 			});
 		});
 		child.on("close", (code) => {
+			settled();
 			const lockTimeout = code !== 0 ? matchLockTimeout(stderrBuffer) : null;
 			resolve({
 				code: code ?? 1,
@@ -1020,6 +1136,109 @@ function unionChanged(ranges) {
 }
 
 export async function main() {
+	let base = ensurePrePushTmpRoot(resolvePrePushTmpRoot(process.env));
+	// The default base belongs exclusively to the gate: detached late writers
+	// can recreate run-* without owner.pid after cleanup. Sweep before claiming
+	// ours. A PI_LENS_PREPUSH_TMPDIR base is the operator's and may be shared
+	// (e.g. /tmp), so there only a run-* carrying our dead owner.pid is ours.
+	const exclusiveBase = !process.env.PI_LENS_PREPUSH_TMPDIR?.trim();
+	// #5468 M1: Vitest claims each worker HOME under TMPDIR, and a HOME under
+	// the checkout (every test's cwd) trips the home-ceiling guard. A
+	// PI_LENS_HOME at or inside the checkout therefore falls back to the default
+	// base. An explicit PI_LENS_PREPUSH_TMPDIR is the operator's and is honoured.
+	const checkout = realpathSync.native(process.cwd());
+	if (
+		exclusiveBase &&
+		nestedDestinationError({
+			destination: realpathSync.native(base),
+			checkouts: [checkout],
+			mainCheckout: checkout,
+		})
+	) {
+		const inside = base;
+		base = ensurePrePushTmpRoot(resolvePrePushTmpRoot({}));
+		console.warn(
+			`[pre-push] temp root ${inside} is inside the checkout; using ${base}`,
+		);
+	}
+	let unsafe = false;
+	try {
+		for (const entry of readdirSync(base, { withFileTypes: true })) {
+			if (!entry.name.startsWith("run-")) continue;
+			try {
+				const dir = path.join(base, entry.name);
+				if (!lstatSync(dir).isDirectory()) {
+					unsafe = true;
+					continue;
+				}
+				readdirSync(dir); // An unreadable entry cannot establish ownership.
+				let markerless = false;
+				try {
+					const marker = path.join(dir, SCRATCH_OWNER_FILE);
+					if (!lstatSync(marker).isFile())
+						throw new Error("unsafe owner marker");
+					readFileSync(marker, "utf8");
+				} catch (error) {
+					if (error?.code !== "ENOENT") throw error;
+					markerless = true;
+				}
+				if (markerless && !exclusiveBase) continue;
+				const alive = markerless ? false : ownerAlive(dir);
+				if (alive === true) continue;
+				if (alive === undefined) {
+					unsafe = true;
+					continue;
+				}
+				rmSync(dir, { recursive: true, force: true });
+			} catch {
+				unsafe = true;
+			}
+		}
+	} catch {
+		unsafe = true;
+	}
+	if (unsafe) console.warn("[pre-push] temp sweep skipped unsafe entries");
+	const runDir = claimScratchDir(base, "run");
+	const lifecycle = { controller: new AbortController(), drained: true };
+	let interrupted;
+	const cleanup = () => {
+		if (!lifecycle.drained) return;
+		try {
+			rmSync(runDir, { recursive: true, force: true });
+		} catch (error) {
+			console.warn(
+				`[pre-push] could not remove temp directory: ${String(error).replace(/[\r\n]+/g, " ")}`,
+			);
+		}
+	};
+	const interrupt = (signal) => {
+		if (interrupted) return;
+		interrupted = signal === "SIGINT" ? 130 : 143;
+		lifecycle.controller.abort();
+	};
+	process.once("exit", cleanup);
+	process.on("SIGINT", interrupt);
+	process.on("SIGTERM", interrupt);
+	try {
+		const code = await runGate(realpathSync(runDir), lifecycle);
+		return interrupted ?? code;
+	} finally {
+		process.removeListener("exit", cleanup);
+		process.removeListener("SIGINT", interrupt);
+		process.removeListener("SIGTERM", interrupt);
+		cleanup();
+	}
+}
+
+async function runGate(prePushTmpRoot, lifecycle) {
+	const callerTmp = process.env.TMPDIR ?? "(unset)";
+	process.env.TMPDIR = prePushTmpRoot;
+	process.env.TEMP = prePushTmpRoot;
+	process.env.TMP = prePushTmpRoot;
+	console.log(
+		`[pre-push] tmp root: ${prePushTmpRoot} (caller TMPDIR was ${callerTmp})`,
+	);
+
 	const input = readStdin();
 	const base = resolveBaseRef();
 	let ranges = resolveDiffRange(input, base);
@@ -1244,7 +1463,8 @@ export async function main() {
 	for (const test of selected) console.log(`  - ${test}`);
 
 	const before = treeSnapshot();
-	const result = await runTargetedTests(selected);
+	if (lifecycle.controller.signal.aborted) return 1;
+	const result = await runTargetedTests(selected, lifecycle);
 	const { code, lockTimeout, error } = result;
 	const outcome = error
 		? "tests-runner-failed"

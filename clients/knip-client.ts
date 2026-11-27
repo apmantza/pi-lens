@@ -21,17 +21,14 @@ import {
 	isUnderDir,
 	normalizeEphemeralMapKey,
 	normalizeFilePath,
+	realpathOrResolve,
 } from "./path-utils.js";
-import {
-	canonicalDirectory,
-	listNestedLinkedWorktreeRoots,
-} from "./review-graph/git-identity.js";
+import { listNestedLinkedWorktreeRoots } from "./review-graph/git-identity.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import {
-	createAvailabilityChecker,
-	findManagedNodeToolBinary,
 	getManagedToolEnvironment,
-	resolveAvailableOrInstall,
+	resolveToolCommandWithInstallFallback,
+	toolBinaryVerdict,
 } from "./dispatch/runners/utils/runner-helpers.js";
 import {
 	createAvailabilityLatch,
@@ -39,7 +36,11 @@ import {
 } from "./dispatch/runners/utils/availability-policy.js";
 import { spawnFailedWithNoOutput } from "./dispatch/runners/utils/spawn-outcome.js";
 import { formatToolFailure } from "./dispatch/runners/utils/tool-failure.js";
-import { findLocalBinUpwards, localBinPath } from "./package-manager.js";
+import {
+	findLocalBinUpwards,
+	isProjectLocalBinPath,
+	localBinPath,
+} from "./package-manager.js";
 import { logSessionStart } from "./sessionstart-logger.js";
 
 // --- Types ---
@@ -302,7 +303,7 @@ function nestedWorktreeScope(targetDir: string): NestedWorktreeScope {
 		prefixes.push(`${normalizeEphemeralMapKey(normalizeFilePath(root))}/`);
 	}
 	if (prefixes.length === 0) return NO_NESTED_WORKTREES;
-	const base = normalizeFilePath(canonicalDirectory(targetDir));
+	const base = normalizeFilePath(realpathOrResolve(targetDir));
 	return {
 		count: prefixes.length,
 		contains: (file) => {
@@ -319,16 +320,6 @@ const MAX_RECORDED_TOOLCHAINS = 32;
 // --- Client ---
 
 export class KnipClient {
-	private readonly knipAvailability = createAvailabilityChecker(
-		"knip",
-		".cmd",
-		["--version"],
-		{
-			environment: (cwd) => getManagedToolEnvironment("knip", cwd),
-			unclassifiedFailureOutcome: "missing",
-			fastPath: () => findManagedNodeToolBinary("knip"),
-		},
-	);
 	/**
 	 * Client-side memo. Only a DURABLE verdict is latched — a transient probe
 	 * failure expires, so an installed knip becomes available again without a
@@ -452,17 +443,15 @@ export class KnipClient {
 
 	private async doEnsureAvailable(): Promise<boolean> {
 		const cwd = process.cwd();
-		const resolved = await resolveAvailableOrInstall(
-			this.knipAvailability,
-			"knip",
-			cwd,
-		);
+		const resolved = await resolveToolCommandWithInstallFallback(cwd, "knip");
 		if (resolved !== null) {
-			this.knipCommand = resolved;
+			// The project's own shim at `cwd` is each analysis's to resolve
+			// (`resolveProjectKnipBinary`), not a command another root falls back to.
+			if (!isProjectLocalBinPath(resolved, cwd)) this.knipCommand = resolved;
 			this.availabilityLatch.noteAvailable();
 			return true;
 		}
-		const verdict = this.knipAvailability.getVerdict(cwd);
+		const verdict = toolBinaryVerdict("knip", cwd);
 		this.availabilityLatch.noteUnavailable(
 			verdict.outcome ?? "missing",
 			verdict.cause ?? "not-found",
@@ -475,7 +464,7 @@ export class KnipClient {
 	 * failure must never be reported as "install knip" — knip is on disk.
 	 */
 	private unavailableResult(): KnipResult {
-		const verdict = this.knipAvailability.getVerdict(process.cwd());
+		const verdict = toolBinaryVerdict("knip", process.cwd());
 		const transient = verdict.outcome === "transient";
 		const retryAfterMs = verdict.retryAtMs
 			? Math.max(0, verdict.retryAtMs - Date.now())
@@ -807,10 +796,12 @@ export class KnipClient {
 			// against a future knip release that changes this. Deliberately NOT
 			// `analyzed` (#2154): nothing was parsed, so this shape must not
 			// retire a retained knip finding — it is reported cold instead.
+			// #5258: and its summary, which the cold note prints, says nothing was
+			// read rather than claiming a clean result it has no report for.
 			return {
 				...EMPTY_RESULT,
 				success: true,
-				summary: "No issues found",
+				summary: "Knip exited 0 with no output, so no report was read",
 			};
 		}
 

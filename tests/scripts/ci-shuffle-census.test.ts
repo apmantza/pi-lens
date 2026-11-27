@@ -36,6 +36,8 @@ import {
 } from "../../scripts/ci-shuffle-changed-tests.mjs";
 import { setupTestEnvironment } from "../clients/test-utils.js";
 import { assertNonEmptyScan } from "../support/sweep-kit.js";
+import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
+import { scaledTestTimeout } from "../support/test-timeout-scale.js";
 import {
 	auditShuffleOptOuts,
 	censusShuffleOptOuts,
@@ -748,6 +750,13 @@ describe("judgeCensus", () => {
 		expect(verdict.lines).toContain(
 			"warning: ratchet entry clean under every seed tonight (delete it if it stays clean): tests/a.test.ts",
 		);
+		// #5072: the planted row is the ratchet file's own row-without-producer
+		// direction, judged by the census's real comparison.
+		expectPlantedStaleRow({
+			baseline: "scripts/shuffle-census-ratchet.json",
+			rowKey: A,
+			verdict: verdict.lines,
+		});
 	});
 
 	// Recurrence: a timing-seam row (a 5 s timeout) can pass on one night. The
@@ -1424,7 +1433,7 @@ describe("the ratchet file", () => {
 	// observed cost and a blow-up reds rather than passing.
 	it(
 		"registers every describe that opts out of shuffle, and reads every other spelling as a finding",
-		{ timeout: 60_000 },
+		{ timeout: scaledTestTimeout(60_000) },
 		() => {
 			const registered = new Set(
 				parsed.byDesign.map((row) => `${row.file}::${row.describe}`),

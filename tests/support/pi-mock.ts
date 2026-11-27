@@ -24,7 +24,7 @@ import type {
 	ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, expect } from "vitest";
-import { withTimeout } from "../../clients/deadline-utils.js";
+import { withDeadline } from "../../clients/deadline-utils.js";
 import { runHandlerExpectingNoThrow } from "./handler-verdict.js";
 import {
 	failOnOpenMockSessions,
@@ -147,10 +147,9 @@ async function runSessionStartWithBudget<T>(
 	hook: () => T | Promise<T>,
 ): Promise<T> {
 	try {
-		return await withTimeout(
-			Promise.resolve().then(hook),
-			SESSION_START_TEST_BUDGET_MS,
-		);
+		return await withDeadline(Promise.resolve().then(hook), {
+			ms: SESSION_START_TEST_BUDGET_MS,
+		});
 	} catch (error) {
 		if (error instanceof Error && /^Timeout after /.test(error.message)) {
 			throw new Error(

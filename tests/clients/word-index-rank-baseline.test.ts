@@ -25,6 +25,10 @@ import {
 	updateWordIndexDocument,
 	updateWordIndexDocumentForEdit,
 } from "../../clients/word-index.js";
+import {
+	expectPlantedStaleRow,
+	rowsWithoutLiveMember,
+} from "../support/baseline-staleness.js";
 
 const WORDS = [
 	"renderWidget",
@@ -118,6 +122,27 @@ function record(index: ReturnType<typeof buildWordIndex>): RecordedQuery[] {
 	]);
 }
 
+/**
+ * The baseline's two-sided comparison: a recorded query row the run does not
+ * reproduce exactly (the row-without-producer direction), and a run row the
+ * baseline does not record. A row is the query with its whole ranked list.
+ */
+function rankDrift(
+	recorded: readonly RecordedQuery[],
+	actual: readonly RecordedQuery[],
+): string[] {
+	const rows = (queries: readonly RecordedQuery[]) =>
+		new Set(queries.map((row) => JSON.stringify(row)));
+	return [
+		...rowsWithoutLiveMember(rows(recorded), rows(actual)).map(
+			(row) => `recorded row the run does not reproduce: ${row}`,
+		),
+		...rowsWithoutLiveMember(rows(actual), rows(recorded)).map(
+			(row) => `run row the baseline does not record: ${row}`,
+		),
+	];
+}
+
 function readBaseline(): RecordedQuery[] {
 	const baseline = JSON.parse(
 		fs.readFileSync(baselinePath, "utf-8"),
@@ -138,7 +163,7 @@ describe("word-index ranking is unchanged by replacement and packing (#2067/#206
 		const index = buildWordIndex(corpus);
 		const actual = record(index);
 
-		expect(actual).toEqual(baseline);
+		expect(rankDrift(baseline, actual)).toEqual([]);
 		expect(
 			updateWordIndexDocument(index, {
 				path: corpus[0].path,
@@ -146,6 +171,24 @@ describe("word-index ranking is unchanged by replacement and packing (#2067/#206
 			}),
 		).toBe(true);
 		expect(record(index)).toEqual(actual);
+	});
+
+	it("reds a planted baseline row the ranking run never produces (#5072)", () => {
+		// The row-without-producer direction: a recorded query the run never
+		// ran, judged by the comparison the case above runs against a real build.
+		const plantedQuery = "5072-ghost-query";
+		const actual = record(buildWordIndex(makeCorpus()));
+		expectPlantedStaleRow({
+			baseline: "tests/support/word-index-rank-baseline.json",
+			rowKey: plantedQuery,
+			verdict: rankDrift(
+				[
+					...readBaseline(),
+					[plantedQuery, [["src/module0/file0.ts", 1, 1, [0]]]],
+				],
+				actual,
+			),
+		});
 	});
 
 	it("reproduces it after every document goes through the per-edit seam (#2067 criterion 5)", async () => {

@@ -207,7 +207,7 @@ describe("workspace sweep hold (#1618 review round 1)", () => {
 		}
 	});
 
-	it("5. a second handleTurnEnd (active editing) while a rearm is pending must not resurrect after cancel", async () => {
+	it("5. a second handleTurnEnd (active editing) while a rearm is pending replaces it: no fire on release, one fire a full window later (#5700)", async () => {
 		const env = setupTestEnvironment("pi-lens-sweep-hold-second-turn-");
 		const runtime = new RuntimeCoordinator();
 		const cacheManager = new CacheManager(false);
@@ -258,8 +258,12 @@ describe("workspace sweep hold (#1618 review round 1)", () => {
 			// The hold finally releases — the rearm from the FIRST turn must have
 			// been cancelled by the second (active-editing) turn, not fired.
 			release();
-			await vi.advanceTimersByTimeAsync(delayMs * 5);
+			await vi.advanceTimersByTimeAsync(delayMs - 1);
 			expect(resetLSPService).not.toHaveBeenCalled();
+			// #5700: the edit turn re-armed a fresh window (it used to cancel and
+			// leave none), so an idle session still releases its fleet, once.
+			await vi.advanceTimersByTimeAsync(delayMs * 5);
+			expect(resetLSPService).toHaveBeenCalledTimes(1);
 		} finally {
 			vi.useRealTimers();
 			env.cleanup();

@@ -77,6 +77,7 @@ import {
 	relativePosix,
 	stableOccurrenceKey,
 } from "../support/sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -132,7 +133,7 @@ const PYTHON_RELATIVE_LEVELS =
 	"a Python relative import climbs a COUNTED number of package levels (the leading dots), not to a marker: `from ..x import y` is `dots - 1` parents of the importing file's directory by package nesting, which the language defines on the spelled module path, so there is no ceiling or root to compare and no identity to take";
 
 const ANCHOR_PREFIX_COUNTED_CLIMB =
-	"clients/dispatch/rule-policy.ts anchorPrefix climbs a COUNTED number of segments: one dirname per segment of the config location's relativePath (its spelling below the directory that owns the file, such as `.pi-lens.json`), so the owning directory is a count fixed by that location, not a walk to a marker or a root; walkUpDirs stops on a marker or a root and cannot express the count, and the result is a spelled prefix for ignorePaths anchoring, with no identity taken";
+	"clients/dispatch/rule-policy.ts ignoreBaseDir climbs a COUNTED number of segments: one dirname per segment of the config location's relativePath (its spelling below the directory that owns the file, such as `.pi-lens.json`), so the owning directory is a count fixed by that location, not a walk to a marker or a root; walkUpDirs stops on a marker or a root and cannot express the count, and the result only names the declaring directory for ignorePaths anchoring; the identity comparisons on it are made by the seam's own predicates (isUnderDir, pathsEqual), not by this climb";
 
 interface Pin {
 	sites: number;
@@ -177,10 +178,10 @@ const PINS: Readonly<Record<string, Pin>> = {
 		reason: BIN_CONTAINMENT,
 	}, // :514, :519
 	"clients/dispatch/runners/utils/runner-helpers.ts#path-resolve-keyed": {
-		sites: 10,
-		identities: "f640b5350df01957",
+		sites: 11,
+		identities: "58a3b6b897193f90",
 		reason: SPELLING_MEMO,
-	}, // :1182, :1193, :1290, :1447, :1449, :1452, :1617, :1691, :1693, :1696
+	}, // :1356, :1363, :1465, :1483, :1669, :1671, :1674, :1859, :1933, :1935, :1938
 	"clients/file-time.ts#path-resolve-keyed": {
 		sites: 5,
 		identities: "90196aeba76b2323",
@@ -261,26 +262,11 @@ const PINS: Readonly<Record<string, Pin>> = {
 		identities: "f25de8a73a269e45",
 		reason: PRE_4689,
 	}, // :215, :1054
-	"clients/probe-home-state.ts#raw-realpath": {
-		sites: 1,
-		identities: "480c8b119f83ad12",
-		reason: PRE_4689,
-	}, // :280
-	"clients/project-diagnostics/fresh-fetch.ts#raw-realpath": {
-		sites: 1,
-		identities: "00f55ad56f820bcc",
-		reason: PRE_4689,
-	}, // :300
 	"clients/project-lens-config.ts#path-resolve-keyed": {
 		sites: 2,
 		identities: "f196f38821d9305c",
 		reason: SPELLING_MEMO,
 	}, // :469, :472
-	"clients/review-graph/git-identity.ts#raw-realpath": {
-		sites: 1,
-		identities: "10303ca5ad9cc1c8",
-		reason: PRE_4689,
-	}, // :142
 	"clients/review-graph/import-resolvers.ts#path-resolve-keyed": {
 		sites: 1,
 		identities: "6be0c6b8129bfb47",
@@ -363,7 +349,7 @@ const PINS: Readonly<Record<string, Pin>> = {
 	}, // :415
 	"clients/dispatch/rule-policy.ts#hand-rolled-upward-walk": {
 		sites: 1,
-		identities: "70c171ce33765a1f",
+		identities: "1ae0a4ac3f69be4a",
 		reason: ANCHOR_PREFIX_COUNTED_CLIMB,
 	}, // :176
 };
@@ -466,34 +452,38 @@ describe("path identity sweep (#4689)", () => {
 			);
 	}
 
-	it("registers every raw realpath and raw path.resolve key outside the seam", () => {
-		// Calibration on the authoring head: 530 runtime files under clients/,
-		// tools/ and mcp/ plus index.ts (seam excluded); half is 265. The live
-		// populations are 31 raw-realpath and 158 path-resolve-keyed sites,
-		// floored at 5; the hand-rolled upward walks (#4966) are floored at 1.
-		assertNonEmptyScan(
-			"path identity sweep: runtime files scanned",
-			scanned,
-			265,
-		);
-		for (const [needle, floor] of [
-			["raw-realpath", 5],
-			["path-resolve-keyed", 5],
-			// The folds of #4966 left the few climbs that stay, each with a reason.
-			["hand-rolled-upward-walk", 1],
-		] as const)
+	it(
+		"registers every raw realpath and raw path.resolve key outside the seam",
+		() => {
+			// Calibration on the authoring head: 530 runtime files under clients/,
+			// tools/ and mcp/ plus index.ts (seam excluded); half is 265. The live
+			// populations are 31 raw-realpath and 158 path-resolve-keyed sites,
+			// floored at 5; the hand-rolled upward walks (#4966) are floored at 1.
 			assertNonEmptyScan(
-				`path identity sweep: ${needle} sites`,
-				occurrences.filter((occurrence) =>
-					occurrence.row.endsWith(`#${needle}`),
-				).length,
-				floor,
+				"path identity sweep: runtime files scanned",
+				scanned,
+				265,
 			);
-		expect(
-			auditPins(occurrences, PINS),
-			"Derive the key through clients/path-utils.ts (normalizeMapKey for a map key, realpathOrResolve for a native-form identity), or pin the row with the reason it is not an identity derivation (a spelling memo, a call-local dedupe, a containment that must refuse a missing path). Refs #4689.",
-		).toEqual({ unlisted: [], mismatched: [], stale: [] });
-	});
+			for (const [needle, floor] of [
+				["raw-realpath", 5],
+				["path-resolve-keyed", 5],
+				// The folds of #4966 left the few climbs that stay, each with a reason.
+				["hand-rolled-upward-walk", 1],
+			] as const)
+				assertNonEmptyScan(
+					`path identity sweep: ${needle} sites`,
+					occurrences.filter((occurrence) =>
+						occurrence.row.endsWith(`#${needle}`),
+					).length,
+					floor,
+				);
+			expect(
+				auditPins(occurrences, PINS),
+				"Derive the key through clients/path-utils.ts (normalizeMapKey for a map key, realpathOrResolve for a native-form identity), or pin the row with the reason it is not an identity derivation (a spelling memo, a call-local dedupe, a containment that must refuse a missing path). Refs #4689.",
+			).toEqual({ unlisted: [], mismatched: [], stale: [] });
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("gives every pinned row a reason", () => {
 		const reasonless = Object.entries(PINS)

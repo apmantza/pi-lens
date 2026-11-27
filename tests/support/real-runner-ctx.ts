@@ -45,7 +45,9 @@ export interface RealRunnerEnv {
  * `defaults` apply to every ctx; `kind` uses production detection and fails
  * loudly for unknown fixture types unless the caller supplies an override.
  *
- * Tree-sitter suites built on this helper MUST `vi.mock`
+ * Tree-sitter suites built on this helper either pass a `modifiedRanges` under
+ * 5 lines (the runner then skips entity extraction; findings are only
+ * range-filtered under `blockingOnly`) or `vi.mock`
  * `clients/review-graph/service.js` so `recordEntitySnapshotDiff` returns an
  * empty diff. A non-empty diff triggers the tree-sitter runner's
  * fire-and-forget `runBlastRadiusInBackground`, gated by a module-global 5s

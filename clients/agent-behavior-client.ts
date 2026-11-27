@@ -6,10 +6,13 @@
  *   write/edit of the same path counts as file knowledge)
  * - Thrashing: repeated identical tool calls with no progress
  *
- * No external dependencies — purely tracks tool call history.
+ * No third-party dependencies — purely tracks tool call history, and records
+ * its one unavailable result through the shared latency sink.
  */
 
+import { createHash } from "node:crypto";
 import { isMutatingToolName } from "./mutating-tool.js";
+import { logLatency } from "./latency-logger.js";
 import { normalizeMapKey } from "./path-utils.js";
 
 // --- Types ---
@@ -32,6 +35,65 @@ interface ToolCallRecord {
 	timestamp: number;
 }
 
+/**
+ * What one tool result says about its own progress, as its caller can see it
+ * (#5429). The tracker never sees the event, so the `tool_result` path hands
+ * down these two fields and this module owns the reading of them.
+ */
+export interface ToolCallProgress {
+	/** The host reported this call's result as a failed result. */
+	readonly failed?: boolean;
+	/**
+	 * Identity of the arguments the call ran with, from {@link toolCallProgress}.
+	 * Two calls that share a key are the same call; a call whose key the caller
+	 * could not derive leaves this out, and the tracker has no evidence that it
+	 * moved.
+	 */
+	readonly argsKey?: string;
+}
+
+/**
+ * Derive the progress signal for one tool result (#5429).
+ *
+ * Only the two fields the `tool_result` path already holds are read, so this
+ * costs no file access: the failure flag is the host's own `isError`, and the
+ * argument identity is a digest of the `input` the host already parsed. The key
+ * is the host's JSON key order, so a retry that reordered the same fields reads
+ * as a different call — a missed warning, deliberately chosen over the false
+ * positive this replaces (three successful edits warning as "no progress").
+ */
+export function toolCallProgress(event: {
+	isError?: unknown;
+	input?: unknown;
+	toolName?: unknown;
+}): ToolCallProgress {
+	const failed = event.isError === true;
+	const toolName =
+		typeof event.toolName === "string" ? event.toolName : undefined;
+	if (event.input === undefined || event.input === null) {
+		return failed ? { failed: true } : {};
+	}
+	let serialized: string;
+	try {
+		serialized = JSON.stringify(event.input);
+	} catch {
+		// A cycle, a BigInt or a throwing getter in a tool's arguments: this call
+		// gets no argument identity, and the bounded row says so for the streams
+		// that read latency.log.
+		logLatency({
+			type: "phase",
+			phase: "behavior_args_unserializable",
+			filePath: "<unknown>",
+			toolName: toolName ?? "<unknown>",
+			durationMs: 0,
+			result: "no-args-key",
+		});
+		return failed ? { failed: true } : {};
+	}
+	const argsKey = createHash("sha256").update(serialized).digest("hex");
+	return failed ? { failed: true, argsKey } : { argsKey };
+}
+
 // --- Constants ---
 
 // #2423: mutating-tool membership comes from the seam
@@ -39,10 +101,10 @@ interface ToolCallRecord {
 // table. The hand-maintained set this replaced also carried a dead
 // `"multiedit"` entry that no host emits.
 //
-// Known gap, stated rather than hidden: this client is handed a tool NAME and a
-// path, never the event, so it cannot see a third-party mutating tool the way
-// the shape adapters can. Blind-write and thrash detection covers pi's
-// built-ins only.
+// Known gap, stated rather than hidden: this client is handed a tool NAME, a
+// path, and the caller's two-field progress signal, never the event, so it
+// cannot see a third-party mutating tool the way the shape adapters can.
+// Blind-write and thrash detection covers pi's built-ins only.
 const READ_OPS = new Set(["read", "bash", "grep", "glob", "find", "rg"]);
 
 const BLIND_WRITE_WINDOW = 5; // Check last N tool calls for a read
@@ -57,6 +119,7 @@ export class AgentBehaviorClient {
 	private lastToolName: string | null = null;
 	private lastToolFilePath: string | null = null;
 	private lastToolTimestamp = 0;
+	private lastArgsKey: string | null = null;
 
 	// Per-file tracking
 	private fileEditCount = new Map<
@@ -68,21 +131,36 @@ export class AgentBehaviorClient {
 	/**
 	 * Record a tool call and return any warnings triggered.
 	 * Called from tool_result handler.
+	 *
+	 * `progress` is the caller's evidence that the call moved anything (#5429).
+	 * Omit it (or give it no argument key) and the call carries no evidence of
+	 * progress, so it counts toward thrashing as it did before the signal.
 	 */
-	recordToolCall(toolName: string, filePath?: string): BehaviorWarning[] {
+	recordToolCall(
+		toolName: string,
+		filePath?: string,
+		progress: ToolCallProgress = {},
+	): BehaviorWarning[] {
 		const warnings: BehaviorWarning[] = [];
 		const now = Date.now();
 
 		// Track consecutive identical tool+file pairs (thrashing).
 		// Editing different files in sequence is normal agent behaviour — only flag
 		// when the same tool is called on the same file N times without making
-		// progress on anything else.
+		// progress on anything else. A call makes progress when it succeeded and
+		// ran with different arguments than the one before it (#5429): three edits
+		// that each change the file are the agent working, not a stuck loop, while
+		// a failed result or a retried argument set is the stuck loop the doc names.
 		const normalizedPath = filePath ? normalizeMapKey(filePath) : null;
-		if (
+		const samePair =
 			toolName === this.lastToolName &&
 			normalizedPath === this.lastToolFilePath &&
-			now - this.lastToolTimestamp < THRASH_TIMEOUT_MS
-		) {
+			now - this.lastToolTimestamp < THRASH_TIMEOUT_MS;
+		const noProgress =
+			progress.failed === true ||
+			progress.argsKey === undefined ||
+			progress.argsKey === this.lastArgsKey;
+		if (samePair && noProgress) {
 			this.consecutiveCount++;
 		} else {
 			this.consecutiveCount = 1;
@@ -90,6 +168,7 @@ export class AgentBehaviorClient {
 		this.lastToolName = toolName;
 		this.lastToolFilePath = normalizedPath;
 		this.lastToolTimestamp = now;
+		this.lastArgsKey = progress.argsKey ?? null;
 
 		// Check for thrashing
 		if (this.consecutiveCount === THRASH_THRESHOLD) {
@@ -188,6 +267,7 @@ export class AgentBehaviorClient {
 		this.consecutiveCount = 0;
 		this.lastToolName = null;
 		this.lastToolTimestamp = 0;
+		this.lastArgsKey = null;
 		this.fileEditCount.clear();
 	}
 }

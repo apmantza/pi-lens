@@ -1,3 +1,4 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { pathsEqual } from "../../path-utils.js";
@@ -171,7 +172,7 @@ const dartAnalyzeRunner: RunnerDefinition = {
 		const flutterAvailable =
 			!dartAvailable && (await flutter.isAvailableAsync(cwd));
 		if (!dartAvailable && !flutterAvailable) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip(cwd, { checker: dart });
 		}
 		const cmd = dartAvailable
 			? dart.getCommand(cwd)!

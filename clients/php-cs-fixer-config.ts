@@ -63,7 +63,7 @@
  * carriage, not the only possible one.
  *
  * Unlike prettier/biome/eslint, an ancestor config found by `detect()`'s own
- * climb (`hasPhpCsFixerConfig` in `clients/tool-policy.ts`,
+ * climb (`hasToolConfig("php-cs-fixer")` in `clients/tool-config-presence.ts`,
  * `phpCsFixerFormatter.detect` in `clients/formatters.ts`) is invisible to a
  * bare `php-cs-fixer fix <file>` invocation whenever that ancestor directory
  * is neither the file's own directory nor the spawn's cwd — php-cs-fixer
@@ -74,7 +74,7 @@
  * precedence: `.php-cs-fixer.php` wins over `.php-cs-fixer.dist.php` when
  * both sit in the SAME directory (first match in the array wins). This
  * resolver mirrors that precedence; the two legacy v2 names are not one of
- * pi-lens's detection targets (`hasPhpCsFixerConfig`/
+ * pi-lens's detection targets (`hasToolConfig("php-cs-fixer")`/
  * `phpCsFixerFormatter.detect` never look for them either) so they are not
  * candidates here.
  *
@@ -83,13 +83,14 @@
  * `typos-config.ts`, and `zizmor-config.ts` already delegate to for their own
  * "walk up for one of these config filenames" search (refs #680, #2472
  * review F2), rather than a private walker of its own. Called with NO
- * `homeDir` — deliberately UNCEILINGED (#2472 review round 3, F1): this
- * resolver's own gates (`hasPhpCsFixerConfig` in `clients/tool-policy.ts`,
- * `phpCsFixerFormatter.detect` in `clients/formatters.ts`) are both
- * unceilinged too (`findNearestContaining`/`findUp` walk to the filesystem
- * root), so a ceilinged carriage here would disagree with its own gate — the
- * gate says "config exists" while the carriage says "not found", silently
- * dropping the `--config` argv this module exists to carry.
+ * `homeDir` — deliberately UNCEILINGED (#2472 review round 3, F1): the gate,
+ * `hasToolConfig("php-cs-fixer")` in `clients/tool-config-presence.ts`, stops
+ * at `$HOME` and visits it (#5408), so a config AT `$HOME` is seen by both.
+ * One strictly above `$HOME` is refused by the gate, the formatter is never
+ * selected and this resolver never runs; the gate's answer is the narrower of
+ * the two. A ceilinged carriage here would disagree with the gate for a config
+ * AT `$HOME` — the gate says "config exists" while the carriage says "not
+ * found", silently dropping the `--config` argv this module exists to carry.
  */
 import { existsSync } from "node:fs";
 import * as path from "node:path";

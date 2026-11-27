@@ -1,18 +1,158 @@
 # HISTORY
 
+## 2026-11-08 — incident stories moved out of the shape catalog and AGENTS.md (#4361)
+
+`docs/defect-shapes.md` keeps a lean screen per shape (`docs/pi-lens-retro.md`
+step 4), and `tests/config/agents-governance.test.ts` now pins the catalog free
+of dated sweeps. The stories its entries carried are recorded here, one heading
+per shape, with the rule each justified left in place.
+
+### Path keys (shape 1)
+
+#3178 took four rounds on a normalizer change, with two inverted arms and one
+unmeasured swap. The three instances of `path.resolve` in front of an identity
+key (2026-10-25) are in the entry above.
+
+### Silencing as fixing (shape 10)
+
+#3166 r2: an 80-finding input bound zeroed a neighbour's genuine errors, and the
+count was recorded only in `latency.log`. #5238 r2 read `build.gradle` as
+"Groovy clean" after its false "unavailable" notice was dropped, though no
+analyzer applies to that file.
+
+### Pull-only observability (shape 31)
+
+#3873: the S2/S3 fixes could not be shown to fire live. #3875 added the record
+rule to the screen.
+
+### One-direction filter proof (shape 54)
+
+#3484 r1: the fence dropped docker-langserver's only publish. The model checked
+`FreshResult` alone, and the fake published after the fence reply instead of in
+the server's measured order.
+
+### Wasm failure outside the containment (shape 60)
+
+#3996: the bash wasm's unresolved `isalpha` import threw an unclassified
+`TypeError` on every `[ a == b ]`, and a callback-traversal trap surfaced raw.
+
+### Stand-in for unknown text (shape 61)
+
+#3997 round 3 stripped the command-substitution mark at three call sites and
+left `checkUngated`, `mktemp` flags, and `git $(:) stash` open.
+
+### Delete or rewrite through a dependency link (shape 62)
+
+Sweep 2026-10-07, clean in the repo's own scripts
+(`grep -rnE "rmSync\(.*node_modules|rm -rf .*node_modules|npm ci" scripts clients tools`):
+no script runs a writer in a lane tree. The delete forms were measured with GNU
+coreutils the same day. #4080 made the symlink-chain seam fail closed when the
+target cannot be resolved. #4054 round 4 fixed one rule for every value form,
+after round 3 regressed `--prefix "$(pwd)"`.
+
+### Console output parsed unstripped (shape 63)
+
+#4074, #4075, #4079 and #4087: the pre-push hook recorded `failed: 0` for a red
+run. Sweep 2026-10-07 over `scripts/`, `scripts/lib/`, `tests/support/` and
+`.github/` (`grep -rnE "Tests\s|Test Files|stripVTControl|u001b|x1b"`): the
+other hits are the classifier's own already-normalized patterns, `ci-verdict`'s
+line classifier (strips before it matches), `check-pr-body`'s lint of pasted
+body text, and readers of Vitest's JSON report.
+
+### Named path against written set (shape 64)
+
+Three rounds on the read guard's authorship seam (#4187 R2-3, R4-1, R5): the
+pre-write retire covered the named path while the post-write advance covered
+every recorded one, so a file nothing checked was re-baselined over another
+writer's bytes. #4210 range-scoped a bridge's first credit, and #4131 R2 pinned
+recognized bash as a whole-file exception.
+
+### Enumerated detector (shape 69)
+
+On 2026-10-18 five detector PRs took two to six rounds each, because every
+verify found one more spelling.
+
+### Process-global last-write-wins session field (shape 72)
+
+Instances: #4554 (fixed by #4563, still open when recorded) and #4564.
+
+### One home variable pinned (shape 82)
+
+On 2026-11-04 two probes (the #5239 fixer and the #5244 reviewer) wrote
+`~/.npm/_logs` through `npx`, because `npm_config_cache` was not in the pinned
+set.
+
+### Serial await on a hot path (shape 89)
+
+#387 and #631: typescript-language-server forwards to one tsserver, so
+overlapping calls to it buys nothing. #5174 was the open instance when the
+entry was trimmed.
+
+### Rule corpus fingerprint (#4212)
+
+A per-call walk of the mutable rule corpus is a measured regression: over 1000
+warm loader calls on 170 rule files, a per-call content hash cost ~1000x
+master, a per-call stat signature ~220x, and the per-cycle memo
+(`ruleCorpusFingerprintForCycle`) ~1.1x.
+
+### Pi double admit list (#4632)
+
+The #4632 admit list held 52 rows at the slice 7 recording. The pi-mock L1, L2
+and L3 moves took three out, the L2 move relabelled one `process-boundary` row
+`internal-seam`, slice 7 moved the `index-smells-rollup-wiring` row out with its
+file, and the inline-factory mode moved six `internal-seam` files to tier 2.
+`AGENTS.md` carried those counts as prose (43 rows) while the list read 48 rows
+on 2026-11-08 (40 `internal-seam`, 2 `process-boundary`, 4
+`unproducible-payload`, 1 `double-subject`, 1 `real-ui-harness`), so the counts
+went and the reproducing command stayed. The double kept a `context` list as
+returned while pi rebuilt the system head, and every test passed (#4631).
+
+## 2026-11-13 — ignore-glob path spelling (shape 94)
+
+Shape 94 entered the catalog from the #5556 audit. Incident: #5544 found that
+`yamllint` and `markdownlint-cli2` match a project's ignore globs against the
+argument string, so an absolute dispatched path under `.claude/worktrees/<lane>`
+reported a silent clean for a file the tool never linted. #5557 fixed those two
+with a project-relative argv. #5578 probed the rest of the census: oxlint was
+affected in lint and autofix and now takes the same relative argv, `./`-prefixed
+when the name starts with `-` (`--fix -D.ts` rewrote an undispatched file); ruff,
+Biome, htmlhint and taplo were cleared. Open on #5556: ESLint (no flat-config
+probe ran) and the cpp-check argv.
+
+## 2026-11-08 — a walk the census could not see through a helper (shape 85)
+
+The #4828 census read a walker only where the test file named it, so a case that
+paid a whole-tree walk inside `clientSourceFiles()`, `testSourceFiles()` or
+`censusSourceFiles()` shipped at the 5 s default. `tests/config/tree-census-timeout.test.ts`
+now derives each `tests/` helper module's verdicts from its source to a fixed
+point (import aliases, `export *` shims, namespace members, re-exports, a git
+spawner behind a module-local wrapper), and an unresolvable call fails closed as a
+walk, a default import included. The `it(title, { timeout }, fn)` form is
+read too, so its `timeout` pair is judged as a budget. On one tree the census
+counts 399 members where master's detector counts 259; every new member is
+budgeted, none baselined. A binding that shadows a walked suite name hides only
+the reads inside its own scope, which retires 39 false positives. The audit
+read its helpers by hand first; the derived verdicts and that table (12
+name verdicts across 8 helper modules) are pinned in the same test, so a
+helper that stops walking reds there. A test file's own
+wrapper is still the accepted residual (#4967, PR #5430).
+
 ## 2026-11-07 — a non-success exit that skips its transition (shape 91)
 
 The 2026-11-07 state-machine census found an autofix timeout that never armed
 the spawn-timeout cooldown. `clients/file-utils.ts` tested `result.error`
 before `failure === "timeout"`, and a real timeout carries both, so every edit
-to a wedged autofix tool paid the full timeout. Fixed in PR #5383 (#5376).
+to a wedged autofix tool paid the full timeout. Fixed in PR #5383 (#5376). The sweep of the
+`if (result.error)` sites found it the only one where that check shadowed a
+cooldown arm.
 
 ## 2026-11-07 — a test double with an impossible result shape (shape 92)
 
 The timeout double in `tests/clients/spawn-timeout-cooldown.test.ts` returned
 `error: null`, while `safeSpawnAsync` returns `error: Error(...)` on a timeout.
 The test passed on the broken ordering from shape 91. PR #5383 replaced the
-double with the real result shape (#5376).
+double with the real result shape (#5376). The same census met no other
+instance.
 
 ## 2026-11-07 — unlocked async read-modify-write of a shared record (shape 93)
 
@@ -4636,7 +4776,7 @@ pi-lens ships **precompiled JS**, not TypeScript source, so pi doesn't jiti-tran
 pi-lens's lifecycle hooks (`session_start`, `tool_call`, `tool_result`, `context`, `turn_end`, `agent_end`) run on the **same event loop as pi's TUI**. Any synchronous burst on a hook **blocks the user's keystrokes**. Slop accumulates because it's invisible on small repos and catastrophic on large (2k-file) ones. Invariants:
 
 - **No hook's synchronous burst should block > ~50ms.** Heavy work is async + time-budgeted through `clients/cooperative-budget.ts` (`createDeadline` / `yieldIfOverBudget` / `forEachCooperatively`) or **deferred past the typing window** (a few-second `setTimeout`, not `setImmediate`). Count/modulus yielding does not bound occupancy when per-item cost grows; call the cheap monotonic deadline check at every work unit.
-- **Bounding a promise by a timer? Use `clients/deadline-utils.ts`** (`withTimeout` reject-on-timeout · `withBudget` resolve-`undefined`-on-timeout · `withinRemaining` deadline-based swallow · `withDeadline` core). Do **not** hand-roll another `Promise.race` + `setTimeout` — it drifted into three near-identical copies (#366), two with latent bugs (a missing late-rejection guard → unhandled rejection when the timer wins; an uncleared timer). The core suppresses the loser promise's late rejection and clears its timer in one place.
+- **Bounding a promise by a timer? Use `clients/deadline-utils.ts`** (`withDeadline` core: `{ ms }` or `{ deadlineAt }`, rejecting by default or resolving `undefined` with `onTimeout: "undefined"` · `withBudget` resolve-`undefined`-on-timeout · `bounded((signal) => work)` for a hook await whose work must stop when the bound fires; `withTimeout` and `withinRemaining` were folded into `withDeadline` in #5656). Do **not** hand-roll another `Promise.race` + `setTimeout` — it drifted into three near-identical copies (#366), two with latent bugs (a missing late-rejection guard → unhandled rejection when the timer wins; an uncleared timer). The core suppresses the loser promise's late rejection and clears its timer in one place.
 - **Every new async step added to a bulk/sweep/per-file loop needs BOTH bounds, not just one (#615).** `runWorkspaceDiagnostics`'s per-file `processFile` was already `withDeadline`-wrapped, but the #608 fix (`preOpenGroupFiles`, a batch pre-open pass inserted ahead of it) shipped with **no bound at all** — a hung `getClientsForFile`/`notify.open` call (stuck server spawn, stuck notification write) froze the entire sweep with no heartbeat and, worse, pressing Escape didn't help either: the loop's `signal?.aborted` check only runs *between* files, never while one is mid-await. A real dogfooding incident hit this (`lsp_workspace_diagnostics_start` logged, then total silence, un-abortable). The fix needed two independent bounds: a `withDeadline` timer (catches a hang even with no user action) **and** a `Promise.race` against the abort signal (so an explicit Escape/turn-abort unblocks immediately instead of waiting out the rest of the per-item budget) — see `tests/clients/lsp/workspace-diagnostics-sweep-batch-open.test.ts`'s `#615` block for the pattern, including the "confirm the regression test actually hangs against the unbounded code" verification step. When adding a new async unit of work to an existing bounded loop, ask both questions: *what stops this if it hangs on its own?* and *what stops this if the user aborts?* — a "yes" to only one is not done.
 - **Per-file / per-event work must be O(1) amortized** — memoize expensive derivations keyed by an invalidation signal (`.gitignore` mtime, `fileSeq`, content hash); never recompute-from-scratch on repeat (e.g. `ignoreMatcher.isIgnored` was recomputed per file per scan — now memoized). Project config discovery uses `walkUpDirs` with a start-dir cache validated by ancestor directory mtimes plus the actual inherited `.pi-lens.json`/`pi-lens.json` path + mtime (not just a file directly under the git root), so editing project `ignore` patterns drops the cached matcher without a session restart while hot dispatch paths avoid repeated candidate probes. The matcher cache key also includes the **global** `~/.pi-lens/config.json` mtime: `ignore` patterns there apply across all projects at **lowest precedence** (global → project `.gitignore` → project `.pi-lens.json`, so a project `!negation` re-includes a globally-ignored path — #252). Directory-mtime memos such as `getModuleSourceFiles` also re-walk stamps younger than the filesystem's coarse-granularity guard window, because an equal mtime cannot prove that a same-tick write was absent.
 - **Expensive scans run once, cache (process memo + disk), reuse across sessions/turns.** Cold start does the minimum (forced "quick" mode), then a deferred background warmup fills caches.

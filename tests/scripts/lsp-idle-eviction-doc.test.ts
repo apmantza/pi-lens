@@ -7,8 +7,8 @@
  *    the document carries only stable columns, so two runs that differ only in
  *    timings and memory must render the same text (review round 1 F1);
  *  - a tracking issue that auto-closes because the measurement could not see
- *    (review round 1 F3): it closes only when every transparent server is
- *    eligible;
+ *    (review round 1 F3): it closes only when every evicted server (any policy
+ *    but resident, #5737) is eligible this run;
  *  - a coverage gap read as a clean zero: an unmeasured figure renders `n/a`,
  *    never `0`, and the header counts what was not measured;
  *  - a registry that evicts a server the measurement vetoes (the only `drift`),
@@ -145,6 +145,8 @@ describe("renderIdleEvictionDoc", () => {
 				declared: "transparent",
 				result: "eligible",
 				reason: undefined,
+				respawn: "ok",
+				coverage: "preserved",
 			},
 			{
 				serverId: "bravo",
@@ -152,6 +154,8 @@ describe("renderIdleEvictionDoc", () => {
 				declared: "unmeasured",
 				result: "eligible",
 				reason: undefined,
+				respawn: "ok",
+				coverage: "preserved",
 			},
 			{
 				serverId: "charlie",
@@ -159,6 +163,8 @@ describe("renderIdleEvictionDoc", () => {
 				declared: "resident",
 				result: "vetoed",
 				reason: "findings-narrowed",
+				respawn: "ok",
+				coverage: "narrowed",
 			},
 			{
 				serverId: "delta",
@@ -166,6 +172,8 @@ describe("renderIdleEvictionDoc", () => {
 				declared: "unmeasured",
 				result: "unavailable",
 				reason: "tool-unavailable",
+				respawn: "n/a",
+				coverage: "n/a",
 			},
 			{
 				serverId: "echo",
@@ -173,6 +181,8 @@ describe("renderIdleEvictionDoc", () => {
 				declared: "unmeasured",
 				result: "unavailable",
 				reason: "budget-exhausted",
+				respawn: "n/a",
+				coverage: "n/a",
 			},
 		]);
 		expect(parseIdleEvictionDoc("# nothing here\n")).toBeNull();
@@ -222,12 +232,14 @@ describe("idleEvictionDrift", () => {
 		]);
 	});
 
-	it("proposes an unmeasured server that is eligible, and confirms one that is vetoed", () => {
+	// #5700: the registry evicts an `unmeasured` server too, so a measured veto
+	// of one is shipped behaviour breaking on respawn: drift, not a proposal.
+	it("proposes an unmeasured server that is eligible, and calls one that is vetoed drift (#5700)", () => {
 		expect(kinds([row("bravo", "eligible")])).toEqual([
 			"bravo:unmeasured-eligible:proposal",
 		]);
 		expect(kinds([row("bravo", "vetoed", "respawn-failed")])).toEqual([
-			"bravo:unmeasured-vetoed:proposal",
+			"bravo:unmeasured-vetoed:drift",
 		]);
 	});
 
@@ -306,6 +318,16 @@ describe("buildIdleEvictionDriftBody", () => {
 		expect(body).toContain("closed automatically");
 	});
 
+	// #5667 review Q4: the drift issue reads the MEASURED rows, while the doc
+	// shows the prior row until two nights agree, so a first-night veto must not
+	// send the reader to a doc row that contradicts the issue.
+	it("says the doc shows the prior row while a change is pending and points at the raw measurement", () => {
+		const body = buildIdleEvictionDriftBody([finding("a", "drift")]) ?? "";
+		expect(body).toContain("two nights agree");
+		expect(body).toContain("step log");
+		expect(body).not.toContain("The per-server rows are in");
+	});
+
 	it("keeps a stable title, because the tracking issue is found by exact title", () => {
 		expect(IDLE_EVICTION_DRIFT_TITLE).toBe(
 			"nightly: LSP idle-eviction drift (declared transparent, measured vetoed)",
@@ -326,14 +348,70 @@ describe("driftIssueState", () => {
 	]);
 	const state = (rows: IdleEvictionRow[]) => driftIssueState(rows, transparent);
 
-	it("is clean only when every transparent server is eligible, whatever the others did", () => {
+	it("is clean only when every evicted server (transparent or unmeasured) is eligible", () => {
+		expect(
+			state([
+				row("alpha", "eligible"),
+				row("bravo", "eligible"),
+				row("charlie", "eligible"),
+			]),
+		).toBe("clean");
+	});
+
+	// #5700/#3952: resident indexers are deliberately not measured for eviction.
+	// Recurrence: counting a resident row as an evicted server made an otherwise
+	// complete run become `unknown` (or `drift`) and could mismanage the issue.
+	it("ignores an unavailable resident indexer beside measured eligible rows", () => {
+		const declaredWithResident = new Map([
+			["alpha", "transparent"],
+			["bravo", "unmeasured"],
+			["rust", "resident"],
+		]);
+
+		expect(
+			driftIssueState(
+				[
+					row("alpha", "eligible"),
+					row("bravo", "eligible"),
+					row("rust", "unavailable", "server-not-started"),
+				],
+				declaredWithResident,
+			),
+		).toBe("clean");
+	});
+
+	// #5737 (thread X): an unmeasured server is evicted too, so unavailable
+	// evidence for it is no evidence either way, and the issue is left alone.
+	// Recurrence: the rule read only `transparent`, so an unmeasured server that
+	// the nightly could not start (`server-not-started`) let the issue close.
+	it("is unknown, never clean, when an unmeasured server is unavailable (#5737)", () => {
+		expect(
+			state([
+				row("alpha", "eligible"),
+				row("bravo", "eligible"),
+				row("charlie", "unavailable", "server-not-started"),
+			]),
+		).toBe("unknown");
+	});
+
+	// #5737 (thread X): the nightly writes no row for a server it did not reach.
+	// Recurrence: an unmeasured server absent from the run closed the issue as
+	// `clean`, the same closing on absence of evidence that F3 forbids.
+	it("is unknown, never clean, when an unmeasured server has no row this run (#5737)", () => {
+		expect(state([row("alpha", "eligible"), row("bravo", "eligible")])).toBe(
+			"unknown",
+		);
+	});
+
+	// #5700: an `unmeasured` server is evicted too, so its veto is drift.
+	it("is drift when an unmeasured server is vetoed (#5700)", () => {
 		expect(
 			state([
 				row("alpha", "eligible"),
 				row("bravo", "eligible"),
 				row("charlie", "vetoed", "respawn-failed"),
 			]),
-		).toBe("clean");
+		).toBe("drift");
 	});
 
 	it("is drift when any transparent server is vetoed, even if the others are eligible", () => {

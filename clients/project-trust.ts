@@ -37,8 +37,13 @@
  * refreshed on each `session_start` and `turn_start`.
  */
 
+import { bounded } from "./deadline-utils.js";
+import { HOOK_WALL_BUDGET_MS } from "./hook-budgets.js";
 import { logExtension } from "./extension-log.js";
-import { recordDegradation } from "./degradation-ledger.js";
+import {
+	recordDegradation,
+	recordDegradationOnce,
+} from "./degradation-ledger.js";
 
 export type ProjectTrustState = "trusted" | "untrusted" | "unknown";
 
@@ -195,4 +200,68 @@ export function projectTrustDenialReason(): string | undefined {
 	return trustState === "untrusted"
 		? "project is not trusted (host isProjectTrusted() === false)"
 		: undefined;
+}
+
+/** The pi adapter supplies its own lazy SDK lookup; non-pi hosts leave it unset. */
+export type ProjectTrustSdk = {
+	ProjectTrustStore?: new (agentDir: string) => {
+		get(root: string): boolean | null;
+	};
+	getAgentDir?: () => string;
+	hasTrustRequiringProjectResources?: (root: string) => boolean;
+	SettingsManager?: {
+		create(
+			cwd: string,
+			agentDir: string,
+			options: { projectTrusted: boolean },
+		): { getGlobalSettings(): { defaultProjectTrust?: string } };
+	};
+};
+let loadProjectTrustSdk: (() => Promise<ProjectTrustSdk>) | undefined;
+
+export function setHostProjectTrustLoader(
+	loader: (() => Promise<ProjectTrustSdk>) | undefined,
+): void {
+	loadProjectTrustSdk = loader;
+}
+
+/** Read pi's decision for a foreign cwd without answering or remembering a prompt. */
+export async function readAdoptedProjectTrust(
+	root: string,
+	shutdownSignal?: AbortSignal,
+): Promise<ProjectTrustState> {
+	if (!loadProjectTrustSdk) return getProjectTrustState();
+	try {
+		const sdk = await bounded(loadProjectTrustSdk(), {
+			ms: HOOK_WALL_BUDGET_MS.tool_result_read_only,
+			signal: undefined,
+			...(shutdownSignal ? { shutdownSignal } : {}),
+			hook: "off_hook",
+			label: "adopted-project-trust-sdk",
+		});
+		if (
+			!sdk?.ProjectTrustStore ||
+			!sdk.getAgentDir ||
+			!sdk.hasTrustRequiringProjectResources ||
+			!sdk.SettingsManager
+		) {
+			throw new Error("host SDK lacks adopted project trust exports");
+		}
+		const agentDir = sdk.getAgentDir();
+		const saved = new sdk.ProjectTrustStore(agentDir).get(root);
+		const trusted = !sdk.hasTrustRequiringProjectResources(root)
+			? (saved ?? true)
+			: (saved ??
+				sdk.SettingsManager.create(agentDir, agentDir, {
+					projectTrusted: false,
+				}).getGlobalSettings().defaultProjectTrust === "always");
+		return trusted ? "trusted" : "untrusted";
+	} catch (trustErr) {
+		recordDegradationOnce({
+			kind: "lsp-registry-decision",
+			subject: `adopted-trust:${root}`,
+			reason: `adopted project trust unavailable: ${String(trustErr)}`,
+		});
+		return "untrusted";
+	}
 }
