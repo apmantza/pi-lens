@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LANGUAGES } from "../../clients/language-registry.js";
 import { rootMarkersForFile } from "../../clients/language-profile.js";
 import {
+	FileDirRoot,
 	LSP_SERVERS,
+	NearestRoot,
 	resolveLspServerCwd,
 	type LSPServerInfo,
 } from "../../clients/lsp/server.js";
@@ -20,6 +22,8 @@ let log: typeof import("../../clients/extension-log.js");
 let pathUtils: typeof import("../../clients/path-utils.js");
 
 let previousHome: string | undefined;
+// TEMP #5802 timing instrumentation; removed before ready.
+let cellStartedAt = 0;
 
 beforeEach(async () => {
 	// #4560: this home is a scratch PI_LENS_HOME, and the markerless-root
@@ -36,13 +40,22 @@ beforeEach(async () => {
 	ledger = await import("../../clients/degradation-ledger.js");
 	log = await import("../../clients/extension-log.js");
 	ledger.resetDegradationLedger();
+	// TEMP #5802 timing instrumentation; removed before ready.
+	cellStartedAt = performance.now();
 });
 
 // Log writes under this home are queued; the drain lets them land before the
 // home is removed.
 useTrackedTempDirs("pi-lens-tool-cwd-");
 
-afterEach(() => {
+afterEach((ctx) => {
+	// TEMP #5802 timing instrumentation; removed before ready.
+	console.log(
+		"PL5802-CELL " +
+			Math.round(performance.now() - cellStartedAt) +
+			"ms " +
+			ctx.task.name,
+	);
 	if (previousHome === undefined) delete process.env.PI_LENS_HOME;
 	else process.env.PI_LENS_HOME = previousHome;
 	delete process.env.PI_LENS_TEST_MODE;
@@ -609,19 +622,73 @@ describe("resolveToolCwd (#2777)", () => {
 	});
 
 	it("uses the file directory for a built-in server with no marker", async () => {
+		// TEMP #5802 timing instrumentation; removed before ready.
+		const T: string[] = [];
+		let t0 = performance.now();
+		const lap = (label: string) => {
+			const now = performance.now();
+			T.push(label + "=" + Math.round(now - t0) + "ms");
+			t0 = now;
+		};
 		const project = path.join(home, "repo");
 		const file = path.join(project, "nested", "src", "main.py");
 		fs.mkdirSync(path.dirname(file), { recursive: true });
+		lap("mkdir");
+		// fs baseline on this host: 130 sync and 130 async stats of absent names.
+		for (let i = 0; i < 130; i++) {
+			try {
+				fs.statSync(path.join(home, "absent-" + i));
+			} catch {
+				/* absent */
+			}
+		}
+		lap("130x statSync(absent)");
+		for (let i = 0; i < 130; i++) {
+			try {
+				await fs.promises.stat(path.join(home, "absent-" + i));
+			} catch {
+				/* absent */
+			}
+		}
+		lap("130x fs.promises.stat(absent)");
+		for (let i = 0; i < 20; i++) fs.realpathSync.native(path.dirname(file));
+		lap("20x realpathSync.native(dir)");
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		lap("setImmediate tick");
 		const server = LSP_SERVERS.find((entry) => entry.id === "python");
 		if (!server) throw new Error("python server missing from registry");
+		lap("find");
 		const service = new LSPService(undefined, project);
+		lap("ctor");
 		const { clientRegistry } = service as unknown as {
 			clientRegistry: {
 				resolveServerRoot(server: LSPServerInfo, file: string): Promise<string>;
 			};
 		};
 		const resolveRoot = clientRegistry.resolveServerRoot.bind(clientRegistry);
-		expect(await resolveRoot(server, file)).toBe(path.dirname(file));
+		const nearest = NearestRoot([
+			".git",
+			"pyproject.toml",
+			"setup.py",
+			"setup.cfg",
+			"requirements.txt",
+			"Pipfile",
+			"poetry.lock",
+		]);
+		const nr = await nearest(file);
+		lap("NearestRoot(walk to fs root)->" + String(nr));
+		const fd = await FileDirRoot(file);
+		lap("FileDirRoot->" + String(fd));
+		const sroot = await server.root(file);
+		lap("server.root->" + String(sroot));
+		const cwd = await resolveLspServerCwd(server, file, project);
+		lap("resolveLspServerCwd->" + String(cwd));
+		const rr = await resolveRoot(server, file);
+		lap("resolveServerRoot->" + String(rr));
+		const rr2 = await resolveRoot(server, file);
+		lap("resolveServerRoot(2nd)");
+		console.log("PL5802-TIMING python-cell " + T.join(" | "));
+		expect(rr2).toBe(path.dirname(file));
 	});
 
 	it("keeps a markerless server-computed root at the LSP seam", async () => {
