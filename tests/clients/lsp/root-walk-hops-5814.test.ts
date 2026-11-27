@@ -4,6 +4,8 @@
  * (2855 ms for 130 of them on a stalled Windows runner, #5802). A directory's
  * markers are now probed together. These cells guard both halves: the number
  * of sequential rounds, and the precedence the one-at-a-time loops defined.
+ * `hasProjectBoundaryMarker` stays serial: it only asks whether any marker
+ * exists, so probing past the first hit costs CPU and gains nothing.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -26,7 +28,8 @@ import { removeTempDirSync } from "../test-utils.js";
 /**
  * A pass-through recorder over the real filesystem calls. A "round" is the
  * calls started in one synchronous stretch: a caller that awaits each call
- * before starting the next makes one round per call. `fault` lets a cell fail
+ * before starting the next makes one round per call. It counts call starts, not
+ * waits: libuv's thread pool bounds how many run at once. `fault` lets a cell fail
  * or delay one path's `stat`.
  */
 const probes = vi.hoisted(() => ({
@@ -161,17 +164,21 @@ describe("LSP root walk rounds (#5814)", () => {
 		expect(probes.calls).toBeGreaterThan(4 * probes.rounds);
 	});
 
-	it("probes one directory's boundary and project markers in one round", async () => {
-		const dir = path.dirname(write("repo", "empty", "keep.txt"));
+	it("stops probing boundary markers at the first hit", async () => {
+		// `.git` is probed first. Probing the rest of the list after it cost many
+		// times the CPU on every early hit (PR #5820 review).
+		write("repo", ".git", "HEAD");
+		const repo = path.join(sandbox, "repo");
 
 		probes.recording = true;
-		expect(await hasProjectBoundaryMarker(dir, server("python"))).toBe(false);
+		expect(await hasProjectBoundaryMarker(repo, server("python"))).toBe(true);
 		probes.recording = false;
-		expect(probes.rounds).toBe(1);
-		expect(probes.calls).toBeGreaterThan(10);
+		expect(probes.calls).toBe(1);
+	});
 
-		probes.calls = 0;
-		probes.rounds = 0;
+	it("probes one directory's project markers in one round", async () => {
+		const dir = path.dirname(write("repo", "empty", "keep.txt"));
+
 		probes.recording = true;
 		expect(await declinesProjectlessRoot(server("csharp"), dir)).toBe(true);
 		probes.recording = false;
@@ -287,6 +294,21 @@ describe("LSP root marker precedence (#5814)", () => {
 				["first.exclude", "second.exclude"],
 			)(file),
 		).toBe(path.join(sandbox, "repo"));
+	});
+
+	it("logs a refused agent-directory marker once per read", async () => {
+		// `tsconfig.json` sits in two of the lists the agent read joins.
+		const file = write("repo", ".pi", "agent", "extensions", "x", "a.ts");
+		const refused = path.join(sandbox, "repo", ".pi", "agent", "tsconfig.json");
+		probes.fault = (target) =>
+			target === refused ? Promise.reject(errno("EACCES")) : undefined;
+		const logged = await sessionStartTail();
+
+		await server("typescript").root(file);
+
+		expect((await logged()).filter((line) => line.includes(refused))).toEqual([
+			`lsp root marker skipped: permission error stat ${refused}`,
+		]);
 	});
 
 	it("classifies the agent directory by its first listed marker", async () => {

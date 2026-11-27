@@ -513,16 +513,16 @@ export async function hasProjectBoundaryMarker(
 	// A nested Git checkout is an independently hosted project even when it has
 	// no language manifest. Keep this directory boundary aligned with the shared
 	// FALLBACK_PROJECT_MARKERS policy used by nearestNonExcludedFallbackRoot.
-	const python = server.extensions.some((extension) =>
-		PYTHON_EXTENSIONS.has(extension),
-	);
-	return markerExists(
-		dir,
-		".git",
-		...PROJECT_BOUNDARY_MARKERS.filter(
-			(marker) => python || !PYTHON_BOUNDARY_MARKERS.has(marker),
-		),
-	);
+	if (await markerExists(dir, ".git")) return true;
+	for (const marker of PROJECT_BOUNDARY_MARKERS) {
+		if (
+			PYTHON_BOUNDARY_MARKERS.has(marker) &&
+			!server.extensions.some((extension) => PYTHON_EXTENSIONS.has(extension))
+		)
+			continue;
+		if (await markerExists(dir, marker)) return true;
+	}
+	return false;
 }
 
 function pathSegments(dir: string): string[] {
@@ -2105,8 +2105,9 @@ async function probeMarker(dir: string, pattern: string): Promise<MarkerProbe> {
 }
 
 /**
- * The `patterns` present in `dir`, in list order. All probes start together, so
- * a directory costs one round trip rather than one per marker (#5814: 2855 ms
+ * The `patterns` present in `dir`, in list order. All probes start together and
+ * libuv's thread pool (4 by default) bounds how many run at once, so a slow
+ * filesystem is waited on fewer times than one marker at a time (#5814: 2855 ms
  * for 130 serial stats on a stalled Windows runner). They are read in list
  * order: a hit never waits on a later marker, and only a marker that was read
  * logs its permission error.
@@ -3257,11 +3258,13 @@ async function classifyAgentLevelMarker(
 	const agentDir = path.dirname(extensionRootKey);
 	if (!agentDir || agentDir === extensionRootKey) return undefined;
 	const configMarkers = tsConfigMarkersForFile(file);
-	for await (const pattern of markerHits(agentDir, [
+	// The config lists overlap; a repeat would log one refusal twice.
+	const markers = new Set([
 		...configMarkers,
 		...TS_CONFIG_MARKERS,
 		...TS_TOOLING_MARKERS,
-	])) {
+	]);
+	for await (const pattern of markerHits(agentDir, [...markers])) {
 		return configMarkers.includes(pattern) ? "config" : "other";
 	}
 	return undefined;

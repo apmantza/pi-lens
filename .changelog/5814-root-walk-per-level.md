@@ -5,6 +5,7 @@ area: lsp
 ---
 
 - **Language server root lookup now checks each folder's markers together.** A
-  lookup waits on marker files once per folder instead of once per file, so a
-  slow filesystem call is paid fewer times. Marker precedence is unchanged.
-  (refs #5814)
+  slow filesystem is waited on fewer times, because markers are probed up to
+  Node's file thread-pool width (4 by default) at once. Marker precedence is
+  unchanged. TypeScript extension and agent-folder lookups now log a marker
+  skipped on a permission error. (refs #5814)

@@ -768,10 +768,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `Array.prototype.filter` call, not a delivery filter.
 		"clients/lsp/launch.ts": 2,
 		"clients/lsp/ruby-drive-dirs.ts": 1,
-		// 5 -> 6 (#5814): `hasProjectBoundaryMarker` drops the Python-only
-		// markers for other servers, an `Array.prototype.filter` call, not a
-		// delivery filter.
-		"clients/lsp/server.ts": 6,
+		"clients/lsp/server.ts": 5,
 		// 1 (#4403): `disabledPrimaryServerIds` is an `Array.prototype.filter`
 		// over registered servers, not a delivery filter.
 		// 1 -> 3 (#4403 round 4): `disabledPrimaries` selects the file's

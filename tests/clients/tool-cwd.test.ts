@@ -618,9 +618,10 @@ describe("resolveToolCwd (#2777)", () => {
 	// waits about 20 ms is not isolated.
 	// 230 hops at 22 ms is 5.1 s, over Vitest's 5 s default (job 140340087346
 	// timed out at 5289 ms). The 15 s Windows ceiling (scale 3) is 3x that.
-	// #5814 probes each directory's markers together, so the same calls now run in
-	// about 4 rounds per directory (`root-walk-hops-5814.test.ts`). The Windows
-	// timing after that change is unmeasured, so the budget stays.
+	// #5814 probes each directory's markers together: the same calls now start in
+	// about 4 batches per directory (`root-walk-hops-5814.test.ts`), and libuv's
+	// thread pool (4 by default) bounds how many run at once. The Windows timing
+	// after that change is unmeasured, so the budget stays.
 	it(
 		"uses the file directory for a built-in server with no marker",
 		async () => {

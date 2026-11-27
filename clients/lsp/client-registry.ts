@@ -596,10 +596,9 @@ export class ClientRegistry {
 		// server, and no client was ever hosted there (real pyright 1.1.414: stale
 		// through 40 calls over 20.25 s). `NearestRoot` already answers the same
 		// question this way (#3412): a miss is never cached. The probe is one
-		// directory's marker set, probed together (#5814): medians 0.84-0.99 ms on
-		// a `.git` hit and 1.36-1.46 ms marker-less on a 4-vCPU Linux box — and it
-		// only runs when a nested candidate has a hosted same-server ancestor,
-		// after the per-call root walk above it.
+		// directory's marker set — 0.024 ms on an early hit, 0.35 ms marker-less,
+		// measured — and it only runs when a nested candidate has a hosted
+		// same-server ancestor, after the per-call root walk above it.
 		if (await hasProjectBoundaryMarker(root, server)) return root;
 		return (
 			this.clients.get(`${server.id}:${nearestAncestor}`)?.root ??
