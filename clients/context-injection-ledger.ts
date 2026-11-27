@@ -38,8 +38,11 @@ import {
 	rollingMessageDigests,
 } from "./cache-observability.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
+import { claimPhaseOncePerSession, logLatency } from "./latency-logger.js";
 import type { ResolvedPiLensFlag } from "./lens-config.js";
 import { resolveLensToolName } from "./tool-config.js";
+
+const RETAIN_DEFAULT_PHASE = "context_injection_retain_default";
 
 /**
  * The APIs whose requests retain by default (#5770). Every other API keeps the
@@ -57,17 +60,27 @@ const RETAIN_DEFAULT_APIS: ReadonlySet<string> = new Set([
  * An explicit setting (the flag, or `contextInjection.retain` in either
  * direction) decides alone: only a setting that resolved to the registry
  * default, which nobody chose, falls back to the API. An API that is absent or
- * not a string is unknown and keeps today's default, off. `apiDefault` says
- * the API, not a setting, turned retention on, so the caller can record that.
+ * not a string is unknown and keeps today's default, off. When the API turned
+ * retention on, the session's first such request writes one
+ * `context_injection_retain_default` latency row, so a reader can tell a
+ * default from a choice.
  */
 export function resolveRetainInjections(
 	setting: Pick<ResolvedPiLensFlag, "value" | "source">,
 	api: unknown,
-): { retain: boolean; apiDefault: boolean } {
-	if (setting.source !== "default")
-		return { retain: Boolean(setting.value), apiDefault: false };
-	const apiDefault = typeof api === "string" && RETAIN_DEFAULT_APIS.has(api);
-	return { retain: apiDefault, apiDefault };
+	sessionId: string | undefined,
+): boolean {
+	if (setting.source !== "default") return Boolean(setting.value);
+	if (typeof api !== "string" || !RETAIN_DEFAULT_APIS.has(api)) return false;
+	if (claimPhaseOncePerSession(RETAIN_DEFAULT_PHASE, sessionId ?? "<none>"))
+		logLatency({
+			type: "phase",
+			phase: RETAIN_DEFAULT_PHASE,
+			filePath: "",
+			durationMs: 0,
+			metadata: { sessionId, api },
+		});
+	return true;
 }
 
 export const MAX_RETAINED_ENTRIES = 64;

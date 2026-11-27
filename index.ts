@@ -315,7 +315,6 @@ import { createProjectReportTool } from "./tools/project-report.js";
 import { createEffectiveConfigTool } from "./tools/effective-config.js";
 import { createSymbolSearchTool } from "./tools/symbol-search.js";
 import {
-	claimPhaseOncePerSession,
 	getLastLoggedPhase,
 	getPhaseForWindow,
 	getRecentLoggedPhases,
@@ -5037,7 +5036,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 			// API THIS request's model reports (`ctx.model` is the host's live
 			// model, so a mid-session switch changes the answer at the next
 			// request); the flag and `contextInjection.retain` decide alone.
-			const retainDecision = resolveRetainInjections(
+			const retainInjections = resolveRetainInjections(
 				resolvePiLensFlagWithSource(
 					"lens-retain-injections",
 					pi.getFlag("lens-retain-injections"),
@@ -5045,32 +5044,15 @@ function activateExtension(hostPi: ExtensionAPI) {
 					loadPiLensProjectConfig(runtime.projectRoot),
 				),
 				ctx.model?.api,
+				prefixSessionId,
 			);
-			const ledger = retainDecision.retain ? injectionLedger : undefined;
+			const ledger = retainInjections ? injectionLedger : undefined;
 			if (!effectiveInjectionEnabled) {
 				// #4743: injection switched off mid-session also stops re-sending
 				// what was retained, so no request carries pi-lens bytes while off.
 				ledger?.clearSession(prefixSessionId);
 				logContextObservation(existingMessages, "none", []);
 				return;
-			}
-			if (
-				retainDecision.apiDefault &&
-				claimPhaseOncePerSession(
-					"context_injection_retain_default",
-					prefixSessionId ?? "<no-session>",
-				)
-			) {
-				logLatency({
-					type: "phase",
-					phase: "context_injection_retain_default",
-					filePath: "",
-					durationMs: 0,
-					metadata: {
-						sessionId: prefixSessionId,
-						api: ctx.model?.api,
-					},
-				});
 			}
 
 			// #4743 (`--lens-retain-injections`): put back what earlier requests of
