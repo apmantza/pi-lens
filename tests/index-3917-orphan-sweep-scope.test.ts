@@ -89,6 +89,7 @@ const seam = vi.hoisted(() => {
 		complete: (outcome: string) => complete(outcome),
 		/** Every process-listing spawn that reached the process boundary. */
 		listings: [] as string[],
+		markers: [] as string[],
 	};
 });
 
@@ -103,6 +104,13 @@ vi.mock("../clients/instance-reaper.js", async (importOriginal) => {
 		) =>
 			original.scheduleUntrackedOrphanSweep(0, {
 				...options,
+				getServers: async () => {
+					const servers = await options.getServers();
+					seam.markers = servers.flatMap(
+						(server) => server.orphanProcess!.names,
+					);
+					return servers;
+				},
 				onComplete: (outcome) => {
 					seam.complete(outcome);
 					options.onComplete?.(outcome);
@@ -200,6 +208,10 @@ describe("#3917 the default scope keeps the orphan sweep off the host process ta
 			outcome: "clean",
 			listings: [],
 		});
+		// #5699: the host must supply the actual widened registry to its deferred sweep.
+		expect(seam.markers).toEqual(
+			expect.arrayContaining(["gopls", "PowerShellEditorServices"]),
+		);
 	});
 });
 
