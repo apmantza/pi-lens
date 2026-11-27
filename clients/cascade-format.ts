@@ -772,16 +772,28 @@ export function forgetCascadePendingNeighbor(
 const answeredWrites = new BoundedFifoMap<string, true>(MAX_PENDING_NEIGHBORS);
 
 /**
- * #5804: note a write of `filePath`. A write starts unanswered, so a crash,
- * timeout, abort or superseded run leaves the file unanswered; the run that
- * publishes a verdict a language server answered for notes it answered.
+ * #5804: note a write of `filePath` with the runners that reached a verdict
+ * on it (`PipelineResult.verdictRunnerIds`). A write starts with none, so a
+ * crash, timeout, abort or superseded run leaves the file unanswered; the run
+ * that publishes a verdict a language server answered for notes it. The
+ * server's runner is `lsp`, the id the dispatch gives the language servers.
  * Consumed by {@link settleCascadePendingAfterWrite}.
  */
-export function noteCascadeWrite(filePath: string, answered: boolean): void {
+export function noteCascadeWrite(
+	filePath: string,
+	verdictRunnerIds: readonly string[],
+): void {
 	const key = normalizeMapKey(filePath);
 	answeredWrites.delete(key);
-	if (answered) answeredWrites.set(key, true);
+	if (verdictRunnerIds.includes("lsp")) answeredWrites.set(key, true);
 }
+
+/**
+ * The sources a primary server's clean answer speaks for: the dispatch
+ * runner tags the primary language server's findings `lsp`, and an auxiliary
+ * keeps its own tool id (#5804, `forgetCascadePendingNeighbor`).
+ */
+export const PRIMARY_SERVER_SOURCES: readonly string[] = ["lsp"];
 
 /**
  * #5804: turn end, for a file pi wrote this turn. Returns true when the

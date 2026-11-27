@@ -1607,10 +1607,9 @@ function publishInlineVerdict(args: {
 	if (resultLive) {
 		// #5804: an applied run a language server answered for reports whatever
 		// error the file still holds, so it speaks for the file's pending
-		// cascade errors. An unanswered run (an inconclusive server) speaks for
-		// none.
-		if (inlineVerdictApplied && (result.verdictRunnerIds ?? []).includes("lsp"))
-			noteCascadeWrite(filePath, true);
+		// cascade errors; a run it did not answer for speaks for none.
+		if (inlineVerdictApplied)
+			noteCascadeWrite(filePath, result.verdictRunnerIds ?? []);
 		// #5020: this write's clean verdict on `filePath` also speaks for the rows
 		// OTHER files' records hold against it. A chart-wide runner reports
 		// `other-b.yaml` while `deploy-a.yaml` is written, so the row sits in
@@ -1817,7 +1816,7 @@ async function dispatchPipelineAnalysis(args: {
 	// #5804: the write has no verdict until a run publishes one a language
 	// server answered for, so a crash, timeout or abort leaves the file's
 	// pending cascade errors standing at turn end.
-	noteCascadeWrite(filePath, false);
+	noteCascadeWrite(filePath, []);
 	const pipelinePromise = runPipeline(
 		{
 			signal: deps.signal,

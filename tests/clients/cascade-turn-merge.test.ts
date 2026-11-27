@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../../clients/cache-manager.js";
+import { noteCascadeWrite } from "../../clients/cascade-format.js";
 import type { CascadeResult } from "../../clients/cascade-types.js";
 import { markDisposition } from "../../clients/diagnostic-dispositions.js";
 import type { Diagnostic } from "../../clients/dispatch/types.js";
@@ -1508,9 +1509,16 @@ describe("cascade delivery at turn_end (#4485, #4487)", () => {
 		);
 	}
 
-	function edit(cacheManager: CacheManager, file: string, cwd: string): void {
+	/** A pi write of `file`; `answered`: a language server answered for it (#5804). */
+	function edit(
+		cacheManager: CacheManager,
+		file: string,
+		cwd: string,
+		answered = true,
+	): void {
 		fs.writeFileSync(file, `export const v = ${Date.now()};\n`);
 		cacheManager.addModifiedRange(file, { start: 1, end: 1 }, false, cwd);
+		noteCascadeWrite(file, answered ? ["lsp"] : []);
 	}
 
 	/** A result the way the in-lane compute builds it: its section text and
@@ -2795,6 +2803,73 @@ describe("cascade delivery at turn_end (#4485, #4487)", () => {
 			expect(await turnEndOf(runtime, cacheManager, env.tmpDir)).not.toContain(
 				"unresolved",
 			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// Recurrence (#5804): the other half of the rule above. An edit no language
+	// server answered for says nothing about the errors the record holds, so
+	// they stay pending, carried to the write, until something answers.
+	it("an edited neighbour no server answered for keeps its pending errors", async () => {
+		const env = setupTestEnvironment("cascade-5804-unanswered-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			const cacheManager = new CacheManager(false);
+			const a = path.join(env.tmpDir, "a.ts");
+			const n1 = path.join(env.tmpDir, "n1.ts");
+			runtime.beginTurn();
+			edit(cacheManager, a, env.tmpDir);
+			runtime.appendCascadeRun({
+				filePath: a,
+				result: await computedResult(env.tmpDir, a, [[n1, ["n1 error"]]]),
+				neighborCount: 1,
+				diagnosticCount: 1,
+				observedNeighborPaths: [n1],
+			} as any);
+			await turnEndOf(runtime, cacheManager, env.tmpDir);
+
+			runtime.beginTurn();
+			edit(cacheManager, n1, env.tmpDir, false);
+			expect(await turnEndOf(runtime, cacheManager, env.tmpDir)).toContain(
+				"1 error(s) unresolved",
+			);
+			const { listCascadePendingNeighbors } =
+				await import("../../clients/cascade-format.js");
+			expect(
+				listCascadePendingNeighbors().map((entry) => entry.errorCount),
+			).toEqual([1]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// Recurrence (#5804, timing B above): the run read n1's errors and pi then
+	// edited n1 with no server answer, so the run's errors stand.
+	it("a neighbour pi edits unanswered in the same turn as the run that saw its errors is recorded", async () => {
+		const env = setupTestEnvironment("cascade-5804-edited-same-turn-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			const cacheManager = new CacheManager(false);
+			const a = path.join(env.tmpDir, "a.ts");
+			const n1 = path.join(env.tmpDir, "n1.ts");
+			runtime.beginTurn();
+			edit(cacheManager, a, env.tmpDir);
+			runtime.appendCascadeRun({
+				filePath: a,
+				result: await computedResult(env.tmpDir, a, [[n1, ["n1 error"]]]),
+				neighborCount: 1,
+				diagnosticCount: 1,
+				observedNeighborPaths: [n1],
+				checkedAt: Date.now(),
+			} as any);
+			edit(cacheManager, n1, env.tmpDir, false);
+			await turnEndOf(runtime, cacheManager, env.tmpDir);
+			const { listCascadePendingNeighbors } =
+				await import("../../clients/cascade-format.js");
+			expect(
+				listCascadePendingNeighbors().map((entry) => entry.errorCount),
+			).toEqual([1]);
 		} finally {
 			env.cleanup();
 		}
