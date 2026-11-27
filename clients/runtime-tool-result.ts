@@ -4183,7 +4183,10 @@ export async function handleToolResult(
 			// minus its `_bypassDebounce` branch (#2464 review round 2, S3), which
 			// no caller reaching this block sets.
 			const observedAutofixModes = new Map<string, "immediate" | "deferred">();
-			for (const observedPath of observedChangedPaths)
+			for (const observedPath of observedChangedPaths) {
+				// #5812 F2: the write outdates the file's last verdict before the
+				// client wait below can return, and for a path past the dispatch cap.
+				noteCascadeWrite(observedPath, []);
 				writeSession.guardedWrite(observedPath, () => {
 					refreshCachedExports(runtime, observedPath);
 					const receipt = (
@@ -4196,6 +4199,7 @@ export async function handleToolResult(
 					if (receipt)
 						observedAutofixModes.set(observedPath, receipt.autofixMode);
 				});
+			}
 			if (observedDispatchPaths.length > 0) {
 				const observedClients = ensureToolResultClients(deps);
 				if (

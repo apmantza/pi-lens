@@ -57,7 +57,6 @@ import {
 	type BridgeMutationEntry,
 	type MutatingToolClassification,
 } from "./mutating-tool.js";
-import { noteCascadeWrite } from "./cascade-format.js";
 import { noteAgentMutation } from "./fix-run-restore.js";
 import { noteMutationHandled } from "./observed-mutation.js";
 import type { ProjectChangeSource } from "./project-changes.js";
@@ -557,10 +556,6 @@ function applyTurnAndChangeLog(
 ): void {
 	const { entry, classification, deps, runtime, filePath, projectRoot } = ctx;
 	const changedRange = resolveChangedRange(classification, deps, filePath);
-	// #5812 F2: these bytes outdate the file's last verdict, whether or not a
-	// dispatch follows (an observed write whose clients are not ready, an LSP
-	// workspace edit, a deferred format pass).
-	noteCascadeWrite(filePath, []);
 	if (sessionLive) {
 		runStage(ctx, "turn-state", () =>
 			deps

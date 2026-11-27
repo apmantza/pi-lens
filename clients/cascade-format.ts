@@ -778,10 +778,12 @@ const answeredWrites = new BoundedFifoMap<string, readonly string[]>(
 
 /**
  * #5804: note a write of `filePath` with the runners that reached a verdict
- * on it (`PipelineResult.verdictRunnerIds`). Every write that records a
- * turn-state range notes none first (#5812 F2), so a write that never
- * dispatches, or a crash, timeout, abort or superseded run, leaves the file
- * unanswered; the run that publishes a verdict notes its runners. Consumed by
+ * on it (`PipelineResult.verdictRunnerIds`). A `tool_result` write notes
+ * none where it records its turn-state range (#5812 F2), so a write that
+ * never dispatches, or a crash, timeout, abort or superseded run, leaves the
+ * file unanswered; the run that publishes a verdict notes its runners. A
+ * write through the mutation bridge alone (an LSP workspace edit, a deferred
+ * format pass) does not reset it. Consumed by
  * {@link settleCascadePendingAfterWrite}.
  */
 export function noteCascadeWrite(
