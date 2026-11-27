@@ -61,8 +61,10 @@ describe("LSP dispatch runner — a clean markdown edit reports a verdict, not a
 	afterEach(() => removeTempDirSync(cwd));
 
 	it("takes the with-auxiliary scope for a markdown edit", async () => {
-		// The scope this fix is about. If the runner ever stopped taking it, the
-		// gate would be unreachable again and this case would say so directly.
+		// A control, not a red-first test: the runner is unchanged by #5774, so
+		// this passes on master too (#5775 review F4). It pins the scope the
+		// with-auxiliary gate depends on: if the runner ever stopped taking it,
+		// the gate would be unreachable again and this case would say so.
 		const file = path.join(cwd, "note.md");
 		fs.writeFileSync(file, "# Note\n");
 		touchFile.mockResolvedValue({ diags: [] });
