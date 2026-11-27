@@ -1,22 +1,10 @@
 import * as fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import * as path from "node:path";
-import {
-	afterAll,
-	afterEach,
-	beforeAll,
-	beforeEach,
-	describe,
-	expect,
-	it,
-	vi,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LANGUAGES } from "../../clients/language-registry.js";
 import { rootMarkersForFile } from "../../clients/language-profile.js";
 import {
-	FileDirRoot,
 	LSP_SERVERS,
-	NearestRoot,
 	resolveLspServerCwd,
 	type LSPServerInfo,
 } from "../../clients/lsp/server.js";
@@ -33,274 +21,7 @@ let pathUtils: typeof import("../../clients/path-utils.js");
 
 let previousHome: string | undefined;
 
-// TEMP #5802 timing instrumentation; removed before ready.
-// File-wide probe over the async fs.promises ops: counts per window (between
-// cells and inside one), the in-flight count at a cell's start, and any call
-// over 100 ms, so a stalled cell names who held the libuv pool.
-// `syncBuiltinESMExports` makes the named imports in clients/lsp/server.ts see
-// the wrappers.
-type Pl5802Row = { n: number; total: number; max: number; maxPath: string };
-const pl5802Probe = (() => {
-	const table = fs.promises as unknown as Record<
-		string,
-		(...args: unknown[]) => Promise<unknown>
-	>;
-	const ops = [
-		"stat",
-		"lstat",
-		"readdir",
-		"access",
-		"realpath",
-		"readFile",
-		"writeFile",
-		"appendFile",
-		"open",
-		"mkdir",
-		"rm",
-		"rename",
-		"unlink",
-		"rmdir",
-		"copyFile",
-		"opendir",
-		"mkdtemp",
-		"utimes",
-	];
-	const original = new Map<string, (...args: unknown[]) => Promise<unknown>>();
-	let inFlight = 0;
-	let injectMs = 0;
-	const inFlightByOp = new Map<string, number>();
-	let windowRows = new Map<string, Pl5802Row>();
-	let slowLogged = 0;
-	const describeWindow = () =>
-		[...windowRows]
-			.map(
-				([op, row]) =>
-					op +
-					" n=" +
-					row.n +
-					" total=" +
-					Math.round(row.total) +
-					"ms max=" +
-					Math.round(row.max) +
-					"ms",
-			)
-			.join(" | ");
-	const describeInFlight = () =>
-		"inFlight=" +
-		inFlight +
-		" " +
-		[...inFlightByOp]
-			.filter(([, n]) => n > 0)
-			.map(([op, n]) => op + ":" + n)
-			.join(",");
-	return {
-		install() {
-			for (const op of ops) {
-				const real = table[op];
-				if (typeof real !== "function") continue;
-				original.set(op, real);
-				table[op] = async (...args: unknown[]) => {
-					const t = performance.now();
-					inFlight++;
-					inFlightByOp.set(op, (inFlightByOp.get(op) ?? 0) + 1);
-					try {
-						if (injectMs > 0 && op === "stat") {
-							await (
-								Atomics as unknown as {
-									waitAsync: (
-										view: Int32Array,
-										index: number,
-										value: number,
-										timeout: number,
-									) => { value: Promise<string> | string };
-								}
-							).waitAsync(
-								new Int32Array(new SharedArrayBuffer(4)),
-								0,
-								0,
-								injectMs,
-							).value;
-						}
-						return await real(...args);
-					} finally {
-						inFlight--;
-						inFlightByOp.set(op, (inFlightByOp.get(op) ?? 1) - 1);
-						const ms = performance.now() - t;
-						const row = windowRows.get(op) ?? {
-							n: 0,
-							total: 0,
-							max: 0,
-							maxPath: "",
-						};
-						row.n++;
-						row.total += ms;
-						if (ms > row.max) {
-							row.max = ms;
-							row.maxPath = String(args[0]);
-						}
-						windowRows.set(op, row);
-						if (ms > 100 && slowLogged++ < 60) {
-							console.log(
-								"PL5802-SLOWFS " +
-									op +
-									" " +
-									Math.round(ms) +
-									"ms " +
-									String(args[0]),
-							);
-						}
-					}
-				};
-			}
-			syncBuiltinESMExports();
-		},
-		inject(ms: number) {
-			injectMs = ms;
-		},
-		uninstall() {
-			for (const [op, real] of original) table[op] = real;
-			original.clear();
-			syncBuiltinESMExports();
-		},
-		carryIn(name: string) {
-			console.log(
-				"PL5802-CARRYIN " +
-					name +
-					" " +
-					describeInFlight() +
-					" | between cells: " +
-					describeWindow(),
-			);
-			windowRows = new Map();
-		},
-		endCell(name: string) {
-			console.log(
-				"PL5802-FSWIN " +
-					name +
-					" " +
-					describeInFlight() +
-					" | in cell: " +
-					describeWindow(),
-			);
-			windowRows = new Map();
-		},
-	};
-})();
-
-// TEMP #5802 timing instrumentation; removed before ready.
-// Red-first: the failing Windows jobs showed 19-22 ms per awaited fs.promises
-// stat (jobs 140372464201, 140383089933), 0.1 ms on a healthy runner. Inject 24
-// ms per awaited stat into the two cells the sweep found near the 5 s ceiling.
-// `Atomics.waitAsync` is a real asynchronous wait without a timer token.
-const pl5802Injected = (name: string): boolean =>
-	/built-in server with no marker|flags exactly the servers/.test(name);
-
-async function pl5802Sequence(tag: string, base: string): Promise<string> {
-	const laps: string[] = [];
-	let t0 = performance.now();
-	let elu0 = performance.eventLoopUtilization();
-	let step = "start";
-	const lap = (label: string) => {
-		const now = performance.now();
-		const elu = performance.eventLoopUtilization(elu0);
-		laps.push(
-			label +
-				"=" +
-				Math.round(now - t0) +
-				"ms(elu " +
-				elu.utilization.toFixed(2) +
-				")",
-		);
-		t0 = now;
-		elu0 = performance.eventLoopUtilization();
-		step = "after " + label;
-		// Logged live: a cell that times out still shows the last finished lap.
-		console.log("PL5802-LAP " + tag + " " + laps.at(-1));
-	};
-	try {
-		const project = path.join(base, "repo");
-		const file = path.join(project, "nested", "src", "main.py");
-		step = "mkdir";
-		fs.mkdirSync(path.dirname(file), { recursive: true });
-		lap("mkdir");
-		step = "statSync";
-		for (let i = 0; i < 130; i++) {
-			try {
-				fs.statSync(path.join(base, "absent-" + i));
-			} catch {
-				/* absent */
-			}
-		}
-		lap("130x statSync(absent)");
-		step = "fs.promises.stat";
-		for (let i = 0; i < 130; i++) {
-			try {
-				await fs.promises.stat(path.join(base, "absent-" + i));
-			} catch {
-				/* absent */
-			}
-		}
-		lap("130x fs.promises.stat(absent)");
-		step = "realpath";
-		for (let i = 0; i < 20; i++) fs.realpathSync.native(path.dirname(file));
-		lap("20x realpathSync.native(dir)");
-		const server = LSP_SERVERS.find((entry) => entry.id === "python");
-		if (!server) throw new Error("python server missing from registry");
-		step = "LSPService ctor";
-		const service = new LSPService(undefined, project);
-		lap("ctor");
-		const { clientRegistry } = service as unknown as {
-			clientRegistry: {
-				resolveServerRoot(server: LSPServerInfo, file: string): Promise<string>;
-			};
-		};
-		const resolveRoot = clientRegistry.resolveServerRoot.bind(clientRegistry);
-		step = "NearestRoot";
-		const nr = await NearestRoot([
-			".git",
-			"pyproject.toml",
-			"setup.py",
-			"setup.cfg",
-			"requirements.txt",
-			"Pipfile",
-			"poetry.lock",
-		])(file);
-		lap("NearestRoot(walk to fs root)->" + String(nr));
-		step = "FileDirRoot";
-		const fd = await FileDirRoot(file);
-		lap("FileDirRoot->" + path.basename(String(fd)));
-		step = "server.root";
-		const sroot = await server.root(file);
-		lap("server.root->" + path.basename(String(sroot)));
-		step = "resolveLspServerCwd";
-		const cwd = await resolveLspServerCwd(server, file, project);
-		lap("resolveLspServerCwd->" + path.basename(String(cwd)));
-		step = "resolveServerRoot";
-		const rr = await resolveRoot(server, file);
-		lap("resolveServerRoot->" + path.basename(String(rr)));
-		step = "resolveServerRoot 2nd";
-		const rr2 = await resolveRoot(server, file);
-		lap("resolveServerRoot(2nd)");
-		return rr2;
-	} finally {
-		console.log(
-			"PL5802-TIMING " +
-				tag +
-				" lastStepReached=" +
-				step +
-				" " +
-				laps.join(" | "),
-		);
-	}
-}
-
-// TEMP #5802 timing instrumentation; removed before ready.
-let cellStartedAt = 0;
-
-beforeAll(() => pl5802Probe.install());
-afterAll(() => pl5802Probe.uninstall());
-
-beforeEach(async (ctx) => {
+beforeEach(async () => {
 	// #4560: this home is a scratch PI_LENS_HOME, and the markerless-root
 	// cells need it to stay out of the project-root walk.
 	home = setupTestEnvironment("pi-lens-tool-cwd-", {
@@ -315,28 +36,13 @@ beforeEach(async (ctx) => {
 	ledger = await import("../../clients/degradation-ledger.js");
 	log = await import("../../clients/extension-log.js");
 	ledger.resetDegradationLedger();
-	// TEMP #5802 timing instrumentation; removed before ready.
-	cellStartedAt = performance.now();
-	pl5802Probe.carryIn(ctx.task.name);
-	pl5802Probe.inject(
-		pl5802Injected(ctx.task.name) && process.platform === "win32" ? 24 : 0,
-	);
 });
 
 // Log writes under this home are queued; the drain lets them land before the
 // home is removed.
 useTrackedTempDirs("pi-lens-tool-cwd-");
 
-afterEach(async (ctx) => {
-	// TEMP #5802 timing instrumentation; removed before ready.
-	pl5802Probe.endCell(ctx.task.name);
-	pl5802Probe.inject(0);
-	console.log(
-		"PL5802-CELL " +
-			Math.round(performance.now() - cellStartedAt) +
-			"ms " +
-			ctx.task.name,
-	);
+afterEach(() => {
 	if (previousHome === undefined) delete process.env.PI_LENS_HOME;
 	else process.env.PI_LENS_HOME = previousHome;
 	delete process.env.PI_LENS_TEST_MODE;
@@ -932,33 +638,6 @@ describe("resolveToolCwd (#2777)", () => {
 		},
 		scaledTestTimeout(5_000),
 	);
-
-	// TEMP #5802 timing instrumentation; removed before ready.
-	it.fails("PL5802 before the fix: built-in server with no marker at the default budget", async () => {
-		// Expected-fail demo: only the Windows leg injects latency, elsewhere
-		// throw so `it.fails` stays green.
-		if (process.platform !== "win32") throw new Error("Windows-only demo");
-		const project = path.join(home, "repo");
-		const file = path.join(project, "nested", "src", "main.py");
-		fs.mkdirSync(path.dirname(file), { recursive: true });
-		const server = LSP_SERVERS.find((entry) => entry.id === "python");
-		if (!server) throw new Error("python server missing from registry");
-		const service = new LSPService(undefined, project);
-		const { clientRegistry } = service as unknown as {
-			clientRegistry: {
-				resolveServerRoot(server: LSPServerInfo, file: string): Promise<string>;
-			};
-		};
-		const resolveRoot = clientRegistry.resolveServerRoot.bind(clientRegistry);
-		expect(await resolveRoot(server, file)).toBe(path.dirname(file));
-	});
-
-	// TEMP #5802 timing instrumentation; removed before ready.
-	it("PL5802 repeat: the python cell sequence 30 times", async () => {
-		for (let i = 0; i < 30; i++) {
-			await pl5802Sequence("repeat-" + i, path.join(home, "r" + i));
-		}
-	}, 120_000);
 
 	it("keeps a markerless server-computed root at the LSP seam", async () => {
 		const project = path.join(home, "repo");
