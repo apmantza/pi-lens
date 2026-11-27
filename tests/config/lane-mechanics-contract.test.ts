@@ -215,3 +215,102 @@ describe("bot review threads and code-scanning alerts (#4566/#4575)", () => {
 		},
 	);
 });
+
+// Recurrence: #5645 closed a Windows timeout by scaling the cell's budget and
+// named no slow step; #5802, a sibling cell in the same file, timed out next.
+// Flakes had also closed on case-by-case windows (#2042 on 11 clean runs,
+// others on one green rerun). These pins hold the two rules in their one home
+// (the fixer contract) and every pointer that makes them bind.
+describe("flaky-test rules (#5806)", () => {
+	const rule = (name: string): string => flat(blankMarkdown(doc(name)));
+	const agents = (): string =>
+		flat(
+			blankMarkdown(
+				fs.readFileSync(
+					process.env.PI_LENS_AGENTS_PATH ?? path.join(REPO_ROOT, "AGENTS.md"),
+					"utf8",
+				),
+			),
+		);
+	// The fixer section body, so a sentence elsewhere cannot satisfy a pin.
+	const fixerSection = (): string => {
+		const text = rule("pi-lens-fixer.md");
+		const start = text.indexOf("## Flaky tests");
+		if (start < 0) return "";
+		const next = text.indexOf(" ## ", start + 1);
+		return text.slice(start, next < 0 ? undefined : next);
+	};
+
+	// Recurrence: a scaled or lengthened budget, a retry, a skip or a quarantine
+	// made the failure go away without a reproduction (#5645 -> #5802).
+	it("states no-reproduction-no-fix with the measurement a budget increase needs", () => {
+		const text = fixerSection();
+		expect(text).toMatch(/No reproduction, no fix\./);
+		expect(text).toMatch(
+			/A retry, a longer or scaled timeout[^.]*a skip or a quarantine is not a fix/,
+		);
+		expect(text).toMatch(
+			/Raise a budget only with a measurement that names the slow step and its time on the failing host/,
+		);
+		expect(text).toContain("#5645");
+		expect(text).toContain("#5802");
+	});
+
+	// Recurrence: closing windows were picked case by case (#2042: 11 runs;
+	// others: one green rerun).
+	it("states the 3/p stopping rule with its derivation and how p is estimated", () => {
+		const text = fixerSection();
+		expect(text).toMatch(
+			/failure rate p counts as fixed after 3\/p consecutive clean runs/,
+		);
+		expect(text).toContain("e^-3");
+		expect(text).toMatch(/about 95% confidence/);
+		expect(text).toMatch(
+			/Estimate p\*\* as failures over runs of the same job in a stated window/,
+		);
+	});
+
+	// Recurrence: a flake whose 3/p is out of reach closed as fixed, so the next
+	// failure read as a regression instead of an unfinished count.
+	it("sends an impractical 3/p to the accepted-gap record and never to a fix close", () => {
+		const text = fixerSection();
+		expect(text).toMatch(/do not close the issue as fixed/);
+		expect(text).toMatch(/accepted gap/);
+		expect(text).toMatch(
+			/each state p, the failures, runs and window behind it, and the clean-run count reached against 3\/p/,
+		);
+	});
+
+	// Recurrence: the reviewer checklist is what judges a flake close; without
+	// its own item a close on one green rerun reads as merge-ready.
+	it("puts the rules on the reviewer checklist, pointing at the fixer home", () => {
+		const text = rule("pi-lens-reviewer.md");
+		expect(text).toContain("**Flake fixes and flake closes.**");
+		expect(text).toContain('`docs/pi-lens-fixer.md` "Flaky tests"');
+		expect(text).toMatch(/a close on one green rerun[^.]*is a finding/);
+	});
+
+	// Recurrence: the close and the known-gap record are where the numbers are
+	// quoted; each points at the one home instead of restating the rule.
+	it("points the merge policy's close and known-gap record at the fixer home", () => {
+		const text = rule("pi-lens-merge-policy.md");
+		expect(text).toMatch(
+			/A flake issue closes as fixed only when the comment that closes it quotes p/,
+		);
+		expect(text).toMatch(
+			/A flake whose 3\/p clean-run count is impractical joins the tracker/,
+		);
+		expect(text.match(/`docs\/pi-lens-fixer\.md` "Flaky tests"/g)?.length).toBe(
+			2,
+		);
+	});
+
+	// Recurrence: AGENTS.md's one-line flake rule predates the scaled-timeout
+	// shape; it must name that form and point at the home, not copy the rule.
+	it("keeps the AGENTS.md flake line pointing at the fixer home", () => {
+		const text = agents();
+		expect(text).toMatch(/no scaled timeout without a measured slow step/);
+		expect(text).toContain('`docs/pi-lens-fixer.md` "Flaky tests"');
+		expect(text).not.toContain("3/p consecutive clean runs");
+	});
+});

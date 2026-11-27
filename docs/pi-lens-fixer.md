@@ -184,6 +184,45 @@ registry; other doubles only as `AGENTS.md` admits them.
   surface quoted from its log; any self-bound sits below the job cap by a
   stated margin.
 
+## Flaky tests
+
+A test that fails on some runs and passes on others owes two things: a
+reproduction before the fix, and a stated number of clean runs before the close.
+This section is the only home of both rules; `AGENTS.md`, the reviewer
+checklist and the merge policy point here.
+
+- **No reproduction, no fix.** A retry, a longer or scaled timeout
+  (`scaledTestTimeout`, a raised `testTimeout`), a skip or a quarantine is not a
+  fix: it hides the failure and leaves its cause. Reproduce the failure on the
+  failing host or lane, name the slow or racing step, and fix that step. Raise a
+  budget only with a measurement that names the slow step and its time on the
+  failing host (and, for a scaled budget, why the step's
+  cost scales with the lane and cannot shrink). Without a reproduction, report
+  `not reproduced` (see "Before code") and record the hypothesis; do not ship a
+  budget change. Recurrence: #5645 closed a Windows timeout by scaling the
+  cell's budget and named no slow step, and #5802, a sibling cell in the same
+  file, timed out next.
+- **Stopping rule.** A flake seen at failure rate p counts as fixed after 3/p
+  consecutive clean runs of the failing job on the fix head. The runs are
+  independent, so a flake still present survives n clean runs with probability
+  (1 - p)^n, about e^(-pn); at n = 3/p that is e^-3, about 0.05, so a clean
+  streak of that length means the flake is gone with about 95% confidence. Fewer
+  runs, such as one green rerun, are not evidence.
+- **Estimate p** as failures over runs of the same job in a stated window, for
+  example 4 failures in the last 40 runs on master, or the lane's CI history
+  since the flake first appeared. Name the window and count a failure only when
+  its message matches the flake's own. A flake with one recorded failure uses
+  p = 1/runs in the window, never 0.
+- **When 3/p is impractical** (a 1-in-50 flake needs 150 clean runs, more than
+  the lane can run), do not close the issue as fixed. Record it as an accepted
+  gap (`docs/pi-lens-merge-policy.md` "Known gaps") with p, its window and the
+  clean-run count reached, and let the count carry forward to the next fix
+  attempt.
+- **The closing step quotes the numbers.** A PR that fixes a flake, the issue
+  close that credits it, and an accepted-gap record each state p, the
+  failures, runs and window behind it, and the clean-run count reached against
+  3/p. Review refuses a close that omits them.
+
 ## Required checks
 
 - Run every test that mocks or deep-equals a changed module or record, and the
