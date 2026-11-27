@@ -29,28 +29,6 @@ async function pl5802Sequence(tag: string, base: string): Promise<string> {
 	let t0 = performance.now();
 	let cpu0 = process.cpuUsage();
 	let step = "start";
-	let lastBeat = performance.now();
-	const stepStarted = () => performance.now() - t0;
-	// Heartbeat: names the step the cell sits in and the event-loop lag, so a
-	// stall shows even when the cell never finishes.
-	const beat = setInterval(() => {
-		const now = performance.now();
-		const lag = Math.round(now - lastBeat - 250);
-		lastBeat = now;
-		if (stepStarted() > 1000 || lag > 500) {
-			console.log(
-				"PL5802-STALL " +
-					tag +
-					" step=" +
-					step +
-					" inStep=" +
-					Math.round(stepStarted()) +
-					"ms loopLag=" +
-					lag +
-					"ms",
-			);
-		}
-	}, 250);
 	const lap = (label: string) => {
 		const now = performance.now();
 		const cpu = process.cpuUsage(cpu0);
@@ -65,6 +43,8 @@ async function pl5802Sequence(tag: string, base: string): Promise<string> {
 		t0 = now;
 		cpu0 = process.cpuUsage();
 		step = "after " + label;
+		// Logged live: a cell that times out still shows the last finished lap.
+		console.log("PL5802-LAP " + tag + " " + laps.at(-1));
 	};
 	try {
 		const project = path.join(base, "repo");
@@ -132,8 +112,14 @@ async function pl5802Sequence(tag: string, base: string): Promise<string> {
 		lap("resolveServerRoot(2nd)");
 		return rr2;
 	} finally {
-		clearInterval(beat);
-		console.log("PL5802-TIMING " + tag + " " + laps.join(" | "));
+		console.log(
+			"PL5802-TIMING " +
+				tag +
+				" lastStepReached=" +
+				step +
+				" " +
+				laps.join(" | "),
+		);
 	}
 }
 
