@@ -106,7 +106,10 @@ import {
 	createReadSymbolTool,
 } from "../tools/module-report.js";
 import { createSymbolSearchTool } from "../tools/symbol-search.js";
-import { peekMcpSessionRuntime } from "../clients/mcp/session.js";
+import {
+	invalidateMcpSessionIfConfigChanged,
+	peekMcpSessionRuntime,
+} from "../clients/mcp/session.js";
 import { isUnderDir, walkUpDirs } from "../clients/path-utils.js";
 import { loadPiLensGlobalConfig } from "../clients/lens-config.js";
 import { loadPiLensProjectConfig } from "../clients/project-lens-config.js";
@@ -244,10 +247,14 @@ const REPO_ROOT = process.env.PI_LENS_MCP_REPO_ROOT
 
 async function ensureReady(cwd: string): Promise<void> {
 	const normalized = path.resolve(cwd);
+	const configChanged = invalidateMcpSessionIfConfigChanged(normalized);
 	// #2052 R1: the session-root registry evicts old roots at a fixed cap. The
 	// readiness memo is only a fast path; consult the registry so an evicted
 	// root can initialize again when it is used later.
-	if (!shouldInitializeSessionRoot(normalized, lspReadyCwds)) {
+	if (
+		!configChanged &&
+		!shouldInitializeSessionRoot(normalized, lspReadyCwds)
+	) {
 		return;
 	}
 	try {
@@ -1569,8 +1576,17 @@ async function callTool(
 									`  ${tool.selected ? "✓" : "✗"} ${tool.id} — ${tool.reason}`,
 							),
 						];
+		let readableSources = 0;
+		let unreadableSources = 0;
+		let absentSources = 0;
+		for (const source of view.inspectedConfigSources) {
+			if (source.state === "readable") readableSources++;
+			else if (source.state === "unreadable") unreadableSources++;
+			else absentSources++;
+		}
 		const lines = [
 			`Config: ${view.documents.length} file(s) contributing, ${view.provenance.length} resolved leaf/leaves`,
+			`Inspected sources: ${view.inspectedConfigSources.length} candidate(s) (${readableSources} readable, ${unreadableSources} unreadable, ${absentSources} absent)`,
 			...view.documents.map(effectiveDocumentLine),
 			...fileLines,
 		];

@@ -136,6 +136,28 @@ describe("runSessionStart", () => {
 		// No baseline computed yet on a fresh RuntimeCoordinator.
 		expect(outcome.errorDebtBaseline).toBeUndefined();
 	});
+
+	it("reuses the MCP session context when config is unchanged and rebuilds it when config changes", async () => {
+		await runSessionStart(tmpDir);
+		await runTurnEnd(tmpDir);
+		const startRuntime = (
+			handleSessionStart.mock.calls[0][0] as { runtime: unknown }
+		).runtime;
+		const unchangedRuntime = (
+			handleTurnEnd.mock.calls[0][0] as { runtime: unknown }
+		).runtime;
+		expect(unchangedRuntime).toBe(startRuntime);
+
+		fs.writeFileSync(
+			path.join(tmpDir, ".pi-lens.json"),
+			JSON.stringify({ lsp: { warmFiles: ["src/index.ts"] } }),
+		);
+		await runTurnEnd(tmpDir);
+		const changedRuntime = (
+			handleTurnEnd.mock.calls[1][0] as { runtime: unknown }
+		).runtime;
+		expect(changedRuntime).not.toBe(startRuntime);
+	});
 });
 
 describe("runTurnEnd", () => {

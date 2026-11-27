@@ -1827,6 +1827,7 @@ describe("pi-lens MCP canonical `path` parameter (#5041)", { retry: 2 }, () => {
 		const older = await call("pilens_effective_config", { file: "app.ts" });
 		expect(canonical.isError, text(canonical)).toBeFalsy();
 		expect(text(canonical)).toContain(`File: ${file}`);
+		expect(text(canonical)).toMatch(/Inspected sources: \d+ candidate\(s\)/);
 		expect(text(canonical)).not.toContain("Ignored unknown argument");
 		expect(text(older)).toContain(`File: ${file}`);
 		expect(text(older)).toContain("Ignored unknown argument");
