@@ -22,6 +22,121 @@ let log: typeof import("../../clients/extension-log.js");
 let pathUtils: typeof import("../../clients/path-utils.js");
 
 let previousHome: string | undefined;
+
+// TEMP #5802 timing instrumentation; removed before ready.
+async function pl5802Sequence(tag: string, base: string): Promise<string> {
+	const laps: string[] = [];
+	let t0 = performance.now();
+	let cpu0 = process.cpuUsage();
+	let step = "start";
+	let lastBeat = performance.now();
+	const stepStarted = () => performance.now() - t0;
+	// Heartbeat: names the step the cell sits in and the event-loop lag, so a
+	// stall shows even when the cell never finishes.
+	const beat = setInterval(() => {
+		const now = performance.now();
+		const lag = Math.round(now - lastBeat - 250);
+		lastBeat = now;
+		if (stepStarted() > 1000 || lag > 500) {
+			console.log(
+				"PL5802-STALL " +
+					tag +
+					" step=" +
+					step +
+					" inStep=" +
+					Math.round(stepStarted()) +
+					"ms loopLag=" +
+					lag +
+					"ms",
+			);
+		}
+	}, 250);
+	const lap = (label: string) => {
+		const now = performance.now();
+		const cpu = process.cpuUsage(cpu0);
+		laps.push(
+			label +
+				"=" +
+				Math.round(now - t0) +
+				"ms(cpu " +
+				Math.round((cpu.user + cpu.system) / 1000) +
+				"ms)",
+		);
+		t0 = now;
+		cpu0 = process.cpuUsage();
+		step = "after " + label;
+	};
+	try {
+		const project = path.join(base, "repo");
+		const file = path.join(project, "nested", "src", "main.py");
+		step = "mkdir";
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		lap("mkdir");
+		step = "statSync";
+		for (let i = 0; i < 130; i++) {
+			try {
+				fs.statSync(path.join(base, "absent-" + i));
+			} catch {
+				/* absent */
+			}
+		}
+		lap("130x statSync(absent)");
+		step = "fs.promises.stat";
+		for (let i = 0; i < 130; i++) {
+			try {
+				await fs.promises.stat(path.join(base, "absent-" + i));
+			} catch {
+				/* absent */
+			}
+		}
+		lap("130x fs.promises.stat(absent)");
+		step = "realpath";
+		for (let i = 0; i < 20; i++) fs.realpathSync.native(path.dirname(file));
+		lap("20x realpathSync.native(dir)");
+		const server = LSP_SERVERS.find((entry) => entry.id === "python");
+		if (!server) throw new Error("python server missing from registry");
+		step = "LSPService ctor";
+		const service = new LSPService(undefined, project);
+		lap("ctor");
+		const { clientRegistry } = service as unknown as {
+			clientRegistry: {
+				resolveServerRoot(server: LSPServerInfo, file: string): Promise<string>;
+			};
+		};
+		const resolveRoot = clientRegistry.resolveServerRoot.bind(clientRegistry);
+		step = "NearestRoot";
+		const nr = await NearestRoot([
+			".git",
+			"pyproject.toml",
+			"setup.py",
+			"setup.cfg",
+			"requirements.txt",
+			"Pipfile",
+			"poetry.lock",
+		])(file);
+		lap("NearestRoot(walk to fs root)->" + String(nr));
+		step = "FileDirRoot";
+		const fd = await FileDirRoot(file);
+		lap("FileDirRoot->" + path.basename(String(fd)));
+		step = "server.root";
+		const sroot = await server.root(file);
+		lap("server.root->" + path.basename(String(sroot)));
+		step = "resolveLspServerCwd";
+		const cwd = await resolveLspServerCwd(server, file, project);
+		lap("resolveLspServerCwd->" + path.basename(String(cwd)));
+		step = "resolveServerRoot";
+		const rr = await resolveRoot(server, file);
+		lap("resolveServerRoot->" + path.basename(String(rr)));
+		step = "resolveServerRoot 2nd";
+		const rr2 = await resolveRoot(server, file);
+		lap("resolveServerRoot(2nd)");
+		return rr2;
+	} finally {
+		clearInterval(beat);
+		console.log("PL5802-TIMING " + tag + " " + laps.join(" | "));
+	}
+}
+
 // TEMP #5802 timing instrumentation; removed before ready.
 let cellStartedAt = 0;
 
@@ -623,73 +738,18 @@ describe("resolveToolCwd (#2777)", () => {
 
 	it("uses the file directory for a built-in server with no marker", async () => {
 		// TEMP #5802 timing instrumentation; removed before ready.
-		const T: string[] = [];
-		let t0 = performance.now();
-		const lap = (label: string) => {
-			const now = performance.now();
-			T.push(label + "=" + Math.round(now - t0) + "ms");
-			t0 = now;
-		};
+		const rr2 = await pl5802Sequence("python-cell", home);
 		const project = path.join(home, "repo");
 		const file = path.join(project, "nested", "src", "main.py");
-		fs.mkdirSync(path.dirname(file), { recursive: true });
-		lap("mkdir");
-		// fs baseline on this host: 130 sync and 130 async stats of absent names.
-		for (let i = 0; i < 130; i++) {
-			try {
-				fs.statSync(path.join(home, "absent-" + i));
-			} catch {
-				/* absent */
-			}
-		}
-		lap("130x statSync(absent)");
-		for (let i = 0; i < 130; i++) {
-			try {
-				await fs.promises.stat(path.join(home, "absent-" + i));
-			} catch {
-				/* absent */
-			}
-		}
-		lap("130x fs.promises.stat(absent)");
-		for (let i = 0; i < 20; i++) fs.realpathSync.native(path.dirname(file));
-		lap("20x realpathSync.native(dir)");
-		await new Promise<void>((resolve) => setImmediate(resolve));
-		lap("setImmediate tick");
-		const server = LSP_SERVERS.find((entry) => entry.id === "python");
-		if (!server) throw new Error("python server missing from registry");
-		lap("find");
-		const service = new LSPService(undefined, project);
-		lap("ctor");
-		const { clientRegistry } = service as unknown as {
-			clientRegistry: {
-				resolveServerRoot(server: LSPServerInfo, file: string): Promise<string>;
-			};
-		};
-		const resolveRoot = clientRegistry.resolveServerRoot.bind(clientRegistry);
-		const nearest = NearestRoot([
-			".git",
-			"pyproject.toml",
-			"setup.py",
-			"setup.cfg",
-			"requirements.txt",
-			"Pipfile",
-			"poetry.lock",
-		]);
-		const nr = await nearest(file);
-		lap("NearestRoot(walk to fs root)->" + String(nr));
-		const fd = await FileDirRoot(file);
-		lap("FileDirRoot->" + String(fd));
-		const sroot = await server.root(file);
-		lap("server.root->" + String(sroot));
-		const cwd = await resolveLspServerCwd(server, file, project);
-		lap("resolveLspServerCwd->" + String(cwd));
-		const rr = await resolveRoot(server, file);
-		lap("resolveServerRoot->" + String(rr));
-		const rr2 = await resolveRoot(server, file);
-		lap("resolveServerRoot(2nd)");
-		console.log("PL5802-TIMING python-cell " + T.join(" | "));
 		expect(rr2).toBe(path.dirname(file));
 	});
+
+	// TEMP #5802 timing instrumentation; removed before ready.
+	it("PL5802 repeat: the python cell sequence 30 times", async () => {
+		for (let i = 0; i < 30; i++) {
+			await pl5802Sequence("repeat-" + i, path.join(home, "r" + i));
+		}
+	}, 120_000);
 
 	it("keeps a markerless server-computed root at the LSP seam", async () => {
 		const project = path.join(home, "repo");
