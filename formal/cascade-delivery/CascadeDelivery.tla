@@ -131,7 +131,15 @@ CONSTANTS
                         \*            (cascade-format.ts
                         \*            settleCascadePendingAfterWrite, #5804), so
                         \*            the gate reads that write as carried, not as
-                        \*            an edit outside pi
+                        \*            an edit outside pi; a record this turn_end
+                        \*            builds from a read before that write keeps
+                        \*            the read bound, so it holds only while the
+                        \*            worklist brings the write to the next settle
+                        \* "settle"   as "carry", and the record this turn_end
+                        \*            builds for a file pi wrote with no answer is
+                        \*            stamped no earlier than the settle too
+                        \*            (runtime-turn.ts `carriedKeys`, #5812 verify
+                        \*            F4), so no worklist clear matters
     WriteSettle,        \* "answered" turn_end forgets a pi-written neighbour's record
                         \*            only when a language server answered for the
                         \*            write (the write's own dispatch reports the
@@ -177,7 +185,9 @@ VARIABLES
     silentDrop, \* some turn_end forgot a written neighbour's errors without a line
     pw,         \* [Neighbours -> PiWrites] pi wrote the neighbour this turn, after the read
     pq,         \* [Neighbours -> PiWrites] such a write of an earlier turn that is still on
-                \* the turn's worklist (turn state outlives a turn_end that delivered a blocker)
+                \* the turn's worklist. A turn_end with no blocker clears the worklist; one
+                \* that delivered a blocker keeps it (fresh content) or clears it (a repeat,
+                \* a suppressed duplicate, or the max-cycles turn_end after it)
     wr,         \* [Neighbours -> BOOLEAN] the record holds errors of a file pi wrote with no answer
     piDrop      \* some turn_end forgot such an error with no newer clean observation
 
@@ -524,8 +534,12 @@ TurnEnd ==
            \* read-bound stamp shows it as a change; the restamp moved the
            \* kept record's stamp to turn_end, so it reads as carried.
            seen(n) == IF eff(n) = "unanswered" /\ CheckStamp = "read" THEN "write"
-                      ELSE IF eff(n) = "unanswered" /\ CheckStamp = "carry" THEN "none"
+                      ELSE IF eff(n) = "unanswered" /\ CheckStamp \in {"carry", "settle"}
+                           THEN "none"
                       ELSE chgSeen[n]
+           \* the record this turn_end builds for a file pi wrote with no answer
+           \* (the settle's `carriedKeys`) takes the settle's stamp
+           settleStamp(n) == CheckStamp = "settle" /\ eff(n) = "unanswered"
            \* the freshness gate: an entry whose file changed after its
            \* read bound, as far as the stamp lets the gate see, is gated out
            gatedOut(n) == PendingGate \in {"notify", "drop"} /\ seen(n) # "none"
@@ -579,13 +593,16 @@ TurnEnd ==
                     IF rec'[n].val = "none" THEN FALSE
                     ELSE IF verdict[n] = "err" \/ lateErr(n) THEN pw[n] = "unanswered"
                     ELSE unconf(n)]
-       \* the worklist keeps a write while this turn_end delivered a blocker;
-       \* a turn_end with none clears it (turn state, runtime-turn.ts)
+       \* the worklist (turn state, runtime-turn.ts): a turn_end with no blocker
+       \* clears it; one that delivered a blocker keeps it for fresh content and
+       \* clears it on a repeat, a suppressed duplicate or the forced max-cycles
+       \* turn_end next (#5812 verify F4), so either may follow
        /\ pw' = [n \in Neighbours |-> "none"]
-       /\ pq' = [n \in Neighbours |->
-                    IF \E m \in Neighbours:
-                          shown'[m] \cap {"err", "late", "unresolved", "changed", "pending"} # {}
-                    THEN eff(n) ELSE "none"]
+       /\ \E keep \in BOOLEAN:
+            pq' = [n \in Neighbours |->
+                     IF keep /\ \E m \in Neighbours:
+                           shown'[m] \cap {"err", "late", "unresolved", "changed", "pending"} # {}
+                     THEN eff(n) ELSE "none"]
        \* whether the observation the record now holds predates a change
        /\ chg' = [n \in Neighbours |->
                     IF settled(n) THEN "none"
@@ -596,23 +613,27 @@ TurnEnd ==
        \* what the gate can see of it: with the read bound, a change after
        \* this turn's read (vmid) or after a late answer's touch (every
        \* cacheChg of the answered publish); with the delivery stamp,
-       \* nothing that landed before this TurnEnd
+       \* nothing that landed before this TurnEnd; with the settle stamp of a
+       \* file pi wrote with no answer, nothing before the settle
        /\ chgSeen' = [n \in Neighbours |->
                         IF settled(n) THEN "none"
+                        ELSE IF (verdict[n] = "err" \/ lateErr(n)) /\ settleStamp(n)
+                            THEN "none"
                         ELSE IF verdict[n] = "err"
-                            THEN IF CheckStamp \in {"read", "carry"} /\ vmid[n]
+                            THEN IF CheckStamp \in {"read", "carry", "settle"} /\ vmid[n]
                                  THEN vchg[n]
-                                 ELSE IF CheckStamp \in {"read", "carry"}
+                                 ELSE IF CheckStamp \in {"read", "carry", "settle"}
                                          /\ pw[n] = "unanswered"
                                  THEN "write" ELSE "none"
                         ELSE IF lateErr(n)
-                            THEN IF CheckStamp \in {"read", "carry"}
+                            THEN IF CheckStamp \in {"read", "carry", "settle"}
                                  THEN IF cacheChg[n] # "none" THEN cacheChg[n]
                                       ELSE IF pw[n] = "unanswered" THEN "write"
                                       ELSE "none"
                                  ELSE "none"
                         ELSE IF rec'[n].val = "none" THEN "none"
-                        ELSE IF eff(n) = "unanswered" /\ CheckStamp = "carry" THEN "none"
+                        ELSE IF eff(n) = "unanswered" /\ CheckStamp \in {"carry", "settle"}
+                            THEN "none"
                         ELSE chgSeen[n]]
        /\ reg' = [n \in Neighbours |-> IF n \in peeked THEN 0 ELSE reg[n]]
        /\ answered' = [n \in Neighbours |->
@@ -682,6 +703,7 @@ NoSilentForget == ~silentDrop
 
 \* Read at the render, as above: a pending error pi's own unanswered write
 \* left behind is never forgotten unconfirmed (#5804; cascade-format.ts
-\* settleCascadePendingAfterWrite keeps and restamps the record).
+\* settleCascadePendingAfterWrite keeps and restamps the record, and
+\* runtime-turn.ts stamps a record built for such a file at the settle).
 NoForgetAfterUnansweredWrite == ~piDrop
 =============================================================================

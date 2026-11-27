@@ -40,10 +40,18 @@
 		"cascade-delivery": {
 			"pins": {
 				"CheckStamp": {
-					"value": "\"carry\"",
-					"test": "tests/index-4484-unfixed-blocker-witness.test.ts",
-					"title": "keeps a neighbour's pending error when its rewrite gets no server verdict",
+					"value": "\"settle\"",
+					"test": "tests/clients/cascade-turn-merge.test.ts",
+					"title": "a neighbour pi writes unanswered on a repeat turn keeps its error after the worklist clears",
 					"also": [
+						{
+							"test": "tests/clients/cascade-turn-merge.test.ts",
+							"title": "a neighbour pi writes unanswered on a suppressed duplicate turn keeps its error after the worklist clears"
+						},
+						{
+							"test": "tests/index-4484-unfixed-blocker-witness.test.ts",
+							"title": "keeps a neighbour's pending error when its rewrite gets no server verdict"
+						},
 						{
 							"test": "tests/clients/cascade-turn-merge.test.ts",
 							"title": "an outside fix after the compute read and before turn_end is not left unresolved"
