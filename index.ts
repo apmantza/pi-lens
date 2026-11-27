@@ -924,6 +924,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 	const endDisposedMember = (
 		member: (typeof liveSessionMembers)[number],
 	): void => {
+		// #5770: the member's retained injections end with it, as a shutdown's do
+		// (the ledger's key is the same `getSessionId()` the member was recorded
+		// under). Before the scope guard: a member with no scope still wrote them.
+		// A repeat read finds nothing left to clear.
+		injectionLedger.clearSession(member.sessionId);
 		if (!member.scope) return;
 		if (liveSessionMembers.some(isLiveSessionMember)) unbindScope(member.scope);
 		else retireScope(member.scope, "disposed");

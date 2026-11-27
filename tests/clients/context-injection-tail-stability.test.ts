@@ -58,10 +58,13 @@ interface TranscriptReplay {
 /** pi-ai's transcript replay, from the certified host's own install. */
 const piAi = piAiModule() as unknown as TranscriptReplay;
 
-function stage(cwd: string, text: string): void {
+// #5792: the record is the writing session's. No `sessionId` is the
+// coordinator's record (the primary); a second session on the activation reads
+// as its own id, so a record staged for it carries that id.
+function stage(cwd: string, text: string, sessionId?: string): void {
 	new CacheManager(false).writeCache(
 		"session-start-guidance",
-		{ content: text },
+		{ content: text, ...(sessionId ? { sessionId } : {}) },
 		cwd,
 	);
 }
@@ -485,7 +488,7 @@ describe("request N+1 keeps the exact prefix request N sent", () => {
 					);
 				stage(live.cwd, SIBLING);
 				expect(await sent(liveSession.extensionRunner, SIBLING)).toBe(1);
-				stage(endedCwd, ENDED);
+				stage(endedCwd, ENDED, ended.sessionManager.getSessionId());
 				expect(await sent(ended.extensionRunner, ENDED)).toBe(1);
 				// Control: with nothing newly staged, a retained entry is re-sent.
 				expect(await sent(liveSession.extensionRunner, SIBLING)).toBe(1);
