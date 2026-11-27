@@ -3814,6 +3814,16 @@ describe("#5790 witness: a cascade note with no finding does not hold the commit
 			// an edit outside pi that the next turn end would name once and forget.
 			expect(fs.readFileSync(neighbour, "utf8")).toContain("BAD_CALL();");
 			expect(await s.commitReason()).toContain(HOLD_REMEDY);
+			// The unanswered write is counted once for the neighbour.
+			expect(
+				getDegradationSummary().find(
+					(c) => c.kind === "blocker-carried-unobserved",
+				)?.latestReasons,
+			).toContainEqual(
+				expect.objectContaining({
+					subject: expect.stringContaining("cascade-user.ts"),
+				}),
+			);
 			const [held] = listCascadePendingNeighbors().filter(
 				(e) => e.filePath === neighbour,
 			);

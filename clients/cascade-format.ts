@@ -16,7 +16,10 @@ import { displayedMessage } from "./finding-identity.js";
 import { BoundedFifoMap } from "./bounded-cache.js";
 import { logLatency } from "./latency-logger.js";
 import { formatCacheAgeLabel } from "./finding-delivery-gate.js";
-import { recordDegradationOnce } from "./degradation-ledger.js";
+import {
+	incrementDegradationCount,
+	recordDegradationOnce,
+} from "./degradation-ledger.js";
 import { inlineBlockerSourceOf } from "./inline-blocker-fields.js";
 import { normalizeMapKey } from "./path-utils.js";
 import type { LSPDiagnostic } from "./lsp/client.js";
@@ -814,7 +817,16 @@ export function settleCascadePendingAfterWrite(
 		return true;
 	}
 	const entry = pendingNeighbors.get(key);
-	if (entry) entry.checkedAt = Math.max(entry.checkedAt, at);
+	if (entry) {
+		entry.checkedAt = Math.max(entry.checkedAt, at);
+		// One count per file key, the carry record the inline blockers use.
+		incrementDegradationCount({
+			kind: "blocker-carried-unobserved",
+			subject: key,
+			reason:
+				"a neighbour's pending cascade errors stay pending: its write reached no language-server verdict (#5804)",
+		});
+	}
 	return false;
 }
 

@@ -240,7 +240,8 @@ export type DegradationKind =
 	 * blocker, and the blocker's runner or language server reached no verdict
 	 * on that write (failed, timed out, unanswered, still in flight). The
 	 * blocker stays pending. One subject per file key, counted across the
-	 * session.
+	 * session. #5804: also a neighbour's pending cascade errors that its own
+	 * write, with no language-server verdict, did not retire.
 	 */
 	| "blocker-carried-unobserved"
 	/**
