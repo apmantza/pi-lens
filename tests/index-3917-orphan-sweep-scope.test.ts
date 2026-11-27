@@ -98,8 +98,8 @@ vi.mock("../clients/instance-reaper.js", async (importOriginal) => {
 	return {
 		...original,
 		scheduleUntrackedOrphanSweep: (
-			_delayMs?: number,
-			options: import("../clients/instance-reaper.js").BackstopSweepOptions = {},
+			_delayMs: number | undefined,
+			options: import("../clients/instance-reaper.js").BackstopSweepOptions,
 		) =>
 			original.scheduleUntrackedOrphanSweep(0, {
 				...options,

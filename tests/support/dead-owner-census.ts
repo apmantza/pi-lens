@@ -144,6 +144,8 @@ export function formatLeakLine(
 export async function loadActualCensusSeams(): Promise<CensusSeams> {
 	const snapshot = await import("../../clients/process-snapshot.js");
 	const reaper = await import("../../clients/instance-reaper.js");
+	const { LSP_SERVERS } = await import("../../clients/lsp/server.js");
+	const names = reaper.managedBinaryNames(LSP_SERVERS);
 	return {
 		listProcesses: () =>
 			snapshot.queryProcessTable(
@@ -152,7 +154,7 @@ export async function loadActualCensusSeams(): Promise<CensusSeams> {
 			),
 		readOwnerTags: (pids) =>
 			snapshot.readOwnerTags(pids, { timeoutMs: CENSUS_SCAN_TIMEOUT_MS }),
-		isManaged: reaper.matchesManagedBinary,
+		isManaged: (command) => reaper.matchesManagedBinary(command, names),
 		isPidAlive: reaper.realIsPidAlive,
 		partition: reaper.partitionBackstopCandidates,
 	};

@@ -20,6 +20,10 @@
  * expectation also holds with the seam in place.
  */
 // flake-shape: real-process-spawn — the taskkill tree-kill case needs a real live child of this process: safeSpawnAsync's ownership guard reads its /proc ppid, which no double carries; the mock beside it on the same module would otherwise hide that spawn (#5064)
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { removeTempDirSync } from "./test-utils.js";
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -274,4 +278,95 @@ describe("the reaper names taskkill.exe through the seam", () => {
 		]);
 		expect(spawns[0]?.args).toEqual(["/F", "/T", "/PID", "2147000001"]);
 	});
+});
+
+// #5699 A3: a newly covered name cannot bypass Windows ownership checks.
+// The real reaper and process-table parser run under win32 on every host;
+// only the OS child-process and liveness boundaries are doubled.
+describe("Windows registry-derived orphan ownership", () => {
+	it.each([
+		{
+			state: "dead parent",
+			alive: false,
+			parentStart: "2026-09-26T07:00:00Z",
+			reap: true,
+		},
+		{
+			state: "live parent",
+			alive: true,
+			parentStart: "2026-09-26T07:00:00Z",
+			reap: false,
+		},
+		{
+			state: "reused ppid within DST margin",
+			alive: true,
+			parentStart: "2026-09-26T09:00:00Z",
+			reap: false,
+		},
+		{
+			state: "reused ppid beyond DST margin",
+			alive: true,
+			parentStart: "2026-09-26T09:00:00.001Z",
+			reap: true,
+		},
+	])(
+		"untagged server with $state preserves the ownership rule",
+		async ({ alive, parentStart, reap }) => {
+			const home = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-win-backstop-"),
+			);
+			const previousHome = process.env.PI_LENS_HOME;
+			process.env.PI_LENS_HOME = home;
+			stubPlatform("win32");
+			const probe = vi.spyOn(process, "kill").mockImplementation(((
+				pid: number,
+			) => {
+				if (pid === 4000 && alive) return true;
+				throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+			}) as typeof process.kill);
+			try {
+				const { spawns } = doubleChildProcess((call) => {
+					const child = new FakeChild(4402);
+					setImmediate(() => {
+						if (!call.command.endsWith("taskkill.exe")) {
+							const script = call.args.at(-1) ?? "";
+							const output = script.includes("TotalMilliseconds")
+								? "5000\t4000\t600000\tC:\\tools\\gopls.exe\n"
+								: `5000\t2026-09-26T08:00:00Z\tC:\\tools\\gopls.exe\n4000\t${parentStart}\tunrelated.exe\n`;
+							child.stdout.emit("data", output);
+						}
+						child.emit("close", 0, null);
+					});
+					return child;
+				});
+				vi.doUnmock("../../clients/process-snapshot.js");
+				vi.resetModules();
+				const { sweepUntrackedOrphans } =
+					await import("../../clients/instance-reaper.js");
+				const { LSP_SERVERS } = await import("../../clients/lsp/server.js");
+				await sweepUntrackedOrphans({
+					getServers: async () => LSP_SERVERS,
+					force: true,
+					graceMs: 0,
+					allowGraceRetry: false,
+					verifyAttempts: 1,
+					verifyIntervalMs: 0,
+				});
+				const kills = spawns.filter((call) =>
+					call.command.endsWith("taskkill.exe"),
+				);
+				expect(kills.map((call) => call.args)).toEqual(
+					reap ? [["/F", "/T", "/PID", "5000"]] : [],
+				);
+				expect(kills.some((call) => call.args.includes("4000"))).toBe(false);
+			} finally {
+				probe.mockRestore();
+				if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+				else process.env.PI_LENS_HOME = previousHome;
+				if (realPlatform)
+					Object.defineProperty(process, "platform", realPlatform);
+				removeTempDirSync(home);
+			}
+		},
+	);
 });

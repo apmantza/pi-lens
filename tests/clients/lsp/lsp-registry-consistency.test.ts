@@ -47,6 +47,14 @@ describe("LSP_SERVERS registry consistency", () => {
 		}
 	});
 
+	// #5699: every built-in joins the ownership-gated orphan backstop.
+	it("every built-in declares command markers and OS images for the backstop", () => {
+		for (const server of LSP_SERVERS) {
+			expect(server.orphanProcess?.names.length, server.id).toBeGreaterThan(0);
+			expect(server.orphanProcess?.images.length, server.id).toBeGreaterThan(0);
+		}
+	});
+
 	it("has no orphan servers — every exported *Server is registered in LSP_SERVERS (#270)", () => {
 		// Catches the dead-code class the consistency checks above can't see: a
 		// fully-defined server const that was never added to LSP_SERVERS, so it can
