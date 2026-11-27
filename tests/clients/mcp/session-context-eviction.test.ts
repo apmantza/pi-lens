@@ -47,7 +47,7 @@ vi.mock("../../../clients/ast-grep-client.js", () => ({
 import {
 	_peekPendingMcpSessionRuntime,
 	_resetMcpSessionContext,
-	getMcpSessionConfigEpoch,
+	captureMcpSessionGeneration,
 	getMcpSessionContext,
 	invalidateMcpSessionIfConfigChanged,
 	peekMcpSessionRuntime,
@@ -296,7 +296,7 @@ describe("getMcpSessionContext memo eviction (#1570)", () => {
 		}
 	});
 
-	it("preserves secondary cwd baselines across config-change invalidation and bumps config epoch", async () => {
+	it("preserves secondary cwd baselines across config-change invalidation and retires the session generation", async () => {
 		const { home, restore } = pinFixtureHome("mcp-eviction-multi-cwd");
 		try {
 			const globalConfigPath = path.join(home, ".pi-lens", "config.json");
@@ -307,11 +307,11 @@ describe("getMcpSessionContext memo eviction (#1570)", () => {
 			fs.mkdirSync(cwdB, { recursive: true });
 
 			_resetMcpSessionContext();
-			const epoch0 = getMcpSessionConfigEpoch();
+			const generation0 = captureMcpSessionGeneration();
 
 			expect(invalidateMcpSessionIfConfigChanged(cwdA)).toBe(false);
 			expect(invalidateMcpSessionIfConfigChanged(cwdB)).toBe(false);
-			expect(getMcpSessionConfigEpoch()).toBe(epoch0);
+			expect(generation0.isCurrent()).toBe(true);
 
 			loadBootstrapClients.mockResolvedValue({ __stub: "clients" });
 			await getMcpSessionContext();
@@ -324,11 +324,11 @@ describe("getMcpSessionContext memo eviction (#1570)", () => {
 				"utf8",
 			);
 			expect(invalidateMcpSessionIfConfigChanged(cwdA)).toBe(true);
-			const epoch1 = getMcpSessionConfigEpoch();
-			expect(epoch1).toBeGreaterThan(epoch0);
+			expect(generation0.isCurrent()).toBe(false);
+			const generation1 = captureMcpSessionGeneration();
 			expect(invalidateMcpSessionIfConfigChanged(cwdB)).toBe(true);
-			const epoch2 = getMcpSessionConfigEpoch();
-			expect(epoch2).toBeGreaterThan(epoch1);
+			expect(generation1.isCurrent()).toBe(false);
+			const generation2 = captureMcpSessionGeneration();
 
 			// Simultaneous project config edits in cwdA and cwdB must invalidate both.
 			fs.writeFileSync(
@@ -343,7 +343,7 @@ describe("getMcpSessionContext memo eviction (#1570)", () => {
 			);
 			expect(invalidateMcpSessionIfConfigChanged(cwdA)).toBe(true);
 			expect(invalidateMcpSessionIfConfigChanged(cwdB)).toBe(true);
-			expect(getMcpSessionConfigEpoch()).toBeGreaterThan(epoch2);
+			expect(generation2.isCurrent()).toBe(false);
 		} finally {
 			restore();
 		}

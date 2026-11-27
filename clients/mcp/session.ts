@@ -82,7 +82,6 @@ let pendingRuntime: RuntimeCoordinator | undefined;
 const bootstrapGeneration = createGenerationSource("mcp-session-bootstrap");
 const inspectedConfigFingerprints = new BoundedLruCache<string, string>(1024);
 let lastGlobalConfigFingerprint: string | undefined;
-let mcpSessionConfigEpoch = 0;
 
 function retireMcpScope(
 	scope: SessionScope,
@@ -157,7 +156,6 @@ export function _peekPendingMcpSessionRuntime():
 
 function resetMcpSessionContext(clearFingerprints = false): void {
 	bootstrapGeneration.bump();
-	mcpSessionConfigEpoch += 1;
 	const currentResolved = resolvedRuntime;
 	const currentPending = pendingRuntime;
 	contextPromise = undefined;
@@ -175,9 +173,16 @@ function resetMcpSessionContext(clearFingerprints = false): void {
 	}
 }
 
-/** Monotonic counter incremented whenever `resetMcpSessionContext` runs. */
-export function getMcpSessionConfigEpoch(): number {
-	return mcpSessionConfigEpoch;
+/**
+ * A handle on the current MCP session generation: `isCurrent()` turns false
+ * once `resetMcpSessionContext` runs, whoever ran it. A caller that must act
+ * on a reset another entry point performed (the server's `ensureReady`)
+ * holds one and re-captures after acting.
+ */
+export function captureMcpSessionGeneration(): ReturnType<
+	typeof bootstrapGeneration.capture
+> {
+	return bootstrapGeneration.capture();
 }
 
 /**
