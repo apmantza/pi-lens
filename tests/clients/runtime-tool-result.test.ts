@@ -152,7 +152,7 @@ beforeAll(async () => {
 				event: {
 					toolName: "bash",
 					toolCallId: "5798-warm",
-					input: { command: `sed -i 's/warm/cold/' ${filePath}` },
+					input: { command: `sed -i 's/warm/cold/' "${filePath}"` },
 				},
 				ctx: { cwd: env.tmpDir },
 				lensEnabled: true,
@@ -165,7 +165,18 @@ beforeAll(async () => {
 				resetLSPService: () => {},
 			} as any),
 		);
+		// #5798 (CodeRabbit PRRT_kwDORt8rec68oegW): an unquoted path split on a
+		// space in TMPDIR, so the warm-up silently captured nothing and the cold
+		// cost stayed in the first case. Any pre_edit_capture row proves the
+		// capture ran. The guard does not require "seeded": the 1500 ms spanless
+		// bound may abandon a slow runner's capture, and a seeded-only guard would
+		// flake there.
+		expect(logLatency).toHaveBeenCalledWith(
+			expect.objectContaining({ phase: "pre_edit_capture" }),
+		);
 	} finally {
+		// The warm-up's own degradation row must not reach a case's ledger read.
+		resetDegradationLedger();
 		env.cleanup();
 	}
 });
@@ -2497,8 +2508,10 @@ describe("bash grep searchReads registration", () => {
 				agentBehaviorRecord: () => [],
 				formatBehaviorWarnings: () => "",
 			} as any);
+			// Only the sample's own raw read. The tree-sitter grammar load is also a
+			// one-argument read, and a cold process runs it inside this case (#5798).
 			const rawHashReads = readFileSyncSpy.mock.calls.filter(
-				(args) => args.length === 1,
+				(args) => args.length === 1 && args[0] === filePath,
 			);
 			// One raw-byte hash is enough when the pipeline reports no write: the
 			// post-write identity is also the state the pipeline analysed. This
