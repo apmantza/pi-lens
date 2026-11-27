@@ -769,18 +769,20 @@ export function forgetCascadePendingNeighbor(
 	pendingNeighbors.delete(key);
 }
 
-// #5804: files whose last write a language server answered for. A note lives
-// until that file's next write starts. Bounded like the record: an evicted
-// note reads as "no answer", which keeps the file's errors.
-const answeredWrites = new BoundedFifoMap<string, true>(MAX_PENDING_NEIGHBORS);
+// #5804: the runners that reached a verdict on each file's last write. A
+// note lives until that file's next write is recorded. Bounded like the
+// record: an evicted note reads as "no answer", which keeps the file's errors.
+const answeredWrites = new BoundedFifoMap<string, readonly string[]>(
+	MAX_PENDING_NEIGHBORS,
+);
 
 /**
  * #5804: note a write of `filePath` with the runners that reached a verdict
- * on it (`PipelineResult.verdictRunnerIds`). A write starts with none, so a
- * crash, timeout, abort or superseded run leaves the file unanswered; the run
- * that publishes a verdict a language server answered for notes it. The
- * server's runner is `lsp`, the id the dispatch gives the language servers.
- * Consumed by {@link settleCascadePendingAfterWrite}.
+ * on it (`PipelineResult.verdictRunnerIds`). Every write that records a
+ * turn-state range notes none first (#5812 F2), so a write that never
+ * dispatches, or a crash, timeout, abort or superseded run, leaves the file
+ * unanswered; the run that publishes a verdict notes its runners. Consumed by
+ * {@link settleCascadePendingAfterWrite}.
  */
 export function noteCascadeWrite(
 	filePath: string,
@@ -788,7 +790,8 @@ export function noteCascadeWrite(
 ): void {
 	const key = normalizeMapKey(filePath);
 	answeredWrites.delete(key);
-	if (verdictRunnerIds.includes("lsp")) answeredWrites.set(key, true);
+	if (verdictRunnerIds.length > 0)
+		answeredWrites.set(key, [...verdictRunnerIds]);
 }
 
 /**
@@ -799,34 +802,34 @@ export function noteCascadeWrite(
 export const PRIMARY_SERVER_SOURCES: readonly string[] = ["lsp"];
 
 /**
- * #5804: turn end, for a file pi wrote this turn. Returns true when the
- * write's own dispatch speaks for the file's cascade errors (a server
- * answered), and forgets the record: the dispatch reports whatever is still
- * there. Otherwise the file is not known clean: the record keeps its errors
- * and its observation moves to `at`, so the freshness gate reads pi's own
- * unconfirmed rewrite as a claim the record carries, not as an edit outside
- * pi.
+ * #5804: turn end, for a file pi wrote this turn. The write's own dispatch
+ * reports what is left of the errors its verdict runners raise, so the record
+ * forgets those rows, by the per-row rule of
+ * {@link forgetCascadePendingNeighbor} (#5812 F1: an `lsp` answer says nothing
+ * about an `opengrep` row). Returns true when the primary server answered
+ * and no row is left. Otherwise the file is not known clean: the record keeps
+ * the rest and its observation moves to `at`, so the freshness gate reads
+ * pi's own unconfirmed rewrite as a claim the record carries, not as an edit
+ * outside pi.
  */
 export function settleCascadePendingAfterWrite(
 	filePath: string,
 	at: number,
 ): boolean {
 	const key = normalizeMapKey(filePath);
-	if (answeredWrites.has(key)) {
-		pendingNeighbors.delete(key);
-		return true;
-	}
+	const covered = answeredWrites.get(key) ?? [];
+	forgetCascadePendingNeighbor(filePath, undefined, covered);
 	const entry = pendingNeighbors.get(key);
-	if (entry) {
-		entry.checkedAt = Math.max(entry.checkedAt, at);
-		// One count per file key, the carry record the inline blockers use.
-		incrementDegradationCount({
-			kind: "blocker-carried-unobserved",
-			subject: key,
-			reason:
-				"a neighbour's pending cascade errors stay pending: its write reached no language-server verdict (#5804)",
-		});
-	}
+	if (!entry)
+		return PRIMARY_SERVER_SOURCES.every((source) => covered.includes(source));
+	entry.checkedAt = Math.max(entry.checkedAt, at);
+	// One count per file key, the carry record the inline blockers use.
+	incrementDegradationCount({
+		kind: "blocker-carried-unobserved",
+		subject: key,
+		reason:
+			"a neighbour's pending cascade errors stay pending: no source that raised them reached a verdict on its write (#5804)",
+	});
 	return false;
 }
 

@@ -3965,4 +3965,50 @@ describe("#5790 witness: a cascade note with no finding does not hold the commit
 		},
 		120_000,
 	);
+
+	// Recurrence (#5812 round 4, CodeRabbit F1): the language server answered
+	// the neighbour's rewrite, and the turn end forgot the whole record, the
+	// opengrep row with the lsp one. No opengrep verdict reached that write, so
+	// the next turn end no longer named the opengrep error.
+	it("keeps a neighbour's pending row from a source its answered rewrite did not cover", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("cy", TARGET, TARGET_FIXED);
+		removeNeighbourOnCleanup();
+		const neighbour = path.join(tmpDir, NEIGHBOUR);
+		fs.writeFileSync(neighbour, NEIGHBOUR_FIXED);
+		const pendingTools = () =>
+			listCascadePendingNeighbors()
+				.filter((e) => e.filePath === neighbour)
+				.flatMap((e) => e.errors.map((error) => error.tool));
+		try {
+			recordDeliveredCascadeNeighbor(
+				neighbour,
+				(["lsp", "opengrep"] as const).map((tool, index) => ({
+					id: tool + ":" + index,
+					message: "finding " + index,
+					filePath: neighbour,
+					line: index + 1,
+					column: 1,
+					severity: "error" as const,
+					semantic: "blocking" as const,
+					tool,
+				})),
+				0,
+				Date.now() - 60_000,
+			);
+			const rewrittenAt = Date.now();
+			await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED + "export const d = 4;\n");
+			await s.endTurn();
+			expect(pendingTools()).toEqual(["opengrep"]);
+			const [held] = listCascadePendingNeighbors().filter(
+				(e) => e.filePath === neighbour,
+			);
+			expect(held?.checkedAt).toBeGreaterThanOrEqual(rewrittenAt);
+			expect(await s.commitReason()).toContain(HOLD_REMEDY);
+		} finally {
+			forgetCascadePendingNeighbor(neighbour);
+		}
+		await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
 });

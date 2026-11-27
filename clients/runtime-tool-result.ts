@@ -4814,6 +4814,9 @@ export async function handleToolResult(
 		dbg,
 		sessionId: deps.sessionId,
 	});
+	// #5812 F2: the write outdates the file's last verdict before the early
+	// return below, which dispatches nothing when the clients are not ready.
+	noteCascadeWrite(filePath, []);
 
 	const turnStateMs = Date.now() - toolResultStart;
 	logLatency({
@@ -5019,6 +5022,8 @@ export async function handleToolResult(
 			)
 		)
 			continue;
+		// #5812 F2: no dispatch of its own follows this side-effect write.
+		noteCascadeWrite(resolvedChanged, []);
 		try {
 			const content = nodeFs.readFileSync(resolvedChanged, "utf-8");
 			const lineCount = content.split("\n").length;
