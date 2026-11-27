@@ -6,7 +6,15 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import { CacheManager } from "../../clients/cache-manager.js";
 import { evaluateGitGuard } from "../../clients/git-guard.js";
 import {
@@ -121,6 +129,64 @@ vi.mock("../../clients/pipeline.js", () => ({
 const notifyExternalFileChange = vi.hoisted(() => vi.fn(async () => undefined));
 const readdirMock = vi.mocked(fsp.readdir);
 const realReaddir = readdirMock.getMockImplementation()!;
+
+// #5798: the first bash tool_call that touches a supported source file pays
+// the one-time costs of its pre-edit capture (the tree-sitter grammar and
+// query compile, the dispatch and analyzer module loads) inside whichever case
+// reaches it first, against the 5 s test budget. On a Windows runner that
+// first case timed out (#5798, six runs). The costs are per process, so one
+// throwaway call here moves them into hook time and every case sees the warm
+// path. `runPipeline` is mocked and never runs.
+beforeAll(async () => {
+	const env = setupTestEnvironment("pi-lens-5798-warm-");
+	try {
+		const filePath = createTempFile(
+			env.tmpDir,
+			"warm.ts",
+			"export const warm = 1;\n",
+		);
+		const runtime = new RuntimeCoordinator();
+		runtime.projectRoot = env.tmpDir;
+		await runHandlerExpectingNoThrow(() =>
+			handleToolCall({
+				event: {
+					toolName: "bash",
+					toolCallId: "5798-warm",
+					input: { command: `sed -i 's/warm/cold/' "${filePath}"` },
+				},
+				ctx: { cwd: env.tmpDir },
+				lensEnabled: true,
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				ensureLSPConfigInitialized: async () => {},
+				updateLspStatus: () => {},
+				resetLSPService: () => {},
+			} as any),
+		);
+		// #5798 (CodeRabbit PRRT_kwDORt8rec68oegW): an unquoted path split on a
+		// space in TMPDIR, so the warm-up silently captured nothing and the cold
+		// cost stayed in the first case. The guard admits the results that ran
+		// the cold capture path: `seeded` (the linters ran and installed the
+		// seed) and `abandoned` (the 1500 ms spanless bound gave up while the
+		// capture, and its cold cost, was still running; a seeded-only guard
+		// would flake on a slow runner). `discarded` ran the linters too
+		// (integration.ts `dispatchSeedLanes`, then a late check dropped the
+		// seed). `skipped` returns before any linter runs, and `failed` is a
+		// capture that threw, so neither completed the warm-up and both red.
+		expect(logLatency).toHaveBeenCalledWith(
+			expect.objectContaining({
+				phase: "pre_edit_capture",
+				result: expect.stringMatching(/^(seeded|abandoned|discarded)$/),
+			}),
+		);
+	} finally {
+		// The warm-up's own degradation row must not reach a case's ledger read.
+		resetDegradationLedger();
+		env.cleanup();
+	}
+});
 
 beforeEach(async () => {
 	// `notifyExternalFileChange` is the spy above: the double answers it for the
@@ -2449,8 +2515,10 @@ describe("bash grep searchReads registration", () => {
 				agentBehaviorRecord: () => [],
 				formatBehaviorWarnings: () => "",
 			} as any);
+			// Only the sample's own raw read. The tree-sitter grammar load is also a
+			// one-argument read, and a cold process runs it inside this case (#5798).
 			const rawHashReads = readFileSyncSpy.mock.calls.filter(
-				(args) => args.length === 1,
+				(args) => args.length === 1 && args[0] === filePath,
 			);
 			// One raw-byte hash is enough when the pipeline reports no write: the
 			// post-write identity is also the state the pipeline analysed. This

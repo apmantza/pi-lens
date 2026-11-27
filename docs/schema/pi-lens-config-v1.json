@@ -544,6 +544,17 @@
       },
       "x-stability": "stable"
     },
+    "opaqueScan": {
+      "type": "object",
+      "properties": {
+        "nonWriterTools": {
+          "type": "array",
+          "items": { "type": "string", "x-stability": "experimental" },
+          "x-stability": "experimental"
+        }
+      },
+      "x-stability": "experimental"
+    },
     "$schema": {
       "type": "string",
       "description": "Identity anchor naming the schema version this config was written against.",

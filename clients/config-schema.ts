@@ -423,6 +423,22 @@ function buildConfigSchema(): ConfigSchemaNode {
 		[STABILITY_TIER_KEY]: "stable",
 	};
 
+	// #5793: the one typed key is a list of tool names. Not a denial: the list
+	// only ever ADMITS a name, so it is not `array-union`, and the consumer
+	// reads the global and project documents apart (trust differs per tier).
+	// The node is closed, so a typo'd sub-key is dropped with a record.
+	properties.opaqueScan = {
+		type: "object",
+		properties: {
+			nonWriterTools: {
+				type: "array",
+				items: { type: "string", [STABILITY_TIER_KEY]: "experimental" },
+				[STABILITY_TIER_KEY]: "experimental",
+			},
+		},
+		[STABILITY_TIER_KEY]: "experimental",
+	};
+
 	// The four legacy ROOT LSP keys. Still accepted for their deprecation window
 	// (#2418 registry), and `experimental` because they are scheduled for
 	// removal — a `stable` tier on a key with a `removeNotBefore` would be two

@@ -173,6 +173,7 @@ import {
 	makeContextWithSystemEvent,
 	makeSessionStartEvent,
 } from "./support/host-event-factory.js";
+import { drainRegisteredBackgroundWritesForTests } from "./support/background-write-drains.js";
 import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx, makeStaleCtx } from "./support/pi-mock.js";
 import { useGlobalConfig } from "./support/global-config.js";
@@ -301,6 +302,18 @@ const setGlobalConfig = useGlobalConfig();
 // fixture roots inside the case, so one root hook ends whatever is still open.
 afterEach(async () => {
 	await endMockSessions();
+	// #5794: every session_start primes the global-bin-dir lookup without
+	// waiting for it (#5261): a `setImmediate` that imports the package manager
+	// and spawns `which` and `npm config get prefix`. A case that only awaits
+	// microtasks never reaches the check phase, so the prime started in a LATER
+	// case's window, and its owned-child row landed in the degradation ledger
+	// as `instance-registry-registration-missing`: the #2515 S3 `/lens-perf`
+	// case's exact-list assertion read it (seeds 202 and 8888). Take one
+	// macrotask turn so the scheduled prime starts, then join it through the
+	// registered drains, here where the case that scheduled it ends. The drain
+	// alone is not enough: with no prime running yet it returns settled.
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	await drainRegisteredBackgroundWritesForTests();
 });
 
 describe("index.ts extension wiring", () => {
