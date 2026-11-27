@@ -145,7 +145,7 @@ export async function loadActualCensusSeams(): Promise<CensusSeams> {
 	const snapshot = await import("../../clients/process-snapshot.js");
 	const reaper = await import("../../clients/instance-reaper.js");
 	const { LSP_SERVERS } = await import("../../clients/lsp/server.js");
-	const names = reaper.managedBinaryNames(LSP_SERVERS);
+	const names = reaper.managedMarkers(LSP_SERVERS);
 	return {
 		listProcesses: () =>
 			snapshot.queryProcessTable(

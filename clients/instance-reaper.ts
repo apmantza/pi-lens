@@ -677,11 +677,20 @@ async function verifyPidGone(
 	return "alive";
 }
 
+/** One registry command marker with the images its own server may run as. */
+export interface ManagedMarker {
+	name: string;
+	images: readonly string[];
+}
+
 /** Registry-owned command markers supplied by the host, without an import cycle. */
-export function managedBinaryNames(
+export function managedMarkers(
 	servers: readonly { orphanProcess?: LspOrphanProcess }[],
-): readonly string[] {
-	return servers.flatMap((server) => server.orphanProcess!.names);
+): readonly ManagedMarker[] {
+	return servers.flatMap((server) => {
+		const { names, images } = server.orphanProcess!;
+		return names.map((name) => ({ name, images }));
+	});
 }
 
 /** Windows image prefilter, including the runtimes declared by each server. */
@@ -897,13 +906,13 @@ export function partitionBackstopCandidates(
 }
 
 /** Enumerate live OS processes whose command line contains one of
- *  `managedBinaryNames()` (#658), independent of the instance registry.
+ *  `managedMarkers()` (#658), independent of the instance registry.
  *  One projected process-table query through the shared seam, narrowed to
  *  managed binaries in JS; returns `{pid, parentPid, command, ageMs}` rows.
  *  Best-effort: any failure ⇒ [], with the scan status carried alongside so
  *  an empty table is never mistaken for a scan that did not run. */
 async function enumerateManagedProcesses(
-	names: readonly string[],
+	names: readonly ManagedMarker[],
 	images: readonly string[],
 	options: {
 		timeoutMs?: number;
@@ -963,7 +972,7 @@ async function enumerateManagedProcesses(
 function narrowToManagedBinaries(
 	processes: OsProcessInfo[],
 	result: { status: SpawnCollectStatus; timeoutKill?: SpawnTimeoutKill },
-	names: readonly string[],
+	names: readonly ManagedMarker[],
 ): ManagedProcessScan {
 	return {
 		names,
@@ -980,7 +989,7 @@ function narrowToManagedBinaries(
  *  output (#1857 item 2); `timeoutKill` reports the fate of a scanner child
  *  that had to be terminated (#1864 review F3). */
 interface ManagedProcessScan {
-	names: readonly string[];
+	names: readonly ManagedMarker[];
 	processes: OsProcessInfo[];
 	status: SpawnCollectStatus;
 	timeoutKill?: SpawnTimeoutKill;
@@ -1065,17 +1074,111 @@ export async function terminateScannerChild(
  *  worst case rather than trusting the median. */
 export const BACKSTOP_SCAN_TIMEOUT_MS = 5_000;
 
-/** The one command-line match rule, shared by both platforms' parsers. */
+/**
+ * The one command-line match rule: which processes are CANDIDATES for the
+ * backstop at all. It never authorizes a kill; ownership does (`isOwnerDead`).
+ *
+ * POSIX: the marker at a token boundary anywhere in the command line. Safe
+ * because a kill also needs the `PI_LENS_OWNER` tag pi-lens put on its own
+ * child.
+ *
+ * Windows: no tag exists, so the match is the whole proof that this is a
+ * pi-lens server and it is anchored (#5699 review F1). The marker counts only
+ * as the process's own image (`gopls.exe`) or, for a server run by a shared
+ * runtime, as the launched script (`yaml-language-server`, `Start-EditorServices.ps1`),
+ * jar (`org.eclipse.equinox.launcher_1.6.900.jar`) or the package directory
+ * under `node_modules` that holds it. Never a substring of another argument or
+ * of an arbitrary directory, and only under an image its own server declares.
+ * A command this cannot tokenize or place is not a match: a server whose launch
+ * form is not listed is left alone, never guessed at.
+ */
 export function matchesManagedBinary(
 	command: string,
-	names: readonly string[],
+	markers: readonly ManagedMarker[],
+	platform: NodeJS.Platform = process.platform,
 ): boolean {
-	return names.some((name) =>
-		new RegExp(
-			String.raw`(?:^|[\s/\\"'])${escapeRegExp(name)}(?=$|[\s/\\"'.-])`,
-			"i",
-		).test(command),
+	return markers.some((marker) =>
+		platform === "win32"
+			? matchesWindowsLaunch(command, marker)
+			: matchesPosixMarker(command, marker.name),
 	);
+}
+
+function matchesPosixMarker(command: string, name: string): boolean {
+	// `_` closes the boundary so a versioned jar
+	// (`org.eclipse.equinox.launcher_1.6.900.jar`) names its marker (#5699 F3).
+	return new RegExp(
+		String.raw`(?:^|[\s/\\"'])${escapeRegExp(name)}(?=$|[\s/\\"'._-])`,
+		"i",
+	).test(command);
+}
+
+/** `CommandLineToArgvW` without its backslash-quote rule: quotes group, and an
+ *  unbalanced quote is no tokenization at all. */
+function splitWindowsCommandLine(command: string): string[] | undefined {
+	const tokens: string[] = [];
+	let token = "";
+	let started = false;
+	let quoted = false;
+	for (const char of command) {
+		if (char === '"') {
+			quoted = !quoted;
+			started = true;
+		} else if (!quoted && /\s/.test(char)) {
+			if (started) tokens.push(token);
+			token = "";
+			started = false;
+		} else {
+			token += char;
+			started = true;
+		}
+	}
+	if (quoted) return undefined;
+	if (started) tokens.push(token);
+	return tokens;
+}
+
+const pathBase = (token: string): string => /[^\\/]*$/.exec(token)![0];
+
+/** The flag that carries the launched file for runtimes that take it so. */
+const LAUNCH_FLAG: Readonly<Record<string, string>> = {
+	"java.exe": "-jar",
+	"pwsh.exe": "-file",
+	"powershell.exe": "-file",
+};
+
+/** The file a shared runtime was told to run, or undefined when none is named. */
+function launchedFile(argv: string[], image: string): string | undefined {
+	const flag = LAUNCH_FLAG[image];
+	if (flag !== undefined) {
+		const at = argv.findIndex((arg, i) => i > 0 && arg.toLowerCase() === flag);
+		return at < 0 ? undefined : argv[at + 1];
+	}
+	return argv.slice(1).find((arg) => !/^[-/]/.test(arg));
+}
+
+function matchesWindowsLaunch(command: string, marker: ManagedMarker): boolean {
+	const argv = splitWindowsCommandLine(command);
+	if (argv === undefined || argv.length === 0) return false;
+	let image = pathBase(argv[0]).toLowerCase();
+	if (!image.includes(".")) image += ".exe"; // npm shims run a bare `node`
+	if (!marker.images.some((own) => own.toLowerCase() === image)) return false;
+	const name = marker.name.toLowerCase();
+	const stem = image.replace(/\.exe$/, "");
+	if (stem === name || stem.startsWith(`${name}-`)) return true; // its own image
+	const file = launchedFile(argv, image);
+	if (file === undefined) return false;
+	const base = pathBase(file).toLowerCase();
+	if (
+		new RegExp(
+			`^${escapeRegExp(name)}(?:\\.[a-z0-9]+|_\\d[\\w.-]*\\.jar)?$`,
+		).test(base)
+	)
+		return true;
+	// A node package launched through its entry file: `node_modules\<marker>\lib\cli.mjs`.
+	const parts = file.toLowerCase().split(/[\\/]+/);
+	const at = parts.indexOf("node_modules");
+	return at >= 0 && parts[at + 1] === name && at + 2 < parts.length;
 }
 
 /**
@@ -1175,7 +1278,7 @@ export async function sweepUntrackedOrphans(
 			readInstanceRegistry(),
 			options.getServers().then((servers) =>
 				enumerateManagedProcesses(
-					managedBinaryNames(servers),
+					managedMarkers(servers),
 					managedImageNames(servers),
 					{
 						timeoutMs: options.scanTimeoutMs,
@@ -1616,12 +1719,12 @@ function readTags(pids: number[]) {
  *  the matched managed-binary name plus the pid. */
 function describeManagedProcess(
 	proc: OsProcessInfo,
-	names: readonly string[],
+	names: readonly ManagedMarker[],
 ): string {
-	const matched = names.find((name) =>
-		matchesManagedBinary(proc.command, [name]),
+	const matched = names.find((marker) =>
+		matchesManagedBinary(proc.command, [marker]),
 	);
-	return `${matched ?? "unknown"}#${proc.pid}`;
+	return `${matched?.name ?? "unknown"}#${proc.pid}`;
 }
 
 function logBackstopOutcome(

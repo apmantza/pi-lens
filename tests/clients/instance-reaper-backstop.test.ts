@@ -1133,7 +1133,8 @@ describe("#1857: cost containment", () => {
 				pid: 7002,
 				parentPid: 4000,
 				ageMs: 10 * 60 * 1000,
-				command: "node /opt/lib/typescript-language-server/cli.mjs --stdio",
+				command:
+					"node /opt/lib/node_modules/typescript-language-server/lib/cli.mjs --stdio",
 			}),
 		].join("\n");
 
@@ -1198,5 +1199,20 @@ describe("registry-derived command selection", () => {
 		});
 		await sweepUntrackedOrphans(FAST);
 		expect(backstopMetadata().scanned).toBe(0);
+	});
+
+	// #5699 F3: jdtls runs `-jar .../org.eclipse.equinox.launcher_<version>.jar`;
+	// the marker could never match its own jar because `_` was no boundary.
+	it("selects the versioned jdtls launcher jar", async () => {
+		h.state.stdout = enumerationRow({
+			pid: 7004,
+			parentPid: 4000,
+			ageMs: 600000,
+			command: isWindows
+				? "java.exe -jar C:\\eclipse\\plugins\\org.eclipse.equinox.launcher_1.6.900.v20240613-2009.jar -data C:\\ws"
+				: "java -jar /opt/eclipse/plugins/org.eclipse.equinox.launcher_1.6.900.v20240613-2009.jar -data /ws",
+		});
+		await sweepUntrackedOrphans(FAST);
+		expect(backstopMetadata().scanned).toBe(1);
 	});
 });
