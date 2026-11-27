@@ -250,34 +250,77 @@ describe("flaky-test rules (#5806)", () => {
 			/A retry, a longer or scaled timeout[^.]*a skip or a quarantine is not a fix/,
 		);
 		expect(text).toMatch(
-			/Raise a budget only with a measurement that names the slow step and its time on the failing host/,
+			/Raise the budget of a test that failed only with a measurement that names the slow step and its time on the failing host/,
 		);
 		expect(text).toContain("#5645");
 		expect(text).toContain("#5802");
 	});
 
-	// Recurrence: closing windows were picked case by case (#2042: 11 runs;
-	// others: one green rerun).
-	it("states the 3/p stopping rule with its derivation and how p is estimated", () => {
+	// Recurrence: shape 85 requires a scaled or shared budget on every new
+	// tree-walking test, and a new test has no failing host. Without this scope
+	// a shape-85-compliant test reads as a budget raised without a measurement
+	// (review of #5809, F2).
+	it("scopes the measurement rule to a test that failed and sends a new test's budget to shape 85", () => {
+		const fixer = fixerSection();
+		expect(fixer).toMatch(/binds a fix to a test that failed or flaked/);
+		expect(fixer).toMatch(
+			/A budget set on a new test follows its own shape \(shape 85/,
+		);
+		const reviewer = rule("pi-lens-reviewer.md");
+		expect(reviewer).toMatch(
+			/A budget set on a new test follows its own shape \(shape 85\) and is not this finding/,
+		);
+	});
+
+	// Recurrence: closing windows were picked case by case (#2042 closed on 11
+	// kill-free runs; other flakes closed on one green rerun), and a p read off
+	// a small window made "95%" a claim about the point estimate (review of
+	// #5809, F3 and F6).
+	it("states the 3/p stopping rule with its derivation, recurrence and how p is estimated", () => {
 		const text = fixerSection();
 		expect(text).toMatch(
 			/failure rate p counts as fixed after 3\/p consecutive clean runs/,
 		);
 		expect(text).toContain("e^-3");
-		expect(text).toMatch(/about 95% confidence/);
+		expect(text).toMatch(/about 95% confidence, for a known p/);
+		expect(text).toMatch(
+			/Recurrence: #2042 closed on an 11-run kill-free window, and other flakes closed on one green rerun/,
+		);
+		expect(text).toMatch(
+			/count the clean runs against the lower bound of its 95% interval/,
+		);
 		expect(text).toMatch(
 			/Estimate p\*\* as failures over runs of the same job in a stated window/,
 		);
 	});
 
-	// Recurrence: a flake whose 3/p is out of reach closed as fixed, so the next
-	// failure read as a regression instead of an unfinished count.
+	// Recurrence: a flake closed as fixed on one green rerun (the #2042 shape)
+	// when its 3/p was out of reach, so the next failure read as a regression
+	// instead of an unfinished count.
 	it("sends an impractical 3/p to the accepted-gap record and never to a fix close", () => {
 		const text = fixerSection();
 		expect(text).toMatch(/do not close the issue as fixed/);
 		expect(text).toMatch(/accepted gap/);
 		expect(text).toMatch(
 			/each state p, the failures, runs and window behind it, and the clean-run count reached against 3\/p/,
+		);
+	});
+
+	// Recurrence: AGENTS.md allows deleting an unknown-cause repeat flake while
+	// the closing rule refuses any close without a clean-run count, so a
+	// deletion had no compliant form (review of #5809, F1).
+	it("gives a deleted flake a close that is not a fix and records p and the root-cause attempt", () => {
+		const text = fixerSection();
+		expect(text).toMatch(/A deletion is not a fix\./);
+		expect(text).toMatch(/closes the issue as removed, never as fixed/);
+		expect(text).toMatch(
+			/records p with the failures, runs and window behind it, and the root-cause attempt/,
+		);
+		expect(agents()).toMatch(
+			/what a deletion records are in `docs\/pi-lens-fixer\.md`/,
+		);
+		expect(rule("pi-lens-reviewer.md")).toMatch(
+			/A deletion closes as removed and records p and the root-cause attempt, never a "fixed" claim/,
 		);
 	});
 
@@ -291,17 +334,18 @@ describe("flaky-test rules (#5806)", () => {
 	});
 
 	// Recurrence: the close and the known-gap record are where the numbers are
-	// quoted; each points at the one home instead of restating the rule.
-	it("points the merge policy's close and known-gap record at the fixer home", () => {
+	// quoted. Each points at the one home for the field list; the close gate
+	// restates only the threshold and the rerun exclusion, and both are pinned
+	// as literal clauses because weakening them ("at least 1", "a green rerun
+	// alone closes") left every earlier pin green (review of #5809, F4). The
+	// sentences are matched one by one, so a third pointer stays legal.
+	it("points the merge policy's close and known-gap record at the fixer home and pins the close gate", () => {
 		const text = rule("pi-lens-merge-policy.md");
 		expect(text).toMatch(
-			/A flake issue closes as fixed only when the comment that closes it quotes p/,
+			/A flake whose 3\/p clean-run count is impractical joins the tracker the same way, with the numbers `docs\/pi-lens-fixer\.md` "Flaky tests" lists; it is never closed as fixed\./,
 		);
 		expect(text).toMatch(
-			/A flake whose 3\/p clean-run count is impractical joins the tracker/,
-		);
-		expect(text.match(/`docs\/pi-lens-fixer\.md` "Flaky tests"/g)?.length).toBe(
-			2,
+			/A flake issue closes as fixed only when the comment that closes it quotes the numbers `docs\/pi-lens-fixer\.md` "Flaky tests" lists, with a clean-run count of at least 3\/p; a green rerun alone does not close one\./,
 		);
 	});
 

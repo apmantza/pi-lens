@@ -272,15 +272,18 @@ instead of rebuilding the probe.
   `// flake-shape: <detector> — <reason>` header and `wallClockBudgetInclude`
   membership (#2547). A pinned file whose count falls below its pin needs its
   baseline tightened; a stale ceiling re-admits regrowth.
-- **Flake fixes and flake closes.** On a PR that changes a test's budget, wait,
-  retry, skip or quarantine, or that closes a flake issue, read
-  `docs/pi-lens-fixer.md` "Flaky tests" and check each part. The fix names a
-  reproduction and the slow or racing step; a longer or scaled timeout carries a
-  measurement of that step on the failing host, and a budget raised without one
-  is a finding even when green (#5645 scaled a Windows cell and #5802, its
-  sibling, timed out next). The close or the accepted-gap record quotes p, the
-  failures, runs and window behind it, and the clean-run count against 3/p; a close on one green
-  rerun, or a "fixed" with a count below 3/p, is a finding.
+- **Flake fixes and flake closes.** On a PR that changes the budget, wait,
+  retry, skip or quarantine of a test that failed, or that closes or deletes a
+  flaky test, read `docs/pi-lens-fixer.md` "Flaky tests" and check each part. The
+  fix names a reproduction and the slow or racing step; a longer or scaled
+  timeout carries a measurement of that step on the failing host, and a budget
+  raised without one is a finding even when green (#5645 scaled a Windows cell
+  and #5802, its sibling, timed out next). A budget set on a new test follows
+  its own shape (shape 85) and is not this finding. The close or the
+  accepted-gap record quotes p, the failures, runs and window behind it, and the
+  clean-run count against 3/p; a close on one green rerun, or a "fixed" with a
+  count below 3/p, is a finding. A deletion closes as removed and records p and
+  the root-cause attempt, never a "fixed" claim.
 - **Self-judging gate.** CI runs the governance suite from the PR head, so a
   diff that touches a ratchet baseline, a governance test, a shape scanner or a
   gate script (`scripts/hooks/`, `scripts/governance-rules/`, a `scripts/check-*`

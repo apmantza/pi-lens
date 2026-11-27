@@ -642,9 +642,9 @@ its detector, a baseline row, and an `ADMITTED_AFTER_BASELINE` entry.
 A flaky test is fixed at its cause: no sleeps, no retry-until-green, no skip,
 no scaled timeout without a measured slow step. A repeat flake whose cause stays
 unknown after a root-cause attempt may be deleted with the reason recorded in
-the PR body, never when it alone pins a behaviour. What counts as a fix and when
-a flake counts as fixed (3/p clean runs) are in `docs/pi-lens-fixer.md` "Flaky
-tests".
+the PR body, never when it alone pins a behaviour. What counts as a fix, when a
+flake counts as fixed, and what a deletion records are in `docs/pi-lens-fixer.md`
+"Flaky tests".
 
 The real-pi harness defaults to `--no-session`; a persisted-session witness
 opts into `withRealPi({ persistedSession: true })`, which pins `--session-dir`

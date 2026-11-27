@@ -191,13 +191,16 @@ reproduction before the fix, and a stated number of clean runs before the close.
 This section is the only home of both rules; `AGENTS.md`, the reviewer
 checklist and the merge policy point here.
 
-- **No reproduction, no fix.** A retry, a longer or scaled timeout
+- **No reproduction, no fix.** This binds a fix to a test that failed or
+  flaked. A budget set on a new test follows its own shape (shape 85 requires
+  `TREE_WALK_TIMEOUT_MS` or `scaledTestTimeout(...)` on a tree-walking test) and
+  needs no failing-host measurement. A retry, a longer or scaled timeout
   (`scaledTestTimeout`, a raised `testTimeout`), a skip or a quarantine is not a
   fix: it hides the failure and leaves its cause. Reproduce the failure on the
-  failing host or lane, name the slow or racing step, and fix that step. Raise a
-  budget only with a measurement that names the slow step and its time on the
-  failing host (and, for a scaled budget, why the step's
-  cost scales with the lane and cannot shrink). Without a reproduction, report
+  failing host or lane, name the slow or racing step, and fix that step. Raise the
+  budget of a test that failed only with a measurement that names the slow step
+  and its time on the failing host (and, for a scaled budget, why the step's cost
+  scales with the lane and cannot shrink). Without a reproduction, report
   `not reproduced` (see "Before code") and record the hypothesis; do not ship a
   budget change. Recurrence: #5645 closed a Windows timeout by scaling the
   cell's budget and named no slow step, and #5802, a sibling cell in the same
@@ -206,22 +209,35 @@ checklist and the merge policy point here.
   consecutive clean runs of the failing job on the fix head. The runs are
   independent, so a flake still present survives n clean runs with probability
   (1 - p)^n, about e^(-pn); at n = 3/p that is e^-3, about 0.05, so a clean
-  streak of that length means the flake is gone with about 95% confidence. Fewer
-  runs, such as one green rerun, are not evidence.
+  streak of that length means the flake is gone with about 95% confidence, for a
+  known p. Fewer runs, such as one green rerun, are not evidence. Recurrence:
+  #2042 closed on an 11-run kill-free window, and other flakes closed on one
+  green rerun.
 - **Estimate p** as failures over runs of the same job in a stated window, for
   example 4 failures in the last 40 runs on master, or the lane's CI history
   since the flake first appeared. Name the window and count a failure only when
   its message matches the flake's own. A flake with one recorded failure uses
-  p = 1/runs in the window, never 0.
+  p = 1/runs in the window, never 0. A p taken from a window is an estimate, so
+  count the clean runs against the lower bound of its 95% interval: 4 failures in
+  40 runs (p = 0.10) has a lower bound near 0.04 and needs about 75 clean runs,
+  not 30.
 - **When 3/p is impractical** (a 1-in-50 flake needs 150 clean runs, more than
   the lane can run), do not close the issue as fixed. Record it as an accepted
-  gap (`docs/pi-lens-merge-policy.md` "Known gaps") with p, its window and the
-  clean-run count reached, and let the count carry forward to the next fix
+  gap (`docs/pi-lens-merge-policy.md` "Known gaps") with the numbers the next bullet
+  lists, and let the count carry forward to the next fix
   attempt.
+- **A deletion is not a fix.** `AGENTS.md` lets a repeat flake whose cause
+  stays unknown after a root-cause attempt be deleted. That closes the issue as
+  removed, never as fixed, and the PR body records p with the failures, runs and
+  window behind it, and the root-cause attempt (what you reproduced or tried,
+  and what stayed unknown). It needs no clean-run count, because no test remains
+  to run.
 - **The closing step quotes the numbers.** A PR that fixes a flake, the issue
-  close that credits it, and an accepted-gap record each state p, the
+  close that credits it, and an accepted-gap record (with the count reached so
+  far) each state p, the
   failures, runs and window behind it, and the clean-run count reached against
-  3/p. Review refuses a close that omits them.
+  3/p. Review treats a close that omits them as a
+  finding.
 
 ## Required checks
 
