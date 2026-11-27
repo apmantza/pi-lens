@@ -215,3 +215,176 @@ describe("bot review threads and code-scanning alerts (#4566/#4575)", () => {
 		},
 	);
 });
+
+// Recurrence: #5645 closed a Windows timeout by scaling the cell's budget and
+// named no slow step; #5802, a sibling cell in the same file, timed out next.
+// Flakes had also closed on case-by-case windows (#2042 on 11 clean runs,
+// others on one green rerun). These pins hold the two rules in their one home
+// (the fixer contract) and every pointer that makes them bind.
+describe("flaky-test rules (#5806)", () => {
+	const rule = (name: string): string => flat(blankMarkdown(doc(name)));
+	const agents = (): string =>
+		flat(
+			blankMarkdown(
+				fs.readFileSync(
+					process.env.PI_LENS_AGENTS_PATH ?? path.join(REPO_ROOT, "AGENTS.md"),
+					"utf8",
+				),
+			),
+		);
+	// The fixer section body, so a sentence elsewhere cannot satisfy a pin.
+	const fixerSection = (): string => {
+		const text = rule("pi-lens-fixer.md");
+		const start = text.indexOf("## Flaky tests");
+		if (start < 0) return "";
+		const next = text.indexOf(" ## ", start + 1);
+		return text.slice(start, next < 0 ? undefined : next);
+	};
+
+	// Recurrence: a scaled or lengthened budget, a retry, a skip or a quarantine
+	// made the failure go away without a reproduction (#5645 -> #5802).
+	it("states no-reproduction-no-fix with the measurement a budget increase needs", () => {
+		const text = fixerSection();
+		expect(text).toMatch(/No reproduction, no fix\./);
+		expect(text).toMatch(
+			/A retry, a longer or scaled timeout[^.]*a skip or a quarantine is not a fix/,
+		);
+		expect(text).toMatch(
+			/Raise the budget of a test that failed only with a measurement that names the slow step and its time on the failing host/,
+		);
+		expect(text).toContain("#5645");
+		expect(text).toContain("#5802");
+	});
+
+	// Recurrence: shape 85 requires a scaled or shared budget on every new
+	// tree-walking test, and a new test has no failing host. Without this scope
+	// a shape-85-compliant test reads as a budget raised without a measurement
+	// (review of #5809, F2). The trigger names its evidence and covers the two
+	// budgets the first scope left open: a new non-walking test, and a raise on
+	// an existing test that never failed (verify r2, V4). The reviewer trigger
+	// must reach that raise too, not only the sentence after it (verify r3, W1).
+	it("scopes the measurement rule to a test with failure evidence and routes the other budgets", () => {
+		const fixer = fixerSection();
+		expect(fixer).toMatch(
+			/binds a fix to a test that failed or flaked, which a failing CI run id or a linked flake issue shows/,
+		);
+		expect(fixer).toMatch(
+			/shape 85 governs it for a tree-walking test .{0,90}and any other new test gets ordinary review/,
+		);
+		expect(fixer).toMatch(
+			/A budget raised on an existing test with no failing run or flake issue to name is not a flake fix; the PR body states the measurement that motivated it/,
+		);
+		const reviewer = rule("pi-lens-reviewer.md");
+		expect(reviewer).toMatch(
+			/a test that failed \(a failing CI run id or a linked flake issue names it\)/,
+		);
+		expect(reviewer).toMatch(
+			/A budget set on a new test is not this finding: shape 85 governs a tree-walking test and any other gets ordinary review/,
+		);
+		expect(reviewer).toMatch(
+			/A budget raised on an existing test with no failure to name is not a flake fix; ask for the measurement that motivated it/,
+		);
+		expect(reviewer).toMatch(
+			/On a PR that changes the budget, wait, retry, skip or quarantine of a test that failed \(a failing CI run id or a linked flake issue names it\), that raises the budget of an existing test, or that closes or deletes a flaky test, read/,
+		);
+		// A raise with no failing host has no measurement to give, so the
+		// "finding even when green" sentence binds only a test that failed (verify
+		// r4, W4). Without this pin it reads as a finding for that raise too.
+		expect(reviewer).toMatch(
+			/and a budget raised on a test that failed without one is a finding even when green/,
+		);
+	});
+
+	// Recurrence: closing windows were picked case by case (#2042 closed on 11
+	// kill-free runs; other flakes closed on one green rerun), and a p read off
+	// a small window makes "95%" approximate (review of #5809, F3 and F6). The
+	// rule counts against the point estimate of p, as #5806 states.
+	it("states the 3/p stopping rule with its derivation, recurrence and how p is estimated", () => {
+		const text = fixerSection();
+		expect(text).toMatch(
+			/failure rate p counts as fixed after 3\/p consecutive clean runs/,
+		);
+		expect(text).toContain("e^-3");
+		expect(text).toMatch(/about 95% confidence, for a known p/);
+		expect(text).toMatch(
+			/Recurrence: #2042 closed on an 11-run kill-free window, and other flakes closed on one green rerun/,
+		);
+		expect(text).toMatch(
+			/A p taken from a window is an estimate, so the 95% figure is approximate; a longer window narrows it/,
+		);
+		expect(text).not.toMatch(/lower bound/);
+		expect(text).toMatch(
+			/Estimate p\*\* as failures over runs of the same job in a stated window/,
+		);
+	});
+
+	// Recurrence: a flake closed as fixed on one green rerun (the #2042 shape)
+	// when its 3/p was out of reach, so the next failure read as a regression
+	// instead of an unfinished count.
+	it("sends an impractical 3/p to the accepted-gap record and never to a fix close", () => {
+		const text = fixerSection();
+		expect(text).toMatch(/do not close the issue as fixed/);
+		expect(text).toMatch(/accepted gap/);
+		expect(text).toMatch(
+			/each state p, the failures, runs and window behind it, and the clean-run count reached against 3\/p\. A close that omits them is a finding/,
+		);
+	});
+
+	// Recurrence: AGENTS.md allows deleting an unknown-cause repeat flake while
+	// the closing rule refuses any close without a clean-run count, so a
+	// deletion had no compliant form (review of #5809, F1).
+	it("gives a deleted flake a close that is not a fix and records p and the root-cause attempt", () => {
+		const text = fixerSection();
+		expect(text).toMatch(/A deletion is not a fix\./);
+		expect(text).toMatch(
+			/closes the issue as not planned, never as completed or fixed/,
+		);
+		expect(text).toMatch(
+			/records p with the failures, runs and window behind it, and the root-cause attempt/,
+		);
+		expect(agents()).toMatch(
+			/what a deletion records are in `docs\/pi-lens-fixer\.md`/,
+		);
+		expect(rule("pi-lens-reviewer.md")).toMatch(
+			/A deletion is the exception: it closes as not planned, records p and the root-cause attempt, and quotes no clean-run count, and a deletion that claims "fixed" is a finding/,
+		);
+	});
+
+	// Recurrence: the reviewer checklist is what judges a flake close; without
+	// its own item a close on one green rerun reads as merge-ready.
+	it("puts the rules on the reviewer checklist, pointing at the fixer home", () => {
+		const text = rule("pi-lens-reviewer.md");
+		expect(text).toContain("**Flake fixes, budget raises and flake closes.**");
+		expect(text).toContain('`docs/pi-lens-fixer.md` "Flaky tests"');
+		expect(text).toMatch(/a close on one green rerun[^.]*is a finding/);
+		// V6: the count sentence binds a fix close; a deletion is its exception.
+		expect(text).toMatch(
+			/A fix close or an accepted-gap record quotes p, the failures, runs and window behind it, and the clean-run count against 3\/p/,
+		);
+	});
+
+	// Recurrence: the close and the known-gap record are where the numbers are
+	// quoted. Each points at the one home for the field list; the close gate
+	// restates only the threshold and the rerun exclusion, and both are pinned
+	// as literal clauses because weakening them ("at least 1", "a green rerun
+	// alone closes") left every earlier pin green (review of #5809, F4). The
+	// sentences are matched one by one, so a third pointer stays legal.
+	it("points the merge policy's close and known-gap record at the fixer home and pins the close gate", () => {
+		const text = rule("pi-lens-merge-policy.md");
+		expect(text).toMatch(
+			/A flake whose 3\/p clean-run count is impractical joins the tracker the same way, with the numbers `docs\/pi-lens-fixer\.md` "Flaky tests" lists; it is never closed as fixed\./,
+		);
+		expect(text).toMatch(
+			/A flake issue closes as fixed only when the comment that closes it quotes the numbers `docs\/pi-lens-fixer\.md` "Flaky tests" lists, with a clean-run count of at least 3\/p; a green rerun alone does not close one\./,
+		);
+	});
+
+	// Recurrence: AGENTS.md's one-line flake rule predates the scaled-timeout
+	// shape; it must name that form and point at the home, not copy the rule.
+	it("keeps the AGENTS.md flake line pointing at the fixer home", () => {
+		const text = agents();
+		expect(text).toMatch(/no scaled timeout without a measured slow step/);
+		expect(text).toContain('`docs/pi-lens-fixer.md` "Flaky tests"');
+		expect(text).not.toContain("3/p consecutive clean runs");
+	});
+});
