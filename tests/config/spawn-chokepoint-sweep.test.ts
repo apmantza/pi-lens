@@ -100,8 +100,8 @@ const ADMITTED: Readonly<Record<string, Admission>> = {
 	},
 	"clients/lsp/launch.ts#nodeSpawn": {
 		reason:
-			"the LSP launcher's own starts (trySpawn's shell and direct arms): its PATH scan and child PATH are trust-scoped (trustScopedEnvironment), a bare command resolving into the project, or into an LSP root not admitted for project code (#5674), is refused (refuseProjectLookup), and the served-root project-local gate (#4248) runs on top; plus its taskkill teardown, whose System32 path now resolves through `windowsExe`",
-		sites: 3,
+			"the LSP launcher's own starts (trySpawn's shell and direct arms): its PATH scan and child PATH are trust-scoped (trustScopedEnvironment), a bare command resolving into the project, or into an LSP root not admitted for project code (#5674), is refused (refuseProjectLookup), and the served-root project-local gate (#4248) runs on top",
+		sites: 2,
 		evidence:
 			"refuseProjectLookup(command, spawnCommand, cwd, env, reachesRoot)",
 	},

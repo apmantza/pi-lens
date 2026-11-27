@@ -190,7 +190,7 @@ const EXPECTED_FILES = 80;
 // 128 -> 127 (#5410 F4): oxlint's `vp --version` probe moved onto the shared
 // resolver, so its spawn site and its wrapper row go.
 // 127 -> 126 (#5410 D9): the lazy installer's direct spawns went with the file.
-const EXPECTED_DIRECT_SITES = 126;
+const EXPECTED_DIRECT_SITES = 125;
 /**
  * Every same-file spawn-routing wrapper call site the scan discovers. Pinned
  * as a LIST, not a count, because the list is the part round 2 got wrong: it
@@ -320,10 +320,6 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/lsp/client.ts#killProcessTree:5e14087c",
 		"LSP process-tree cleanup targets a pid and does not resolve project configuration",
-	],
-	[
-		"clients/lsp/launch.ts#stopLSP.killWindowsTree:7ff361c9",
-		"Windows LSP tree cleanup targets a pid and does not resolve project configuration",
 	],
 	[
 		"clients/dead-code-client.ts#PythonDeadCodeClient.analyze:a1223aae~edc51d69",

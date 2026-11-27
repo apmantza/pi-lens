@@ -55,11 +55,12 @@ import { _setServersForFileForTests } from "../../../clients/lsp/config.js";
 import { bounded } from "../../../clients/deadline-utils.js";
 import { runPersistentReverify } from "../../../clients/persistent-reverify.js";
 import {
+	killProcessTree,
 	createLSPClient,
 	type LSPClientInfo,
 } from "../../../clients/lsp/client.js";
 import { LSPService } from "../../../clients/lsp/index.js";
-import { type LSPProcess, stopLSP } from "../../../clients/lsp/launch.js";
+import { type LSPProcess } from "../../../clients/lsp/launch.js";
 import { normalizeMapKey } from "../../../clients/path-utils.js";
 import { LspRequestTimeoutError } from "../../../clients/lsp/request-timeout-error.js";
 import { spawnAbortScope } from "../../../clients/spawn-abort-scope.js";
@@ -159,7 +160,7 @@ async function withHangingServer(
 			/* ignore */
 		}
 		try {
-			await stopLSP(proc);
+			await killProcessTree(proc.process, proc.pid);
 		} catch {
 			/* ignore */
 		}
@@ -701,7 +702,7 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 			await received("textDocument/diagnostic");
 		} finally {
 			await client.shutdown().catch(() => {});
-			await stopLSP(proc).catch(() => {});
+			await killProcessTree(proc.process, proc.pid).catch(() => {});
 		}
 	}, 20_000);
 
@@ -786,7 +787,7 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 			expect(Date.now() - startedAt).toBeLessThan(2000);
 		} finally {
 			await client.shutdown().catch(() => {});
-			await stopLSP(proc).catch(() => {});
+			await killProcessTree(proc.process, proc.pid).catch(() => {});
 		}
 	}, 20_000);
 
@@ -821,7 +822,7 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 		} finally {
 			setAmbientAbortSignal(undefined);
 			await client.shutdown().catch(() => {});
-			await stopLSP(proc).catch(() => {});
+			await killProcessTree(proc.process, proc.pid).catch(() => {});
 		}
 	}, 20_000);
 

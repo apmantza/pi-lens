@@ -253,24 +253,6 @@ describe("the LSP teardowns name taskkill.exe through the seam", () => {
 		]);
 		expect(spawns[0]?.args).toEqual(["/F", "/T", "/PID", "4242"]);
 	});
-
-	it("stopLSP (clients/lsp/launch.ts) spawns the pinned taskkill.exe", async () => {
-		stubPlatform("win32");
-		const { spawns } = doubleChildProcess(() => new FakeChild(4301));
-		const { stopLSP } = await import("../../clients/lsp/launch.js");
-		const process_ = new FakeChild(4343);
-		const stopping = stopLSP({
-			process: process_,
-			pid: 4343,
-		} as unknown as Parameters<typeof stopLSP>[0]);
-		// The tree kill starts inside stopLSP's synchronous executor, so the spawn
-		// is already recorded here.
-		process_.emit("exit", 0, null);
-		await stopping;
-
-		expect(spawns[0]?.command).toBe(system32("taskkill.exe"));
-		expect(spawns[0]?.args).toEqual(["/F", "/T", "/PID", "4343"]);
-	});
 });
 
 describe("the reaper names taskkill.exe through the seam", () => {

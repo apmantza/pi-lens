@@ -17,9 +17,10 @@
  * before test B gets to look at it. The only cleanup is an `afterAll`, which
  * runs strictly after test B's assertion has already been made.
  */
+import { killProcessTree } from "../../clients/lsp/client.js";
 import { afterAll, describe, expect, it } from "vitest";
 import { waitFor } from "../clients/interleaving-kit.js";
-import { stopLSP } from "../../clients/lsp/launch.js";
+
 import { spawnFakeLspServer } from "./fake-lsp-server.js";
 
 function isAlive(pid: number): boolean {
@@ -180,7 +181,7 @@ describe("fake LSP pull/push ordering controls (#2824)", () => {
 			expect(ordered[0]?.method).toBe("textDocument/publishDiagnostics");
 			expect(ordered[1]?.id).toBe(2);
 		} finally {
-			await stopLSP(proc).catch(() => {});
+			await killProcessTree(proc.process, proc.pid).catch(() => {});
 		}
 	});
 
@@ -198,7 +199,7 @@ describe("fake LSP pull/push ordering controls (#2824)", () => {
 			expect(ordered[0]?.id).toBe(2);
 			expect(ordered[1]?.method).toBe("textDocument/publishDiagnostics");
 		} finally {
-			await stopLSP(proc).catch(() => {});
+			await killProcessTree(proc.process, proc.pid).catch(() => {});
 		}
 	});
 
@@ -216,7 +217,7 @@ describe("fake LSP pull/push ordering controls (#2824)", () => {
 				)?.params?.version,
 			).toBe(7);
 		} finally {
-			await stopLSP(proc).catch(() => {});
+			await killProcessTree(proc.process, proc.pid).catch(() => {});
 		}
 	});
 
@@ -245,7 +246,7 @@ describe("fake LSP pull/push ordering controls (#2824)", () => {
 				await waitForCompletion(frames);
 				expect(matches(frames.find((frame) => frame.id === 2))).toBe(true);
 			} finally {
-				await stopLSP(proc).catch(() => {});
+				await killProcessTree(proc.process, proc.pid).catch(() => {});
 			}
 		},
 	);
@@ -267,7 +268,7 @@ describe("fake LSP pull/push ordering controls (#2824)", () => {
 				),
 			).toBe(true);
 		} finally {
-			await stopLSP(proc).catch(() => {});
+			await killProcessTree(proc.process, proc.pid).catch(() => {});
 		}
 	});
 });

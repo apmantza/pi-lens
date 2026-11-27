@@ -1,3 +1,4 @@
+import { killProcessTree } from "../../../clients/lsp/client.js";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -259,11 +260,7 @@ describe.skipIf(!RUN_LIVE_CLASSIC_REPAIR)(
 			expect(typeScriptVersion(toolsDir)?.split(".")[0]).toBe("7");
 			expect(fs.existsSync(tsserverPathIn(toolsDir))).toBe(false);
 
-			const {
-				server,
-				launch,
-				client: clientModule,
-			} = await importServerBoundTo(home);
+			const { server, client: clientModule } = await importServerBoundTo(home);
 			server._resetClassicTsRepairForTests();
 
 			// `findTsserverPath` probes `process.cwd()/node_modules` before the
@@ -281,7 +278,9 @@ describe.skipIf(!RUN_LIVE_CLASSIC_REPAIR)(
 			}
 			expect(spawned).toBeDefined();
 			if (!spawned) return;
-			running.push(() => launch.stopLSP(spawned.process));
+			running.push(() =>
+				killProcessTree(spawned.process.process, spawned.process.pid),
+			);
 
 			// The repair fired exactly once, naming the TS 7 compiler it replaced.
 			const repairLines = sessionStartLines.filter((line) =>
@@ -352,7 +351,7 @@ describe.skipIf(!RUN_LIVE_CLASSIC_REPAIR)(
 			);
 			const beforeMtimeMs = fs.statSync(manifestPath).mtimeMs;
 
-			const { server, launch } = await importServerBoundTo(home);
+			const { server } = await importServerBoundTo(home);
 			server._resetClassicTsRepairForTests();
 
 			process.chdir(root);
@@ -364,7 +363,10 @@ describe.skipIf(!RUN_LIVE_CLASSIC_REPAIR)(
 			} finally {
 				process.chdir(originalCwd);
 			}
-			if (spawned) running.push(() => launch.stopLSP(spawned.process));
+			if (spawned)
+				running.push(() =>
+					killProcessTree(spawned.process.process, spawned.process.pid),
+				);
 
 			expect(
 				sessionStartLines.filter((line) => REPAIR_LOG.test(line)),

@@ -18,12 +18,12 @@
  * evaluation.
  */
 
+import { killProcessTree } from "../../../clients/lsp/client.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { stopLSP } from "../../../clients/lsp/launch.js";
 import { spawnFakeLspServer } from "../../support/fake-lsp-server.js";
 import { removeTempDirSync } from "../test-utils.js";
 
@@ -57,7 +57,7 @@ describe("live client accounting spans module evaluations (#2130)", () => {
 		});
 		cleanups.push(async () => {
 			await client.shutdown().catch(() => {});
-			await stopLSP(proc).catch(() => {});
+			await killProcessTree(proc.process, proc.pid).catch(() => {});
 		});
 	}
 
@@ -118,7 +118,7 @@ describe("live client accounting spans module evaluations (#2130)", () => {
 		);
 
 		await client.shutdown().catch(() => {});
-		await stopLSP(proc).catch(() => {});
+		await killProcessTree(proc.process, proc.pid).catch(() => {});
 
 		await vi.waitFor(
 			() => {

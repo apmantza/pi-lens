@@ -49,8 +49,8 @@ import {
 import { serializeWordIndex } from "../../clients/word-index.js";
 import { PathKeyedMap } from "../../clients/path-keyed-map.js";
 import { normalizeEphemeralMapKey } from "../../clients/path-utils.js";
-import { createLSPClient } from "../../clients/lsp/client.js";
-import { stopLSP } from "../../clients/lsp/launch.js";
+import { killProcessTree, createLSPClient } from "../../clients/lsp/client.js";
+
 import { spawnFakeLspServer } from "../support/fake-lsp-server.js";
 
 describe("shouldEmitMemorySample (cadence)", () => {
@@ -434,7 +434,7 @@ describe("collectMemorySampleSubsystems (O(1)/O(bounded-cache-size) live reads)"
 			);
 		} finally {
 			await client.shutdown().catch(() => {});
-			await stopLSP(proc).catch(() => {});
+			await killProcessTree(proc.process, proc.pid).catch(() => {});
 		}
 	}, 15_000);
 });
