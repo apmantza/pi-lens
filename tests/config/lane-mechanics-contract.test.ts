@@ -261,7 +261,8 @@ describe("flaky-test rules (#5806)", () => {
 	// a shape-85-compliant test reads as a budget raised without a measurement
 	// (review of #5809, F2). The trigger names its evidence and covers the two
 	// budgets the first scope left open: a new non-walking test, and a raise on
-	// an existing test that never failed (verify r2, V4).
+	// an existing test that never failed (verify r2, V4). The reviewer trigger
+	// must reach that raise too, not only the sentence after it (verify r3, W1).
 	it("scopes the measurement rule to a test with failure evidence and routes the other budgets", () => {
 		const fixer = fixerSection();
 		expect(fixer).toMatch(
@@ -282,6 +283,9 @@ describe("flaky-test rules (#5806)", () => {
 		);
 		expect(reviewer).toMatch(
 			/A budget raised on an existing test with no failure to name is not a flake fix; ask for the measurement that motivated it/,
+		);
+		expect(reviewer).toMatch(
+			/On a PR that changes the budget, wait, retry, skip or quarantine of a test that failed \(a failing CI run id or a linked flake issue names it\), that raises the budget of an existing test, or that closes or deletes a flaky test, read/,
 		);
 	});
 
