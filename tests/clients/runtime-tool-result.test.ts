@@ -167,12 +167,19 @@ beforeAll(async () => {
 		);
 		// #5798 (CodeRabbit PRRT_kwDORt8rec68oegW): an unquoted path split on a
 		// space in TMPDIR, so the warm-up silently captured nothing and the cold
-		// cost stayed in the first case. Any pre_edit_capture row proves the
-		// capture ran. The guard does not require "seeded": the 1500 ms spanless
-		// bound may abandon a slow runner's capture, and a seeded-only guard would
-		// flake there.
+		// cost stayed in the first case. The guard admits the results that ran
+		// the cold capture path: `seeded` (the linters ran and installed the
+		// seed) and `abandoned` (the 1500 ms spanless bound gave up while the
+		// capture, and its cold cost, was still running; a seeded-only guard
+		// would flake on a slow runner). `discarded` ran the linters too
+		// (integration.ts `dispatchSeedLanes`, then a late check dropped the
+		// seed). `skipped` returns before any linter runs, and `failed` is a
+		// capture that threw, so neither completed the warm-up and both red.
 		expect(logLatency).toHaveBeenCalledWith(
-			expect.objectContaining({ phase: "pre_edit_capture" }),
+			expect.objectContaining({
+				phase: "pre_edit_capture",
+				result: expect.stringMatching(/^(seeded|abandoned|discarded)$/),
+			}),
 		);
 	} finally {
 		// The warm-up's own degradation row must not reach a case's ledger read.
