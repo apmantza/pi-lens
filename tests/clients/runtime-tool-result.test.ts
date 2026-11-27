@@ -6,7 +6,15 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import { CacheManager } from "../../clients/cache-manager.js";
 import { evaluateGitGuard } from "../../clients/git-guard.js";
 import {
@@ -121,6 +129,44 @@ vi.mock("../../clients/pipeline.js", () => ({
 const notifyExternalFileChange = vi.hoisted(() => vi.fn(async () => undefined));
 const readdirMock = vi.mocked(fsp.readdir);
 const realReaddir = readdirMock.getMockImplementation()!;
+
+// #5798: the first bash tool_call that touches a supported source file pays
+// the one-time costs of its pre-edit capture (the tree-sitter grammar and
+// query compile, the dispatch and analyzer module loads) inside whichever case
+// reaches it first, against the 5 s test budget. On a Windows runner that
+// first case timed out (#5798, six runs). The costs are per process, so one
+// throwaway call here moves them into hook time and every case sees the warm
+// path. `runPipeline` is mocked and never runs.
+beforeAll(async () => {
+	const env = setupTestEnvironment("pi-lens-5798-warm-");
+	try {
+		const filePath = createTempFile(
+			env.tmpDir,
+			"warm.ts",
+			"export const warm = 1;\n",
+		);
+		const runtime = new RuntimeCoordinator();
+		runtime.projectRoot = env.tmpDir;
+		await handleToolCall({
+			event: {
+				toolName: "bash",
+				toolCallId: "5798-warm",
+				input: { command: `sed -i 's/warm/cold/' ${filePath}` },
+			},
+			ctx: { cwd: env.tmpDir },
+			lensEnabled: true,
+			getFlag: () => false,
+			dbg: () => {},
+			runtime,
+			cacheManager: new CacheManager(false),
+			ensureLSPConfigInitialized: async () => {},
+			updateLspStatus: () => {},
+			resetLSPService: () => {},
+		} as any);
+	} finally {
+		env.cleanup();
+	}
+});
 
 beforeEach(async () => {
 	// `notifyExternalFileChange` is the spy above: the double answers it for the
