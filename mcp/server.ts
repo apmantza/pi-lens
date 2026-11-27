@@ -107,6 +107,7 @@ import {
 } from "../tools/module-report.js";
 import { createSymbolSearchTool } from "../tools/symbol-search.js";
 import {
+	getMcpSessionConfigEpoch,
 	invalidateMcpSessionIfConfigChanged,
 	peekMcpSessionRuntime,
 } from "../clients/mcp/session.js";
@@ -166,6 +167,7 @@ function resolveDefaultCwd(): string {
 
 const DEFAULT_CWD = path.resolve(resolveDefaultCwd());
 const lspReadyCwds = new Set<string>();
+let observedMcpConfigEpoch = getMcpSessionConfigEpoch();
 
 // Where THIS server's code lives — used to resolve the fresh-mode worker (same
 // build layout as the server) and the pi-lens repo root (for rebuilds).
@@ -248,6 +250,11 @@ const REPO_ROOT = process.env.PI_LENS_MCP_REPO_ROOT
 async function ensureReady(cwd: string): Promise<void> {
 	const normalized = path.resolve(cwd);
 	const configChanged = invalidateMcpSessionIfConfigChanged(normalized);
+	const currentConfigEpoch = getMcpSessionConfigEpoch();
+	if (configChanged || currentConfigEpoch !== observedMcpConfigEpoch) {
+		lspReadyCwds.clear();
+		observedMcpConfigEpoch = currentConfigEpoch;
+	}
 	// #2052 R1: the session-root registry evicts old roots at a fixed cap. The
 	// readiness memo is only a fast path; consult the registry so an evicted
 	// root can initialize again when it is used later.

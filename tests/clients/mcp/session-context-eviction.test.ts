@@ -47,6 +47,7 @@ vi.mock("../../../clients/ast-grep-client.js", () => ({
 import {
 	_peekPendingMcpSessionRuntime,
 	_resetMcpSessionContext,
+	getMcpSessionConfigEpoch,
 	getMcpSessionContext,
 	invalidateMcpSessionIfConfigChanged,
 	peekMcpSessionRuntime,
@@ -290,6 +291,116 @@ describe("getMcpSessionContext memo eviction (#1570)", () => {
 
 			const reasons = await scopeEndReasons();
 			expect(reasons).toEqual(Array(6).fill("mcp-session-reset"));
+		} finally {
+			restore();
+		}
+	});
+
+	it("preserves secondary cwd baselines across config-change invalidation and bumps config epoch", async () => {
+		const { home, restore } = pinFixtureHome("mcp-eviction-multi-cwd");
+		try {
+			const globalConfigPath = path.join(home, ".pi-lens", "config.json");
+			setConfigPath(globalConfigPath);
+			const cwdA = path.join(home, "proj-a");
+			const cwdB = path.join(home, "proj-b");
+			fs.mkdirSync(cwdA, { recursive: true });
+			fs.mkdirSync(cwdB, { recursive: true });
+
+			_resetMcpSessionContext();
+			const epoch0 = getMcpSessionConfigEpoch();
+
+			expect(invalidateMcpSessionIfConfigChanged(cwdA)).toBe(false);
+			expect(invalidateMcpSessionIfConfigChanged(cwdB)).toBe(false);
+			expect(getMcpSessionConfigEpoch()).toBe(epoch0);
+
+			loadBootstrapClients.mockResolvedValue({ __stub: "clients" });
+			await getMcpSessionContext();
+
+			// Global config change must invalidate cwdA AND keep cwdB's baseline so cwdB also detects the change.
+			fs.mkdirSync(path.dirname(globalConfigPath), { recursive: true });
+			fs.writeFileSync(
+				globalConfigPath,
+				JSON.stringify({ lsp: { disabledServers: ["typos"] } }),
+				"utf8",
+			);
+			expect(invalidateMcpSessionIfConfigChanged(cwdA)).toBe(true);
+			const epoch1 = getMcpSessionConfigEpoch();
+			expect(epoch1).toBeGreaterThan(epoch0);
+			expect(invalidateMcpSessionIfConfigChanged(cwdB)).toBe(true);
+			const epoch2 = getMcpSessionConfigEpoch();
+			expect(epoch2).toBeGreaterThan(epoch1);
+
+			// Simultaneous project config edits in cwdA and cwdB must invalidate both.
+			fs.writeFileSync(
+				path.join(cwdA, ".pi-lens.json"),
+				JSON.stringify({ lsp: { warmFiles: ["a.ts"] } }),
+				"utf8",
+			);
+			fs.writeFileSync(
+				path.join(cwdB, ".pi-lens.json"),
+				JSON.stringify({ lsp: { disabledServers: ["marksman"] } }),
+				"utf8",
+			);
+			expect(invalidateMcpSessionIfConfigChanged(cwdA)).toBe(true);
+			expect(invalidateMcpSessionIfConfigChanged(cwdB)).toBe(true);
+			expect(getMcpSessionConfigEpoch()).toBeGreaterThan(epoch2);
+		} finally {
+			restore();
+		}
+	});
+
+	it("retains active workspaces past 128 other cwds and catches global config edits past 1024-entry LRU capacity", async () => {
+		const { home, restore } = pinFixtureHome("mcp-eviction-lru-global");
+		try {
+			const globalConfigPath = path.join(home, ".pi-lens", "config.json");
+			setConfigPath(globalConfigPath);
+			const cwdA = path.join(home, "proj-a");
+			const projectConfigA = path.join(cwdA, ".pi-lens.json");
+			fs.mkdirSync(cwdA, { recursive: true });
+			fs.writeFileSync(
+				projectConfigA,
+				JSON.stringify({ lsp: { warmFiles: ["a.ts"] } }),
+				"utf8",
+			);
+
+			_resetMcpSessionContext();
+			expect(invalidateMcpSessionIfConfigChanged(cwdA)).toBe(false);
+			loadBootstrapClients.mockResolvedValue({ __stub: "clients" });
+			const ctx1 = await getMcpSessionContext();
+
+			// Probe 200 distinct directories (> old 128 FIFO cap).
+			for (let i = 0; i < 200; i++) {
+				const other = path.join(home, `other-${i}`);
+				fs.mkdirSync(other, { recursive: true });
+				expect(invalidateMcpSessionIfConfigChanged(other)).toBe(false);
+			}
+
+			// Project config edit on cwdA must still invalidate and retire ctx1.
+			fs.writeFileSync(
+				projectConfigA,
+				JSON.stringify({ lsp: { warmFiles: ["b.ts"] } }),
+				"utf8",
+			);
+			expect(invalidateMcpSessionIfConfigChanged(cwdA)).toBe(true);
+			expect(ctx1.runtime.sessionScope.isLive()).toBe(false);
+
+			// Probe 1030 distinct directories (> 1024 LRU cap) so cwdA is evicted from LRU.
+			const ctx2 = await getMcpSessionContext();
+			for (let i = 200; i < 1230; i++) {
+				const other = path.join(home, `other-${i}`);
+				fs.mkdirSync(other, { recursive: true });
+				expect(invalidateMcpSessionIfConfigChanged(other)).toBe(false);
+			}
+
+			// Even after cwdA was evicted from the 1024-entry LRU, a global config edit must still reset.
+			fs.mkdirSync(path.dirname(globalConfigPath), { recursive: true });
+			fs.writeFileSync(
+				globalConfigPath,
+				JSON.stringify({ lsp: { disabledServers: ["typos"] } }),
+				"utf8",
+			);
+			expect(invalidateMcpSessionIfConfigChanged(cwdA)).toBe(true);
+			expect(ctx2.runtime.sessionScope.isLive()).toBe(false);
 		} finally {
 			restore();
 		}

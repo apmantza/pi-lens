@@ -2159,3 +2159,98 @@ describe("non-pi workspace trust (#4300)", () => {
 		}
 	}, 60_000);
 });
+
+describe("multi-cwd global config invalidation in MCP server (#5394)", () => {
+	it("reloads LSP config for secondary workspaces after global config changes", async () => {
+		const env = setupTestEnvironment("pi-lens-mcp-multicwd-");
+		const home = path.join(env.tmpDir, "home");
+		const globalConfigPath = path.join(home, "config.json");
+		fs.mkdirSync(home, { recursive: true });
+		fs.writeFileSync(globalConfigPath, JSON.stringify({}), "utf8");
+
+		const shim = path.join(env.tmpDir, "lua-server.mjs");
+		fs.writeFileSync(
+			shim,
+			[
+				'process.env.FAKE_LSP_NO_DIAGNOSTIC_PROVIDER = "1";',
+				`await import(${JSON.stringify(new URL("../fixtures/fake-lsp-server.mjs", import.meta.url).href)});`,
+				"",
+			].join("\n"),
+		);
+
+		const makeProj = (name: string) => {
+			const dir = path.join(env.tmpDir, name);
+			fs.mkdirSync(path.join(dir, ".pi-lens"), { recursive: true });
+			fs.writeFileSync(path.join(dir, ".luarc.json"), "{}\n");
+			fs.writeFileSync(
+				path.join(dir, ".pi-lens", "lsp.json"),
+				JSON.stringify({
+					servers: {
+						emmylua: {
+							name: "test-lua",
+							extensions: [".lua"],
+							command: process.execPath,
+							args: [shim],
+							rootMarkers: [".luarc.json"],
+						},
+					},
+					disabledServers: ["lua", "ast-grep", "typos", "opengrep"],
+				}),
+			);
+			const file = path.join(dir, "probe.lua");
+			fs.writeFileSync(file, "local x = 1\n");
+			return { dir, file };
+		};
+
+		const projA = makeProj("proj-a");
+		const projB = makeProj("proj-b");
+		const child = new McpHarness({
+			cwd: projA.dir,
+			env: {
+				PI_LENS_HOME: home,
+				PI_LENS_CONFIG_PATH: globalConfigPath,
+				PI_LENS_TEST_MODE: "0",
+			},
+		});
+
+		try {
+			await child.request(53940, "initialize", {
+				protocolVersion: "2025-06-18",
+				capabilities: {},
+				clientInfo: { name: "multicwd-test", version: "0" },
+			});
+			child.notify("notifications/initialized");
+
+			const navText = async (id: number, cwd: string, file: string) => {
+				const res = await child.request(id, "tools/call", {
+					name: "pilens_lsp_navigation",
+					arguments: { cwd, operation: "documentSymbol", path: file },
+				});
+				return (res.result as { content: { text: string }[] }).content[0].text;
+			};
+
+			const beforeA = await navText(53941, projA.dir, projA.file);
+			const beforeB = await navText(53942, projB.dir, projB.file);
+			expect(beforeA).not.toContain(
+				"disabled in config by lsp.disabledServers",
+			);
+			expect(beforeB).not.toContain(
+				"disabled in config by lsp.disabledServers",
+			);
+
+			fs.writeFileSync(
+				globalConfigPath,
+				JSON.stringify({ lsp: { disabledServers: ["emmylua"] } }),
+				"utf8",
+			);
+
+			const afterA = await navText(53943, projA.dir, projA.file);
+			const afterB = await navText(53944, projB.dir, projB.file);
+			expect(afterA).toContain("disabled in config by lsp.disabledServers");
+			expect(afterB).toContain("disabled in config by lsp.disabledServers");
+		} finally {
+			child.dispose();
+			env.cleanup();
+		}
+	}, 60_000);
+});

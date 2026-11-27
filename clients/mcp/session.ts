@@ -20,7 +20,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import { AstGrepClient } from "../ast-grep-client.js";
-import { BoundedFifoMap } from "../bounded-cache.js";
+import { BoundedFifoMap, BoundedLruCache } from "../bounded-cache.js";
 import {
 	type BootstrapClients,
 	loadBootstrapClients,
@@ -32,6 +32,7 @@ import {
 	type TurnStateOwner,
 } from "../cache-manager.js";
 import {
+	type ConfigSourceDigest,
 	configSourcesFingerprint,
 	resolvePiLensConfig,
 } from "../config-resolve.js";
@@ -79,7 +80,9 @@ let contextPromise: Promise<McpSessionContext> | undefined;
 let resolvedRuntime: RuntimeCoordinator | undefined;
 let pendingRuntime: RuntimeCoordinator | undefined;
 const bootstrapGeneration = createGenerationSource("mcp-session-bootstrap");
-const inspectedConfigFingerprints = new BoundedFifoMap<string, string>(128);
+const inspectedConfigFingerprints = new BoundedLruCache<string, string>(1024);
+let lastGlobalConfigFingerprint: string | undefined;
+let mcpSessionConfigEpoch = 0;
 
 function retireMcpScope(
 	scope: SessionScope,
@@ -152,20 +155,29 @@ export function _peekPendingMcpSessionRuntime():
 	return pendingRuntime;
 }
 
-function resetMcpSessionContext(): void {
+function resetMcpSessionContext(clearFingerprints = false): void {
 	bootstrapGeneration.bump();
+	mcpSessionConfigEpoch += 1;
 	const currentResolved = resolvedRuntime;
 	const currentPending = pendingRuntime;
 	contextPromise = undefined;
 	resolvedRuntime = undefined;
 	pendingRuntime = undefined;
-	inspectedConfigFingerprints.clear();
+	if (clearFingerprints) {
+		inspectedConfigFingerprints.clear();
+		lastGlobalConfigFingerprint = undefined;
+	}
 	if (currentResolved) {
 		retireMcpScope(currentResolved.sessionScope, "mcp-session-reset");
 	}
 	if (currentPending && currentPending !== currentResolved) {
 		retireMcpScope(currentPending.sessionScope, "mcp-session-reset");
 	}
+}
+
+/** Monotonic counter incremented whenever `resetMcpSessionContext` runs. */
+export function getMcpSessionConfigEpoch(): number {
+	return mcpSessionConfigEpoch;
 }
 
 /**
@@ -183,22 +195,33 @@ export function invalidateMcpSessionIfConfigChanged(cwd: string): boolean {
 	const fingerprint = configSourcesFingerprint(
 		resolution.inspectedConfigSources,
 	);
+	const globalSources: ConfigSourceDigest[] = [];
+	for (const entry of resolution.inspectedConfigSources) {
+		if (entry.tier === "global") globalSources.push(entry);
+	}
+	const globalFingerprint = configSourcesFingerprint(globalSources);
+	const globalChanged =
+		lastGlobalConfigFingerprint !== undefined &&
+		lastGlobalConfigFingerprint !== globalFingerprint;
 	const previous = inspectedConfigFingerprints.get(cacheKey);
-	if (previous === undefined) {
+	if (previous === undefined && !globalChanged) {
 		inspectedConfigFingerprints.set(cacheKey, fingerprint);
+		lastGlobalConfigFingerprint = globalFingerprint;
 		return false;
 	}
-	if (previous === fingerprint) {
+	if (previous === fingerprint && !globalChanged) {
+		lastGlobalConfigFingerprint = globalFingerprint;
 		return false;
 	}
 	resetMcpSessionContext();
 	inspectedConfigFingerprints.set(cacheKey, fingerprint);
+	lastGlobalConfigFingerprint = globalFingerprint;
 	return true;
 }
 
 /** Test hook — drop the cached context so a fresh one is built next call. */
 export function _resetMcpSessionContext(): void {
-	resetMcpSessionContext();
+	resetMcpSessionContext(true);
 }
 
 const noop = (): void => {};

@@ -79,6 +79,7 @@ import {
 	_resetMcpSessionContext,
 	_resetTurnEndChain,
 	acknowledgeTurnEnd,
+	getMcpSessionConfigEpoch,
 	runSessionStart,
 	runTurnEnd,
 	runTurnEndForIpc,
@@ -148,6 +149,7 @@ describe("runSessionStart", () => {
 		).runtime;
 		expect(unchangedRuntime).toBe(startRuntime);
 
+		const epochBeforeChange = getMcpSessionConfigEpoch();
 		fs.writeFileSync(
 			path.join(tmpDir, ".pi-lens.json"),
 			JSON.stringify({ lsp: { warmFiles: ["src/index.ts"] } }),
@@ -157,6 +159,7 @@ describe("runSessionStart", () => {
 			handleTurnEnd.mock.calls[1][0] as { runtime: unknown }
 		).runtime;
 		expect(changedRuntime).not.toBe(startRuntime);
+		expect(getMcpSessionConfigEpoch()).toBeGreaterThan(epochBeforeChange);
 	});
 });
 
