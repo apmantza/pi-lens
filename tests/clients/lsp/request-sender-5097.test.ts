@@ -377,13 +377,16 @@ describe("one request sender owns cancel and release (#5097)", () => {
 // real-spawn file. Recurrence: review F1, where the gate's proxy for this fact
 // (the service's last-known cache) forgot a finding after a partial touch.
 describe("a pushed finding stays unwithdrawn until the server withdraws it (#5775)", () => {
+	/** Polls until `assertion` passes: the publishes land on the server's clock. */
+	const until = (assertion: () => void) =>
+		vi.waitFor(assertion, { timeout: 5000, interval: 10 });
+
 	it("a didChange clears the cached finding but not the record", async () => {
 		await withHangingServer(
 			"",
 			async (ctx) => {
-				await vi.waitFor(
-					() => expect(ctx.client.getDiagnostics(ctx.file)).toHaveLength(1),
-					{ timeout: 5000, interval: 10 },
+				await until(() =>
+					expect(ctx.client.getDiagnostics(ctx.file)).toHaveLength(1),
 				);
 				expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(true);
 				// The fixture publishes only on didOpen, so the change is never answered.
@@ -401,19 +404,11 @@ describe("a pushed finding stays unwithdrawn until the server withdraws it (#577
 			"",
 			async (ctx) => {
 				// The finding first, then the empty push 500 ms later withdraws it.
-				await vi.waitFor(
-					() =>
-						expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(
-							true,
-						),
-					{ timeout: 5000, interval: 10 },
+				await until(() =>
+					expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(true),
 				);
-				await vi.waitFor(
-					() =>
-						expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(
-							false,
-						),
-					{ timeout: 5000, interval: 10 },
+				await until(() =>
+					expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(false),
 				);
 				expect(
 					ctx.client.getAllDiagnostics().get(normalizeMapKey(ctx.file)),
@@ -434,21 +429,13 @@ describe("a pushed finding stays unwithdrawn until the server withdraws it (#577
 		await withHangingServer(
 			"",
 			async (ctx) => {
-				await vi.waitFor(
-					() =>
-						expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(
-							true,
-						),
-					{ timeout: 5000, interval: 10 },
+				await until(() =>
+					expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(true),
 				);
 				// didChange answers with the sequence alone: one empty push.
 				await ctx.client.notify.change(ctx.file, "function greet() { }\n");
-				await vi.waitFor(
-					() =>
-						expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(
-							false,
-						),
-					{ timeout: 5000, interval: 10 },
+				await until(() =>
+					expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(false),
 				);
 			},
 			{

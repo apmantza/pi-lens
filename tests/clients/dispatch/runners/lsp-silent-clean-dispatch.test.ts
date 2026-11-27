@@ -1,3 +1,4 @@
+// flake-shape: in-process-mock — the real auxiliary enablement also reads the machine-wide LSP budget and subagent mode, so only the enabled list is fixed; the runner itself is real
 /**
  * The dispatch boundary: what a CLEAN markdown edit reports to the agent.
  *
@@ -18,6 +19,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import lspRunner from "../../../../clients/dispatch/runners/lsp.js";
+import { makeLspServiceDouble } from "../../../support/lsp-service-double.js";
 import { installLspService } from "../../../support/lsp-service-seam.js";
 import { removeTempDirSync } from "../../test-utils.js";
 
@@ -34,16 +36,14 @@ vi.mock(
 );
 
 const touchFile = vi.fn();
-const attachedDiagnostics = vi.fn();
 
 function installService(): void {
-	installLspService({
-		supportsLSP: () => true,
-		touchFile,
-		tryWarmAttachedDiagnostics: attachedDiagnostics,
-		// The remaining member the runner can reach is inert for this path.
-		codeAction: vi.fn(),
-	} as never);
+	installLspService(
+		makeLspServiceDouble({
+			supportsLSP: () => true,
+			touchFile,
+		}) as never,
+	);
 }
 
 describe("LSP dispatch runner — a clean markdown edit reports a verdict, not a gap", () => {
@@ -51,7 +51,6 @@ describe("LSP dispatch runner — a clean markdown edit reports a verdict, not a
 
 	beforeEach(() => {
 		touchFile.mockReset();
-		attachedDiagnostics.mockReset().mockResolvedValue({ available: false });
 		installService();
 		cwd = fs.realpathSync(
 			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-dispatch-silent-")),

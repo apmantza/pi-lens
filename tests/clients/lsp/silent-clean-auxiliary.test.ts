@@ -1,3 +1,6 @@
+// flake-shape: raw-timer-wait — a client double stands for a server silent through the diagnostics wait, so its wait sleeps that budget (50 ms); an immediate answer is a different outcome and never reaches the gate
+// flake-shape: in-process-mock — a language server is a spawned process; each case needs a primary that is wedged, throws on its probe, advertises the tsserver command or lacks a method, which no real server does on demand
+// flake-shape: service-double — the gate reads the client's ping, push-finding record and capability answers, set per case to drive each refusal; the real-wire cases are in request-sender-5097.test.ts
 /**
  * A clean markdown edit pays the full silent-on-clean wait and is then reported
  * inconclusive, because the clean-confirm gate never covers the scope the
@@ -38,18 +41,20 @@ const createLSPClient = vi.fn();
 // Whole-module mock, like `silent-clean-confirm.test.ts`: the suite's ratchet
 // (`tests/config/vi-mock-export-sweep.test.ts`, #2281) counts omitted module
 // exports, so naming one member here would register a new regression row.
-//
-// The config module is mocked too, and the real one is NOT consulted: through
-// the registry seam the production config reaches the real server list, whose
-// rows probe for a launcher (`which`, `npm`, and the server itself) and start
-// real child processes — which the #5100 real-spawn census refuses from a test
-// with no admission. `getServerInitOverride` answers the one other member
-// `LSPService` calls on this module.
 vi.mock("../../../clients/lsp/client.js", () => ({ createLSPClient }));
-vi.mock("../../../clients/lsp/config.js", () => ({
-	getServersForFileWithConfig,
-	getServerInitOverride: vi.fn().mockReturnValue(undefined),
-}));
+
+/**
+ * A fresh service whose server list is this test's, through the config
+ * module's selection seam (`_setServersForFileForTests`), so no real server
+ * row probes for a launcher. Imported after `vi.resetModules()`, so the seam
+ * is set on the same module instance the service reads.
+ */
+async function loadService() {
+	const config = await import("../../../clients/lsp/config.js");
+	config._setServersForFileForTests(getServersForFileWithConfig);
+	const { LSPService } = await import("../../../clients/lsp/index.js");
+	return new LSPService();
+}
 
 function makeServer(id: string, ext: string, root: string, role?: "auxiliary") {
 	return {
@@ -234,8 +239,11 @@ describe("with-auxiliary silent-clean confirm (per-edit dispatch path)", () => {
 		// Flat tiny budget: the mocked waits sleep in real time.
 		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "50";
 	});
-	afterEach(() => {
+	afterEach(async () => {
 		delete process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS;
+		(await import("../../../clients/lsp/config.js"))._setServersForFileForTests(
+			undefined,
+		);
 		removeTempDirSync(tmp);
 	});
 
@@ -253,8 +261,7 @@ describe("with-auxiliary silent-clean confirm (per-edit dispatch path)", () => {
 				: makeSilentPushOnlyClient("marksman", tmp).client,
 		);
 
-		const { LSPService } = await import("../../../clients/lsp/index.js");
-		const service = new LSPService();
+		const service = await loadService();
 		const options = {
 			diagnostics: "document" as const,
 			collectDiagnostics: true as const,
@@ -295,8 +302,7 @@ describe("with-auxiliary silent-clean confirm (per-edit dispatch path)", () => {
 				: wedged.client,
 		);
 
-		const { LSPService } = await import("../../../clients/lsp/index.js");
-		const service = new LSPService();
+		const service = await loadService();
 		// Warm first (#5775 review F3): a cold touch is refused on the inherited
 		// client check and would never reach the liveness probe this case is about.
 		await service.touchFile(filePath, "# hi\n", perEditOptions);
@@ -328,8 +334,7 @@ describe("with-auxiliary silent-clean confirm (per-edit dispatch path)", () => {
 				: broken.client,
 		);
 
-		const { LSPService } = await import("../../../clients/lsp/index.js");
-		const service = new LSPService();
+		const service = await loadService();
 		const options = {
 			diagnostics: "document" as const,
 			collectDiagnostics: true as const,
@@ -381,8 +386,7 @@ describe("with-auxiliary silent-clean confirm (per-edit dispatch path)", () => {
 				: makeAnsweringClient("ast-grep", tmp, filePath).client,
 		);
 
-		const { LSPService } = await import("../../../clients/lsp/index.js");
-		const service = new LSPService();
+		const service = await loadService();
 		const options = { ...perEditOptions, auxiliaryServerIds: ["ast-grep"] };
 		// Warm first (#5775 review F3): only an inherited client reaches the class
 		// check, so a cold touch would pass this case whatever the class said.
@@ -412,8 +416,7 @@ describe("with-auxiliary silent-clean confirm (per-edit dispatch path)", () => {
 				: makeSilentPushOnlyClient("lua", tmp).client,
 		);
 
-		const { LSPService } = await import("../../../clients/lsp/index.js");
-		const service = new LSPService();
+		const service = await loadService();
 
 		const luaOptions = {
 			diagnostics: "document" as const,
@@ -451,8 +454,7 @@ describe("with-auxiliary silent-clean confirm (per-edit dispatch path)", () => {
 				: straggler,
 		);
 
-		const { LSPService } = await import("../../../clients/lsp/index.js");
-		const service = new LSPService();
+		const service = await loadService();
 		// Warm first (#5775 review F3), as in the TypeScript case above.
 		await service.touchFile(filePath, "# hi\n", perEditOptions);
 
@@ -479,8 +481,7 @@ describe("with-auxiliary silent-clean confirm (per-edit dispatch path)", () => {
 			makePreviouslyDirtyClient("marksman", tmp, filePath),
 		);
 
-		const { LSPService } = await import("../../../clients/lsp/index.js");
-		const service = new LSPService();
+		const service = await loadService();
 
 		const priming = await service.touchFile(
 			filePath,
@@ -528,8 +529,7 @@ describe("with-auxiliary silent-clean confirm (per-edit dispatch path)", () => {
 				: unknown,
 		);
 
-		const { LSPService } = await import("../../../clients/lsp/index.js");
-		const service = new LSPService();
+		const service = await loadService();
 		await service.touchFile(filePath, "# hi\n", perEditOptions);
 		const result = await service.touchFile(filePath, "# hi\n", perEditOptions);
 
@@ -558,8 +558,7 @@ describe("with-auxiliary silent-clean confirm (per-edit dispatch path)", () => {
 				: unprobed,
 		);
 
-		const { LSPService } = await import("../../../clients/lsp/index.js");
-		const service = new LSPService();
+		const service = await loadService();
 		await service.touchFile(filePath, "# hi\n", perEditOptions);
 		const result = await service.touchFile(filePath, "# hi\n", perEditOptions);
 
