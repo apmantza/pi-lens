@@ -1,7 +1,16 @@
 import * as fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import { LANGUAGES } from "../../clients/language-registry.js";
 import { rootMarkersForFile } from "../../clients/language-profile.js";
 import {
@@ -25,87 +34,139 @@ let pathUtils: typeof import("../../clients/path-utils.js");
 let previousHome: string | undefined;
 
 // TEMP #5802 timing instrumentation; removed before ready.
-// Wraps the async fs.promises ops the root walk uses, so a stalled cell names
-// the op and path. `syncBuiltinESMExports` makes the named imports in
-// clients/lsp/server.ts see the wrappers.
-async function pl5802WithFsProbe<T>(
-	tag: string,
-	work: () => Promise<T>,
-): Promise<T> {
+// File-wide probe over the async fs.promises ops: counts per window (between
+// cells and inside one), the in-flight count at a cell's start, and any call
+// over 100 ms, so a stalled cell names who held the libuv pool.
+// `syncBuiltinESMExports` makes the named imports in clients/lsp/server.ts see
+// the wrappers.
+type Pl5802Row = { n: number; total: number; max: number; maxPath: string };
+const pl5802Probe = (() => {
 	const table = fs.promises as unknown as Record<
 		string,
 		(...args: unknown[]) => Promise<unknown>
 	>;
-	const ops = ["stat", "lstat", "readdir", "access", "realpath", "readFile"];
+	const ops = [
+		"stat",
+		"lstat",
+		"readdir",
+		"access",
+		"realpath",
+		"readFile",
+		"writeFile",
+		"appendFile",
+		"open",
+		"mkdir",
+		"rm",
+		"rename",
+		"unlink",
+		"rmdir",
+		"copyFile",
+		"opendir",
+		"mkdtemp",
+		"utimes",
+	];
 	const original = new Map<string, (...args: unknown[]) => Promise<unknown>>();
-	const tally = new Map<
-		string,
-		{ n: number; total: number; max: number; maxPath: string }
-	>();
-	for (const op of ops) {
-		const real = table[op];
-		original.set(op, real);
-		table[op] = async (...args: unknown[]) => {
-			const t = performance.now();
-			try {
-				return await real(...args);
-			} finally {
-				const ms = performance.now() - t;
-				const row = tally.get(op) ?? { n: 0, total: 0, max: 0, maxPath: "" };
-				row.n++;
-				row.total += ms;
-				if (ms > row.max) {
-					row.max = ms;
-					row.maxPath = String(args[0]);
-				}
-				tally.set(op, row);
-				if (ms > 100) {
-					console.log(
-						"PL5802-SLOWFS " +
-							tag +
-							" " +
-							op +
-							" " +
-							Math.round(ms) +
-							"ms " +
-							String(args[0]),
-					);
-				}
+	let inFlight = 0;
+	const inFlightByOp = new Map<string, number>();
+	let windowRows = new Map<string, Pl5802Row>();
+	let slowLogged = 0;
+	const describeWindow = () =>
+		[...windowRows]
+			.map(
+				([op, row]) =>
+					op +
+					" n=" +
+					row.n +
+					" total=" +
+					Math.round(row.total) +
+					"ms max=" +
+					Math.round(row.max) +
+					"ms",
+			)
+			.join(" | ");
+	const describeInFlight = () =>
+		"inFlight=" +
+		inFlight +
+		" " +
+		[...inFlightByOp]
+			.filter(([, n]) => n > 0)
+			.map(([op, n]) => op + ":" + n)
+			.join(",");
+	return {
+		install() {
+			for (const op of ops) {
+				const real = table[op];
+				if (typeof real !== "function") continue;
+				original.set(op, real);
+				table[op] = async (...args: unknown[]) => {
+					const t = performance.now();
+					inFlight++;
+					inFlightByOp.set(op, (inFlightByOp.get(op) ?? 0) + 1);
+					try {
+						return await real(...args);
+					} finally {
+						inFlight--;
+						inFlightByOp.set(op, (inFlightByOp.get(op) ?? 1) - 1);
+						const ms = performance.now() - t;
+						const row = windowRows.get(op) ?? {
+							n: 0,
+							total: 0,
+							max: 0,
+							maxPath: "",
+						};
+						row.n++;
+						row.total += ms;
+						if (ms > row.max) {
+							row.max = ms;
+							row.maxPath = String(args[0]);
+						}
+						windowRows.set(op, row);
+						if (ms > 100 && slowLogged++ < 60) {
+							console.log(
+								"PL5802-SLOWFS " +
+									op +
+									" " +
+									Math.round(ms) +
+									"ms " +
+									String(args[0]),
+							);
+						}
+					}
+				};
 			}
-		};
-	}
-	syncBuiltinESMExports();
-	try {
-		return await work();
-	} finally {
-		for (const op of ops) table[op] = original.get(op) as never;
-		syncBuiltinESMExports();
-		console.log(
-			"PL5802-FS " +
-				tag +
-				" " +
-				[...tally]
-					.map(
-						([op, row]) =>
-							op +
-							" n=" +
-							row.n +
-							" total=" +
-							Math.round(row.total) +
-							"ms max=" +
-							Math.round(row.max) +
-							"ms",
-					)
-					.join(" | "),
-		);
-	}
-}
+			syncBuiltinESMExports();
+		},
+		uninstall() {
+			for (const [op, real] of original) table[op] = real;
+			original.clear();
+			syncBuiltinESMExports();
+		},
+		carryIn(name: string) {
+			console.log(
+				"PL5802-CARRYIN " +
+					name +
+					" " +
+					describeInFlight() +
+					" | between cells: " +
+					describeWindow(),
+			);
+			windowRows = new Map();
+		},
+		endCell(name: string) {
+			console.log(
+				"PL5802-FSWIN " +
+					name +
+					" " +
+					describeInFlight() +
+					" | in cell: " +
+					describeWindow(),
+			);
+			windowRows = new Map();
+		},
+	};
+})();
 
-function pl5802Sequence(tag: string, base: string): Promise<string> {
-	return pl5802WithFsProbe(tag, () => pl5802SequenceBody(tag, base));
-}
-
-async function pl5802SequenceBody(tag: string, base: string): Promise<string> {
+async function pl5802Sequence(tag: string, base: string): Promise<string> {
 	const laps: string[] = [];
 	let t0 = performance.now();
 	let elu0 = performance.eventLoopUtilization();
@@ -207,7 +268,10 @@ async function pl5802SequenceBody(tag: string, base: string): Promise<string> {
 // TEMP #5802 timing instrumentation; removed before ready.
 let cellStartedAt = 0;
 
-beforeEach(async () => {
+beforeAll(() => pl5802Probe.install());
+afterAll(() => pl5802Probe.uninstall());
+
+beforeEach(async (ctx) => {
 	// #4560: this home is a scratch PI_LENS_HOME, and the markerless-root
 	// cells need it to stay out of the project-root walk.
 	home = setupTestEnvironment("pi-lens-tool-cwd-", {
@@ -224,6 +288,7 @@ beforeEach(async () => {
 	ledger.resetDegradationLedger();
 	// TEMP #5802 timing instrumentation; removed before ready.
 	cellStartedAt = performance.now();
+	pl5802Probe.carryIn(ctx.task.name);
 });
 
 // Log writes under this home are queued; the drain lets them land before the
@@ -232,6 +297,7 @@ useTrackedTempDirs("pi-lens-tool-cwd-");
 
 afterEach((ctx) => {
 	// TEMP #5802 timing instrumentation; removed before ready.
+	pl5802Probe.endCell(ctx.task.name);
 	console.log(
 		"PL5802-CELL " +
 			Math.round(performance.now() - cellStartedAt) +
