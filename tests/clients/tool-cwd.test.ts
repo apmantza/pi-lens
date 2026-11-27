@@ -610,12 +610,16 @@ describe("resolveToolCwd (#2777)", () => {
 
 	// #5802: this cell awaits about 230 `fs.promises.stat` calls (the python root
 	// walk from the fixture to the filesystem root, then the file-directory
-	// fallback walk; 210-250 counted on Windows and Linux). On the Windows leg
-	// the first 130 awaited stats of this cell took 2855 ms and 2473 ms (22 and
-	// 19 ms each, job 140372464201 and job 140383089933) while 130 `statSync`
-	// calls took 5 and 2 ms: the wait is the pool hop, not the filesystem.
-	// 230 hops at 22 ms is 5.1 s, over Vitest's 5 s default (the failing run
+	// fallback walk; 210-254 counted on Windows and Linux, the Linux count raw).
+	// On the Windows leg the first 130 awaited stats of this cell took 2855 ms
+	// and 2473 ms (job 140372464201 and job 140383089933). The cost sits in the
+	// awaited call (statSync 2-5 ms against awaited stat 19-22 ms per 130 calls
+	// in the same cell); why an awaited stat waits about 20 ms is not isolated.
+	// 230 hops at 22 ms is 5.1 s, over Vitest's 5 s default (job 140340087346
 	// timed out at 5289 ms). The 15 s Windows ceiling (scale 3) is 3x that.
+	// The walk cannot shrink in this test-only PR: cutting its hops means probing
+	// each level's markers in parallel, a change to `resolveServerRoot` in product
+	// code that #5814 files for its own review.
 	it(
 		"uses the file directory for a built-in server with no marker",
 		async () => {
@@ -803,10 +807,12 @@ describe("resolveToolCwd (#2777)", () => {
 	// decision (rust measured, .NET documented, everything else unflagged until
 	// measured) is pinned on the REAL registry entries, bare directory, real root
 	// functions.
-	// #5802: eight real `resolveLspServerCwd` walks, about 136 awaited stats and
-	// 64 readdirs. It took 4055 ms on the Windows run whose sibling cell timed out
-	// (job 140340087346), 81% of Vitest's 5 s default, for the same pool-hop
-	// reason as the "built-in server with no marker" cell above; same budget.
+	// #5802: eight real `resolveLspServerCwd` walks, 172 awaited stats and 80
+	// readdirs (raw counts, one Linux run). It took 4055 ms on master run 45948956820
+	// (job 140340087346), where the main cell timed out, 81% of Vitest's 5 s
+	// default. It timed out at 5000 ms on master run 45967122876 (job 140398356519).
+	// Same awaited-stat cost as the "built-in server with no marker" cell above;
+	// same budget.
 	it(
 		"flags exactly the servers that need a project, on the real registry (#3750)",
 		async () => {
