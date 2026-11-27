@@ -17,6 +17,10 @@ import {
 	type LSPServerInfo,
 	NearestRoot,
 } from "../../../clients/lsp/server.js";
+import {
+	flushSessionStartLog,
+	SESSIONSTART_LOG_FILE,
+} from "../../../clients/sessionstart-logger.js";
 import { removeTempDirSync } from "../test-utils.js";
 
 /**
@@ -44,7 +48,6 @@ const probes = vi.hoisted(() => ({
 		});
 	},
 }));
-const sessionStartLines = vi.hoisted(() => [] as string[]);
 
 vi.mock("node:fs/promises", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -60,19 +63,6 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 		}) as typeof actual.readdir,
 	};
 });
-vi.mock("../../../clients/sessionstart-logger.js", async (importOriginal) => {
-	const actual =
-		await importOriginal<
-			typeof import("../../../clients/sessionstart-logger.js")
-		>();
-	return {
-		...actual,
-		logSessionStart: (line: string) => {
-			sessionStartLines.push(line);
-		},
-	};
-});
-
 let sandbox: string;
 
 beforeEach(() => {
@@ -97,7 +87,6 @@ afterEach(() => {
 	probes.fault = undefined;
 	probes.calls = 0;
 	probes.rounds = 0;
-	sessionStartLines.length = 0;
 	removeTempDirSync(sandbox);
 });
 
@@ -128,6 +117,26 @@ function resolveThroughRegistry(
 		};
 	};
 	return clientRegistry.resolveServerRoot(server(id), file);
+}
+
+/** Turns the real session-start sink on and returns a reader for its new lines. */
+async function sessionStartTail(): Promise<() => Promise<string[]>> {
+	vi.stubEnv("PI_LENS_TEST_MODE", "0");
+	await flushSessionStartLog();
+	const from = fs.existsSync(SESSIONSTART_LOG_FILE)
+		? fs.statSync(SESSIONSTART_LOG_FILE).size
+		: 0;
+	return async () => {
+		await flushSessionStartLog();
+		const added = fs.existsSync(SESSIONSTART_LOG_FILE)
+			? fs.readFileSync(SESSIONSTART_LOG_FILE).subarray(from).toString()
+			: "";
+		// Drop the `[timestamp] ` prefix; keep this cell's sandbox only.
+		return added
+			.split("\n")
+			.filter((line) => line.includes(sandbox))
+			.map((line) => line.slice(line.indexOf("] ") + 2));
+	};
 }
 
 function errno(code: string): NodeJS.ErrnoException {
@@ -189,25 +198,23 @@ describe("LSP root marker precedence (#5814)", () => {
 		write("repo", "setup.cfg");
 		const file = write("repo", "main.py");
 		const repo = path.join(sandbox, "repo");
-		const refuse = (ms: number) =>
-			new Promise<never>((_, reject) =>
-				setTimeout(() => reject(errno("EACCES")), ms),
-			);
+		const refuse = () => Promise.reject(errno("EACCES"));
 		probes.fault = (target) => {
-			if (target === path.join(repo, ".git")) return refuse(30);
-			if (target === path.join(repo, "pyproject.toml")) return refuse(0);
-			if (target === path.join(repo, "Pipfile")) return refuse(0);
+			// A real read settles after every already-rejected probe.
+			if (target === path.join(repo, ".git"))
+				return fs.promises.readFile(file).then(refuse);
+			if (target === path.join(repo, "pyproject.toml")) return refuse();
+			if (target === path.join(repo, "Pipfile")) return refuse();
 			return undefined;
 		};
+		const logged = await sessionStartTail();
 
 		expect(
 			await NearestRoot([...(server("python").root.rootMarkers ?? [])])(file),
 		).toBe(repo);
 		// Listed order, and nothing for a marker listed after the hit. The last
 		// line is the hit's `.git` boundary climb, a second read of that path.
-		expect(
-			sessionStartLines.filter((line) => line.includes("permission error")),
-		).toEqual([
+		expect(await logged()).toEqual([
 			`lsp root marker skipped: permission error stat ${path.join(repo, ".git")}`,
 			`lsp root marker skipped: permission error stat ${path.join(repo, "pyproject.toml")}`,
 			`lsp root marker skipped: permission error stat ${path.join(repo, ".git")}`,
@@ -218,14 +225,18 @@ describe("LSP root marker precedence (#5814)", () => {
 		write("repo", "first.marker");
 		const file = write("repo", "main.py");
 		const repo = path.join(sandbox, "repo");
+		let release!: (reason: Error) => void;
+		const held = new Promise<never>((_, reject) => {
+			release = reject;
+		});
+		held.catch(() => {});
 		probes.fault = (target) =>
-			target === path.join(repo, "second.marker")
-				? new Promise<never>(() => {})
-				: undefined;
+			target === path.join(repo, "second.marker") ? held : undefined;
 
 		expect(await NearestRoot(["first.marker", "second.marker"])(file)).toBe(
 			repo,
 		);
+		release(errno("ENOENT"));
 	});
 
 	it.each(["EACCES", "EPERM", "EIO", "ENOTDIR"])(
@@ -237,13 +248,16 @@ describe("LSP root marker precedence (#5814)", () => {
 			const inner = path.join(sandbox, "repo", "nested", "inner.marker");
 			probes.fault = (target) =>
 				target === inner ? Promise.reject(errno(code)) : undefined;
+			const logged = await sessionStartTail();
 
 			expect(await NearestRoot(["inner.marker", "outer.marker"])(file)).toBe(
 				path.join(sandbox, "repo"),
 			);
-			expect(
-				sessionStartLines.filter((line) => line.includes(inner)),
-			).toHaveLength(code === "EACCES" || code === "EPERM" ? 1 : 0);
+			expect((await logged()).filter((line) => line.includes(inner))).toEqual(
+				code === "EACCES" || code === "EPERM"
+					? [`lsp root marker skipped: permission error stat ${inner}`]
+					: [],
+			);
 		},
 	);
 
