@@ -834,12 +834,14 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :57, :79
 	"clients/lsp/server.ts": {
-		silent: 30,
+		silent: 27,
+		// 30 -> 27 (#5814): the three `stat` catches of the extension-bounded walk
+		// and the agent-level marker read fold onto the shared marker probe.
 		// 28 -> 30 (#4914): `findEffectTsgoLsp` answers `undefined` for an absent or
 		// unreadable `@effect/tsgo` manifest and skips a missing bin candidate, the
 		// same shape as `findNativeTypeScriptLsp`'s probe; either way the launch
 		// falls back to the native `tsc`, whose own session-start line names it.
-		identities: "b84df3748a14a0b7",
+		identities: "a05c43eae73a9dc1",
 		reason: PRE_RULE,
 	}, // :223, :377, :890, :921, :1150, :1350, :1483, :1615, :1806, :1953, :1975, :2306, :2385, :2400, :2414, :2431, :2449, :2481, :2508, :2521, :2601, :2613, :2634, :2659, :2700, :2714, :2928, :2936, :2966, :3610
 	"clients/lsp/service-singleton.ts": {

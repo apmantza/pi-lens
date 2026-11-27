@@ -2789,7 +2789,10 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// which the resolver and the Python spawn both await; the helper holds the
 	// lookup's own await, so the resolver's call is the one new site. Same
 	// spawn path, which no hook awaits; hook-signal threading stays #2523 AC4.
-	"clients/lsp/server.ts": 140,
+	// #5814: 140 -> 139. The extension-bounded walk and the agent-level marker
+	// read lose their serial `stat` awaits to the shared marker probe, which
+	// holds one probe's await and one ordered read.
+	"clients/lsp/server.ts": 139,
 	"clients/map-with-concurrency.ts": 2,
 	"clients/observed-mutation.ts": 18,
 	// #4493: 10 -> 12, the `git rev-parse` in readGitHead and the `git diff`

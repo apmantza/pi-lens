@@ -768,7 +768,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `Array.prototype.filter` call, not a delivery filter.
 		"clients/lsp/launch.ts": 2,
 		"clients/lsp/ruby-drive-dirs.ts": 1,
-		"clients/lsp/server.ts": 5,
+		// 5 -> 6 (#5814): `hasProjectBoundaryMarker` drops the Python-only
+		// markers for other servers, an `Array.prototype.filter` call, not a
+		// delivery filter.
+		"clients/lsp/server.ts": 6,
 		// 1 (#4403): `disabledPrimaryServerIds` is an `Array.prototype.filter`
 		// over registered servers, not a delivery filter.
 		// 1 -> 3 (#4403 round 4): `disabledPrimaries` selects the file's
@@ -1398,7 +1401,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// three filesystem path uses on the same probe.
 		// 114 -> 113 (#5728): folding IgnoreHomeRoot onto isAtOrAboveHomeDir
 		// replaces `path.resolve(root)` with `realpathOrResolve(root)`.
-		"clients/lsp/server.ts": 113,
+		// 113 -> 110 (#5814): the three `stat(path.join(...))` probes of the
+		// extension-bounded walk and the agent-level read fold onto the shared
+		// marker probe.
+		"clients/lsp/server.ts": 110,
 		"clients/lsp/session-roots.ts": 7,
 		// 13 -> 15 (#4346): a creation's path joins the entry's dependency
 		// scope test (Go package directory, created-file stem/directory names).
