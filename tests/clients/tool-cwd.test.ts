@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LANGUAGES } from "../../clients/language-registry.js";
@@ -24,7 +25,87 @@ let pathUtils: typeof import("../../clients/path-utils.js");
 let previousHome: string | undefined;
 
 // TEMP #5802 timing instrumentation; removed before ready.
-async function pl5802Sequence(tag: string, base: string): Promise<string> {
+// Wraps the async fs.promises ops the root walk uses, so a stalled cell names
+// the op and path. `syncBuiltinESMExports` makes the named imports in
+// clients/lsp/server.ts see the wrappers.
+async function pl5802WithFsProbe<T>(
+	tag: string,
+	work: () => Promise<T>,
+): Promise<T> {
+	const table = fs.promises as unknown as Record<
+		string,
+		(...args: unknown[]) => Promise<unknown>
+	>;
+	const ops = ["stat", "lstat", "readdir", "access", "realpath", "readFile"];
+	const original = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+	const tally = new Map<
+		string,
+		{ n: number; total: number; max: number; maxPath: string }
+	>();
+	for (const op of ops) {
+		const real = table[op];
+		original.set(op, real);
+		table[op] = async (...args: unknown[]) => {
+			const t = performance.now();
+			try {
+				return await real(...args);
+			} finally {
+				const ms = performance.now() - t;
+				const row = tally.get(op) ?? { n: 0, total: 0, max: 0, maxPath: "" };
+				row.n++;
+				row.total += ms;
+				if (ms > row.max) {
+					row.max = ms;
+					row.maxPath = String(args[0]);
+				}
+				tally.set(op, row);
+				if (ms > 100) {
+					console.log(
+						"PL5802-SLOWFS " +
+							tag +
+							" " +
+							op +
+							" " +
+							Math.round(ms) +
+							"ms " +
+							String(args[0]),
+					);
+				}
+			}
+		};
+	}
+	syncBuiltinESMExports();
+	try {
+		return await work();
+	} finally {
+		for (const op of ops) table[op] = original.get(op) as never;
+		syncBuiltinESMExports();
+		console.log(
+			"PL5802-FS " +
+				tag +
+				" " +
+				[...tally]
+					.map(
+						([op, row]) =>
+							op +
+							" n=" +
+							row.n +
+							" total=" +
+							Math.round(row.total) +
+							"ms max=" +
+							Math.round(row.max) +
+							"ms",
+					)
+					.join(" | "),
+		);
+	}
+}
+
+function pl5802Sequence(tag: string, base: string): Promise<string> {
+	return pl5802WithFsProbe(tag, () => pl5802SequenceBody(tag, base));
+}
+
+async function pl5802SequenceBody(tag: string, base: string): Promise<string> {
 	const laps: string[] = [];
 	let t0 = performance.now();
 	let elu0 = performance.eventLoopUtilization();
