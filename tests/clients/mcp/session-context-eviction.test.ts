@@ -33,36 +33,11 @@ import { useConfigPath } from "../../support/global-config.js";
 import { pinFixtureHome, setupTestEnvironment } from "../test-utils.js";
 
 const loadBootstrapClients = vi.hoisted(() => vi.fn());
-const createdRuntimes = vi.hoisted(
-	() =>
-		[] as Array<{
-			sessionScope: {
-				isLive: () => boolean;
-				retiredBy: () => string | undefined;
-			};
-			captureSessionGeneration: () => { isCurrent: () => boolean };
-		}>,
-);
 
 vi.mock("../../../clients/bootstrap.js", () => ({ loadBootstrapClients }));
 vi.mock("../../../clients/ast-grep-client.js", () => ({
 	AstGrepClient: class {},
 }));
-vi.mock("../../../clients/runtime-coordinator.js", async (importOriginal) => {
-	const actual =
-		await importOriginal<
-			typeof import("../../../clients/runtime-coordinator.js")
-		>();
-	class TrackedRuntimeCoordinator extends actual.RuntimeCoordinator {
-		constructor(
-			...args: ConstructorParameters<typeof actual.RuntimeCoordinator>
-		) {
-			super(...args);
-			createdRuntimes.push(this);
-		}
-	}
-	return { ...actual, RuntimeCoordinator: TrackedRuntimeCoordinator };
-});
 // Static (module-load-time) import, not a dynamic `await import(...)` inside
 // the it() body — a dynamic import's module-graph transform cost (measured
 // 3.3-5.2s under contention) was charged against the per-test timeout and
@@ -70,6 +45,7 @@ vi.mock("../../../clients/runtime-coordinator.js", async (importOriginal) => {
 // vi.mock calls regardless of import position), matching session.test.ts's
 // pattern.
 import {
+	_peekPendingMcpSessionRuntime,
 	_resetMcpSessionContext,
 	getMcpSessionContext,
 	invalidateMcpSessionIfConfigChanged,
@@ -119,7 +95,6 @@ beforeEach(async () => {
 	// surface comes from the factory (#2592).
 	await installLspServiceDouble({ getAliveClientCount: () => 0 });
 	loadBootstrapClients.mockReset();
-	createdRuntimes.length = 0;
 });
 
 afterEach(async () => {
@@ -145,16 +120,19 @@ describe("getMcpSessionContext memo eviction (#1570)", () => {
 		clearLatencyLog();
 		await flushLatencyLog();
 
-		loadBootstrapClients.mockRejectedValueOnce(
-			new Error("EMFILE: transient fs error"),
-		);
+		let failedRuntime:
+			| ReturnType<typeof _peekPendingMcpSessionRuntime>
+			| undefined;
+		loadBootstrapClients.mockImplementationOnce(() => {
+			failedRuntime = _peekPendingMcpSessionRuntime();
+			return Promise.reject(new Error("EMFILE: transient fs error"));
+		});
 		await expect(getMcpSessionContext()).rejects.toThrow(
 			"EMFILE: transient fs error",
 		);
-		expect(createdRuntimes).toHaveLength(1);
-		const failedRuntime = createdRuntimes[0]!;
-		expect(failedRuntime.sessionScope.isLive()).toBe(false);
-		expect(failedRuntime.sessionScope.retiredBy()).toBe(
+		expect(failedRuntime).toBeDefined();
+		expect(failedRuntime?.sessionScope.isLive()).toBe(false);
+		expect(failedRuntime?.sessionScope.retiredBy()).toBe(
 			"mcp-session-bootstrap-failed",
 		);
 		expect(await scopeEndReasons()).toEqual(["mcp-session-bootstrap-failed"]);
@@ -212,8 +190,8 @@ describe("getMcpSessionContext memo eviction (#1570)", () => {
 		);
 		const first = getMcpSessionContext();
 		expect(peekMcpSessionRuntime()).toBeUndefined();
-		expect(createdRuntimes).toHaveLength(1);
-		const firstRuntime = createdRuntimes[0]!;
+		const firstRuntime = _peekPendingMcpSessionRuntime()!;
+		expect(firstRuntime).toBeDefined();
 		const firstHandle = firstRuntime.captureSessionGeneration();
 		expect(firstRuntime.sessionScope.isLive()).toBe(true);
 		expect(firstHandle.isCurrent()).toBe(true);

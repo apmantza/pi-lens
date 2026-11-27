@@ -19,7 +19,6 @@
 
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
-import { resolve as resolveFilePath } from "node:path";
 import { AstGrepClient } from "../ast-grep-client.js";
 import { BoundedFifoMap } from "../bounded-cache.js";
 import {
@@ -41,7 +40,11 @@ import { getGlobalPiLensDir } from "../file-utils.js";
 import { resetFormatService } from "../format-service.js";
 import { getPiLensGlobalConfigPath } from "../lens-config.js";
 import { getLSPService, resetLSPService } from "../lsp/capabilities.js";
-import { resolveHostToolPath } from "../path-utils.js";
+import {
+	normalizeMapKey,
+	realpathOrResolve,
+	resolveHostToolPath,
+} from "../path-utils.js";
 import {
 	acknowledgeTestFindings,
 	acknowledgeTurnEndFindings,
@@ -142,6 +145,13 @@ export function peekMcpSessionRuntime(): RuntimeCoordinator | undefined {
 	return resolvedRuntime;
 }
 
+/** Test hook — peek at the in-flight bootstrap runtime before it settles. */
+export function _peekPendingMcpSessionRuntime():
+	| RuntimeCoordinator
+	| undefined {
+	return pendingRuntime;
+}
+
 function resetMcpSessionContext(): void {
 	bootstrapGeneration.bump();
 	const currentResolved = resolvedRuntime;
@@ -163,25 +173,26 @@ function resetMcpSessionContext(): void {
  * MCP session context if any inspected candidate changed since the last check.
  */
 export function invalidateMcpSessionIfConfigChanged(cwd: string): boolean {
-	const normalized = resolveFilePath(cwd);
+	const resolvedCwd = realpathOrResolve(cwd);
+	const cacheKey = normalizeMapKey(resolvedCwd);
 	const resolution = resolvePiLensConfig({
-		cwd: normalized,
+		cwd: resolvedCwd,
 		globalDir: getGlobalPiLensDir(),
 		globalConfigPath: getPiLensGlobalConfigPath(),
 	});
 	const fingerprint = configSourcesFingerprint(
 		resolution.inspectedConfigSources,
 	);
-	const previous = inspectedConfigFingerprints.get(normalized);
+	const previous = inspectedConfigFingerprints.get(cacheKey);
 	if (previous === undefined) {
-		inspectedConfigFingerprints.set(normalized, fingerprint);
+		inspectedConfigFingerprints.set(cacheKey, fingerprint);
 		return false;
 	}
 	if (previous === fingerprint) {
 		return false;
 	}
 	resetMcpSessionContext();
-	inspectedConfigFingerprints.set(normalized, fingerprint);
+	inspectedConfigFingerprints.set(cacheKey, fingerprint);
 	return true;
 }
 
