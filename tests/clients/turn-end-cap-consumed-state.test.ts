@@ -2783,3 +2783,100 @@ describe("#5240: a duplicate turn end stages a repeat of its live blockers", () 
 		}
 	});
 });
+
+describe("#5790: the commit gate's record keeps only cascade sections that show a finding", () => {
+	const NOTE = "CASCADE-5790-NOTE";
+	const coverageLine = "⚠️ Cascade did not evaluate 3 finding(s)";
+	/** One cascade run whose result has the form the cell names. */
+	function run(
+		rig: Rig,
+		form: { layout: boolean; coverageLine: string; diagnostic: boolean },
+	) {
+		const primary = touch(rig, "casc-5790.ts");
+		const neighbor = touch(rig, "casc-5790-dep.ts");
+		const base = cascadeResult(primary, neighbor, NOTE);
+		const result: CascadeResult = {
+			...base,
+			neighbors: base.neighbors.map((n) => ({
+				...n,
+				diagnostics: form.diagnostic ? n.diagnostics : [],
+			})),
+			...(form.layout
+				? {
+						layout: {
+							cwd: rig.cwd,
+							noun: "neighbor",
+							includeReason: true,
+							header: "",
+							truncationLine: "",
+							coverageLine: form.coverageLine,
+							policySuppressed: 0,
+						},
+					}
+				: {}),
+		};
+		rig.runtime.appendCascadeRun({
+			filePath: primary,
+			result,
+			neighborCount: 1,
+			diagnosticCount: form.diagnostic ? 1 : 0,
+		});
+	}
+
+	// Recurrence (#5790): a finding-free cascade note in the record held the
+	// commit gate until the next turn end. Every other form keeps failing
+	// closed: a coverage line names findings nobody evaluated, and a result
+	// with no layout is a form the rule does not recognise.
+	it.each([
+		{
+			cell: "layout, no coverage line, no diagnostic",
+			layout: true,
+			coverageLine: "",
+			diagnostic: false,
+			kept: false,
+		},
+		{
+			cell: "layout with a coverage line, no diagnostic",
+			layout: true,
+			coverageLine,
+			diagnostic: false,
+			kept: true,
+		},
+		{
+			cell: "no layout, no diagnostic",
+			layout: false,
+			coverageLine: "",
+			diagnostic: false,
+			kept: true,
+		},
+		{
+			cell: "layout, no coverage line, a neighbour diagnostic",
+			layout: true,
+			coverageLine: "",
+			diagnostic: true,
+			kept: true,
+		},
+	])(
+		"$cell: the record keeps the section = $kept",
+		async ({ layout, coverageLine, diagnostic, kept }) => {
+			const rig = makeRig("pi-lens-5790-");
+			try {
+				rig.lensGuard = true;
+				run(rig, { layout, coverageLine, diagnostic });
+				// The agent is told in every cell.
+				expect(await endTurn(rig)).toContain(NOTE);
+				const record = rig.cacheManager.readCache<{ blockerContent?: string }>(
+					"turn-end-findings",
+					rig.cwd,
+					Number.POSITIVE_INFINITY,
+				)?.data;
+				expect((record?.blockerContent ?? "").includes(NOTE)).toBe(kept);
+				expect(
+					evaluateGitGuard(rig.runtime, rig.cacheManager, rig.cwd).block,
+				).toBe(kept);
+			} finally {
+				rig.cleanup();
+			}
+		},
+	);
+});
