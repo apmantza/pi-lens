@@ -372,6 +372,63 @@ describe("one request sender owns cancel and release (#5097)", () => {
 	}, 15_000);
 });
 
+// #5775: the record the with-auxiliary clean-confirm gate reads, on a real wire.
+// It shares this file's fake-server harness rather than admitting a new
+// real-spawn file. Recurrence: review F1, where the gate's proxy for this fact
+// (the service's last-known cache) forgot a finding after a partial touch.
+describe("a pushed finding stays unwithdrawn until the server withdraws it (#5775)", () => {
+	it("a didChange clears the cached finding but not the record", async () => {
+		await withHangingServer(
+			"",
+			async (ctx) => {
+				await vi.waitFor(
+					() => expect(ctx.client.getDiagnostics(ctx.file)).toHaveLength(1),
+					{ timeout: 5000, interval: 10 },
+				);
+				expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(true);
+				// The fixture publishes only on didOpen, so the change is never answered.
+				await ctx.client.notify.change(ctx.file, "function greet() { }\n");
+				await ctx.barrier();
+				expect(ctx.client.getDiagnostics(ctx.file)).toEqual([]);
+				expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(true);
+			},
+			{ env: { FAKE_LSP_PUSH_DIAGNOSTIC: "1" } },
+		);
+	}, 15_000);
+
+	it("an empty push after the finding withdraws it", async () => {
+		await withHangingServer(
+			"",
+			async (ctx) => {
+				// The finding first, then the empty push 500 ms later withdraws it.
+				await vi.waitFor(
+					() =>
+						expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(
+							true,
+						),
+					{ timeout: 5000, interval: 10 },
+				);
+				await vi.waitFor(
+					() =>
+						expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(
+							false,
+						),
+					{ timeout: 5000, interval: 10 },
+				);
+				expect(
+					ctx.client.getAllDiagnostics().get(normalizeMapKey(ctx.file)),
+				).toMatchObject({ diags: [] });
+			},
+			{
+				env: {
+					FAKE_LSP_PUBLISH_SEQUENCE: "dirty,empty",
+					FAKE_LSP_PUBLISH_SEQUENCE_GAP_MS: "500",
+				},
+			},
+		);
+	}, 15_000);
+});
+
 describe("a firing bound cancels the request its LSP work started (#5097)", () => {
 	let tmp: string;
 	let trace: string;
