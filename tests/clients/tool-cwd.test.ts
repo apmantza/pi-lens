@@ -608,21 +608,41 @@ describe("resolveToolCwd (#2777)", () => {
 		}
 	});
 
-	it("uses the file directory for a built-in server with no marker", async () => {
-		const project = path.join(home, "repo");
-		const file = path.join(project, "nested", "src", "main.py");
-		fs.mkdirSync(path.dirname(file), { recursive: true });
-		const server = LSP_SERVERS.find((entry) => entry.id === "python");
-		if (!server) throw new Error("python server missing from registry");
-		const service = new LSPService(undefined, project);
-		const { clientRegistry } = service as unknown as {
-			clientRegistry: {
-				resolveServerRoot(server: LSPServerInfo, file: string): Promise<string>;
+	// #5802: this cell awaits about 230 `fs.promises.stat` calls (the python root
+	// walk from the fixture to the filesystem root, then the file-directory
+	// fallback walk; 210-254 counted on Windows and Linux, the Linux count raw).
+	// On the Windows leg the first 130 awaited stats of this cell took 2855 ms
+	// and 2473 ms (job 140372464201 and job 140383089933). The cost sits in the
+	// awaited call: awaited stat 19-22 ms per call (2473-2855 ms per 130 calls)
+	// against statSync 2-5 ms per 130 calls in the same cell. Why an awaited stat
+	// waits about 20 ms is not isolated.
+	// 230 hops at 22 ms is 5.1 s, over Vitest's 5 s default (job 140340087346
+	// timed out at 5289 ms). The 15 s Windows ceiling (scale 3) is 3x that.
+	// The walk cannot shrink in this test-only PR: cutting its hops means probing
+	// each level's markers in parallel, a change to `resolveServerRoot` in product
+	// code that #5814 files for its own review.
+	it(
+		"uses the file directory for a built-in server with no marker",
+		async () => {
+			const project = path.join(home, "repo");
+			const file = path.join(project, "nested", "src", "main.py");
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			const server = LSP_SERVERS.find((entry) => entry.id === "python");
+			if (!server) throw new Error("python server missing from registry");
+			const service = new LSPService(undefined, project);
+			const { clientRegistry } = service as unknown as {
+				clientRegistry: {
+					resolveServerRoot(
+						server: LSPServerInfo,
+						file: string,
+					): Promise<string>;
+				};
 			};
-		};
-		const resolveRoot = clientRegistry.resolveServerRoot.bind(clientRegistry);
-		expect(await resolveRoot(server, file)).toBe(path.dirname(file));
-	});
+			const resolveRoot = clientRegistry.resolveServerRoot.bind(clientRegistry);
+			expect(await resolveRoot(server, file)).toBe(path.dirname(file));
+		},
+		scaledTestTimeout(5_000),
+	);
 
 	it("keeps a markerless server-computed root at the LSP seam", async () => {
 		const project = path.join(home, "repo");
@@ -788,48 +808,58 @@ describe("resolveToolCwd (#2777)", () => {
 	// decision (rust measured, .NET documented, everything else unflagged until
 	// measured) is pinned on the REAL registry entries, bare directory, real root
 	// functions.
-	it("flags exactly the servers that need a project, on the real registry (#3750)", async () => {
-		const bare = path.join(home, "bare");
-		fs.mkdirSync(bare, { recursive: true });
-		const byId = new Map(LSP_SERVERS.map((server) => [server.id, server]));
-		const verdicts: Record<string, boolean | undefined> = {};
+	// #5802: eight real `resolveLspServerCwd` walks, 172 awaited stats and 80
+	// readdirs (raw counts, one Linux run). It took 4055 ms on master run 45948956820
+	// (job 140340087346), where the main cell timed out, 81% of Vitest's 5 s
+	// default. It timed out at 5000 ms on master run 45967122876 (job 140398356519).
+	// It assumes the awaited-stat cost of the "built-in server with no marker"
+	// cell above (its 80 readdirs were not timed separately); same budget.
+	it(
+		"flags exactly the servers that need a project, on the real registry (#3750)",
+		async () => {
+			const bare = path.join(home, "bare");
+			fs.mkdirSync(bare, { recursive: true });
+			const byId = new Map(LSP_SERVERS.map((server) => [server.id, server]));
+			const verdicts: Record<string, boolean | undefined> = {};
 
-		for (const id of [
-			"rust",
-			"csharp",
-			"omnisharp",
-			"fsharp",
-			"lua",
-			"nix",
-			"deno",
-			"ocaml",
-		]) {
-			const server = byId.get(id);
-			const extension = server?.extensions[0] ?? ".x";
-			let seen: boolean | undefined;
-			await resolveLspServerCwd(
-				server as LSPServerInfo,
-				path.join(bare, `f${extension}`),
-				bare,
-				undefined,
-				(fallback) => {
-					seen = fallback.requiresProjectRoot;
-				},
-			);
-			verdicts[id] = seen;
-		}
+			for (const id of [
+				"rust",
+				"csharp",
+				"omnisharp",
+				"fsharp",
+				"lua",
+				"nix",
+				"deno",
+				"ocaml",
+			]) {
+				const server = byId.get(id);
+				const extension = server?.extensions[0] ?? ".x";
+				let seen: boolean | undefined;
+				await resolveLspServerCwd(
+					server as LSPServerInfo,
+					path.join(bare, `f${extension}`),
+					bare,
+					undefined,
+					(fallback) => {
+						seen = fallback.requiresProjectRoot;
+					},
+				);
+				verdicts[id] = seen;
+			}
 
-		expect(verdicts).toEqual({
-			rust: true,
-			csharp: true,
-			omnisharp: true,
-			fsharp: true,
-			lua: false,
-			nix: false,
-			deno: false,
-			ocaml: false,
-		});
-	});
+			expect(verdicts).toEqual({
+				rust: true,
+				csharp: true,
+				omnisharp: true,
+				fsharp: true,
+				lua: false,
+				nix: false,
+				deno: false,
+				ocaml: false,
+			});
+		},
+		scaledTestTimeout(5_000),
+	);
 
 	it("words each cause of a root fallback without claiming a marker is missing when one exists (#3750)", async () => {
 		const { describeRootFallback } =
