@@ -723,6 +723,9 @@ export const wallClockBudgetInclude = [
 	"tests/clients/lsp/service-notify-inflight-throttle-real-stream.test.ts",
 	"tests/clients/lsp/service-rename-file.test.ts",
 	"tests/clients/lsp/shutdown-live-wedged-process.test.ts",
+	// #5775: client doubles sleep their own 50 ms diagnostics budget (flake-shape
+	// admission, raw-timer-wait).
+	"tests/clients/lsp/silent-clean-auxiliary.test.ts",
 	"tests/clients/lsp/teardown-logging.test.ts",
 	// #4742: a real git checkout and a real pyright-langserver child (skipped,
 	// with a named reason, when none is installed): the stale bytes live only in

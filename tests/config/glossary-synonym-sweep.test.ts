@@ -756,7 +756,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// that server's rows from the last known answer it falls back to.
 		// 51 -> 50 (#4944): the stored-rows filter above moved into
 		// `dropExcludedServers` (`clients/dispatch/auxiliary-lsp.ts`).
-		"clients/lsp/index.ts": 50,
+		// 50 -> 51 (#5775): the with-auxiliary clean-confirm gate selects the
+		// primaries the touch has no answer from.
+		"clients/lsp/index.ts": 51,
 		"clients/lsp/inferred-project.ts": 2,
 		"clients/lsp/jvm-runtime.ts": 3,
 		"clients/lsp/language.ts": 1,

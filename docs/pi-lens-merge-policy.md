@@ -231,6 +231,10 @@ merges, its `### Accepted residuals` lines join the same tracker under their
 seam. A known gap reopens as p2 when it turns material: a live wrong result,
 data loss, a hang, or a leak with no bound.
 
+A flake whose 3/p clean-run count is impractical joins the tracker the same way,
+with the numbers `docs/pi-lens-fixer.md` "Flaky tests" lists; it is never closed
+as fixed.
+
 **Ideas go on the tracker (user, 2026-10-31).** A rule candidate, research idea
 or optional slice that no lane will start is never filed as a p3 issue. It goes
 straight onto the pinned known-gaps tracker under its seam. On 2026-10-31 five
@@ -682,6 +686,9 @@ read the worst cell to route the round.
   passes and the regression test was red first.
 - `closes` vs `refs` follows delivery, not optimism; leftovers get an issue
   comment before anything closes.
+- A flake issue closes as fixed only when the comment that closes it quotes the
+  numbers `docs/pi-lens-fixer.md` "Flaky tests" lists, with a clean-run count of
+  at least 3/p; a green rerun alone does not close one.
 - After merging a `refs #N` PR, VERIFY the issue: read `gh issue view N
   --comments` and confirm a comment names the remainder. If the PR in fact
   satisfied every acceptance criterion, close N crediting the PR; if a
