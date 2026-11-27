@@ -1,3 +1,4 @@
+// flake-shape: in-process-mock — a pass-through of createInjectionLedger that records the real ledger each activation builds; the ledger is private to its activation and nothing in it is replaced.
 /**
  * #5770 F5 (dispose route): a session pi disposes with no `session_shutdown`
  * gives its retained injections back, as its shutdown does.
