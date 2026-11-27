@@ -145,6 +145,7 @@ import type {
 	RuntimeCoordinator,
 } from "./runtime-coordinator.js";
 import { EXPANSION_LIMIT_LINES } from "./read-expansion.js";
+import { noteCascadeWrite } from "./cascade-format.js";
 import { resyncGitGuardAfterRetire, syncGitGuardRecord } from "./git-guard.js";
 import { isCrossFileBlocker } from "./inline-blocker-fields.js";
 import { writeOrderToken } from "./write-ordering-guard.js";
@@ -1604,6 +1605,17 @@ function publishInlineVerdict(args: {
 
 	// A superseded verdict must not latch the commit gate either (#3507).
 	if (resultLive) {
+		// #5804: an applied, authored run a language server answered for reports
+		// whatever error the file still holds, so it speaks for the file's
+		// pending cascade errors. An unanswered or unauthored run (an
+		// inconclusive server, a withheld blocker channel) speaks for none.
+		if (
+			inlineVerdictApplied &&
+			authored &&
+			!result.isError &&
+			(result.verdictRunnerIds ?? []).includes("lsp")
+		)
+			noteCascadeWrite(filePath, true);
 		// #5020: this write's clean verdict on `filePath` also speaks for the rows
 		// OTHER files' records hold against it. A chart-wide runner reports
 		// `other-b.yaml` while `deploy-a.yaml` is written, so the row sits in
@@ -1807,6 +1819,10 @@ async function dispatchPipelineAnalysis(args: {
 		runtime.fixedThisTurn,
 		sessionGeneration,
 	);
+	// #5804: the write has no verdict until a run publishes one a language
+	// server answered for, so a crash, timeout or abort leaves the file's
+	// pending cascade errors standing at turn end.
+	noteCascadeWrite(filePath, false);
 	const pipelinePromise = runPipeline(
 		{
 			signal: deps.signal,

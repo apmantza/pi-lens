@@ -3778,6 +3778,54 @@ describe("#5790 witness: a cascade note with no finding does not hold the commit
 		await fixAndDrain(s);
 	}, 120_000);
 
+	// Recurrence (#5804, #5790 r3 rows V2 to V3): the neighbour's cascade error
+	// held the commit gate, then the neighbour was rewritten while the server
+	// gave no verdict, with the error still in its bytes. The turn end forgot
+	// the neighbour's pending error (an edited file's own dispatch "reports
+	// it") although that dispatch reported nothing, and the gate admitted the
+	// commit with the error on disk.
+	it("keeps a neighbour's pending error when its rewrite gets no server verdict", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("cf", TARGET, TARGET_FIXED);
+		removeNeighbourOnCleanup();
+		const neighbour = path.join(tmpDir, NEIGHBOUR);
+		fs.writeFileSync(neighbour, NEIGHBOUR_BAD);
+		expect(await s.write(TARGET_BAD)).toContain("🔴 STOP");
+		boundary.lsp.mode = "inconclusive";
+		await s.write(TARGET_BAD_OTHER);
+		boundary.lsp.mode = "answer";
+		expect(await s.endTurn()).toContain(CASCADE_ERRORS);
+		fs.writeFileSync(s.target, TARGET_FIXED);
+		expect(await s.settleCall({ source: "lsp", waitMs: 30000 })).toMatch(
+			/confirmed clean/,
+		);
+		// V2: the neighbour's error alone holds the gate.
+		expect(await s.commitReason()).toContain("blocking_provenance_untrusted");
+		// The neighbour is rewritten, the error still in its bytes, and the
+		// server gives no verdict on the rewrite.
+		boundary.lsp.mode = "inconclusive";
+		const rewrittenAt = Date.now();
+		await s.writeOther(NEIGHBOUR, NEIGHBOUR_BAD + "export const d = 4;\n");
+		boundary.lsp.mode = "answer";
+		await s.endTurn();
+		try {
+			// V3: the error is still on disk, so the gate still refuses, and the
+			// record carries it to the rewrite: a claim about bytes pi wrote, not
+			// an edit outside pi that the next turn end would name once and forget.
+			expect(fs.readFileSync(neighbour, "utf8")).toContain("BAD_CALL();");
+			expect(await s.commitReason()).toContain(HOLD_REMEDY);
+			const [held] = listCascadePendingNeighbors().filter(
+				(e) => e.filePath === neighbour,
+			);
+			expect(held?.errorCount).toBe(1);
+			expect(held?.checkedAt).toBeGreaterThanOrEqual(rewrittenAt);
+		} finally {
+			forgetCascadePendingNeighbor(neighbour);
+		}
+		await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
+
 	// Recurrence (#5790 review F2): a source=lsp probe covers the sources its
 	// servers answered for, so it retires only the pending rows those sources
 	// raised. A knip row it never observed stayed forgotten with the lsp ones.

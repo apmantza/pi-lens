@@ -170,6 +170,8 @@ import {
 	cascadeStillPresentSince,
 	composeCascadeSection,
 	forgetCascadePendingNeighbor,
+	settleCascadePendingAfterWrite,
+	clearCascadeWriteVerdicts,
 	formatCascadeNeighborDiagnostics,
 	listCascadePendingNeighbors,
 	markCascadeUnansweredPrimariesDelivered,
@@ -2372,13 +2374,18 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	const cascadeTurn = runtime.turnIndex;
 	// #4487: an edited file's own dispatch reports its errors (with #4484,
 	// the ones still observed as well as the new ones); the cascade record
-	// keeps none for it.
+	// keeps none for it. #5804: only when a language server answered for that
+	// write. A write with no answer (inconclusive, crashed, timed out,
+	// superseded, never dispatched) says nothing about the errors the record
+	// holds, so they stay, carried to the write's read time.
 	const editedKeys = new Set<string>();
+	const settleAt = Date.now();
 	for (const file of files) {
 		const absolute = path.resolve(cwd, file);
-		editedKeys.add(normalizeMapKey(absolute));
-		forgetCascadePendingNeighbor(absolute);
+		if (settleCascadePendingAfterWrite(absolute, settleAt))
+			editedKeys.add(normalizeMapKey(absolute));
 	}
+	clearCascadeWriteVerdicts();
 	// The latest result per primary (last writer wins).
 	const seen = new Map<string, CascadeResult>();
 	for (const result of cascadeResults) {
@@ -2523,7 +2530,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					if (n.diagnostics.length === 0) continue;
 					// #4495 round 3: a neighbour pi edited this turn is reported by
 					// its own dispatch; the record keeps nothing for it, even when a
-					// run read it before the edit.
+					// run read it before the edit. #5804: `editedKeys` holds only the
+					// files whose write a language server answered for.
 					if (editedKeys.has(normalizeMapKey(n.filePath))) continue;
 					if (primaryUnanswered.has(normalizeMapKey(n.filePath))) continue;
 					sectionObservations.push({

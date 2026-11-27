@@ -766,6 +766,51 @@ export function forgetCascadePendingNeighbor(
 	pendingNeighbors.delete(key);
 }
 
+// #5804: files whose last write this turn a language server answered for.
+// Bounded like the record: an evicted note reads as "no answer", which keeps
+// the file's errors.
+const answeredWrites = new BoundedFifoMap<string, true>(MAX_PENDING_NEIGHBORS);
+
+/**
+ * #5804: note a write of `filePath`. A write starts unanswered, so a crash,
+ * timeout, abort or superseded run leaves the file unanswered; the run that
+ * publishes a verdict a language server answered for notes it answered.
+ * Consumed by {@link settleCascadePendingAfterWrite}.
+ */
+export function noteCascadeWrite(filePath: string, answered: boolean): void {
+	const key = normalizeMapKey(filePath);
+	answeredWrites.delete(key);
+	if (answered) answeredWrites.set(key, true);
+}
+
+/**
+ * #5804: turn end, for a file pi wrote this turn. Returns true when the
+ * write's own dispatch speaks for the file's cascade errors (a server
+ * answered), and forgets the record: the dispatch reports whatever is still
+ * there. Otherwise the file is not known clean: the record keeps its errors
+ * and its observation moves to `at`, so the freshness gate reads pi's own
+ * unconfirmed rewrite as a claim the record carries, not as an edit outside
+ * pi.
+ */
+export function settleCascadePendingAfterWrite(
+	filePath: string,
+	at: number,
+): boolean {
+	const key = normalizeMapKey(filePath);
+	if (answeredWrites.has(key)) {
+		pendingNeighbors.delete(key);
+		return true;
+	}
+	const entry = pendingNeighbors.get(key);
+	if (entry) entry.checkedAt = Math.max(entry.checkedAt, at);
+	return false;
+}
+
+/** Turn end: the notes above are about this turn's writes only. */
+export function clearCascadeWriteVerdicts(): void {
+	answeredWrites.clear();
+}
+
 /** The record, oldest-written first. */
 export function listCascadePendingNeighbors(): ReadonlyArray<{
 	filePath: string;
@@ -794,4 +839,5 @@ export function getCascadePendingNeighborCount(): number {
 /** Session reset (`resetDispatchBaselines` in clients/dispatch/integration.ts). */
 export function resetCascadePendingNeighbors(): void {
 	pendingNeighbors.clear();
+	answeredWrites.clear();
 }
