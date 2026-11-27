@@ -1,5 +1,11 @@
 # User changelog
 
+## [4.5.3] - 2026-11-27
+
+2 features, 13 fixes, 2 other changes.
+
+Full notes: https://github.com/apmantza/pi-lens/releases/tag/v4.5.3
+
 ## [4.5.2] - 2026-11-22
 
 1 feature, 23 fixes, 2 other changes.
@@ -23,9 +29,3 @@ Full notes: https://github.com/apmantza/pi-lens/releases/tag/v4.5.0
 1 feature, 2 fixes.
 
 Full notes: https://github.com/apmantza/pi-lens/releases/tag/v4.4.12
-
-## [4.4.11] - 2026-11-09
-
-32 fixes, 2 other changes.
-
-Full notes: https://github.com/apmantza/pi-lens/releases/tag/v4.4.11
