@@ -89,7 +89,7 @@ column is the effective behavior when nothing is set.
 | `--no-read-guard` | `readGuard.enabled` | global | read-before-edit monitor **on** |
 | `--no-read-expansion` | `readGuard.expandReads` | global | read widening **on** (guard stays active when disabled) |
 | `--no-lens-context` | `contextInjection.enabled` | global | context injection **on** |
-| `--lens-retain-injections` | `contextInjection.retain` | global | **off** |
+| `--lens-retain-injections` | `contextInjection.retain` | global | **off**, except **on** for `anthropic-messages` models when unset (#5770) |
 | `--lens-turn-summary` | `turnSummary.enabled` | global | **off** |
 | `--lens-actionable-warnings` | `actionableWarnings.enabled` | global | **off** |
 | `--lens-actionable-warning-actions` | `actionableWarnings.includeLspCodeActions` | global | **off** |
