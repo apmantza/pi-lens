@@ -370,6 +370,12 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// 2026-10-16 (#4476): the same fake auxiliary, seen from the role lookup
 	// the registry's dependency restart asks; getServerById knows only the
 	// built-in catalog, so the auxiliary added above answers there too.
+	"in-process-mock:clients/dispatch/runners/lsp-silent-clean-dispatch.test.ts::clients/dispatch/auxiliary-lsp":
+		{
+			detector: "in-process-mock",
+			reason:
+				"the case pins the scope the real runner takes when an auxiliary is enabled; the real enablement also reads the machine-wide LSP budget and the subagent mode, so only the enabled list is fixed and the runner is real (#5775)",
+		},
 	"in-process-mock:clients/head-move-resync-4476.test.ts::clients/lsp/server": {
 		detector: "in-process-mock",
 		reason:
@@ -495,6 +501,12 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// 2026-10-23 (#4785 F4): the touch's verdict over the real wait, publish
 	// handler and clear; only the client factory, which spawns the server, is
 	// replaced by a client over a real state.
+	"in-process-mock:clients/lsp/silent-clean-auxiliary.test.ts::clients/lsp/client":
+		{
+			detector: "in-process-mock",
+			reason:
+				"a language server is a spawned process; the cases need a primary that is wedged, throws on its probe, advertises the tsserver command or lacks a method, which a real server cannot be made to do on demand. The service, its gate and the server list seam are real; the real-wire cases are in request-sender-5097.test.ts (#5775)",
+		},
 	"in-process-mock:clients/lsp/touch-cleared-deferred-wait-4785.test.ts::clients/lsp/client":
 		{
 			detector: "in-process-mock",
@@ -674,6 +686,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// `bounded()` races the touch against a live wall deadline; fake timers
 	// would settle the bound instantly and the budget semantics would be
 	// unmeasurable. The assertion is on outcomes and counts, never elapsed ms.
+	"raw-timer-wait:clients/lsp/silent-clean-auxiliary.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the client doubles stand for a server that stays silent through the diagnostics wait, so their wait sleeps its own budget (50 ms here); an immediate undefined reads as a different outcome and the gate is never reached (#5775)",
+	},
 	"raw-timer-wait:clients/persistent-reverify.test.ts": {
 		detector: "raw-timer-wait",
 		reason:
@@ -1094,7 +1111,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"real-process-spawn:clients/lsp/request-sender-5097.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"#5097: the cancel on the wire and the connection's busy count are the subject, for a call's own request and for the pull and ping a firing bound started through the real service, and for a loading or healthy-but-slow server a touch is cut off from; a server that accepts a request and never answers it, and ignores the cancel, cannot be stood in for without a real JSON-RPC stream.",
+			"#5097: the cancel on the wire and the connection's busy count are the subject, for a call's own request and for the pull and ping a firing bound started through the real service, and for a loading or healthy-but-slow server a touch is cut off from; a server that accepts a request and never answers it, and ignores the cancel, cannot be stood in for without a real JSON-RPC stream.. #5775 adds a primary and an auxiliary on real wires, because the push-finding record the clean-confirm gate reads lives in the client's publish handler, and polls for the publishes that record depends on",
 	},
 	"real-process-spawn:clients/lsp/server-status-readiness-5487.test.ts": {
 		detector: "real-process-spawn",
@@ -2091,6 +2108,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			"the transport double hands back a client that stands in for a running language server; which ids start, and whether an untrusted project may, is decided by the real acquisition",
 	},
 	// 2026-10-23 (#4785 F4): see the in-process-mock entry for this file.
+	"service-double:clients/lsp/silent-clean-auxiliary.test.ts::LSPClientInfo": {
+		detector: "service-double",
+		reason:
+			"a language-server client is a spawned process; the gate reads the client's ping, its push-finding record and its capability answers, which the cases set per client to drive each refusal (#5775)",
+	},
 	"service-double:clients/lsp/touch-cleared-deferred-wait-4785.test.ts::LSPClientInfo":
 		{
 			detector: "service-double",
@@ -2149,7 +2171,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"ungoverned-wait-for:clients/lsp/request-sender-5097.test.ts": {
 		detector: "ungoverned-wait-for",
 		reason:
-			"#5097: the abort must land after the request is on the wire (and the server's own refresh must reach a re-pull, and a loading server must be reported loading, and the workspace pull and the read-only command must be on the wire before the Esc), and only the server's own trace shows that; the poll is bounded by its own timeout",
+			"#5097: the abort must land after the request is on the wire (and the server's own refresh must reach a re-pull, and a loading server must be reported loading, and the workspace pull and the read-only command must be on the wire before the Esc), and only the server's own trace shows that; the poll is bounded by its own timeout. #5775 adds a primary and an auxiliary on real wires, because the push-finding record the clean-confirm gate reads lives in the client's publish handler, and polls for the publishes that record depends on",
 	},
 	"ungoverned-wait-for:clients/lsp/windows-server-containment-5694.test.ts": {
 		detector: "ungoverned-wait-for",

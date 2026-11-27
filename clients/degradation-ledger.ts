@@ -1243,6 +1243,17 @@ export type DegradationKind =
 	 * file. Counted: each unresolved file is a separate decision.
 	 */
 	| "lsp-implicit-scope-unknown"
+	/*
+	 * `lsp-liveness-probe-failed`: A liveness probe (`clientPingLiveness`,
+	 * `clients/lsp/client.ts`) did not answer at all — it threw. The caller's
+	 * verdict is the same as a probe that answered `false`, but the two are
+	 * different facts and the verdict alone cannot separate them: one says the
+	 * server is wedged, the other says the check never ran. Recorded by the
+	 * silent-clean confirm gates in `clients/lsp/index.ts`, with the `serverId`
+	 * and the probe's own message, so a broken probe is visible instead of
+	 * silently downgrading every clean touch to inconclusive.
+	 */
+	| "lsp-liveness-probe-failed"
 	/**
 	 * `lsp-liveness-probe-unsupported`: A liveness probe (`clientPingLiveness`, `clients/lsp/client.ts`) found no
 	 * request method the server advertises that it could safely probe with, so

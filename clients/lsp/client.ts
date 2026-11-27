@@ -496,6 +496,11 @@ export interface LSPClientInfo {
 		sent: number;
 		published: number;
 	};
+	/** #5775: whether this server pushed findings for the path that it has not
+	 *  withdrawn with an empty push since (see
+	 *  {@link LSPClientState.unwithdrawnPushFindings}). Optional; a caller that
+	 *  certifies silence as clean reads a missing method as "unknown" and refuses. */
+	hasUnwithdrawnPushFindings?(filePath: string): boolean;
 	waitForDiagnostics(
 		filePath: string,
 		timeoutMs?: number,
@@ -1435,6 +1440,15 @@ export interface LSPClientState {
 	 * the paths the diagnostics store holds.
 	 */
 	nonEmptyAnswerPhases?: Map<string, string>;
+	/**
+	 * #5775: the paths whose findings this server pushed and has not withdrawn.
+	 * Set by a non-empty push receipt, deleted only when an empty push is
+	 * stored. Deliberately NOT dropped by {@link clearDiagnosticsForPath}: a
+	 * didChange clears the cached findings, but the server has not taken them
+	 * back, so a silent-on-clean server's silence after it still means "not
+	 * re-examined", never "clean". Holds at most the paths the server reported.
+	 */
+	unwithdrawnPushFindings?: Set<string>;
 	/**
 	 * #5131: per path, the bookkeeping that tells the client's OWN first-open
 	 * `workspace/didChangeWatchedFiles` apart from the server's answer. Set when
@@ -3266,6 +3280,9 @@ export function setupIncomingHandlers(
 			// nor is an empty that lands in its finding's phase; refused here, it
 			// also leaves a pending finding's debounce timer running.
 			const newDiags = normalizeLspDiagnostics(params.diagnostics || []);
+			// #5775: every finding the server sends counts, stored or not.
+			if (newDiags.length > 0)
+				(state.unwithdrawnPushFindings ??= new Set()).add(normalizedPath);
 			if (
 				newDiags.length === 0 &&
 				auxiliaryEmptyIsNotEvidence(state, normalizedPath, docVersion)
@@ -3565,6 +3582,8 @@ export function setupIncomingHandlers(
 					countPublication(state, normalizedPath);
 				}
 				state.pushDiagnostics.set(normalizedPath, newDiags);
+				if (newDiags.length === 0)
+					state.unwithdrawnPushFindings?.delete(normalizedPath);
 				state.pushDiagnosticTimestamps.set(normalizedPath, Date.now());
 				recordDocVersion();
 				bumpDiagnosticsVersion(state, normalizedPath);
@@ -3604,6 +3623,8 @@ export function setupIncomingHandlers(
 					return;
 				}
 				state.pushDiagnostics.set(normalizedPath, newDiags);
+				if (newDiags.length === 0)
+					state.unwithdrawnPushFindings?.delete(normalizedPath);
 				state.pushDiagnosticTimestamps.set(normalizedPath, Date.now());
 				recordDocVersion();
 				bumpDiagnosticsVersion(state, normalizedPath);
@@ -8003,6 +8024,12 @@ export async function createLSPClient(options: {
 
 		getPublicationCountsForPath(filePath) {
 			return publicationCountsForPath(state, normalizeMapKey(filePath));
+		},
+
+		hasUnwithdrawnPushFindings(filePath) {
+			return (
+				state.unwithdrawnPushFindings?.has(normalizeMapKey(filePath)) ?? false
+			);
 		},
 
 		getAllDiagnostics() {
