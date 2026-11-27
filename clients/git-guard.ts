@@ -2397,6 +2397,8 @@ function unconfirmedRecordRemedy(
 	/** #4921: the session attempting the commit. */
 	me: string,
 	cwd: string,
+	/** The host's name for `lens_diagnostics`, when it has one. */
+	diagnosticsTool?: string,
 ): string | undefined {
 	if (stored === undefined) return undefined;
 	const { fields } = stored;
@@ -2411,6 +2413,13 @@ function unconfirmedRecordRemedy(
 		record.sessionId === me &&
 		record.carriedBlockers === undefined
 	) {
+		// #5790 r3: text no file owns is not cleared by a write.
+		const unattributed = unattributedRecordRemedy(record, cwd, diagnosticsTool);
+		if (unattributed) {
+			return [unattributed, testRemedy, "Then retry."]
+				.flatMap((part) => (part ? [part] : []))
+				.join(" ");
+		}
 		// #4733 r1 F5: a write re-checks this session's own files, and clears no
 		// test failure, so a record that holds one names the passing run too.
 		return testRemedy
@@ -2472,6 +2481,35 @@ function unconfirmedRecordRemedy(
 	}
 	if (testRemedy) parts.push(testRemedy);
 	return parts.length > 0 ? `${parts.join(" ")} Then retry.` : undefined;
+}
+
+/**
+ * #5790 r3: the steps that clear this session's own record when part of it is
+ * text no file owns (a cascade, knip, trivy or secrets report), or
+ * `undefined` when every part is a file's. `syncGitGuardRecord` refuses to
+ * trim such a record, so no write clears it mid-turn; this session's next turn
+ * end replaces its partition from fresh findings. A cascade neighbour's error
+ * comes back at that turn end unless the neighbour was re-checked: a write of
+ * it, or a confirmed clean `source=lsp` probe (`forgetCascadePendingNeighbor`).
+ */
+function unattributedRecordRemedy(
+	findings: TurnEndFindingsCache,
+	cwd: string,
+	diagnosticsTool: string | undefined,
+): string | undefined {
+	const attributed = recordPartitions(findings).every(
+		(partition) =>
+			blockingProvenance(
+				partition.blockerContent,
+				partition.blockingFiles,
+				cwd,
+			) !== undefined,
+	);
+	if (attributed) return undefined;
+	const probe = diagnosticsTool
+		? `run ${diagnosticsTool} source=lsp on it`
+		: "run the LSP diagnostics probe on it";
+	return `The record holds blockers pi-lens cannot attribute to one file (a cascade, knip, trivy or secrets report), so no write of one file clears them now. Fix what they name, re-check each file (write it, or ${probe}), and end the turn: this session's next turn end replaces them.`;
 }
 
 export function unknown(
@@ -3156,7 +3194,8 @@ export function evaluateGitGuard(
 	const stored =
 		inspection === "missing" ? undefined : storedRecord(cacheManager, cwd);
 	const recordRemedy = () =>
-		unconfirmedRecordRemedy(stored, inspection, me, cwd) ?? RECHECK_REMEDY;
+		unconfirmedRecordRemedy(stored, inspection, me, cwd, diagnosticsTool) ??
+		RECHECK_REMEDY;
 	// #4941: a reason latched about another tree's stored record is not this
 	// commit's; any form scoping does not read still refuses on every reason.
 	const latched = runtime.gitGuardCacheUnknownFor(latchInScope);
@@ -3214,10 +3253,16 @@ export function evaluateGitGuard(
 		return unknown(cwd, "session_mismatch", {}, recordRemedy());
 	}
 	if (record.projectSeqEnd !== runtime.projectSeq) {
-		return unknown(cwd, "project_sequence_mismatch", {
-			recordedProjectSeq: record.projectSeqEnd,
-			currentProjectSeq: runtime.projectSeq,
-		});
+		// #5790 review F1: these record checks name the record's own steps too.
+		return unknown(
+			cwd,
+			"project_sequence_mismatch",
+			{
+				recordedProjectSeq: record.projectSeqEnd,
+				currentProjectSeq: runtime.projectSeq,
+			},
+			recordRemedy(),
+		);
 	}
 	const liveFiles: string[] = [];
 	for (const file of record.affectedFiles) {
@@ -3228,7 +3273,12 @@ export function evaluateGitGuard(
 			recordedSeq === undefined ||
 			recordedSeq !== (runtime.getFileSeq?.(resolved) ?? 0)
 		) {
-			return unknown(cwd, "file_sequence_mismatch", { file: resolved });
+			return unknown(
+				cwd,
+				"file_sequence_mismatch",
+				{ file: resolved },
+				recordRemedy(),
+			);
 		}
 		try {
 			if (
@@ -3244,7 +3294,12 @@ export function evaluateGitGuard(
 						currentHash.startsWith("unreadable:") ||
 						expectedHash !== currentHash
 					) {
-						return unknown(cwd, "file_content_changed", { file: resolved });
+						return unknown(
+							cwd,
+							"file_content_changed",
+							{ file: resolved },
+							recordRemedy(),
+						);
 					}
 				}
 			}
@@ -3271,8 +3326,10 @@ export function evaluateGitGuard(
 		projectSeq: record.projectSeqEnd,
 		affectedFileCount: record.affectedFiles.length,
 	});
+	// #5790 r3: "commit again" after a fix does not clear text no file owns.
+	const unattributed = unattributedRecordRemedy(record, cwd, diagnosticsTool);
 	return {
 		block: true,
-		reason: `🔴 COMMIT BLOCKED (--lens-guard): unresolved blockers must be fixed before commit/push.\n${inspectLine}`,
+		reason: `🔴 COMMIT BLOCKED (--lens-guard): unresolved blockers must be fixed before commit/push.\n${unattributed ?? inspectLine}`,
 	};
 }

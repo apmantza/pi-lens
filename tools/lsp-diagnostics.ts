@@ -1589,6 +1589,8 @@ export type ConfirmedNoBlockersInfo = {
 	writeIndex?: number;
 	coveredSources: string[];
 	cwd: string;
+	/** #5790 r3: when the read behind the verdict started (epoch ms). */
+	observedAt: number;
 };
 
 function reconcileWidgetFromLspResult(
@@ -1915,6 +1917,7 @@ async function collectFileDiagnosticResult(
 				excludeServerIds,
 			),
 			cwd,
+			observedAt: scannedAt,
 		});
 	}
 	// #671: only a CONFIRMED outcome ("clean", or a non-empty result — either
@@ -2175,6 +2178,7 @@ async function runFileDiagnostics(
 				excludeServerIds,
 			),
 			cwd,
+			observedAt,
 		});
 	}
 
