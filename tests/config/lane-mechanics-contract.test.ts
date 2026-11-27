@@ -287,6 +287,12 @@ describe("flaky-test rules (#5806)", () => {
 		expect(reviewer).toMatch(
 			/On a PR that changes the budget, wait, retry, skip or quarantine of a test that failed \(a failing CI run id or a linked flake issue names it\), that raises the budget of an existing test, or that closes or deletes a flaky test, read/,
 		);
+		// A raise with no failing host has no measurement to give, so the
+		// "finding even when green" sentence binds only a test that failed (verify
+		// r4, W4). Without this pin it reads as a finding for that raise too.
+		expect(reviewer).toMatch(
+			/and a budget raised on a test that failed without one is a finding even when green/,
+		);
 	});
 
 	// Recurrence: closing windows were picked case by case (#2042 closed on 11
@@ -348,7 +354,7 @@ describe("flaky-test rules (#5806)", () => {
 	// its own item a close on one green rerun reads as merge-ready.
 	it("puts the rules on the reviewer checklist, pointing at the fixer home", () => {
 		const text = rule("pi-lens-reviewer.md");
-		expect(text).toContain("**Flake fixes and flake closes.**");
+		expect(text).toContain("**Flake fixes, budget raises and flake closes.**");
 		expect(text).toContain('`docs/pi-lens-fixer.md` "Flaky tests"');
 		expect(text).toMatch(/a close on one green rerun[^.]*is a finding/);
 		// V6: the count sentence binds a fix close; a deletion is its exception.
