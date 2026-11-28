@@ -1447,6 +1447,18 @@ describe("#4484 witness, round 2: only evidence retires a recorded blocker", () 
 		const w2 = await s.write(U2);
 		expect(w2).not.toMatch(/clean/);
 		expect(w2).toMatch(STILL_UNFIXED);
+		// #5812 r7: held because the run still observes it, not because its
+		// source gave no verdict, so no unobserved carry is counted. Drift it
+		// catches: the count reading `stillObserved` alone after the split.
+		expect(
+			getDegradationSummary().find(
+				(c) => c.kind === "blocker-carried-unobserved",
+			)?.latestReasons ?? [],
+		).not.toContainEqual(
+			expect.objectContaining({
+				subject: expect.stringContaining("carry-unused.ts"),
+			}),
+		);
 		expect(await s.commitBlocked()).toBe(true);
 		expect(await s.endTurn()).not.toContain("Resolved this turn");
 		await fixAndDrain(s);
