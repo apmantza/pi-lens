@@ -780,8 +780,9 @@ const answeredWrites = new BoundedFifoMap<string, readonly string[]>(
  * #5804: note a write of `filePath` with the sources that reached a verdict
  * on it (`PipelineResult.verdictSourceIds`: the verdict runners, and the
  * auxiliary servers that answered inside them, #5812 r5, less any source
- * that still reports a finding the write did not deliver, #5812 r6). A `tool_result` write notes
- * none where it records its turn-state range (#5812 F2), so a write that
+ * that withheld a blocker outside the edited lines, #5812 r6). A
+ * `tool_result` write notes none where it records its turn-state range
+ * (#5812 F2), so a write that
  * never dispatches, or a crash, timeout, abort or superseded run, leaves the
  * file unanswered; the run that publishes a verdict notes its runners. The
  * agent_settled drain (deferred format and autofix) notes none for each file

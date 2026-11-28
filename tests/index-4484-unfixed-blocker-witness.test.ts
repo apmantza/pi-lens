@@ -4120,4 +4120,37 @@ describe("#5790 witness: a cascade note with no finding does not hold the commit
 		},
 		120_000,
 	);
+
+	// Recurrence (#5812 round 7, verify R6-1): the neighbour kept an unused
+	// local the delta held back from an earlier write, and the language
+	// server answered the write that fixed its cascade error. The write note
+	// read the held-back hint as lsp still reporting, left lsp out, and the
+	// fixed error's row held the commit through every later clean write.
+	it("retires a neighbour's fixed lsp row while it keeps a held-back unused value", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("db", TARGET, TARGET_FIXED);
+		removeNeighbourOnCleanup();
+		const neighbour = path.join(tmpDir, NEIGHBOUR);
+		const kept = NEIGHBOUR_FIXED + "const unusedVar = 1;\n";
+		const pendingTools = () =>
+			listCascadePendingNeighbors()
+				.filter((e) => e.filePath === neighbour)
+				.flatMap((e) => e.errors.map((error) => error.tool));
+		try {
+			await s.writeOther(NEIGHBOUR, kept);
+			await s.endTurn();
+			fs.writeFileSync(neighbour, kept + "BAD_CALL();\n");
+			await s.write(TARGET_FIXED + "export const d = 4;\n");
+			expect(await s.endTurn()).toContain(CASCADE_ERRORS);
+			expect(pendingTools()).toEqual(["lsp"]);
+			await s.writeOther(NEIGHBOUR, kept + "export const e = 5;\n");
+			await s.endTurn();
+			expect(pendingTools()).toEqual([]);
+			expect(await s.commitReason()).toBe("");
+		} finally {
+			forgetCascadePendingNeighbor(neighbour);
+		}
+		await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
 });

@@ -263,13 +263,20 @@ export interface DispatchResult {
 	 */
 	preExisting?: Diagnostic[];
 	/**
-	 * #4484 round 2: findings this observation still holds that neither
-	 * deliver nor enter the record on their own: a blocking finding an
-	 * edit-range gate withheld because the edit did not touch its lines, and an
-	 * unused value the delta held back (promoted, as when it was new). Each
-	 * keeps a recorded blocker of the same identity pending. Absent when none.
+	 * #4484 round 2: blocking findings an edit-range gate withheld because the
+	 * edit did not touch their lines. Not delivered and not recorded on their
+	 * own; each keeps a recorded blocker of the same identity pending, and its
+	 * source's answer did not deliver it (`verdictSourceIds`). Absent when none.
 	 */
 	stillObserved?: Diagnostic[];
+	/**
+	 * #4484 round 2: non-blocking findings the delta held back that block once
+	 * raised: an unused value (promoted, as when it was new) and a class member
+	 * (#5416). Each keeps a recorded blocker of the same identity pending, as
+	 * `stillObserved` does. #5812 r7: a separate field, because neither is a
+	 * blocker its source withheld. Absent when none.
+	 */
+	heldBackPromoted?: Diagnostic[];
 	/**
 	 * #4484 round 6: runners whose verdict covers only the edit's ranges
 	 * (`RunnerResult.editScopedVerdict`). Absent when none.
@@ -1028,10 +1035,12 @@ export function verdictRunnerIds(
  * id, and the auxiliary servers that runner's touch says answered these
  * bytes (`answeredServerIds`). An auxiliary's rows carry its server id as
  * their tool (`retagAuxiliaryDiagnostics`), and it answers inside the `lsp`
- * runner, so no runner id ever names it. #5812 r6: a source with a finding
- * in `stillObserved` (one withheld outside the edited lines, #4481, or held
- * by the delta) is left out: its answer did not deliver what it still
- * reports, so a pending row of that source must stay.
+ * runner, so no runner id ever names it. #5812 r6: a source with a blocker
+ * withheld outside the edited lines (`stillObserved`, #4481) is left out:
+ * its answer did not deliver what it still reports, so a pending row of that
+ * source must stay. #5812 r7: `heldBackPromoted` does not count. A cascade
+ * row is a finding its server reported as an error, and each of those was
+ * non-blocking as reported, so it is never the pending row.
  */
 export function verdictSourceIds(
 	result: Pick<

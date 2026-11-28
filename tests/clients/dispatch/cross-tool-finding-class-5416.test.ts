@@ -687,7 +687,7 @@ describe("#5416: the class merge runs after every per-copy filter", () => {
 			[answering(oxlintRunner, oxlint())],
 		);
 		expect(second.blockers).toHaveLength(0);
-		expect(second.stillObserved?.map((d) => [d.rule, d.semantic])).toEqual([
+		expect(second.heldBackPromoted?.map((d) => [d.rule, d.semantic])).toEqual([
 			["no-undef", "blocking"],
 		]);
 	});

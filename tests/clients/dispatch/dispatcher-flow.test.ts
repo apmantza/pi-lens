@@ -1150,7 +1150,7 @@ describe("Dispatch Flow", () => {
 		it("keeps a held-back runner fault a warning, so the record never holds it as a blocker (#4130)", async () => {
 			// Recurrence: the same fault on the next edit is no longer new, so the
 			// delta holds it back as already seen. That is the second caller of the
-			// promotion seam (`stillObserved`), which must leave the fault a warning.
+			// promotion seam (`heldBackPromoted`), which must leave the fault a warning.
 			const facts = new FactStore();
 			setBaselineFacts(
 				facts,
@@ -1176,7 +1176,9 @@ describe("Dispatch Flow", () => {
 
 			const result = await dispatchForFile(ctx, groups);
 
-			expect(result.stillObserved?.map((d) => d.semantic)).toEqual(["warning"]);
+			expect(result.heldBackPromoted?.map((d) => d.semantic)).toEqual([
+				"warning",
+			]);
 			expect(result.hasBlockers).toBe(false);
 		});
 

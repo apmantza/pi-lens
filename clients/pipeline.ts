@@ -2065,9 +2065,10 @@ function buildEnrichedBlockerOutput(
  * matched by a blocker this run delivers or holds back, of the same identity
  * at the blocker's position (`positionOf`), is already in `observed`; the
  * observed copies matched this way are returned as `matched`. One matched only
- * by `stillObserved` stays as its observed copy. One no finding matches stays,
- * at its position when it has one, only when its runner or server reached no
- * verdict; that carry is counted per file. #5727: a blocker whose own server
+ * by `stillObserved` or `heldBackPromoted` stays as its observed copy. One no
+ * finding matches stays, at its position when it has one, only when its
+ * runner or server reached no verdict; that carry is counted per file.
+ * #5727: a blocker whose own server
  * answered these bytes, although its runner reached no verdict
  * (`answeredServerIds`), is judged by that answer. Round 6: a runner whose verdict
  * covers only the edit (`editScopedRunnerIds`) answers only for a blocker
@@ -2081,7 +2082,10 @@ function carryRecordedBlockers(
 	observed: readonly Diagnostic[],
 	dispatchResult: Pick<
 		DispatchResult,
-		"stillObserved" | "inconclusiveSources" | "editScopedRunnerIds"
+		| "stillObserved"
+		| "heldBackPromoted"
+		| "inconclusiveSources"
+		| "editScopedRunnerIds"
 	>,
 	filePath: string,
 	positionOf: (d: Diagnostic) => number | undefined | typeof ANY_POSITION,
@@ -2112,20 +2116,20 @@ function carryRecordedBlockers(
 	};
 	const observedNow = new Set(observed);
 	const recorded = new Set(prior);
-	const { kept } = retainRecordedFindings(
-		prior,
-		[...observed, ...(dispatchResult.stillObserved ?? [])],
-		{
-			positionOf,
-			matchesAnywhere,
-			keepUnobserved: (d) =>
-				runnerKeeps(d) ||
-				(d.serverId !== undefined && serverIds.has(d.serverId)) ||
-				(d.runnerId !== undefined &&
-					editScoped.has(d.runnerId) &&
-					!insideEdit(d)),
-		},
-	);
+	const stillHeld = [
+		...(dispatchResult.stillObserved ?? []),
+		...(dispatchResult.heldBackPromoted ?? []),
+	];
+	const { kept } = retainRecordedFindings(prior, [...observed, ...stillHeld], {
+		positionOf,
+		matchesAnywhere,
+		keepUnobserved: (d) =>
+			runnerKeeps(d) ||
+			(d.serverId !== undefined && serverIds.has(d.serverId)) ||
+			(d.runnerId !== undefined &&
+				editScoped.has(d.runnerId) &&
+				!insideEdit(d)),
+	});
 	const matched = new Set(kept.flatMap((d) => (observedNow.has(d) ? [d] : [])));
 	const carried = kept.flatMap((d) => {
 		if (observedNow.has(d)) return [];
@@ -2150,7 +2154,7 @@ function carryRecordedBlockers(
 			return [{ ...row, positionStale: true as const, ...marker }];
 		return [{ ...row, line: at, ...marker }];
 	});
-	if (carried.some((d) => !dispatchResult.stillObserved?.includes(d))) {
+	if (carried.some((d) => !stillHeld.includes(d))) {
 		incrementDegradationCount({
 			kind: "blocker-carried-unobserved",
 			subject: normalizeMapKey(filePath),
