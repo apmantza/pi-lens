@@ -37,6 +37,7 @@ import {
 } from "../../clients/lens-engine.js";
 import { createSymbolSearchTool } from "../../tools/symbol-search.js";
 import { createTempFile, setupTestEnvironment } from "../clients/test-utils.js";
+import { withEnv } from "../support/with-env.js";
 
 /** The one join on a cold build, which exposes no awaitable. */
 const eventually = (check: () => unknown) =>
@@ -355,11 +356,7 @@ describe("symbol_search tool", () => {
 		"a root whose link is $moved mid-build reports the failure and recovers",
 		async ({ move }) => {
 			const env = setupTestEnvironment("pi-lens-symbolsearch-moved-");
-			const previousDataDir = process.env.PILENS_DATA_DIR;
-			const restoreDataDir = () => {
-				if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
-				else process.env.PILENS_DATA_DIR = previousDataDir;
-			};
+			let restoreDataDir = () => {};
 			try {
 				const root = path.join(env.tmpDir, "a");
 				const other = path.join(env.tmpDir, "b");
@@ -372,11 +369,13 @@ describe("symbol_search tool", () => {
 				}
 				const link = path.join(env.tmpDir, "current");
 				fs.symlinkSync(root, link, "junction");
-				process.env.PILENS_DATA_DIR = createTempFile(
-					env.tmpDir,
-					"occupied-data-root",
-					"not a directory",
-				);
+				restoreDataDir = withEnv({
+					PILENS_DATA_DIR: createTempFile(
+						env.tmpDir,
+						"occupied-data-root",
+						"not a directory",
+					),
+				});
 				expect((await queryAt(link)).details).toMatchObject({
 					unavailableReason: "building",
 				});
@@ -433,11 +432,7 @@ describe("symbol_search tool", () => {
 	// link's parent. Resolved physically, the status named the target's parent.
 	it("files a link/.. root's build status under the project it walks (shape 1)", async () => {
 		const env = setupTestEnvironment("pi-lens-symbolsearch-dotdot-");
-		const previousDataDir = process.env.PILENS_DATA_DIR;
-		const restoreDataDir = () => {
-			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
-			else process.env.PILENS_DATA_DIR = previousDataDir;
-		};
+		let restoreDataDir = () => {};
 		try {
 			const walked = path.join(env.tmpDir, "workspace");
 			const physical = path.join(env.tmpDir, "projects");
@@ -449,11 +444,13 @@ describe("symbol_search tool", () => {
 			fs.mkdirSync(path.join(physical, "app"), { recursive: true });
 			const link = path.join(walked, "link");
 			fs.symlinkSync(path.join(physical, "app"), link, "junction");
-			process.env.PILENS_DATA_DIR = createTempFile(
-				env.tmpDir,
-				"occupied-data-root",
-				"not a directory",
-			);
+			restoreDataDir = withEnv({
+				PILENS_DATA_DIR: createTempFile(
+					env.tmpDir,
+					"occupied-data-root",
+					"not a directory",
+				),
+			});
 			// Concatenated: `path.join` would fold the `..` away.
 			expect((await queryAt(`${link}${path.sep}..`)).details).toMatchObject({
 				unavailableReason: "building",
