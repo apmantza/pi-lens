@@ -305,7 +305,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"deadline and no signal, exactly like index.ts:2151.",
 		owner: "#2523 slice 2",
 	},
-	"clients/mcp/session.ts#runSessionStartImpl:fceb216b~fb5d3323": {
+	"clients/mcp/session.ts#runSessionStartImpl:fceb216b~73c6239d": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
@@ -332,7 +332,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"`handleTurnEnd` sits beneath it.",
 		owner: "#2523 slice 2",
 	},
-	"clients/mcp/session.ts#runTurnEndForIpcNow:fceb216b~1d78168d": {
+	"clients/mcp/session.ts#runTurnEndForIpcNow:fceb216b~daa7001c": {
 		family: "hook-await",
 		site: "turn_end",
 		reason:
@@ -350,7 +350,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"queue, not the work it admits — #2523 says so explicitly.",
 		owner: "#2523 slice 2",
 	},
-	"clients/mcp/session.ts#runTurnEndNowImpl:fceb216b~047d1dce": {
+	"clients/mcp/session.ts#runTurnEndNowImpl:fceb216b~04fda1bd": {
 		family: "hook-await",
 		site: "turn_end",
 		reason:

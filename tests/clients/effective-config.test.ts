@@ -790,6 +790,9 @@ describe("effectiveConfig — redaction is unconditional", () => {
 		for (const document of view.documents) {
 			expect(document.file.startsWith("~/")).toBe(true);
 		}
+		for (const source of view.inspectedConfigSources) {
+			expect(source.file.startsWith("~/")).toBe(true);
+		}
 
 		// What DOES survive is the part that answers the question: the server
 		// exists, it came from the project file, and this is the binary.
@@ -1570,4 +1573,147 @@ describe("effectiveConfig — tools answer from the runtime's project read (#573
 
 		expect(logSink.messages).toEqual([]);
 	});
+});
+
+describe("effectiveConfig — inspectedConfigSources (#5394)", () => {
+	it("surfaces home-redacted absent, unreadable, and readable (parsed true/false) candidates", async () => {
+		const home = fs.realpathSync.native(
+			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-effcfg-")),
+		);
+		tempRoots.push(home);
+		const projectDir = path.join(home, "repo");
+		fs.mkdirSync(projectDir, { recursive: true });
+		// Readable + parsed: true
+		fs.writeFileSync(
+			path.join(projectDir, ".pi-lens.json"),
+			JSON.stringify({ lsp: { warmFiles: ["a.ts"] } }),
+		);
+		// Readable + parsed: false (invalid JSON)
+		fs.writeFileSync(path.join(projectDir, "pi-lens.json"), "{ not json");
+		// Unreadable (directory at candidate path causes EISDIR)
+		fs.mkdirSync(path.join(projectDir, "pi-lsp.json"), { recursive: true });
+
+		const previousHome = process.env.PI_LENS_HOME;
+		process.env.PI_LENS_HOME = path.join(home, ".pi-lens");
+		setConfigPath(path.join(home, ".pi-lens", "config.json"));
+		resetLSPConfigStateForTests();
+		resetLSPConfigWarnCache();
+
+		try {
+			const view = await effectiveConfig({
+				cwd: projectDir,
+				homeDir: home,
+				redact: true,
+			});
+
+			const serialized = JSON.stringify(view.inspectedConfigSources);
+			expect(serialized).not.toContain(JSON.stringify(home).slice(1, -1));
+			for (const entry of view.inspectedConfigSources) {
+				expect(entry.file.startsWith("~/")).toBe(true);
+			}
+
+			expect(
+				view.inspectedConfigSources.find(
+					(entry) => entry.file === "~/repo/.pi-lens.json",
+				),
+			).toMatchObject({
+				file: "~/repo/.pi-lens.json",
+				tier: "project",
+				state: "readable",
+				parsed: true,
+			});
+			expect(
+				view.inspectedConfigSources.find(
+					(entry) => entry.file === "~/repo/pi-lens.json",
+				),
+			).toMatchObject({
+				file: "~/repo/pi-lens.json",
+				tier: "project",
+				state: "readable",
+				parsed: false,
+			});
+			expect(
+				view.inspectedConfigSources.find(
+					(entry) => entry.file === "~/repo/pi-lsp.json",
+				),
+			).toEqual({
+				file: "~/repo/pi-lsp.json",
+				tier: "project",
+				state: "unreadable",
+			});
+			expect(
+				view.inspectedConfigSources.find(
+					(entry) => entry.file === "~/.pi-lens/config.json",
+				),
+			).toEqual({
+				file: "~/.pi-lens/config.json",
+				tier: "global",
+				state: "absent",
+			});
+		} finally {
+			if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = previousHome;
+		}
+	});
+
+	it.skipIf(process.platform === "win32")(
+		"redacts paths under a symlinked $HOME in inspectedConfigSources and view fields",
+		async () => {
+			const base = fs.realpathSync.native(
+				fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-effcfg-symhome-")),
+			);
+			tempRoots.push(base);
+			const realHome = path.join(base, "real-home");
+			const linkHome = path.join(base, "link-home");
+			fs.mkdirSync(realHome, { recursive: true });
+			fs.symlinkSync(realHome, linkHome, "dir");
+
+			const projectDir = path.join(linkHome, "proj");
+			fs.mkdirSync(projectDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(projectDir, ".pi-lens.json"),
+				JSON.stringify({ lsp: { disabledServers: ["typos"] } }),
+			);
+			fs.writeFileSync(path.join(projectDir, "notes.md"), "hello\n");
+
+			const previousHome = process.env.PI_LENS_HOME;
+			process.env.PI_LENS_HOME = path.join(linkHome, ".pi-lens");
+			setConfigPath(path.join(linkHome, ".pi-lens", "config.json"));
+			resetLSPConfigStateForTests();
+			resetLSPConfigWarnCache();
+
+			try {
+				const view = await effectiveConfig({
+					cwd: projectDir,
+					file: "notes.md",
+					homeDir: linkHome,
+					redact: true,
+				});
+
+				const serialized = JSON.stringify(view);
+				expect(serialized).not.toContain(JSON.stringify(realHome).slice(1, -1));
+				expect(serialized).not.toContain(JSON.stringify(linkHome).slice(1, -1));
+				expect(view.cwd).toBe("~/proj");
+				for (const entry of view.inspectedConfigSources) {
+					expect(entry.file.startsWith("~/")).toBe(true);
+				}
+				expect(
+					view.inspectedConfigSources.find(
+						(entry) => entry.file === "~/proj/.pi-lens.json",
+					),
+				).toMatchObject({
+					file: "~/proj/.pi-lens.json",
+					tier: "project",
+					state: "readable",
+					parsed: true,
+				});
+				expect(view.documents).toEqual([
+					{ tier: "project", file: "~/proj/.pi-lens.json", legacy: false },
+				]);
+			} finally {
+				if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+				else process.env.PI_LENS_HOME = previousHome;
+			}
+		},
+	);
 });

@@ -46,6 +46,7 @@ import {
 } from "./config-locations.js";
 import {
 	type ConfigDocumentSummary,
+	type ConfigSourceDigest,
 	lspSectionOf,
 	type PiLensConfigResolution,
 	resolveOnePiLensConfigDocument,
@@ -76,7 +77,11 @@ import {
 // hand-rolled `path.relative`/prefix check here is how the two would drift
 // apart on a Windows-shaped path (AGENTS.md defect shape 2).
 import { isSameOrWithin } from "./lsp/server.js";
-import { homeRelativePath, resolveHostToolPath } from "./path-utils.js";
+import {
+	homeRelativePath,
+	realpathOrResolve,
+	resolveHostToolPath,
+} from "./path-utils.js";
 import { resolveToolCwd } from "./tool-cwd.js";
 import { compareOrdinal } from "./string-utils.js";
 import { LENS_TOOL_NAMES, resolveLensToolEnabled } from "./tool-config.js";
@@ -204,6 +209,8 @@ export interface EffectiveConfigView {
 	/** Home-relative when the workspace is under `$HOME`. */
 	readonly cwd: string;
 	readonly documents: readonly EffectiveConfigDocument[];
+	/** Read-time candidate source digests (home-relative when under `$HOME`). */
+	readonly inspectedConfigSources: readonly ConfigSourceDigest[];
 	/** Every resolved leaf's source. Sources only, never values. */
 	readonly provenance: readonly ProvenanceViewEntry[];
 	/** How many leaves each tier decided. The shape `pilens_health` embeds. */
@@ -317,9 +324,22 @@ function provenanceOfSubtree(
  * that has no entry of its own still falls back to the array, which is the
  * walk doing its job rather than an accident.
  */
+function homeRelativeWithRealFallback(
+	filePath: string,
+	homeDir: string,
+	realHomeDir: string,
+): string {
+	const redacted = homeRelativePath(filePath, homeDir);
+	if (redacted !== filePath || realHomeDir === homeDir) {
+		return redacted;
+	}
+	return homeRelativePath(filePath, realHomeDir);
+}
+
 function viewOf(
 	entry: Provenance | undefined,
-	homeDir: string | undefined,
+	homeDir: string,
+	realHomeDir: string,
 ): ProvenanceViewEntry | undefined {
 	if (!entry) return undefined;
 	return {
@@ -327,7 +347,9 @@ function viewOf(
 		tier: entry.tier,
 		...(entry.file === undefined
 			? {}
-			: { file: homeRelativePath(entry.file, homeDir) }),
+			: {
+					file: homeRelativeWithRealFallback(entry.file, homeDir, realHomeDir),
+				}),
 		...(entry.trust === undefined ? {} : { trust: entry.trust }),
 	};
 }
@@ -414,6 +436,7 @@ export async function effectiveConfig(
 ): Promise<EffectiveConfigView> {
 	const cwd = options.cwd ?? process.cwd();
 	const homeDir = options.homeDir ?? os.homedir();
+	const realHomeDir = realpathOrResolve(homeDir);
 	// The resolution, at whichever directory this query is answered FROM.
 	//
 	// `homeDir` is threaded, unlike `initLSPConfig`'s hard-wired `os.homedir()`:
@@ -543,7 +566,11 @@ export async function effectiveConfig(
 	// the one named back in the rejection message below, so an agent reading
 	// `file: { error }` sees the SAME `cwd` spelling the rest of the view
 	// uses, not a second, raw-path rendering of it.
-	const homeRelativeCwd = homeRelativePath(cwd, homeDir);
+	const homeRelativeCwd = homeRelativeWithRealFallback(
+		cwd,
+		homeDir,
+		realHomeDir,
+	);
 
 	// The unknown `lsp.disabledServers` ids (#5141) are collected by the same
 	// projection the loader runs, into a problems list this query never reports.
@@ -552,8 +579,26 @@ export async function effectiveConfig(
 
 	const view: EffectiveConfigView = {
 		cwd: homeRelativeCwd,
-		documents: summary.documents,
-		provenance: provenanceView(resolved, homeDir).entries,
+		documents: summary.documents.map((document) => ({
+			...document,
+			file: homeRelativeWithRealFallback(document.file, homeDir, realHomeDir),
+		})),
+		inspectedConfigSources: resolution.inspectedConfigSources.map((entry) => ({
+			...entry,
+			file: homeRelativeWithRealFallback(entry.file, homeDir, realHomeDir),
+		})),
+		provenance: provenanceView(resolved, homeDir).entries.map((entry) =>
+			entry.file === undefined
+				? entry
+				: {
+						...entry,
+						file: homeRelativeWithRealFallback(
+							entry.file,
+							homeDir,
+							realHomeDir,
+						),
+					},
+		),
 		provenanceCounts: summary.countsByTier,
 		// The unknown `dispatch.disabledRunners` ids are records too: the pure
 		// `disabledRunnersOf` derives them without reporting (this query is not a
@@ -593,6 +638,7 @@ export async function effectiveConfig(
 							policyResolution,
 							resolved,
 							homeDir,
+							realHomeDir,
 							cwd,
 							// The gates read the LSP slice of that SAME resolution, through
 							// the same `registerLSPConfig` conversion `initLSPConfig` uses —
@@ -635,6 +681,7 @@ async function fileView(
 	resolution: PiLensConfigResolution,
 	resolved: Resolved<Record<string, unknown>>,
 	homeDir: string,
+	realHomeDir: string,
 	workspaceCwd: string,
 	lspConfig: RegisteredLSPConfig,
 ): Promise<EffectiveFileView> {
@@ -673,6 +720,7 @@ async function fileView(
 				index >= 0 ? `${denyPointer}/${index}` : denyPointer,
 			),
 			homeDir,
+			realHomeDir,
 		);
 	};
 
@@ -706,6 +754,7 @@ async function fileView(
 												`/servers/${entry.server.id}`,
 											),
 										homeDir,
+										realHomeDir,
 									),
 								}),
 					}),
@@ -748,14 +797,18 @@ async function fileView(
 			selected: available.has(id) && !denied && !lacksConfig,
 			reason: toolReason(available.has(id), denied, lacksConfig, kind),
 			...decidedByOrNothing(
-				viewOf(disabledRunners.get(id)?.decidedBy, homeDir),
+				viewOf(disabledRunners.get(id)?.decidedBy, homeDir, realHomeDir),
 			),
-			resolvedCwd: homeRelativePath(runnerCwdOf(id), homeDir),
+			resolvedCwd: homeRelativeWithRealFallback(
+				runnerCwdOf(id),
+				homeDir,
+				realHomeDir,
+			),
 		};
 	});
 
 	return {
-		path: homeRelativePath(absolute, homeDir),
+		path: homeRelativeWithRealFallback(absolute, homeDir, realHomeDir),
 		...(language === undefined ? {} : { language: language.id }),
 		...(kind === undefined ? {} : { kind }),
 		servers,

@@ -187,6 +187,33 @@ export class McpHarness {
 		});
 	}
 
+	/** Send several requests in ONE stdin write, so the server reads them from
+	 *  one chunk (a write under PIPE_BUF arrives whole). */
+	pipelinedRequests(
+		requests: { id: number; method: string; params?: unknown }[],
+		timeoutMs = this.defaultTimeoutMs,
+	): Promise<Record<string, unknown>[]> {
+		const responses = requests.map(
+			({ id, method }) =>
+				new Promise<Record<string, unknown>>((resolve, reject) => {
+					const timer = setTimeout(
+						() => reject(new Error(`timeout: ${method}`)),
+						timeoutMs,
+					);
+					this.pending.set(id, (msg) => {
+						clearTimeout(timer);
+						resolve(msg);
+					});
+				}),
+		);
+		this.child.stdin.write(
+			requests
+				.map((request) => `${JSON.stringify({ jsonrpc: "2.0", ...request })}\n`)
+				.join(""),
+		);
+		return Promise.all(responses);
+	}
+
 	notify(method: string, params?: unknown): void {
 		this.child.stdin.write(
 			`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`,

@@ -31,6 +31,7 @@ import { projectScan } from "../../clients/lens-engine.js";
 import { _resetStateCacheForTests } from "../../clients/diagnostic-dispositions.js";
 import { createLensDiagnosticMarkTool } from "../../tools/lens-diagnostic-mark.js";
 import { stripSource } from "../support/sweep-kit.js";
+import { readNdjsonRows } from "../support/ndjson-rows.js";
 
 // Spawns the MCP server as a real stdio subprocess; like analyze-cli, it can lose
 // a CPU-starvation race in the full parallel suite (passes in isolation). retry: 2
@@ -1827,6 +1828,7 @@ describe("pi-lens MCP canonical `path` parameter (#5041)", { retry: 2 }, () => {
 		const older = await call("pilens_effective_config", { file: "app.ts" });
 		expect(canonical.isError, text(canonical)).toBeFalsy();
 		expect(text(canonical)).toContain(`File: ${file}`);
+		expect(text(canonical)).toMatch(/Inspected sources: \d+ candidate\(s\)/);
 		expect(text(canonical)).not.toContain("Ignored unknown argument");
 		expect(text(older)).toContain(`File: ${file}`);
 		expect(text(older)).toContain("Ignored unknown argument");
@@ -2157,4 +2159,217 @@ describe("non-pi workspace trust (#4300)", () => {
 			env.cleanup();
 		}
 	}, 60_000);
+});
+
+describe("multi-cwd global config invalidation in MCP server (#5394)", () => {
+	it("reloads LSP config for secondary workspaces after global config changes", async () => {
+		const env = setupTestEnvironment("pi-lens-mcp-multicwd-");
+		const home = path.join(env.tmpDir, "home");
+		const globalConfigPath = path.join(home, "config.json");
+		fs.mkdirSync(home, { recursive: true });
+		fs.writeFileSync(globalConfigPath, JSON.stringify({}), "utf8");
+
+		const shim = path.join(env.tmpDir, "lua-server.mjs");
+		fs.writeFileSync(
+			shim,
+			[
+				'process.env.FAKE_LSP_NO_DIAGNOSTIC_PROVIDER = "1";',
+				`await import(${JSON.stringify(new URL("../fixtures/fake-lsp-server.mjs", import.meta.url).href)});`,
+				"",
+			].join("\n"),
+		);
+
+		const makeProj = (name: string) => {
+			const dir = path.join(env.tmpDir, name);
+			fs.mkdirSync(path.join(dir, ".pi-lens"), { recursive: true });
+			fs.writeFileSync(path.join(dir, ".luarc.json"), "{}\n");
+			fs.writeFileSync(
+				path.join(dir, ".pi-lens", "lsp.json"),
+				JSON.stringify({
+					servers: {
+						emmylua: {
+							name: "test-lua",
+							extensions: [".lua"],
+							command: process.execPath,
+							args: [shim],
+							rootMarkers: [".luarc.json"],
+						},
+					},
+					disabledServers: ["lua", "ast-grep", "typos", "opengrep"],
+				}),
+			);
+			const file = path.join(dir, "probe.lua");
+			fs.writeFileSync(file, "local x = 1\n");
+			return { dir, file };
+		};
+
+		const projA = makeProj("proj-a");
+		const projB = makeProj("proj-b");
+		const child = new McpHarness({
+			cwd: projA.dir,
+			env: {
+				PI_LENS_HOME: home,
+				PI_LENS_CONFIG_PATH: globalConfigPath,
+				PI_LENS_TEST_MODE: "0",
+			},
+		});
+
+		try {
+			await child.request(53940, "initialize", {
+				protocolVersion: "2025-06-18",
+				capabilities: {},
+				clientInfo: { name: "multicwd-test", version: "0" },
+			});
+			child.notify("notifications/initialized");
+
+			const navText = async (id: number, cwd: string, file: string) => {
+				const res = await child.request(id, "tools/call", {
+					name: "pilens_lsp_navigation",
+					arguments: { cwd, operation: "documentSymbol", path: file },
+				});
+				return (res.result as { content: { text: string }[] }).content[0].text;
+			};
+
+			const beforeA = await navText(53941, projA.dir, projA.file);
+			const beforeB = await navText(53942, projB.dir, projB.file);
+			expect(beforeA).not.toContain(
+				"disabled in config by lsp.disabledServers",
+			);
+			expect(beforeB).not.toContain(
+				"disabled in config by lsp.disabledServers",
+			);
+
+			fs.writeFileSync(
+				globalConfigPath,
+				JSON.stringify({ lsp: { disabledServers: ["emmylua"] } }),
+				"utf8",
+			);
+
+			const afterA = await navText(53943, projA.dir, projA.file);
+			const afterB = await navText(53944, projB.dir, projB.file);
+			expect(afterA).toContain("disabled in config by lsp.disabledServers");
+			expect(afterB).toContain("disabled in config by lsp.disabledServers");
+		} finally {
+			child.dispose();
+			env.cleanup();
+		}
+	}, 60_000);
+});
+
+// #5394: a config reset by a pipelined turn_end, between session_start's own
+// config check and its resumption, let session_start run on the retired runtime
+// and `resetForSession` revived it.
+describe("session_start versus a pipelined config reset (#5394)", () => {
+	it.each([
+		{
+			delivery: "in the same stdin chunk",
+			deferSecond: false,
+			writeAt: 3,
+			refused: true,
+			resets: [],
+		},
+		{
+			delivery: "one macrotask later",
+			deferSecond: true,
+			writeAt: 3,
+			refused: false,
+			resets: [{ retiredBy: null, liveAfter: true }],
+		},
+		{
+			// Capture-order pin: the write lands after ensureReady's read and before
+			// session_start's own config check. That check resets first, so the
+			// capture after it must still be current.
+			delivery: "after ensureReady's read, before session_start's own check",
+			deferSecond: false,
+			writeAt: 2,
+			refused: false,
+			resets: [{ retiredBy: null, liveAfter: true }],
+		},
+	])(
+		"never revives a retired runtime when turn_end arrives $delivery",
+		async ({ deferSecond, writeAt, refused, resets }) => {
+			const env = setupTestEnvironment("pi-lens-mcp-reset-race-");
+			const project = path.join(env.tmpDir, "project");
+			const home = path.join(env.tmpDir, "home");
+			const dataDir = path.join(env.tmpDir, "data");
+			const globalConfigPath = path.join(home, "config.json");
+			const eventLog = path.join(env.tmpDir, "race.ndjson");
+			fs.mkdirSync(project, { recursive: true });
+			fs.mkdirSync(home, { recursive: true });
+			fs.writeFileSync(globalConfigPath, "{}");
+			fs.writeFileSync(path.join(project, "a.ts"), "// TODO: probe\n");
+			const preload = new URL(
+				"../fixtures/mcp-session-reset-race.mjs",
+				import.meta.url,
+			).href;
+			const child = new McpHarness({
+				cwd: project,
+				env: {
+					PI_LENS_HOME: home,
+					PILENS_DATA_DIR: dataDir,
+					PI_LENS_CONFIG_PATH: globalConfigPath,
+					PI_LENS_TEST_MODE: "0",
+					NODE_OPTIONS:
+						`${process.env.NODE_OPTIONS ?? ""} --import ${preload}`.trim(),
+					PI_LENS_TEST_RACE_LOG: eventLog,
+					PI_LENS_TEST_RACE_DEFER_SECOND: deferSecond ? "1" : "",
+					PI_LENS_TEST_RACE_WRITE_READ: String(writeAt),
+				},
+			});
+			const call = (id: number, name: string) => ({
+				id,
+				method: "tools/call",
+				params: { name, arguments: { cwd: project } },
+			});
+
+			try {
+				// Warm the session context: the race needs a resolved bootstrap.
+				const warm = call(53950, "pilens_turn_end");
+				await child.request(warm.id, warm.method, warm.params);
+
+				const [started] = await child.pipelinedRequests([
+					call(53951, "pilens_session_start"),
+					call(53952, "pilens_turn_end"),
+				]);
+				const events = readNdjsonRows<{
+					read?: string;
+					reset?: unknown;
+					wrote?: boolean;
+				}>(eventLog);
+
+				if (!deferSecond) {
+					// The config write lands after the third read.
+					expect(events.rows.flatMap((e) => e.read ?? [])).toEqual([
+						"ensureReady",
+						"ensureReady",
+						"runSessionStartImpl",
+						"runTurnEndNowImpl",
+					]);
+				}
+				const result = started.result as {
+					isError?: boolean;
+					content: { text: string }[];
+				};
+				expect({
+					// The write must land, or the arm proves nothing: a fixture that never
+					// writes passes every arm with refused:false.
+					wrote: events.rows.filter((e) => e.wrote).length,
+					skipped: events.skipped,
+					resets: events.rows.flatMap((e) => e.reset ?? []),
+					refused: result.isError ?? false,
+				}).toEqual({ wrote: 1, skipped: 0, resets, refused });
+				if (refused) {
+					expect(result.content[0].text).toContain(
+						"MCP session context reset before session_start",
+					);
+					// No data file at all: neither turn_end here has a file to record.
+					expect(fs.existsSync(dataDir)).toBe(false);
+				}
+			} finally {
+				child.dispose();
+				env.cleanup();
+			}
+		},
+		60_000,
+	);
 });

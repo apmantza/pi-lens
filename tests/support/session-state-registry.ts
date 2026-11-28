@@ -2121,7 +2121,7 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<
 		sessionSeamException:
 			"the MCP server holds one session context per process that runSessionStart replaces, and its turn-end queue and delivery maps are keyed by cwd with no session id, so a second live session would share them",
 		reason:
-			"MCP turn-end delivery chain, drained per turn; its session context is replaced, not accumulated. #2455 fix round 2: the widened detector also now flags `turnEndQueue`, a non-exported TurnEndQueue instance — the serial queue this same delivery chain drains through. It already has a reset seam (`_resetTurnEndChain`, exported above), and the same reasoning applies: at most one item is ever pending (a second enqueue is rejected busy), and each carries its own 5s unref'd timeout, so nothing accumulates across a boundary. (#2455 fix round 3, F3: an earlier draft added the clause 'and MCP has no pi session_start boundary for this file to hook into anyway'. Struck — it is false. runSessionStart in this very file calls handleSessionStart, and `mcp/server.ts` runs it at boot (:252) and from the `pilens_session_start` tool (:1631).)",
+			"MCP turn-end delivery chain, drained per turn; its session context is replaced, not accumulated. #2455 fix round 2: the widened detector also now flags `turnEndQueue`, a non-exported TurnEndQueue instance — the serial queue this same delivery chain drains through. It already has a reset seam (`_resetTurnEndChain`, exported above), and the same reasoning applies: at most one item is ever pending (a second enqueue is rejected busy), and each carries its own 5s unref'd timeout, so nothing accumulates across a boundary. (#2455 fix round 3, F3: an earlier draft added the clause 'and MCP has no pi session_start boundary for this file to hook into anyway'. Struck — it is false. runSessionStart in this very file calls handleSessionStart, and `mcp/server.ts` runs it at boot (:252) and from the `pilens_session_start` tool (:1631).) #5394: `inspectedConfigFingerprints` is a bounded 1024-entry LRU preserving per-cwd baselines across production config-change resets and cleared on `_resetMcpSessionContext()`.",
 	},
 	"metrics/function-metrics.ts": {
 		ownerKey:
@@ -2686,8 +2686,8 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// clear()/delete()-shaped-method filter — it exposes `reset()`, not either
 	// name) is now counted (2 → 3) under the widened "declared in clients/,
 	// any export shape" predicate. See this file's EXEMPT_SESSION_STATE_FILES
-	// entry above.
-	"mcp/session.ts": 4,
+	// entry above. #5394: 4 -> 5 for `inspectedConfigFingerprints` (BoundedLruCache).
+	"mcp/session.ts": 5,
 	// #5086: the frozen node-kind tables moved here from complexity-client.ts,
 	// which pinned 24. #5087: 20 -> 24, each table's `containers` set (the
 	// classes and impls that own a function key), frozen like the others.

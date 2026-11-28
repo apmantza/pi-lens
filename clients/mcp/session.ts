@@ -20,7 +20,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import { AstGrepClient } from "../ast-grep-client.js";
-import { BoundedFifoMap } from "../bounded-cache.js";
+import { BoundedFifoMap, BoundedLruCache } from "../bounded-cache.js";
 import {
 	type BootstrapClients,
 	loadBootstrapClients,
@@ -31,10 +31,21 @@ import {
 	MCP_TURN_STATE_OWNER_ID,
 	type TurnStateOwner,
 } from "../cache-manager.js";
+import {
+	type ConfigSourceDigest,
+	configSourcesFingerprint,
+	resolvePiLensConfig,
+} from "../config-resolve.js";
 import { resetDispatchBaselines } from "../dispatch/integration.js";
+import { getGlobalPiLensDir } from "../file-utils.js";
 import { resetFormatService } from "../format-service.js";
+import { getPiLensGlobalConfigPath } from "../lens-config.js";
 import { getLSPService, resetLSPService } from "../lsp/capabilities.js";
-import { resolveHostToolPath } from "../path-utils.js";
+import {
+	normalizeMapKey,
+	realpathOrResolve,
+	resolveHostToolPath,
+} from "../path-utils.js";
 import {
 	acknowledgeTestFindings,
 	acknowledgeTurnEndFindings,
@@ -49,8 +60,14 @@ import { handleSessionStart } from "../runtime-session.js";
 import { handleTurnEnd } from "../runtime-turn.js";
 import { createMcpHost } from "./host-shim.js";
 import { startSituationalToolTelemetrySession } from "../situational-tool-telemetry.js";
+import { createGenerationSource } from "../generation-guard.js";
 import { bounded } from "../deadline-utils.js";
 import { HOOK_WALL_BUDGET_MS } from "../hook-budgets.js";
+import {
+	logScopeTransition,
+	retireScope,
+	type SessionScope,
+} from "../session-scope.js";
 
 interface McpSessionContext {
 	runtime: RuntimeCoordinator;
@@ -61,6 +78,21 @@ interface McpSessionContext {
 
 let contextPromise: Promise<McpSessionContext> | undefined;
 let resolvedRuntime: RuntimeCoordinator | undefined;
+let pendingRuntime: RuntimeCoordinator | undefined;
+const bootstrapGeneration = createGenerationSource("mcp-session-bootstrap");
+const inspectedConfigFingerprints = new BoundedLruCache<string, string>(1024);
+let lastGlobalConfigFingerprint: string | undefined;
+
+function retireMcpScope(
+	scope: SessionScope,
+	reason: "mcp-session-reset" | "mcp-session-bootstrap-failed",
+): void {
+	const wasLive = scope.isLive();
+	retireScope(scope, reason);
+	if (wasLive) {
+		logScopeTransition(scope, { transition: "end", reason });
+	}
+}
 
 /**
  * Lazily build (once) the persistent session context shared across MCP
@@ -69,20 +101,42 @@ let resolvedRuntime: RuntimeCoordinator | undefined;
  * process — evict the memo on rejection so the next call retries (#1570).
  */
 export function getMcpSessionContext(): Promise<McpSessionContext> {
-	contextPromise ??= (async () => {
+	if (contextPromise) return contextPromise;
+	const generation = bootstrapGeneration.capture();
+	const runtime = new RuntimeCoordinator();
+	pendingRuntime = runtime;
+	const promise = (async () => {
 		const context: McpSessionContext = {
-			runtime: new RuntimeCoordinator(),
+			runtime,
 			cacheManager: new CacheManager(),
 			astGrepClient: new AstGrepClient(),
 			clients: await loadBootstrapClients(),
 		};
-		resolvedRuntime = context.runtime;
-		return context;
+		const published = generation.guardedWrite("bootstrap", () => {
+			if (pendingRuntime === runtime) {
+				pendingRuntime = undefined;
+			}
+			resolvedRuntime = context.runtime;
+			return context;
+		});
+		if (!published) {
+			// `resetMcpSessionContext()` already retired `pendingRuntime.sessionScope`
+			// when bumping `bootstrapGeneration`; throw so the stale call fails fast.
+			throw new Error("MCP session context reset during bootstrap");
+		}
+		return published;
 	})().catch((err: unknown) => {
-		contextPromise = undefined;
+		if (pendingRuntime === runtime) {
+			pendingRuntime = undefined;
+		}
+		if (contextPromise === promise) {
+			contextPromise = undefined;
+		}
+		retireMcpScope(runtime.sessionScope, "mcp-session-bootstrap-failed");
 		throw err;
 	});
-	return contextPromise;
+	contextPromise = promise;
+	return promise;
 }
 
 /** Synchronous peek at the session runtime, for construction sites that cannot
@@ -93,10 +147,86 @@ export function peekMcpSessionRuntime(): RuntimeCoordinator | undefined {
 	return resolvedRuntime;
 }
 
-/** Test hook — drop the cached context so a fresh one is built next call. */
-export function _resetMcpSessionContext(): void {
+/** Test hook — peek at the in-flight bootstrap runtime before it settles. */
+export function _peekPendingMcpSessionRuntime():
+	| RuntimeCoordinator
+	| undefined {
+	return pendingRuntime;
+}
+
+function resetMcpSessionContext(clearFingerprints = false): void {
+	bootstrapGeneration.bump();
+	const currentResolved = resolvedRuntime;
+	const currentPending = pendingRuntime;
 	contextPromise = undefined;
 	resolvedRuntime = undefined;
+	pendingRuntime = undefined;
+	if (clearFingerprints) {
+		inspectedConfigFingerprints.clear();
+		lastGlobalConfigFingerprint = undefined;
+	}
+	if (currentResolved) {
+		retireMcpScope(currentResolved.sessionScope, "mcp-session-reset");
+	}
+	if (currentPending && currentPending !== currentResolved) {
+		retireMcpScope(currentPending.sessionScope, "mcp-session-reset");
+	}
+}
+
+/**
+ * A handle on the current MCP session generation: `isCurrent()` turns false
+ * once `resetMcpSessionContext` runs, whoever ran it. A caller that must act
+ * on a reset another entry point performed (the server's `ensureReady`)
+ * holds one and re-captures after acting.
+ */
+export function captureMcpSessionGeneration(): ReturnType<
+	typeof bootstrapGeneration.capture
+> {
+	return bootstrapGeneration.capture();
+}
+
+/**
+ * Synchronously inspect config source digests for `cwd` and reset the cached
+ * MCP session context if any inspected candidate changed since the last check.
+ */
+export function invalidateMcpSessionIfConfigChanged(cwd: string): boolean {
+	const resolvedCwd = realpathOrResolve(cwd);
+	const cacheKey = normalizeMapKey(resolvedCwd);
+	const resolution = resolvePiLensConfig({
+		cwd: resolvedCwd,
+		globalDir: getGlobalPiLensDir(),
+		globalConfigPath: getPiLensGlobalConfigPath(),
+	});
+	const fingerprint = configSourcesFingerprint(
+		resolution.inspectedConfigSources,
+	);
+	const globalSources: ConfigSourceDigest[] = [];
+	for (const entry of resolution.inspectedConfigSources) {
+		if (entry.tier === "global") globalSources.push(entry);
+	}
+	const globalFingerprint = configSourcesFingerprint(globalSources);
+	const globalChanged =
+		lastGlobalConfigFingerprint !== undefined &&
+		lastGlobalConfigFingerprint !== globalFingerprint;
+	const previous = inspectedConfigFingerprints.get(cacheKey);
+	if (previous === undefined && !globalChanged) {
+		inspectedConfigFingerprints.set(cacheKey, fingerprint);
+		lastGlobalConfigFingerprint = globalFingerprint;
+		return false;
+	}
+	if (previous === fingerprint && !globalChanged) {
+		lastGlobalConfigFingerprint = globalFingerprint;
+		return false;
+	}
+	resetMcpSessionContext();
+	inspectedConfigFingerprints.set(cacheKey, fingerprint);
+	lastGlobalConfigFingerprint = globalFingerprint;
+	return true;
+}
+
+/** Test hook — drop the cached context so a fresh one is built next call. */
+export function _resetMcpSessionContext(): void {
+	resetMcpSessionContext(true);
 }
 
 const noop = (): void => {};
@@ -135,7 +265,12 @@ const degradedSessionStart: SessionStartOutcome = {
  */
 async function runSessionStartImpl(cwd: string): Promise<SessionStartOutcome> {
 	startSituationalToolTelemetrySession("mcp");
+	invalidateMcpSessionIfConfigChanged(cwd);
+	const generation = captureMcpSessionGeneration();
 	const ctx = await getMcpSessionContext();
+	if (!generation.isCurrent()) {
+		throw new Error("MCP session context reset before session_start");
+	}
 	const host = createMcpHost(undefined, cwd);
 
 	await bounded(
@@ -329,6 +464,7 @@ async function runTurnEndNowImpl(
 	files: string[] = [],
 	deferredDelivery = false,
 ): Promise<TurnEndTransaction> {
+	invalidateMcpSessionIfConfigChanged(cwd);
 	const ctx = await getMcpSessionContext();
 	const host = createMcpHost(undefined, cwd);
 
@@ -516,6 +652,7 @@ function runTurnEndForIpcNow(cwd: string): Promise<TurnEndDelivery> {
 			};
 		}
 
+		invalidateMcpSessionIfConfigChanged(cwd);
 		const ctx = await getMcpSessionContext();
 		const reader = ctx.runtime.telemetrySessionId;
 		const cachedOutcome: TurnEndOutcome = {

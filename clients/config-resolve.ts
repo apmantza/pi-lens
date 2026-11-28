@@ -57,6 +57,7 @@
  * now applies the ordinary tier precedence and the deny union to ONE node.
  */
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -120,6 +121,40 @@ export type ConfigReadOutcome =
 	  }
 	| { readonly status: "ok"; readonly value: unknown };
 
+/** Maximum size in bytes accepted for a single config candidate file (1 MiB). */
+export const MAX_CONFIG_BYTES = 1_048_576;
+
+function readRawConfigBytes(file: string): Buffer | ConfigReadOutcome {
+	try {
+		const stat = fs.statSync(file);
+		if (!stat.isDirectory() && stat.size > MAX_CONFIG_BYTES) {
+			throw new Error(
+				`config file exceeds maximum size of ${MAX_CONFIG_BYTES} bytes (${stat.size} bytes)`,
+			);
+		}
+		const bytes = fs.readFileSync(file);
+		if (bytes.byteLength > MAX_CONFIG_BYTES) {
+			throw new Error(
+				`config file exceeds maximum size of ${MAX_CONFIG_BYTES} bytes (${bytes.byteLength} bytes)`,
+			);
+		}
+		return bytes;
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+			return { status: "missing" };
+		}
+		return { status: "error", error };
+	}
+}
+
+function parseConfigJson(text: string): ConfigReadOutcome {
+	try {
+		return { status: "ok", value: JSON.parse(text) as unknown };
+	} catch (error) {
+		return { status: "error", error, sourceText: text };
+	}
+}
+
 /**
  * Read and JSON-parse one config file.
  *
@@ -129,20 +164,7 @@ export type ConfigReadOutcome =
  * stays with the loader while the reading itself is shared.
  */
 export function readConfigDocument(file: string): ConfigReadOutcome {
-	let text: string;
-	try {
-		text = fs.readFileSync(file, "utf-8");
-	} catch (error) {
-		if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-			return { status: "missing" };
-		}
-		return { status: "error", error };
-	}
-	try {
-		return { status: "ok", value: JSON.parse(text) as unknown };
-	} catch (error) {
-		return { status: "error", error, sourceText: text };
-	}
+	return readConfigDocumentAndDigest(file, "project").outcome;
 }
 
 /** One config file that exists on disk and parsed. */
@@ -209,7 +231,29 @@ export interface ResolvePiLensConfigOptions {
 	readonly stopAtGitRoot?: boolean;
 }
 
+export type ConfigSourceDigest =
+	| {
+			readonly file: string;
+			readonly tier: SourceTier;
+			readonly state: "absent";
+	  }
+	| {
+			readonly file: string;
+			readonly tier: SourceTier;
+			readonly state: "unreadable";
+	  }
+	| {
+			readonly file: string;
+			readonly tier: SourceTier;
+			readonly state: "readable";
+			readonly parsed: boolean;
+			readonly sha256: string;
+			readonly byteLength: number;
+	  };
+
 export interface PiLensConfigResolution {
+	/** Read-time digests for every inspected candidate path (present, unreadable, and absent). */
+	readonly inspectedConfigSources: readonly ConfigSourceDigest[];
 	/** The merged configuration. */
 	readonly value: Record<string, unknown>;
 	readonly provenance: ReadonlyMap<string, Provenance>;
@@ -243,11 +287,41 @@ function canonicalGlobalFile(
 		: path.join(options.globalDir, CANONICAL_GLOBAL_CONFIG_FILE);
 }
 
+function readConfigDocumentAndDigest(
+	file: string,
+	tier: SourceTier,
+): { outcome: ConfigReadOutcome; digest: ConfigSourceDigest } {
+	const raw = readRawConfigBytes(file);
+	if (!Buffer.isBuffer(raw)) {
+		return {
+			outcome: raw,
+			digest:
+				"error" in raw
+					? { file, tier, state: "unreadable" }
+					: { file, tier, state: "absent" },
+		};
+	}
+	const outcome = parseConfigJson(raw.toString("utf-8"));
+	const digest: ConfigSourceDigest = {
+		file,
+		tier,
+		state: "readable",
+		parsed: "value" in outcome,
+		sha256: createHash("sha256").update(raw).digest("hex"),
+		byteLength: raw.byteLength,
+	};
+	return {
+		outcome,
+		digest,
+	};
+}
+
 function collectDocuments(
 	dir: string,
 	locations: readonly ConfigLocation[],
 	tier: SourceTier,
 	onReadError: ((failure: ConfigReadFailure) => void) | undefined,
+	digests?: ConfigSourceDigest[],
 ): ConfigDocument[] {
 	const documents: ConfigDocument[] = [];
 	for (const location of locations) {
@@ -257,7 +331,8 @@ function collectDocuments(
 		// document, which would double-read and double-validate it
 		// (global-config-location PR, refs #2457).
 		if (tier !== "global" && isResolvedGlobalConfigPath(file)) continue;
-		const outcome = readConfigDocument(file);
+		const { outcome, digest } = readConfigDocumentAndDigest(file, tier);
+		digests?.push(digest);
 		if (outcome.status === "missing") continue;
 		if (outcome.status === "error") {
 			onReadError?.({
@@ -292,6 +367,7 @@ const CANONICAL_PROJECT_CONFIG_LOCATIONS: readonly ConfigLocation[] =
  */
 function collectPiLensConfigDocuments(
 	options: ResolvePiLensConfigOptions,
+	digests?: ConfigSourceDigest[],
 ): ConfigDocument[] {
 	const documents: ConfigDocument[] = [];
 	const { globalDir, onReadError } = options;
@@ -306,7 +382,8 @@ function collectPiLensConfigDocuments(
 						? undefined
 						: path.join(globalDir, location.relativePath);
 			if (file === undefined) continue;
-			const outcome = readConfigDocument(file);
+			const { outcome, digest } = readConfigDocumentAndDigest(file, "global");
+			digests?.push(digest);
 			if (outcome.status === "missing") continue;
 			if (outcome.status === "error") {
 				onReadError?.({
@@ -333,16 +410,27 @@ function collectPiLensConfigDocuments(
 		const locations = options.excludeLegacyProjectDocuments
 			? CANONICAL_PROJECT_CONFIG_LOCATIONS
 			: PROJECT_CONFIG_LOCATIONS;
-		const bearing = dirs
-			.map((dir) => ({
+		const scanned = dirs.map((dir) => {
+			const dirDigests: ConfigSourceDigest[] = [];
+			const found = collectDocuments(
 				dir,
-				found: collectDocuments(dir, locations, "project", onReadError),
-			}))
-			.filter((entry) => entry.found.length > 0);
-		bearing.forEach((entry, index) => {
-			const tier: SourceTier = index === 0 ? "project" : "nested-project";
-			for (const document of entry.found) documents.push({ ...document, tier });
+				locations,
+				"project",
+				onReadError,
+				dirDigests,
+			);
+			return { dir, found, dirDigests };
 		});
+		let seenBearing = false;
+		for (const entry of scanned) {
+			const tier: SourceTier = seenBearing ? "nested-project" : "project";
+			for (const d of entry.dirDigests) digests?.push({ ...d, tier });
+			if (entry.found.length > 0) {
+				seenBearing = true;
+				for (const document of entry.found)
+					documents.push({ ...document, tier });
+			}
+		}
 	}
 
 	return documents;
@@ -419,11 +507,32 @@ export function summarizeConfigResolution(
 	};
 }
 
+/** Deterministic fingerprint of an inspected config-source digest sequence. */
+export function configSourcesFingerprint(
+	sources: readonly ConfigSourceDigest[],
+): string {
+	const hash = createHash("sha256");
+	for (const entry of sources) {
+		if (entry.state === "readable") {
+			hash.update(
+				`${entry.tier}\0${entry.file}\0${entry.state}\0${entry.parsed ? "1" : "0"}\0${entry.byteLength}\0${entry.sha256}\n`,
+			);
+		} else {
+			hash.update(`${entry.tier}\0${entry.file}\0${entry.state}\n`);
+		}
+	}
+	return hash.digest("hex");
+}
+
 /** Resolve every discovered document into one configuration. */
 export function resolvePiLensConfig(
 	options: ResolvePiLensConfigOptions,
 ): PiLensConfigResolution {
-	const documents = collectPiLensConfigDocuments(options);
+	const inspectedConfigSources: ConfigSourceDigest[] = [];
+	const documents = collectPiLensConfigDocuments(
+		options,
+		inspectedConfigSources,
+	);
 	const sources = configSources(documents);
 	const resolution = resolveConfig<Record<string, unknown>>({
 		sources,
@@ -431,6 +540,7 @@ export function resolvePiLensConfig(
 	});
 	return {
 		value: resolution.resolved.value ?? {},
+		inspectedConfigSources,
 		provenance: resolution.resolved.provenance,
 		records: finalizeRecords(
 			[
