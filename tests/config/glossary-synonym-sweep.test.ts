@@ -1398,7 +1398,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// three filesystem path uses on the same probe.
 		// 114 -> 113 (#5728): folding IgnoreHomeRoot onto isAtOrAboveHomeDir
 		// replaces `path.resolve(root)` with `realpathOrResolve(root)`.
-		"clients/lsp/server.ts": 113,
+		// 113 -> 110 (#5814): the three `stat(path.join(...))` probes of the
+		// extension-bounded walk and the agent-level read fold onto the shared
+		// marker probe.
+		"clients/lsp/server.ts": 110,
 		"clients/lsp/session-roots.ts": 7,
 		// 13 -> 15 (#4346): a creation's path joins the entry's dependency
 		// scope test (Go package directory, created-file stem/directory names).
