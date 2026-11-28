@@ -685,7 +685,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/suppress-writer.ts": 1,
 		// 0 -> 1 (#5258): `checkedVerdict` keeps the rows of runners that
 		// completed, an `Array.prototype.filter` call, not a delivery filter.
-		"clients/dispatch/types.ts": 1,
+		// 1 -> 2 (#5812 r6): `verdictSourceIds` drops a source that still
+		// reports, also an `Array.prototype.filter` call.
+		"clients/dispatch/types.ts": 2,
 		"clients/dispatch/utils/lsp-diagnostics.ts": 1,
 		"clients/file-kinds.ts": 1,
 		"clients/file-role.ts": 3,

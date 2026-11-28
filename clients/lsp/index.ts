@@ -7261,6 +7261,14 @@ export class LSPService {
 			// collect, `binding` only for a collecting touch — a non-collecting touch
 			// keeps resolving `{ diags: [] }`, no flags.
 			const result: TouchFileResult = { diags: collected ?? [] };
+			// #5727: the auxiliaries whose answer is bound to these bytes (the
+			// merge's frozen set). An inconclusive touch names no coverage gap, so
+			// "not named" is no evidence an auxiliary answered; only this list is.
+			// #5812 r5: a conclusive touch names them too, so a write's verdict can
+			// speak for an auxiliary's pending cascade row.
+			if (collected !== undefined && auxCoveredAtMerge.size > 0) {
+				result.answeredServerIds = [...auxCoveredAtMerge];
+			}
 			const primaryDiagnosticsUnsupported =
 				diagnosticsUnsupportedServerIds.some((serverId) =>
 					spawned.some(
@@ -7288,12 +7296,6 @@ export class LSPService {
 				}
 				if (verdict.disabledPrimaryServerIds) {
 					result.disabledPrimaryServerIds = verdict.disabledPrimaryServerIds;
-				}
-				// #5727: the auxiliaries whose answer is bound to these bytes (the
-				// merge's frozen set). This branch names no coverage gap, so "not
-				// named" is no evidence an auxiliary answered; only this list is.
-				if (auxCoveredAtMerge.size > 0) {
-					result.answeredServerIds = [...auxCoveredAtMerge];
 				}
 				if (verdict.primaryUnavailableCause) {
 					result.primaryUnavailableCause = verdict.primaryUnavailableCause;

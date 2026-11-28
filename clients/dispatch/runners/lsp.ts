@@ -496,6 +496,11 @@ const lspRunner: RunnerDefinition = {
 			};
 		}
 
+		// #5812 r5: the auxiliaries that answered these bytes, on every return
+		// below as on the findings return, so the verdict names them too.
+		const answered = answeredServerIds.length > 0 && {
+			answeredServerIds: [...answeredServerIds],
+		};
 		if (lspDiags.length === 0) {
 			// #5008: the primary's empty answer is a verdict about ITS blockers even
 			// while an auxiliary is unconfirmed or deferred. The named ids are what
@@ -508,6 +513,7 @@ const lspRunner: RunnerDefinition = {
 					semantic: "none",
 					unconfirmedServerIds: [...unconfirmedServerIds],
 					deferredServerIds: [...deferredServerIds],
+					...answered,
 				};
 			}
 			if (unconfirmedServerIds.length > 0) {
@@ -528,6 +534,7 @@ const lspRunner: RunnerDefinition = {
 					diagnostics: [],
 					semantic: "none",
 					unconfirmedServerIds: [...unconfirmedServerIds],
+					...answered,
 				};
 			}
 			if (primaryAnswerStale) {
@@ -549,6 +556,7 @@ const lspRunner: RunnerDefinition = {
 				semantic: "none",
 				rawOutput: "no-diagnostics",
 				...(withheldNotice !== undefined && { withheldNotice }),
+				...answered,
 			};
 		}
 

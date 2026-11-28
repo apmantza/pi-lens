@@ -37,6 +37,11 @@ Actions:
    whether or not its verdict flips) or deleted (k = "delete"), either
    between turns or between the compute's read and turn_end (#4495 round 3).
    The client's cached publish now predates the change.
+ - PiWrite(n, a): pi itself writes the neighbour after the run's read
+   (#5804). a = "answered": a language server reached a verdict on the
+   write, so the write's own dispatch reports what is left; a =
+   "unanswered": none did (inconclusive, crashed, timed out, superseded,
+   never dispatched).
  - TurnEnd: settle, peek the registry, render the run, the late answers,
    the unresolved and changed lines, and update the record.
 
@@ -61,6 +66,11 @@ Invariants:
  - NoSilentForget: a recorded error whose file was written outside pi is
    never forgotten without the "changed since checked" line (#4495 round-2
    verify R2-2); a deleted file's record may go silently.
+ - NoForgetAfterUnansweredWrite: a neighbour error the model knows (held by
+   the record, or observed this turn) is never forgotten after pi wrote the
+   file with no language-server answer, unless a newer observation read it
+   clean (#5804). The write is pi's own, so the "changed outside pi" line
+   does not excuse the drop: the error may still be on disk.
  - TypeOK.
 ***************************************************************************)
 EXTENDS Naturals, FiniteSets
@@ -108,13 +118,37 @@ CONSTANTS
                         \* turns) and {"computed"} (between the compute's read and
                         \* turn_end); a config bound, not a fix switch
     OutsideKinds,       \* which outside changes: a subset of {"write", "delete"}
-    CheckStamp          \* "read"     the record's stamp is the run's read bound
+    CheckStamp,         \* "read"     the record's stamp is the run's read bound
                         \*            (CascadeRun.checkedAt: the compute's start,
                         \*            or a late answer's touchedAt), so the gate
-                        \*            sees any write after the read
+                        \*            sees any write after the read, pi's own
+                        \*            included
                         \* "delivery" the stamp is turn_end's delivery time
                         \*            (#4495 round 2), so a write between the
                         \*            read and turn_end is invisible to the gate
+                        \* "carry"    the read bound, and a record kept after pi's
+                        \*            unanswered write is restamped to turn_end
+                        \*            (cascade-format.ts
+                        \*            settleCascadePendingAfterWrite, #5804), so
+                        \*            the gate reads that write as carried, not as
+                        \*            an edit outside pi; a record this turn_end
+                        \*            builds from a read before that write keeps
+                        \*            the read bound, so it holds only while the
+                        \*            worklist brings the write to the next settle
+                        \* "settle"   as "carry", and the record this turn_end
+                        \*            builds for a file pi wrote with no answer is
+                        \*            stamped no earlier than the settle too
+                        \*            (runtime-turn.ts `carriedKeys`, #5812 verify
+                        \*            F4), so no worklist clear matters
+    WriteSettle,        \* "answered" turn_end forgets a pi-written neighbour's record
+                        \*            only when a language server answered for the
+                        \*            write (the write's own dispatch reports the
+                        \*            rest); an unanswered write keeps it (#5804)
+                        \* "forget"   it forgets the record of every pi-written
+                        \*            neighbour, answered or not (before #5804)
+    PiWriteAnswers      \* which pi writes of a neighbour the scenario allows: a
+                        \* subset of {"answered", "unanswered"}; {} turns PiWrite
+                        \* off. A config bound, not a fix switch
 
 VARIABLES
     turn,       \* 1..MaxTurns + 1
@@ -148,15 +182,23 @@ VARIABLES
     chg,        \* [Neighbours -> Kinds] the file changed after the observation rec holds
     chgSeen,    \* [Neighbours -> Kinds] that change as the freshness gate can see it
     staleClaim, \* some turn_end named a changed neighbour on the unresolved line
-    silentDrop  \* some turn_end forgot a written neighbour's errors without a line
+    silentDrop, \* some turn_end forgot a written neighbour's errors without a line
+    pw,         \* [Neighbours -> PiWrites] pi wrote the neighbour this turn, after the read
+    pq,         \* [Neighbours -> PiWrites] such a write of an earlier turn that is still on
+                \* the turn's worklist. A turn_end with no blocker clears the worklist; one
+                \* that delivered a blocker keeps it (fresh content) or clears it (a repeat,
+                \* a suppressed duplicate, or the max-cycles turn_end after it)
+    wr,         \* [Neighbours -> BOOLEAN] the record holds errors of a file pi wrote with no answer
+    piDrop      \* some turn_end forgot such an error with no newer clean observation
 
 vars == <<turn, phase, model, opened, truth, epoch, cache, owed, reg, answered,
           rc, lastErr, verdict, fresh, vep, display, touched, superseded, lateQ,
           rec, shown, recBefore, freshClean, freshErr, lost, cacheChg, vchg, vmid,
-          chg, chgSeen, staleClaim, silentDrop>>
+          chg, chgSeen, staleClaim, silentDrop, pw, pq, wr, piDrop>>
 
 Vals == {"clean", "err"}
-Tags == {"err", "pending", "late", "unresolved", "changed"}
+Tags == {"err", "pending", "late", "unresolved", "changed", "own"}
+PiWrites == {"none", "answered", "unanswered"}
 Kinds == {"none", "write", "delete"}
 Outcomes == {"none", "clean", "err", "unconfirmed", "deferred", "inconclusive"}
 Entry == [val : {"none", "clean", "err"}, ep : 0..MaxTurns]
@@ -196,6 +238,10 @@ TypeOK ==
     /\ chgSeen \in [Neighbours -> Kinds]
     /\ staleClaim \in BOOLEAN
     /\ silentDrop \in BOOLEAN
+    /\ pw \in [Neighbours -> PiWrites]
+    /\ pq \in [Neighbours -> PiWrites]
+    /\ wr \in [Neighbours -> BOOLEAN]
+    /\ piDrop \in BOOLEAN
 
 \* Warm start: an open neighbour holds a publish of its starting verdict.
 Init ==
@@ -233,6 +279,10 @@ Init ==
     /\ chgSeen = [n \in Neighbours |-> "none"]
     /\ staleClaim = FALSE
     /\ silentDrop = FALSE
+    /\ pw = [n \in Neighbours |-> "none"]
+    /\ pq = [n \in Neighbours |-> "none"]
+    /\ wr = [n \in Neighbours |-> FALSE]
+    /\ piDrop = FALSE
 
 \* A push server's publish rule: Always after every notify; CmdPull and
 \* Silent only on a change of verdict (classic tsserver, probe S0-S4).
@@ -253,7 +303,7 @@ Edit ==
     /\ UNCHANGED <<turn, model, opened, cache, reg, answered, rc, lastErr,
                    verdict, fresh, vep, display, touched, superseded, lateQ, rec,
                    shown, recBefore, freshClean, freshErr, lost, cacheChg, vchg, vmid,
-                   chg, chgSeen, staleClaim, silentDrop>>
+                   chg, chgSeen, staleClaim, silentDrop, pw, pq, wr, piDrop>>
 
 \* Publish(n): the owed publish lands in the client's per-file cache
 \* (client.ts publishDiagnostics handling). A touch outstanding in the
@@ -267,7 +317,7 @@ Publish(n) ==
     /\ UNCHANGED <<turn, phase, model, opened, truth, epoch, reg, rc, lastErr,
                    verdict, fresh, vep, display, touched, superseded, lateQ, rec,
                    shown, recBefore, freshClean, freshErr, lost, vchg, vmid, chg,
-                   chgSeen, staleClaim, silentDrop>>
+                   chgSeen, staleClaim, silentDrop, pw, pq, wr, piDrop>>
 
 PostEdit(n) == cache[n].ep = epoch
 PassiveServes(n) ==
@@ -355,7 +405,7 @@ Compute ==
     /\ superseded' = FALSE
     /\ phase' = "computed"
     /\ UNCHANGED <<turn, model, truth, epoch, lateQ, rec, shown, recBefore,
-                   lost, chg, chgSeen, staleClaim, silentDrop>>
+                   lost, chg, chgSeen, staleClaim, silentDrop, pw, pq, wr, piDrop>>
 
 \* LaterWrite: a later write of the primary supersedes the run before
 \* turn_end (runtime-turn.ts consume filter, `cascade_carry_over_drop`).
@@ -374,7 +424,7 @@ LaterWrite ==
     /\ vmid' = [n \in Neighbours |-> FALSE]
     /\ UNCHANGED <<turn, model, opened, truth, epoch, cache, owed, reg,
                    answered, rc, lastErr, lateQ, rec, shown, recBefore, lost,
-                   cacheChg, chg, chgSeen, staleClaim, silentDrop>>
+                   cacheChg, chg, chgSeen, staleClaim, silentDrop, pw, pq, wr, piDrop>>
 
 \* QuietWindow: quiet-window.ts reconciles answered outstanding touches
 \* (cascade-tier.ts reconcileOutstandingCascadeTouches); the answer reaches
@@ -389,7 +439,7 @@ QuietWindow ==
     /\ UNCHANGED <<turn, phase, model, opened, truth, epoch, cache, owed, rc,
                    lastErr, verdict, fresh, vep, display, touched, superseded, rec,
                    shown, recBefore, freshClean, freshErr, lost, cacheChg, vchg,
-                   vmid, chg, chgSeen, staleClaim, silentDrop>>
+                   vmid, chg, chgSeen, staleClaim, silentDrop, pw, pq, wr, piDrop>>
 
 \* Expire(n): cascade-tier.ts prune of an outstanding touch past its
 \* maximum age.
@@ -406,7 +456,7 @@ Expire(n) ==
     /\ UNCHANGED <<turn, phase, model, opened, truth, epoch, cache, owed, rc,
                    lastErr, verdict, fresh, vep, display, touched, superseded, rec,
                    shown, recBefore, freshClean, freshErr, cacheChg, vchg, vmid,
-                   chg, chgSeen, staleClaim, silentDrop>>
+                   chg, chgSeen, staleClaim, silentDrop, pw, pq, wr, piDrop>>
 
 \* OutsideChange(n, k): the file is written (k = "write") by something pi
 \* never saw, or deleted (k = "delete"). It lands between turns (phase
@@ -432,7 +482,24 @@ OutsideChange(n, k) ==
     /\ UNCHANGED <<turn, phase, model, opened, epoch, cache, owed, reg, answered,
                    rc, lastErr, verdict, fresh, vep, display, touched, superseded,
                    lateQ, rec, shown, recBefore, freshClean, freshErr, lost,
-                   staleClaim, silentDrop>>
+                   staleClaim, silentDrop, pw, pq, wr, piDrop>>
+
+\* PiWrite(n, a): pi itself writes the neighbour after this turn's run read
+\* it (#5804). The write is the agent's own, not an outside change: it
+\* sets neither `chg` nor `cacheChg`. `a` is whether a language server
+\* reached a verdict on it (the write's dispatch listed `lsp` in its
+\* verdictRunnerIds, cascade-format.ts noteCascadeWrite). The write
+\* happens once per neighbour per turn; the model keeps its final answer.
+PiWrite(n, a) ==
+    /\ phase = "computed"
+    /\ turn <= MaxTurns
+    /\ a \in PiWriteAnswers
+    /\ pw' = [pw EXCEPT ![n] = a]
+    /\ UNCHANGED <<turn, phase, model, opened, truth, epoch, cache, owed, reg,
+                   answered, rc, lastErr, verdict, fresh, vep, display, touched,
+                   superseded, lateQ, rec, shown, recBefore, freshClean, freshErr,
+                   lost, cacheChg, vchg, vmid, chg, chgSeen, staleClaim,
+                   silentDrop, pq, wr, piDrop>>
 
 \* TurnEnd: runtime-turn.ts handleTurnEnd. The registry peek
 \* (peekOutstandingCascadeTouches) moves answered touches to the late queue;
@@ -451,20 +518,49 @@ TurnEnd ==
            \* this turn's (the carried-run label)
            lateFresh(n) == n \in late /\ cache[n].ep = epoch
            observed(n) == verdict[n] \in {"clean", "err"} \/ n \in late
-           pending(n) == Reserve = "record" /\ rec[n].val = "err" /\ ~observed(n)
+           \* The settle at the top of handleTurnEnd (settleCascadePendingAfterWrite):
+           \* a pi-written neighbour whose write a server answered (or, before
+           \* #5804, any pi-written one) loses its record, and this turn's
+           \* observations of it are not recorded (`editedKeys`).
+           \* the write the settle sees: this turn's, else one still on the
+           \* worklist from a turn_end that delivered a blocker
+           eff(n) == IF pw[n] # "none" THEN pw[n] ELSE pq[n]
+           settled(n) == eff(n) # "none"
+                         /\ (eff(n) = "answered" \/ WriteSettle = "forget")
+           pending(n) == Reserve = "record" /\ ~settled(n) /\ rec[n].val = "err"
+                         /\ ~observed(n)
+           \* What the gate can see of a write to the file after the record's
+           \* stamp. pi's unanswered write comes after the run's read: the
+           \* read-bound stamp shows it as a change; the restamp moved the
+           \* kept record's stamp to turn_end, so it reads as carried.
+           seen(n) == IF eff(n) = "unanswered" /\ CheckStamp = "read" THEN "write"
+                      ELSE IF eff(n) = "unanswered" /\ CheckStamp \in {"carry", "settle"}
+                           THEN "none"
+                      ELSE chgSeen[n]
+           \* the record this turn_end builds for a file pi wrote with no answer
+           \* (the settle's `carriedKeys`) takes the settle's stamp
+           settleStamp(n) == CheckStamp = "settle" /\ eff(n) = "unanswered"
            \* the freshness gate: an entry whose file changed after its
            \* read bound, as far as the stamp lets the gate see, is gated out
-           gatedOut(n) == PendingGate \in {"notify", "drop"} /\ chgSeen[n] # "none"
+           gatedOut(n) == PendingGate \in {"notify", "drop"} /\ seen(n) # "none"
            changedLine(n) == PendingGate = "notify" /\ pending(n)
-                             /\ chgSeen[n] = "write"
+                             /\ seen(n) = "write"
            unresolved(n) == pending(n) /\ ~gatedOut(n)
+           \* a clean observation newer than the record's error
+           cleanedBy(n) == (verdict[n] = "clean" /\ vep[n] > rec[n].ep)
+                           \/ (lateClean(n) /\ cache[n].ep > rec[n].ep)
+           \* the record's errors are unconfirmed since a pi write no server answered
+           \* (a later answered write speaks for the file and ends it)
+           unconf(n) == eff(n) = "unanswered" \/ (wr[n] /\ eff(n) = "none")
        IN
        /\ shown' = [n \in Neighbours |->
                       display[n]
                       \cup (IF lateErr(n) /\ lateFresh(n) THEN {"err"} ELSE {})
                       \cup (IF lateErr(n) /\ ~lateFresh(n) THEN {"late"} ELSE {})
                       \cup (IF unresolved(n) THEN {"unresolved"} ELSE {})
-                      \cup (IF changedLine(n) THEN {"changed"} ELSE {})]
+                      \cup (IF changedLine(n) THEN {"changed"} ELSE {})
+                      \* an answered write's own dispatch reported the file
+                      \cup (IF eff(n) = "answered" THEN {"own"} ELSE {})]
        /\ freshErr' = [n \in Neighbours |->
                          freshErr[n] \/ (lateErr(n) /\ lateFresh(n))]
        /\ freshClean' = [n \in Neighbours |->
@@ -475,7 +571,8 @@ TurnEnd ==
        \* A clean observation clears it only when newer than the error it
        \* holds (forgetCascadePendingNeighbor's `observedAt` check).
        /\ rec' = [n \in Neighbours |->
-                    IF verdict[n] = "err" THEN [val |-> "err", ep |-> vep[n]]
+                    IF settled(n) THEN NoRec
+                    ELSE IF verdict[n] = "err" THEN [val |-> "err", ep |-> vep[n]]
                     ELSE IF lateErr(n) THEN [val |-> "err", ep |-> cache[n].ep]
                     ELSE IF verdict[n] = "clean" /\ vep[n] > rec[n].ep THEN NoRec
                     ELSE IF lateClean(n) /\ cache[n].ep > rec[n].ep THEN NoRec
@@ -485,22 +582,58 @@ TurnEnd ==
        /\ silentDrop' = (silentDrop \/ (\E n \in Neighbours:
                             pending(n) /\ gatedOut(n) /\ chg[n] = "write"
                             /\ ~changedLine(n)))
+       \* the drop #5804 forbids: an error the model knows, forgotten with no
+       \* newer clean observation, while a pi write no server answered is
+       \* the last word on the file's bytes
+       /\ piDrop' = (piDrop \/ (\E n \in Neighbours:
+                         unconf(n) /\ rec'[n].val = "none" /\ ~cleanedBy(n)
+                         /\ (rec[n].val = "err" \/ verdict[n] = "err"
+                             \/ lateErr(n))))
+       /\ wr' = [n \in Neighbours |->
+                    IF rec'[n].val = "none" THEN FALSE
+                    ELSE IF verdict[n] = "err" \/ lateErr(n) THEN pw[n] = "unanswered"
+                    ELSE unconf(n)]
+       \* the worklist (turn state, runtime-turn.ts): a turn_end with no blocker
+       \* clears it; one that delivered a blocker keeps it for fresh content and
+       \* clears it on a repeat, a suppressed duplicate or the forced max-cycles
+       \* turn_end next (#5812 verify F4), so either may follow
+       /\ pw' = [n \in Neighbours |-> "none"]
+       /\ \E keep \in BOOLEAN:
+            pq' = [n \in Neighbours |->
+                     IF keep /\ \E m \in Neighbours:
+                           shown'[m] \cap {"err", "late", "unresolved", "changed", "pending"} # {}
+                     THEN eff(n) ELSE "none"]
        \* whether the observation the record now holds predates a change
        /\ chg' = [n \in Neighbours |->
-                    IF verdict[n] = "err" THEN vchg[n]
+                    IF settled(n) THEN "none"
+                    ELSE IF verdict[n] = "err" THEN vchg[n]
                     ELSE IF lateErr(n) THEN cacheChg[n]
                     ELSE IF rec'[n].val = "none" THEN "none"
                     ELSE chg[n]]
        \* what the gate can see of it: with the read bound, a change after
        \* this turn's read (vmid) or after a late answer's touch (every
        \* cacheChg of the answered publish); with the delivery stamp,
-       \* nothing that landed before this TurnEnd
+       \* nothing that landed before this TurnEnd; with the settle stamp of a
+       \* file pi wrote with no answer, nothing before the settle
        /\ chgSeen' = [n \in Neighbours |->
-                        IF verdict[n] = "err"
-                            THEN IF CheckStamp = "read" /\ vmid[n] THEN vchg[n] ELSE "none"
+                        IF settled(n) THEN "none"
+                        ELSE IF (verdict[n] = "err" \/ lateErr(n)) /\ settleStamp(n)
+                            THEN "none"
+                        ELSE IF verdict[n] = "err"
+                            THEN IF CheckStamp \in {"read", "carry", "settle"} /\ vmid[n]
+                                 THEN vchg[n]
+                                 ELSE IF CheckStamp \in {"read", "carry", "settle"}
+                                         /\ pw[n] = "unanswered"
+                                 THEN "write" ELSE "none"
                         ELSE IF lateErr(n)
-                            THEN IF CheckStamp = "read" THEN cacheChg[n] ELSE "none"
+                            THEN IF CheckStamp \in {"read", "carry", "settle"}
+                                 THEN IF cacheChg[n] # "none" THEN cacheChg[n]
+                                      ELSE IF pw[n] = "unanswered" THEN "write"
+                                      ELSE "none"
+                                 ELSE "none"
                         ELSE IF rec'[n].val = "none" THEN "none"
+                        ELSE IF eff(n) = "unanswered" /\ CheckStamp \in {"carry", "settle"}
+                            THEN "none"
                         ELSE chgSeen[n]]
        /\ reg' = [n \in Neighbours |-> IF n \in peeked THEN 0 ELSE reg[n]]
        /\ answered' = [n \in Neighbours |->
@@ -520,6 +653,7 @@ Next ==
     \/ QuietWindow
     \/ \E n \in Neighbours: Expire(n)
     \/ \E n \in Neighbours, k \in OutsideKinds: OutsideChange(n, k)
+    \/ \E n \in Neighbours, a \in PiWriteAnswers: PiWrite(n, a)
     \/ TurnEnd
 
 Spec == Init /\ [][Next]_vars
@@ -566,4 +700,10 @@ NoUnresolvedAfterChange == ~staleClaim
 \* only with its "changed since checked" line (the cut-line hold is
 \* runtime-turn.ts's, tested in turn-end-cap-consumed-state.test.ts).
 NoSilentForget == ~silentDrop
+
+\* Read at the render, as above: a pending error pi's own unanswered write
+\* left behind is never forgotten unconfirmed (#5804; cascade-format.ts
+\* settleCascadePendingAfterWrite keeps and restamps the record, and
+\* runtime-turn.ts stamps a record built for such a file at the settle).
+NoForgetAfterUnansweredWrite == ~piDrop
 =============================================================================

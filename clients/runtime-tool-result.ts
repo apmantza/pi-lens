@@ -145,6 +145,7 @@ import type {
 	RuntimeCoordinator,
 } from "./runtime-coordinator.js";
 import { EXPANSION_LIMIT_LINES } from "./read-expansion.js";
+import { noteCascadeWrite } from "./cascade-format.js";
 import { resyncGitGuardAfterRetire, syncGitGuardRecord } from "./git-guard.js";
 import { isCrossFileBlocker } from "./inline-blocker-fields.js";
 import { writeOrderToken } from "./write-ordering-guard.js";
@@ -1604,6 +1605,11 @@ function publishInlineVerdict(args: {
 
 	// A superseded verdict must not latch the commit gate either (#3507).
 	if (resultLive) {
+		// #5804: an applied run a language server answered for reports whatever
+		// error the file still holds, so it speaks for the file's pending
+		// cascade errors; a run it did not answer for speaks for none.
+		if (inlineVerdictApplied)
+			noteCascadeWrite(filePath, result.verdictSourceIds ?? []);
 		// #5020: this write's clean verdict on `filePath` also speaks for the rows
 		// OTHER files' records hold against it. A chart-wide runner reports
 		// `other-b.yaml` while `deploy-a.yaml` is written, so the row sits in
@@ -1807,6 +1813,10 @@ async function dispatchPipelineAnalysis(args: {
 		runtime.fixedThisTurn,
 		sessionGeneration,
 	);
+	// #5804: the write has no verdict until a run publishes one a language
+	// server answered for, so a crash, timeout or abort leaves the file's
+	// pending cascade errors standing at turn end.
+	noteCascadeWrite(filePath, []);
 	const pipelinePromise = runPipeline(
 		{
 			signal: deps.signal,
@@ -4173,7 +4183,10 @@ export async function handleToolResult(
 			// minus its `_bypassDebounce` branch (#2464 review round 2, S3), which
 			// no caller reaching this block sets.
 			const observedAutofixModes = new Map<string, "immediate" | "deferred">();
-			for (const observedPath of observedChangedPaths)
+			for (const observedPath of observedChangedPaths) {
+				// #5812 F2: the write outdates the file's last verdict before the
+				// client wait below can return, and for a path past the dispatch cap.
+				noteCascadeWrite(observedPath, []);
 				writeSession.guardedWrite(observedPath, () => {
 					refreshCachedExports(runtime, observedPath);
 					const receipt = (
@@ -4186,6 +4199,7 @@ export async function handleToolResult(
 					if (receipt)
 						observedAutofixModes.set(observedPath, receipt.autofixMode);
 				});
+			}
 			if (observedDispatchPaths.length > 0) {
 				const observedClients = ensureToolResultClients(deps);
 				if (
@@ -4804,6 +4818,9 @@ export async function handleToolResult(
 		dbg,
 		sessionId: deps.sessionId,
 	});
+	// #5812 F2: the write outdates the file's last verdict before the early
+	// return below, which dispatches nothing when the clients are not ready.
+	noteCascadeWrite(filePath, []);
 
 	const turnStateMs = Date.now() - toolResultStart;
 	logLatency({
@@ -5009,6 +5026,8 @@ export async function handleToolResult(
 			)
 		)
 			continue;
+		// #5812 F2: no dispatch of its own follows this side-effect write.
+		noteCascadeWrite(resolvedChanged, []);
 		try {
 			const content = nodeFs.readFileSync(resolvedChanged, "utf-8");
 			const lineCount = content.split("\n").length;

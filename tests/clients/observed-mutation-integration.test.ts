@@ -14,6 +14,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CacheManager } from "../../clients/cache-manager.js";
 import {
+	forgetCascadePendingNeighbor,
+	listCascadePendingNeighbors,
+	noteCascadeWrite,
+	recordDeliveredCascadeNeighbor,
+} from "../../clients/cascade-format.js";
+import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
@@ -47,6 +53,7 @@ import { countFileLines } from "../../clients/read-guard-tool-lines.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import { handleToolResult } from "../../clients/runtime-tool-result.js";
+import { handleTurnEnd } from "../../clients/runtime-turn.js";
 import { evaluateGitGuard } from "../../clients/git-guard.js";
 import { setupTestEnvironment } from "./test-utils.js";
 import { installLspServiceDouble } from "../support/lsp-service-seam.js";
@@ -61,6 +68,10 @@ vi.mock("../../clients/pipeline.js", () => ({
 	})),
 }));
 
+/** #5812 F2: a case fails the demand once to stand for clients not ready. */
+const requestBootstrapClients = vi.hoisted(() =>
+	vi.fn(async (): Promise<unknown> => ({ complexityClient: undefined })),
+);
 vi.mock("../../clients/bootstrap.js", () => ({
 	loadBootstrapClients: async () => ({
 		complexityClient: {
@@ -71,7 +82,7 @@ vi.mock("../../clients/bootstrap.js", () => ({
 		ruffClient: {},
 		agentBehaviorClient: { recordToolCall: () => [], formatWarnings: () => "" },
 	}),
-	requestBootstrapClients: async () => ({ complexityClient: undefined }),
+	requestBootstrapClients,
 }));
 
 const SOURCE = ["const a = 1;", "const b = 2;", "const c = 3;", ""].join("\n");
@@ -2913,5 +2924,230 @@ describe("#4732 an observed tool's opaque diff", () => {
 			else process.env.PILENS_DATA_DIR = previousDataDir;
 			env.cleanup();
 		}
+	});
+});
+
+/**
+ * #5812 round 4 (CodeRabbit F2): a write that records its turn-state range
+ * and never reaches a dispatch must not leave an earlier write's language
+ * server answer standing. The turn end's settle read that stale answer as
+ * covering the file and forgot the neighbour's pending cascade error. Real:
+ * the observed arm, `handleToolResult`, the mutation bridge, the worklist,
+ * `handleTurnEnd` and the cascade pending store.
+ */
+const EMPTY_KNIP_RESULT = {
+	success: true,
+	issues: [],
+	unusedExports: [],
+	unusedFiles: [],
+	unusedDeps: [],
+	unlistedDeps: [],
+	summary: "",
+};
+
+/** One #5812 F2 case: a neighbour with an answered note and a pending error. */
+async function withAnsweredNeighbour(
+	prefix: string,
+	body: (ctx: {
+		env: ReturnType<typeof setupTestEnvironment>;
+		neighbour: string;
+		runtime: RuntimeCoordinator;
+		cacheManager: CacheManager;
+		turnEnd: () => Promise<void>;
+		heldErrorCount: () => number | undefined;
+	}) => Promise<void>,
+): Promise<void> {
+	const env = setupTestEnvironment(prefix);
+	const previousDataDir = process.env.PILENS_DATA_DIR;
+	process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+	const neighbour = path.join(env.tmpDir, "n1.ts");
+	try {
+		fs.writeFileSync(neighbour, "export const n = 1;\n");
+		const { runtime, cacheManager } = newSession(env.tmpDir);
+		// An earlier write a language server answered, then the error a later
+		// turn end delivered for the file.
+		noteCascadeWrite(neighbour, ["lsp"]);
+		recordDeliveredCascadeNeighbor(
+			neighbour,
+			[
+				{
+					id: "ts:2304",
+					message: "Cannot find name 'BAD_CALL'.",
+					filePath: neighbour,
+					line: 1,
+					column: 1,
+					severity: "error",
+					semantic: "blocking",
+					tool: "lsp",
+				},
+			],
+			0,
+			Date.now() - 60_000,
+		);
+		await body({
+			env,
+			neighbour,
+			runtime,
+			cacheManager,
+			turnEnd: async () => {
+				await handleTurnEnd({
+					ctxCwd: env.tmpDir,
+					getFlag: () => false,
+					dbg: () => {},
+					runtime,
+					cacheManager,
+					knipClient: {
+						ensureAvailable: async () => false,
+						analyze: async () => EMPTY_KNIP_RESULT,
+					},
+					deadCodeClients: [],
+					depChecker: { ensureAvailable: async () => false },
+					testRunnerClient: { getTestRunTarget: () => null },
+					resetLSPService: () => {},
+					resetFormatService: () => {},
+				} as never);
+			},
+			heldErrorCount: () =>
+				listCascadePendingNeighbors().find((e) => e.filePath === neighbour)
+					?.errorCount,
+		});
+	} finally {
+		forgetCascadePendingNeighbor(neighbour);
+		noteCascadeWrite(neighbour, []);
+		if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+		else process.env.PILENS_DATA_DIR = previousDataDir;
+		env.cleanup();
+	}
+}
+
+describe("#5812 F2: a write that never dispatches voids the file's earlier answer", () => {
+	/** `toolResultDeps` without the analyzer clients, so the demand runs. */
+	const withoutClients = (
+		event: Record<string, unknown>,
+		runtime: RuntimeCoordinator,
+		cacheManager: CacheManager,
+	) => {
+		const {
+			biomeClient: _biome,
+			ruffClient: _ruff,
+			...deps
+		} = toolResultDeps({ event, runtime, cacheManager });
+		return deps as Parameters<typeof handleToolResult>[0];
+	};
+
+	it("keeps a neighbour's pending error after a classified write whose clients were not ready", async () => {
+		await withAnsweredNeighbour(
+			"pi-lens-5812-classified-",
+			async ({
+				env,
+				neighbour,
+				runtime,
+				cacheManager,
+				turnEnd,
+				heldErrorCount,
+			}) => {
+				const { runPipeline } = await import("../../clients/pipeline.js");
+				vi.mocked(runPipeline).mockClear();
+				requestBootstrapClients.mockResolvedValueOnce(null);
+				const content = "export const n = 2;\n";
+				fs.writeFileSync(neighbour, content);
+				await handleToolResult(
+					withoutClients(
+						{
+							toolName: "write",
+							input: { path: neighbour, content },
+							content: [{ type: "text", text: "wrote" }],
+						},
+						runtime,
+						cacheManager,
+					),
+				);
+				expect(vi.mocked(runPipeline)).not.toHaveBeenCalled();
+				expect(
+					Object.keys(cacheManager.readTurnState(env.tmpDir).files),
+				).toHaveLength(1);
+				await turnEnd();
+				expect(heldErrorCount()).toBe(1);
+			},
+		);
+	});
+
+	it("keeps a neighbour's pending error after an observed write whose clients were not ready", async () => {
+		await withAnsweredNeighbour(
+			"pi-lens-5812-observed-",
+			async ({
+				env,
+				neighbour,
+				runtime,
+				cacheManager,
+				turnEnd,
+				heldErrorCount,
+			}) => {
+				const { runPipeline } = await import("../../clients/pipeline.js");
+				vi.mocked(runPipeline).mockClear();
+				const event = patchEvent(neighbour, "call-5812-observed");
+				// The tool_call arm, without the git probe `handleToolCall` spawns.
+				await armObservedMutation({
+					toolCallId: "call-5812-observed",
+					toolName: "patch_file",
+					targetPath: neighbour,
+					cwd: env.tmpDir,
+					sessionGeneration: runtime.sessionGeneration,
+					turnIndex: runtime.turnIndex,
+				});
+				fs.writeFileSync(neighbour, "export const n = 3;\n");
+				requestBootstrapClients.mockClear();
+				requestBootstrapClients.mockResolvedValueOnce(null);
+				await handleToolResult(withoutClients(event, runtime, cacheManager));
+				expect(vi.mocked(runPipeline)).not.toHaveBeenCalled();
+				expect(requestBootstrapClients).toHaveBeenCalled();
+				expect(
+					Object.keys(cacheManager.readTurnState(env.tmpDir).files),
+				).toHaveLength(1);
+				await turnEnd();
+				expect(heldErrorCount()).toBe(1);
+			},
+		);
+	});
+
+	it("keeps a neighbour's pending error after the pipeline's autofix rewrote it as a side effect", async () => {
+		await withAnsweredNeighbour(
+			"pi-lens-5812-side-effect-",
+			async ({
+				env,
+				neighbour,
+				runtime,
+				cacheManager,
+				turnEnd,
+				heldErrorCount,
+			}) => {
+				const target = path.join(env.tmpDir, "t.ts");
+				const content = "export const t = 1;\n";
+				fs.writeFileSync(target, content);
+				const { runPipeline } = await import("../../clients/pipeline.js");
+				vi.mocked(runPipeline).mockClear();
+				vi.mocked(runPipeline).mockImplementationOnce((async () => {
+					fs.writeFileSync(neighbour, "export const n = 4;\n");
+					return { ...PIPELINE_RESULT, changedFiles: [neighbour] };
+				}) as never);
+				await handleToolResult(
+					toolResultDeps({
+						event: {
+							toolName: "write",
+							input: { path: target, content },
+							content: [{ type: "text", text: "wrote" }],
+						},
+						runtime,
+						cacheManager,
+					}),
+				);
+				expect(vi.mocked(runPipeline)).toHaveBeenCalledTimes(1);
+				expect(
+					Object.keys(cacheManager.readTurnState(env.tmpDir).files),
+				).toHaveLength(2);
+				await turnEnd();
+				expect(heldErrorCount()).toBe(1);
+			},
+		);
 	});
 });

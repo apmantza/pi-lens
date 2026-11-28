@@ -40,10 +40,22 @@
 		"cascade-delivery": {
 			"pins": {
 				"CheckStamp": {
-					"value": "\"read\"",
+					"value": "\"settle\"",
 					"test": "tests/clients/cascade-turn-merge.test.ts",
-					"title": "an outside fix after the compute read and before turn_end is not left unresolved",
+					"title": "a neighbour pi writes unanswered on a repeat turn keeps its error after the worklist clears",
 					"also": [
+						{
+							"test": "tests/clients/cascade-turn-merge.test.ts",
+							"title": "a neighbour pi writes unanswered on a suppressed duplicate turn keeps its error after the worklist clears"
+						},
+						{
+							"test": "tests/index-4484-unfixed-blocker-witness.test.ts",
+							"title": "keeps a neighbour's pending error when its rewrite gets no server verdict"
+						},
+						{
+							"test": "tests/clients/cascade-turn-merge.test.ts",
+							"title": "an outside fix after the compute read and before turn_end is not left unresolved"
+						},
 						{
 							"test": "tests/clients/cascade-compute.test.ts",
 							"title": "a run that lists neighbour errors carries its read time: the compute's start, before every read"
@@ -148,6 +160,25 @@
 						}
 					]
 				},
+				"WriteSettle": {
+					"value": "\"answered\"",
+					"test": "tests/index-4484-unfixed-blocker-witness.test.ts",
+					"title": "keeps a neighbour's pending error when its rewrite gets no server verdict",
+					"also": [
+						{
+							"test": "tests/clients/cascade-turn-merge.test.ts",
+							"title": "an edited neighbour no server answered for keeps its pending errors"
+						},
+						{
+							"test": "tests/index-4484-unfixed-blocker-witness.test.ts",
+							"title": "keeps a neighbour's pending error when an unanswered write follows an answered one"
+						},
+						{
+							"test": "tests/clients/cascade-turn-merge.test.ts",
+							"title": "a neighbour pi edits in the same turn as the run that saw its errors is not recorded"
+						}
+					]
+				},
 				"UnconfirmedMarker": {
 					"value": "\"marked\"",
 					"test": "tests/clients/cascade-compute.test.ts",
@@ -169,7 +200,8 @@
 						"MaxTurns",
 						"QuietFires",
 						"OutsidePhases",
-						"OutsideKinds"
+						"OutsideKinds",
+						"PiWriteAnswers"
 					]
 				},
 				{

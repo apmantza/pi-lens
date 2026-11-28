@@ -83,6 +83,13 @@ import {
 	getFormattersForFile,
 } from "../../clients/formatters.js";
 import { runHandlerExpectingNoThrow } from "../support/handler-verdict.js";
+import {
+	forgetCascadePendingNeighbor,
+	listCascadePendingNeighbors,
+	noteCascadeWrite,
+	recordDeliveredCascadeNeighbor,
+} from "../../clients/cascade-format.js";
+import { handleTurnEnd } from "../../clients/runtime-turn.js";
 
 describe("runtime-agent-end deferred formatting", () => {
 	const cleanupAgentEndTemps = async () => {
@@ -4101,5 +4108,109 @@ describe("runtime-agent-end deferred records queued before a /tree (#3521 R2-F1)
 				moved: false,
 			}),
 		).toBe("allow");
+	});
+});
+
+/**
+ * #5812 round 5 (verify V2): the agent_settled format drain rewrites a file
+ * after a write a language server answered. The drain records the file's
+ * turn-state range, so the next turn end settles it, and the earlier
+ * answer must not speak for the formatted bytes nothing analysed. Real: the
+ * drain, the turn-state worklist, `handleTurnEnd` and the cascade store; the
+ * formatter is doubled.
+ */
+describe("#5812 V2: a deferred format voids the file's earlier answer", () => {
+	it("keeps a neighbour's pending error after the agent_settled format drain rewrote it", async () => {
+		const env = setupTestEnvironment("pi-lens-agent-end-5812-drain-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		const neighbour = createTempFile(env.tmpDir, "n1.ts", "export const n=1\n");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const cacheManager = new CacheManager(false);
+			// An earlier write a language server answered, then the error a
+			// later turn end delivered for the file.
+			noteCascadeWrite(neighbour, ["lsp"]);
+			recordDeliveredCascadeNeighbor(
+				neighbour,
+				[
+					{
+						id: "ts:2304",
+						message: "Cannot find name 'BAD_CALL'.",
+						filePath: neighbour,
+						line: 1,
+						column: 1,
+						severity: "error",
+						semantic: "blocking",
+						tool: "lsp",
+					},
+				],
+				0,
+				Date.now() - 60_000,
+			);
+			runtime.deferFormat(neighbour, env.tmpDir, "write", env.tmpDir);
+			const summary = await handleAgentEnd({
+				ctxCwd: env.tmpDir,
+				getFlag: (name) => name === "no-lsp",
+				notify: vi.fn(),
+				dbg: () => {},
+				runtime,
+				cacheManager,
+				getFormatService: () =>
+					({
+						recordRead: () => {},
+						formatFile: async (fp: string) => {
+							fs.writeFileSync(fp, "export const n = 1;\n");
+							return {
+								filePath: fp,
+								formatters: [
+									{ name: "oxfmt", changed: true, outcome: "changed" },
+								],
+								anyChanged: true,
+								allSucceeded: true,
+							};
+						},
+					}) as never,
+			});
+			expect(summary?.changed).toEqual([neighbour]);
+			expect(
+				Object.keys(cacheManager.readTurnState(env.tmpDir).files),
+			).toHaveLength(1);
+			await handleTurnEnd({
+				ctxCwd: env.tmpDir,
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager,
+				knipClient: {
+					ensureAvailable: async () => false,
+					analyze: async () => ({
+						success: true,
+						issues: [],
+						unusedExports: [],
+						unusedFiles: [],
+						unusedDeps: [],
+						unlistedDeps: [],
+						summary: "",
+					}),
+				},
+				deadCodeClients: [],
+				depChecker: { ensureAvailable: async () => false },
+				testRunnerClient: { getTestRunTarget: () => null },
+				resetLSPService: () => {},
+				resetFormatService: () => {},
+			} as never);
+			expect(
+				listCascadePendingNeighbors().find((e) => e.filePath === neighbour)
+					?.errorCount,
+			).toBe(1);
+		} finally {
+			forgetCascadePendingNeighbor(neighbour);
+			noteCascadeWrite(neighbour, []);
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
+			env.cleanup();
+		}
 	});
 });

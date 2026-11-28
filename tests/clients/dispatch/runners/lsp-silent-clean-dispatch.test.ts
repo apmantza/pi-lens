@@ -79,4 +79,35 @@ describe("LSP dispatch runner — a clean markdown edit reports a verdict, not a
 		const options = touchFile.mock.calls[0]?.[2] as { clientScope?: string };
 		expect(options.clientScope).toBe("with-auxiliary");
 	});
+
+	// #5812 r6 (verify R5-3): a clean run with one auxiliary deferred or
+	// silent still names the auxiliary that answered these bytes, so the
+	// turn-end settle can retire that auxiliary's pending row.
+	it.each([
+		["deferred", { deferredServerIds: ["opengrep"] }],
+		["unconfirmed", { unconfirmedServerIds: ["opengrep"] }],
+	] as const)(
+		"names the auxiliary that answered beside one %s",
+		async (_gap, touchGap) => {
+			const file = path.join(cwd, "note.md");
+			fs.writeFileSync(file, "# Note\n");
+			touchFile.mockResolvedValue({
+				diags: [],
+				...touchGap,
+				answeredServerIds: ["typos"],
+			});
+
+			const result = await lspRunner.run({
+				filePath: file,
+				cwd,
+				fileRole: "source",
+				pi: { getFlag: () => undefined },
+			} as never);
+
+			expect(result).toMatchObject({
+				...touchGap,
+				answeredServerIds: ["typos"],
+			});
+		},
+	);
 });

@@ -84,5 +84,62 @@ describe(
 
 			expect(listCascadePendingNeighbors()).toEqual([]);
 		});
+
+		// Recurrence (#5804 sweep, #5790 review F2's shape): the touch went to the
+		// primary server only, so its late clean publish speaks for the rows that
+		// server raised. A row an auxiliary server raised was dropped with them,
+		// and no later turn end named it.
+		it("a late clean answer from the primary keeps the pending rows an auxiliary raised", async () => {
+			const handle = await startPiSession({
+				root: fixture.root,
+				responses: [endTurn()],
+				inlineFactory: async () => (await import("../index.js")).default,
+			});
+			expect(handle.errors).toEqual([]);
+
+			const { listCascadePendingNeighbors, recordDeliveredCascadeNeighbor } =
+				await import("../clients/cascade-format.js");
+			const { peekOutstandingCascadeTouches, recordOutstandingCascadeTouch } =
+				await import("../clients/lsp/cascade-tier.js");
+
+			const neighbor = "/repo/src/b.ts";
+			const now = Date.now();
+			const row = (tool: string, line: number): Diagnostic =>
+				({
+					id: `:`,
+					message: `finding from `,
+					filePath: neighbor,
+					line,
+					column: 1,
+					severity: "error",
+					semantic: "blocking",
+					tool,
+				}) as Diagnostic;
+			recordDeliveredCascadeNeighbor(
+				neighbor,
+				[row("lsp", 2), row("opengrep", 3)],
+				1,
+				now - 300,
+			);
+			const client = {
+				serverId: "typescript",
+				getAllDiagnostics: () =>
+					new Map([[normalizeMapKey(neighbor), { diags: [], ts: now - 100 }]]),
+			};
+			recordOutstandingCascadeTouch({
+				filePath: neighbor,
+				serverId: "typescript",
+				client: new WeakRef(client),
+				touchedAt: now - 200,
+			});
+
+			peekOutstandingCascadeTouches();
+
+			expect(
+				listCascadePendingNeighbors().flatMap((e) =>
+					e.errors.map((error) => error.tool),
+				),
+			).toEqual(["opengrep"]);
+		});
 	},
 );

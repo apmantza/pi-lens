@@ -284,6 +284,48 @@ describe("the LSP scripts' reading of a touch (#4403)", () => {
 		});
 	}, 30_000);
 
+	// #5812 r5 (verify V1): a write the primary answered retires a pending
+	// auxiliary row only when that auxiliary answered too, so a conclusive
+	// touch names it as well; the list was set on inconclusive touches only,
+	// and no write ever retired an ast-grep or opengrep row.
+	it("names the auxiliary that answered beside a primary that answered (#5812)", async () => {
+		const notes = await workspace({
+			file: "notes.md",
+			content: "# Notes\n",
+			fake: ["marksman", "typos"],
+			disabled: [],
+		});
+
+		const touched = await service!.touchFile(
+			notes.file,
+			notes.content,
+			rowTouch(["typos"]),
+		);
+
+		expect(touched).not.toHaveProperty("inconclusive");
+		expect(touched).toMatchObject({ answeredServerIds: ["typos"] });
+	}, 30_000);
+
+	it("does not name an auxiliary that stayed silent beside a primary that answered (#5812)", async () => {
+		const notes = await workspace({
+			file: "notes.md",
+			content: "# Notes\n",
+			fake: ["marksman"],
+			silent: ["typos"],
+			disabled: [],
+		});
+
+		const touched = await service!.touchFile(
+			notes.file,
+			notes.content,
+			rowTouch(["typos"]),
+		);
+
+		expect(touched).not.toHaveProperty("inconclusive");
+		expect(touched).toMatchObject({ unconfirmedServerIds: ["typos"] });
+		expect(touched).not.toHaveProperty("answeredServerIds");
+	}, 30_000);
+
 	// The other half: an auxiliary that was acquired but did not answer is not
 	// named, and the inconclusive touch names no coverage gap for it either, so
 	// only the answered list can say an auxiliary answered.

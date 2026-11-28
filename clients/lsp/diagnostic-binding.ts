@@ -137,12 +137,12 @@ export interface TouchFileResult {
 	 */
 	inconclusiveServerIds?: string[];
 	/**
-	 * #5727: on an inconclusive touch, the auxiliaries whose answer is bound to
+	 * #5727: on a collecting touch, the auxiliaries whose answer is bound to
 	 * these bytes (published for them, or a binding that matches them). Each
-	 * is that server's verdict on the file while the primary gave none. An
-	 * auxiliary that did not answer is not here; the inconclusive touch names
-	 * no coverage gap, so an id missing from both lists is not one that
-	 * answered. Absent on every other touch.
+	 * is that server's verdict on the file, whether or not the primary gave
+	 * one (#5812 r5). An auxiliary that did not answer is not here; an
+	 * inconclusive touch names no coverage gap, so an id missing from both
+	 * lists is not one that answered. Absent on a non-collecting touch.
 	 */
 	answeredServerIds?: string[];
 	/**

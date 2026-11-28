@@ -506,6 +506,18 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 		},
 	},
 	{
+		id: "cascade-format:answeredWrites",
+		module: "cascade-format.ts",
+		state: "answeredWrites",
+		policy: "session_start",
+		ownerKey: "session",
+		sessionSeamException:
+			"one process BoundedFifoMap keyed by normalized file path, with no session in the key; it notes the sources (verdict runners and the auxiliary servers that answered inside them) of each file's last write, read at the turn end of whichever session wrote it (shape 72 member, no open issue)",
+		resetName: "resetCascadePendingNeighbors",
+		reason:
+			"#5804: the sources that answered each file's last write, which let a turn end forget the neighbour's pending cascade rows those sources raised. A note from a previous session would let the next session's turn end forget errors that session's agent was shown.",
+	},
+	{
 		id: "cascade-format:cascadeUnansweredPrimariesDelivered",
 		module: "cascade-format.ts",
 		state: "cascadeUnansweredPrimariesDelivered",
@@ -2443,7 +2455,7 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// registered above and reset by resetDispatchBaselines.
 	// #4487: the cascade pending-error record (1 -> 2), registered above and
 	// reset by resetDispatchBaselines.
-	"cascade-format.ts": 2,
+	"cascade-format.ts": 3,
 	"config-core/records.ts": 1,
 	"config-resolve.ts": 2,
 	// #2418: the one warn-once latch behind all three config loaders, moved

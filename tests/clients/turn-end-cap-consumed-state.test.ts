@@ -43,6 +43,7 @@ import {
 	DEFAULT_MAX_AGE_MS,
 } from "../../clients/cache-manager.js";
 import { resetBoundedTelemetry } from "../../clients/bounded-telemetry.js";
+import { noteCascadeWrite } from "../../clients/cascade-format.js";
 import type { CascadeResult } from "../../clients/cascade-types.js";
 import { _resetSharedLineCountCacheForTests } from "../../clients/diagnostic-line-freshness.js";
 import {
@@ -167,6 +168,9 @@ function touch(rig: Rig, name: string, content = "export const a = 1;\n") {
 		rig.cwd,
 		rig.runtime.telemetrySessionId,
 	);
+	// A pi write a language server answered for, so its own dispatch speaks
+	// for the file's cascade record (#5804).
+	noteCascadeWrite(file, ["lsp"]);
 	return file;
 }
 

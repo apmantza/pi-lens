@@ -198,6 +198,7 @@ import { registerCascadeTierReconcileTask } from "./clients/lsp/cascade-tier.js"
 import {
 	buildResolvedFoundCascadeRun,
 	forgetCascadePendingNeighbor,
+	PRIMARY_SERVER_SOURCES,
 } from "./clients/cascade-format.js";
 import { initLSPConfig } from "./clients/lsp/config.js";
 import { getLSPService, resetLSPService } from "./clients/lsp/capabilities.js";
@@ -4261,7 +4262,13 @@ function activateExtension(hostPi: ExtensionAPI) {
 		// errors, when it is newer than the observation that recorded them.
 		onResolvedClean: ({ filePath, publishedAt }) => {
 			reconcileCascadeNeighborLspErrors(filePath, [], undefined, publishedAt);
-			forgetCascadePendingNeighbor(filePath, publishedAt);
+			// The touch was primary-scope: only the rows the primary server
+			// raised (#5804 sweep).
+			forgetCascadePendingNeighbor(
+				filePath,
+				publishedAt,
+				PRIMARY_SERVER_SOURCES,
+			);
 		},
 	});
 	// #484: emit the opt-in run summary entry HERE, not at turn_end. The SDK's

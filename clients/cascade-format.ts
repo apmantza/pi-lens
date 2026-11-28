@@ -16,7 +16,10 @@ import { displayedMessage } from "./finding-identity.js";
 import { BoundedFifoMap } from "./bounded-cache.js";
 import { logLatency } from "./latency-logger.js";
 import { formatCacheAgeLabel } from "./finding-delivery-gate.js";
-import { recordDegradationOnce } from "./degradation-ledger.js";
+import {
+	incrementDegradationCount,
+	recordDegradationOnce,
+} from "./degradation-ledger.js";
 import { inlineBlockerSourceOf } from "./inline-blocker-fields.js";
 import { normalizeMapKey } from "./path-utils.js";
 import type { LSPDiagnostic } from "./lsp/client.js";
@@ -766,6 +769,76 @@ export function forgetCascadePendingNeighbor(
 	pendingNeighbors.delete(key);
 }
 
+// #5804: the sources that reached a verdict on each file's last write. A
+// note lives until that file's next write is recorded. Bounded like the
+// record: an evicted note reads as "no answer", which keeps the file's errors.
+const answeredWrites = new BoundedFifoMap<string, readonly string[]>(
+	MAX_PENDING_NEIGHBORS,
+);
+
+/**
+ * #5804: note a write of `filePath` with the sources that reached a verdict
+ * on it (`PipelineResult.verdictSourceIds`: the verdict runners, and the
+ * auxiliary servers that answered inside them, #5812 r5, less any source
+ * that withheld a blocker outside the edited lines, #5812 r6). A
+ * `tool_result` write notes none where it records its turn-state range
+ * (#5812 F2), so a write that
+ * never dispatches, or a crash, timeout, abort or superseded run, leaves the
+ * file unanswered; the run that publishes a verdict notes its runners. The
+ * agent_settled drain (deferred format and autofix) notes none for each file
+ * it rewrites (#5812 r5). A server-initiated workspace edit, the turn-end
+ * warnings fix and a co-process bridge write still do not. Consumed by
+ * {@link settleCascadePendingAfterWrite}.
+ */
+export function noteCascadeWrite(
+	filePath: string,
+	verdictSourceIds: readonly string[],
+): void {
+	const key = normalizeMapKey(filePath);
+	answeredWrites.delete(key);
+	if (verdictSourceIds.length > 0)
+		answeredWrites.set(key, [...verdictSourceIds]);
+}
+
+/**
+ * The sources a primary server's clean answer speaks for: the dispatch
+ * runner tags the primary language server's findings `lsp`, and an auxiliary
+ * keeps its own tool id (#5804, `forgetCascadePendingNeighbor`).
+ */
+export const PRIMARY_SERVER_SOURCES: readonly string[] = ["lsp"];
+
+/**
+ * #5804: turn end, for a file pi wrote this turn. The write's own dispatch
+ * reports what is left of the errors its verdict sources raise, so the record
+ * forgets those rows, by the per-row rule of
+ * {@link forgetCascadePendingNeighbor} (#5812 F1: an `lsp` answer says nothing
+ * about an `opengrep` row). Returns true when the primary server answered
+ * and no row is left. Otherwise the file is not known clean: the record keeps
+ * the rest and its observation moves to `at`, so the freshness gate reads
+ * pi's own unconfirmed rewrite as a claim the record carries, not as an edit
+ * outside pi.
+ */
+export function settleCascadePendingAfterWrite(
+	filePath: string,
+	at: number,
+): boolean {
+	const key = normalizeMapKey(filePath);
+	const covered = answeredWrites.get(key) ?? [];
+	forgetCascadePendingNeighbor(filePath, undefined, covered);
+	const entry = pendingNeighbors.get(key);
+	if (!entry)
+		return PRIMARY_SERVER_SOURCES.every((source) => covered.includes(source));
+	entry.checkedAt = Math.max(entry.checkedAt, at);
+	// One count per file key, the carry record the inline blockers use.
+	incrementDegradationCount({
+		kind: "blocker-carried-unobserved",
+		subject: key,
+		reason:
+			"a neighbour's pending cascade errors stay pending: no source that raised them reached a verdict on its write (#5804)",
+	});
+	return false;
+}
+
 /** The record, oldest-written first. */
 export function listCascadePendingNeighbors(): ReadonlyArray<{
 	filePath: string;
@@ -794,4 +867,5 @@ export function getCascadePendingNeighborCount(): number {
 /** Session reset (`resetDispatchBaselines` in clients/dispatch/integration.ts). */
 export function resetCascadePendingNeighbors(): void {
 	pendingNeighbors.clear();
+	answeredWrites.clear();
 }

@@ -375,7 +375,13 @@ const boundary = vi.hoisted(() => {
 					);
 					lsp.onHold?.();
 				});
-			return { diags: lsp.diagnose(content) };
+			// #5812 r5: a server with `diag` answers these bytes, which the real
+			// service names in `answeredServerIds` on every collecting touch
+			// (tests/scripts/touch-result.test.ts pins it).
+			return {
+				diags: lsp.diagnose(content),
+				...(ag.diag && { answeredServerIds: ["ast-grep"] }),
+			};
 		},
 	};
 	const helm = { stdout: "", lintCalls: 0 };
@@ -675,6 +681,25 @@ async function openSession(
 					toolName: "write",
 					input: { path: other, content },
 					content: [{ type: "text", text: "wrote" }],
+				},
+				ctx(),
+			);
+		},
+		/** #5812 r6: a host `edit` of another file that changed `line` (1-based). */
+		async editOther(
+			file: string,
+			content: string,
+			line: number,
+		): Promise<void> {
+			const other = path.join(tmpDir, file);
+			fs.writeFileSync(other, content);
+			await pi.emit(
+				"tool_result",
+				{
+					toolName: "edit",
+					input: { path: other },
+					details: { diff: `+ ${line} ${content.split("\n")[line - 1] ?? ""}` },
+					content: [{ type: "text", text: "edited" }],
 				},
 				ctx(),
 			);
@@ -1422,6 +1447,18 @@ describe("#4484 witness, round 2: only evidence retires a recorded blocker", () 
 		const w2 = await s.write(U2);
 		expect(w2).not.toMatch(/clean/);
 		expect(w2).toMatch(STILL_UNFIXED);
+		// #5812 r7: held because the run still observes it, not because its
+		// source gave no verdict, so no unobserved carry is counted. Drift it
+		// catches: the count reading `stillObserved` alone after the split.
+		expect(
+			getDegradationSummary().find(
+				(c) => c.kind === "blocker-carried-unobserved",
+			)?.latestReasons ?? [],
+		).not.toContainEqual(
+			expect.objectContaining({
+				subject: expect.stringContaining("carry-unused.ts"),
+			}),
+		);
 		expect(await s.commitBlocked()).toBe(true);
 		expect(await s.endTurn()).not.toContain("Resolved this turn");
 		await fixAndDrain(s);
@@ -3778,6 +3815,144 @@ describe("#5790 witness: a cascade note with no finding does not hold the commit
 		await fixAndDrain(s);
 	}, 120_000);
 
+	// Recurrence (#5804, #5790 r3 rows V2 to V3): the neighbour's cascade error
+	// held the commit gate, then the neighbour was rewritten while the server
+	// gave no verdict, with the error still in its bytes. The turn end forgot
+	// the neighbour's pending error (an edited file's own dispatch "reports
+	// it") although that dispatch reported nothing, and the gate admitted the
+	// commit with the error on disk.
+	it("keeps a neighbour's pending error when its rewrite gets no server verdict", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("cf", TARGET, TARGET_FIXED);
+		removeNeighbourOnCleanup();
+		const neighbour = path.join(tmpDir, NEIGHBOUR);
+		fs.writeFileSync(neighbour, NEIGHBOUR_BAD);
+		expect(await s.write(TARGET_BAD)).toContain("🔴 STOP");
+		boundary.lsp.mode = "inconclusive";
+		await s.write(TARGET_BAD_OTHER);
+		boundary.lsp.mode = "answer";
+		expect(await s.endTurn()).toContain(CASCADE_ERRORS);
+		fs.writeFileSync(s.target, TARGET_FIXED);
+		expect(await s.settleCall({ source: "lsp", waitMs: 30000 })).toMatch(
+			/confirmed clean/,
+		);
+		// V2: the neighbour's error alone holds the gate.
+		expect(await s.commitReason()).toContain("blocking_provenance_untrusted");
+		// The neighbour is rewritten, the error still in its bytes, and the
+		// server gives no verdict on the rewrite.
+		boundary.lsp.mode = "inconclusive";
+		const rewrittenAt = Date.now();
+		await s.writeOther(NEIGHBOUR, NEIGHBOUR_BAD + "export const d = 4;\n");
+		boundary.lsp.mode = "answer";
+		await s.endTurn();
+		try {
+			// V3: the error is still on disk, so the gate still refuses, and the
+			// record carries it to the rewrite: a claim about bytes pi wrote, not
+			// an edit outside pi that the next turn end would name once and forget.
+			expect(fs.readFileSync(neighbour, "utf8")).toContain("BAD_CALL();");
+			expect(await s.commitReason()).toContain(HOLD_REMEDY);
+			// The unanswered write is counted once for the neighbour.
+			expect(
+				getDegradationSummary().find(
+					(c) => c.kind === "blocker-carried-unobserved",
+				)?.latestReasons,
+			).toContainEqual(
+				expect.objectContaining({
+					subject: expect.stringContaining("cascade-user.ts"),
+				}),
+			);
+			const [held] = listCascadePendingNeighbors().filter(
+				(e) => e.filePath === neighbour,
+			);
+			expect(held?.errorCount).toBe(1);
+			expect(held?.checkedAt).toBeGreaterThanOrEqual(rewrittenAt);
+		} finally {
+			forgetCascadePendingNeighbor(neighbour);
+		}
+		await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence (#5804, a write is a transition): the last write of the turn
+	// decides. A write a server answered for, then one it did not, leaves the
+	// file unconfirmed; the first write's answer must not speak for the second.
+	it("keeps a neighbour's pending error when an unanswered write follows an answered one", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("cw", TARGET, TARGET_FIXED);
+		removeNeighbourOnCleanup();
+		const neighbour = path.join(tmpDir, NEIGHBOUR);
+		fs.writeFileSync(neighbour, NEIGHBOUR_BAD);
+		expect(await s.write(TARGET_BAD)).toContain("🔴 STOP");
+		boundary.lsp.mode = "inconclusive";
+		await s.write(TARGET_BAD_OTHER);
+		boundary.lsp.mode = "answer";
+		expect(await s.endTurn()).toContain(CASCADE_ERRORS);
+		fs.writeFileSync(s.target, TARGET_FIXED);
+		expect(await s.settleCall({ source: "lsp", waitMs: 30000 })).toMatch(
+			/confirmed clean/,
+		);
+		try {
+			await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+			boundary.lsp.mode = "inconclusive";
+			await s.writeOther(NEIGHBOUR, NEIGHBOUR_BAD + "export const d = 4;\n");
+			boundary.lsp.mode = "answer";
+			await s.endTurn();
+			expect(fs.readFileSync(neighbour, "utf8")).toContain("BAD_CALL();");
+			expect(await s.commitReason()).toContain(HOLD_REMEDY);
+		} finally {
+			forgetCascadePendingNeighbor(neighbour);
+		}
+		await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence (#5804, a timeout is a transition): the file's earlier write
+	// was answered, and a later write is still in flight when the turn ends,
+	// so it has published no verdict. The earlier answer must not speak for
+	// the bytes now on disk.
+	it("keeps a neighbour's pending error while a later write of it is still in flight at the turn end", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("cx", TARGET, TARGET_FIXED);
+		removeNeighbourOnCleanup();
+		const neighbour = path.join(tmpDir, NEIGHBOUR);
+		fs.writeFileSync(neighbour, NEIGHBOUR_BAD);
+		expect(await s.write(TARGET_BAD)).toContain("🔴 STOP");
+		boundary.lsp.mode = "inconclusive";
+		await s.write(TARGET_BAD_OTHER);
+		boundary.lsp.mode = "answer";
+		expect(await s.endTurn()).toContain(CASCADE_ERRORS);
+		fs.writeFileSync(s.target, TARGET_FIXED);
+		expect(await s.settleCall({ source: "lsp", waitMs: 30000 })).toMatch(
+			/confirmed clean/,
+		);
+		let inFlight: Promise<void> | undefined;
+		try {
+			await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+			boundary.lsp.mode = "hold";
+			let held!: () => void;
+			const holding = new Promise<void>((resolve) => {
+				held = resolve;
+			});
+			boundary.lsp.onHold = () => held();
+			inFlight = s.writeOther(
+				NEIGHBOUR,
+				NEIGHBOUR_BAD + "export const d = 4;\n",
+			);
+			await holding;
+			boundary.lsp.onHold = undefined;
+			await s.endTurn();
+			expect(fs.readFileSync(neighbour, "utf8")).toContain("BAD_CALL();");
+			expect(await s.commitReason()).toContain(HOLD_REMEDY);
+		} finally {
+			boundary.lsp.mode = "answer";
+			for (const release of boundary.lsp.held.splice(0)) release(true);
+			await inFlight;
+			forgetCascadePendingNeighbor(neighbour);
+		}
+		await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
+
 	// Recurrence (#5790 review F2): a source=lsp probe covers the sources its
 	// servers answered for, so it retires only the pending rows those sources
 	// raised. A knip row it never observed stayed forgotten with the lsp ones.
@@ -3827,4 +4002,167 @@ describe("#5790 witness: a cascade note with no finding does not hold the commit
 		},
 		120_000,
 	);
+
+	// Recurrence (#5812 round 4, CodeRabbit F1): the language server answered
+	// the neighbour's rewrite, and the turn end forgot the whole record, the
+	// opengrep row with the lsp one. No opengrep verdict reached that write, so
+	// the next turn end no longer named the opengrep error.
+	it("keeps a neighbour's pending row from a source its answered rewrite did not cover", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("cy", TARGET, TARGET_FIXED);
+		removeNeighbourOnCleanup();
+		const neighbour = path.join(tmpDir, NEIGHBOUR);
+		fs.writeFileSync(neighbour, NEIGHBOUR_FIXED);
+		const pendingTools = () =>
+			listCascadePendingNeighbors()
+				.filter((e) => e.filePath === neighbour)
+				.flatMap((e) => e.errors.map((error) => error.tool));
+		try {
+			recordDeliveredCascadeNeighbor(
+				neighbour,
+				(["lsp", "opengrep"] as const).map((tool, index) => ({
+					id: tool + ":" + index,
+					message: "finding " + index,
+					filePath: neighbour,
+					line: index + 1,
+					column: 1,
+					severity: "error" as const,
+					semantic: "blocking" as const,
+					tool,
+				})),
+				0,
+				Date.now() - 60_000,
+			);
+			const rewrittenAt = Date.now();
+			await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED + "export const d = 4;\n");
+			await s.endTurn();
+			expect(pendingTools()).toEqual(["opengrep"]);
+			const [held] = listCascadePendingNeighbors().filter(
+				(e) => e.filePath === neighbour,
+			);
+			expect(held?.checkedAt).toBeGreaterThanOrEqual(rewrittenAt);
+			expect(await s.commitReason()).toContain(HOLD_REMEDY);
+		} finally {
+			forgetCascadePendingNeighbor(neighbour);
+		}
+		await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence (#5812 round 5, verify V1): the cascade recorded an ast-grep
+	// row on the neighbour, the agent rewrote the neighbour without the
+	// finding, and the ast-grep server answered that rewrite. The row stayed
+	// through every later write and held the commit: the write note named
+	// only dispatch runners, and no runner is called `ast-grep`.
+	it("retires a neighbour's pending auxiliary row once that auxiliary answers its rewrite", async () => {
+		boundary.lsp.enabled = true;
+		boundary.ag.diag = true;
+		const s = await openSession("cz", TARGET, TARGET_FIXED);
+		removeNeighbourOnCleanup();
+		const neighbour = path.join(tmpDir, NEIGHBOUR);
+		fs.writeFileSync(
+			neighbour,
+			NEIGHBOUR_FIXED + "export function f(): unknown {\n\treturn c;\n}\n",
+		);
+		const pendingTools = () =>
+			listCascadePendingNeighbors()
+				.filter((e) => e.filePath === neighbour)
+				.flatMap((e) => e.errors.map((error) => error.tool));
+		try {
+			await s.write(TARGET_FIXED + "export const d = 4;\n");
+			expect(await s.endTurn()).toContain(CASCADE_ERRORS);
+			expect(pendingTools()).toEqual(["ast-grep"]);
+			expect(await s.commitReason()).toContain(HOLD_REMEDY);
+			await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+			await s.endTurn();
+			expect(pendingTools()).toEqual([]);
+			expect(await s.commitReason()).toBe("");
+		} finally {
+			forgetCascadePendingNeighbor(neighbour);
+		}
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence (#5812 round 6, verify R5-1): ast-grep answered an edit on
+	// another line of the neighbour, and the lsp runner withheld its blocker
+	// as outside the edited lines (#4481). The settle read "ast-grep answered"
+	// and retired the row, so the commit was admitted with the error on disk.
+	// The whole-file write and the primary-server row are the controls.
+	it.each([
+		{ kind: "an edit on another line", tool: "ast-grep", whole: false },
+		{ kind: "a whole-file write", tool: "ast-grep", whole: true },
+		{ kind: "an edit on another line", tool: "lsp", whole: false },
+	] as const)(
+		"keeps a neighbour's $tool blocker blocking after $kind leaves it in place",
+		async ({ tool, whole }) => {
+			boundary.lsp.enabled = true;
+			boundary.ag.diag = true;
+			const s = await openSession("da" + tool + whole, TARGET, TARGET_FIXED);
+			removeNeighbourOnCleanup();
+			const neighbour = path.join(tmpDir, NEIGHBOUR);
+			const bad =
+				tool === "lsp"
+					? NEIGHBOUR_BAD
+					: NEIGHBOUR_FIXED +
+						"export function f(): unknown {\n\treturn c;\n}\n";
+			fs.writeFileSync(neighbour, bad);
+			const pendingTools = () =>
+				listCascadePendingNeighbors()
+					.filter((e) => e.filePath === neighbour)
+					.flatMap((e) => e.errors.map((error) => error.tool));
+			try {
+				await s.write(TARGET_FIXED + "export const d = 4;\n");
+				expect(await s.endTurn()).toContain(CASCADE_ERRORS);
+				expect(pendingTools()).toEqual([tool]);
+				const after = bad + "export const e = 5;\n";
+				if (whole) await s.writeOther(NEIGHBOUR, after);
+				else await s.editOther(NEIGHBOUR, after, after.split("\n").length - 1);
+				await s.endTurn();
+				await s.endTurn();
+				expect(await s.commitReason()).not.toBe("");
+				// Only the withheld ast-grep finding depends on the row; the
+				// controls deliver their error in the write's own result.
+				if (tool === "ast-grep" && !whole)
+					expect(pendingTools()).toEqual(["ast-grep"]);
+			} finally {
+				forgetCascadePendingNeighbor(neighbour);
+			}
+			await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+			await fixAndDrain(s);
+		},
+		120_000,
+	);
+
+	// Recurrence (#5812 round 7, verify R6-1): the neighbour kept an unused
+	// local the delta held back from an earlier write, and the language
+	// server answered the write that fixed its cascade error. The write note
+	// read the held-back hint as lsp still reporting, left lsp out, and the
+	// fixed error's row held the commit through every later clean write.
+	it("retires a neighbour's fixed lsp row while it keeps a held-back unused value", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("db", TARGET, TARGET_FIXED);
+		removeNeighbourOnCleanup();
+		const neighbour = path.join(tmpDir, NEIGHBOUR);
+		const kept = NEIGHBOUR_FIXED + "const unusedVar = 1;\n";
+		const pendingTools = () =>
+			listCascadePendingNeighbors()
+				.filter((e) => e.filePath === neighbour)
+				.flatMap((e) => e.errors.map((error) => error.tool));
+		try {
+			await s.writeOther(NEIGHBOUR, kept);
+			await s.endTurn();
+			fs.writeFileSync(neighbour, kept + "BAD_CALL();\n");
+			await s.write(TARGET_FIXED + "export const d = 4;\n");
+			expect(await s.endTurn()).toContain(CASCADE_ERRORS);
+			expect(pendingTools()).toEqual(["lsp"]);
+			await s.writeOther(NEIGHBOUR, kept + "export const e = 5;\n");
+			await s.endTurn();
+			expect(pendingTools()).toEqual([]);
+			expect(await s.commitReason()).toBe("");
+		} finally {
+			forgetCascadePendingNeighbor(neighbour);
+		}
+		await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
 });

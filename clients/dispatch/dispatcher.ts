@@ -660,6 +660,8 @@ export interface RunnerLatency {
 	claimSource?: RunnerClaimSource;
 	unconfirmedServerIds?: readonly string[];
 	deferredServerIds?: readonly string[];
+	/** #5812 r5: the runner's own `answeredServerIds`. */
+	answeredServerIds?: readonly string[];
 	/** #4403: the runner's own `primaryUnavailableCause`. */
 	primaryUnavailableCause?: PrimaryUnavailableCause;
 	/** #4403: the runner's own `disabledPrimaryServerIds`. */
@@ -1530,6 +1532,9 @@ async function runGroup(
 			...(result.deferredServerIds !== undefined && {
 				deferredServerIds: result.deferredServerIds,
 			}),
+			...(result.answeredServerIds !== undefined && {
+				answeredServerIds: result.answeredServerIds,
+			}),
 			...(result.primaryUnavailableCause !== undefined && {
 				primaryUnavailableCause: result.primaryUnavailableCause,
 			}),
@@ -1981,6 +1986,7 @@ export async function dispatchForFile(
 	// them, and the record clears only when they and the delta's blockers are
 	// both gone.
 	let heldBackBlockers: Diagnostic[] = [];
+	let heldBackPromoted: Diagnostic[] = [];
 	if (ctx.deltaMode && previousBaseline) {
 		// Silencing a rule is not fixing it. The stored baseline is deliberately
 		// unfiltered (below), so compare against a fully-filtered view of it
@@ -2007,18 +2013,17 @@ export async function dispatchForFile(
 		// #4484 r2: an unused value is a blocker only while the delta calls it
 		// new. Held back as already seen, it is still observed, promoted as it
 		// was when it was recorded, so the record keeps it pending. #5416: so is
-		// a class member the merge below raised.
-		stillObserved.push(
-			...promoteDeltaUnusedToBlockers(
-				visibleDiagnostics.flatMap((d) =>
-					!isNew.has(d) &&
-					d.semantic !== "blocking" &&
-					(isUnusedValueDiagnostic(d) || blocksAsClassMember(d))
-						? [d]
-						: [],
-				),
-			).map(withClassSeverity),
-		);
+		// a class member the merge below raised. #5812 r7: apart from
+		// `stillObserved`, whose source withheld a blocker it still reports.
+		heldBackPromoted = promoteDeltaUnusedToBlockers(
+			visibleDiagnostics.flatMap((d) =>
+				!isNew.has(d) &&
+				d.semantic !== "blocking" &&
+				(isUnusedValueDiagnostic(d) || blocksAsClassMember(d))
+					? [d]
+					: [],
+			),
+		).map(withClassSeverity);
 		visibleDiagnostics = promoteDeltaUnusedToBlockers(filtered.new);
 		resolvedCount = filtered.fixed.length;
 	}
@@ -2234,6 +2239,7 @@ export async function dispatchForFile(
 			// #4484 r2: findings that only keep a recorded blocker pending, and
 			// the sources whose silence is no evidence.
 			stillObserved: stillObserved.length,
+			heldBackPromoted: heldBackPromoted.length,
 			inconclusiveRunners: inconclusiveRunnerIds.size,
 			inconclusiveServers: inconclusiveServerIds.size,
 		},
@@ -2253,6 +2259,7 @@ export async function dispatchForFile(
 		...(heldBackBlockers.length > 0 && { heldBackBlockers }),
 		...(preExisting.length > 0 && { preExisting }),
 		...(stillObserved.length > 0 && { stillObserved }),
+		...(heldBackPromoted.length > 0 && { heldBackPromoted }),
 		...(editScopedRunnerIds.some((id) => !voidedCovers.has(id)) && {
 			editScopedRunnerIds: editScopedRunnerIds.flatMap((id) =>
 				voidedCovers.has(id) ? [] : [id],
