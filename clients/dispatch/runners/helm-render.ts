@@ -72,6 +72,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { withMessageIds } from "../../finding-identity.js";
 import { logLatency } from "../../latency-logger.js";
 import { PathKeyedMap } from "../../path-keyed-map.js";
 import {
@@ -311,6 +312,11 @@ export function mapRenderedToSource(options: {
 	return { filePath: chartYaml(chartRoot), mapped: false };
 }
 
+/** A line below an `Error:` line that belongs to that error. */
+function isErrorDetail(line = ""): boolean {
+	return line !== "" && !line.startsWith("Error:");
+}
+
 /**
  * Turn a failed `helm template` into findings about the CHART. A render that
  * exits non-zero is a real defect the user needs (#1487): the chart cannot be
@@ -319,9 +325,11 @@ export function mapRenderedToSource(options: {
  *
  * Helm reports template faults as
  * `Error: template: <chart>/templates/x.yaml:12:9: executing ...` and parse
- * faults as `Error: parse error at (<chart>/templates/x.yaml:5): ...`. Anything
- * unrecognized still becomes one diagnostic on `Chart.yaml`, so a render that
- * failed can never come back empty.
+ * faults as `Error: parse error at (<chart>/templates/x.yaml:5): ...`. helm 4
+ * prints an execution fault's cause on the lines below `Error:`, so a finding's
+ * message runs to the next blank or `Error:` line; its location is read from the
+ * first line. Anything unrecognized still becomes one diagnostic on
+ * `Chart.yaml`, so a render that failed can never come back empty.
  */
 export function parseHelmTemplateFailure(
 	raw: string,
@@ -330,19 +338,23 @@ export function parseHelmTemplateFailure(
 	const diagnostics: Diagnostic[] = [];
 	const text = raw.trim();
 	const realRoot = canonicalChartRoot(chartRoot);
-	for (const line of text.split(/\r?\n/)) {
-		const trimmed = line.trim();
+	const lines = text.split(/\r?\n/).map((line) => line.trim());
+	for (const [index, trimmed] of lines.entries()) {
 		if (!trimmed.startsWith("Error:")) continue;
+		let end = index + 1;
+		while (isErrorDetail(lines[end])) end++;
+		const block = lines.slice(index, end).join("\n");
 		const location = extractTemplateRef(trimmed);
 		const resolved = location
 			? resolveTemplateSource(location.ref, chartRoot, realRoot)
 			: null;
 		const chartName = path.basename(chartRoot);
+		const message = resolved
+			? block
+			: `${block} (helm template failed for chart ${chartName})`;
 		diagnostics.push({
-			id: `helm-render-error-${diagnostics.length + 1}`,
-			message: resolved
-				? trimmed
-				: `${trimmed} (helm template failed for chart ${chartName})`,
+			id: "helm-render-error",
+			message,
 			filePath: resolved ?? chartYaml(chartRoot),
 			line: resolved ? (location?.line ?? 1) : 1,
 			column: 1,
@@ -367,7 +379,7 @@ export function parseHelmTemplateFailure(
 			fixable: false,
 		});
 	}
-	return diagnostics;
+	return withMessageIds(diagnostics);
 }
 
 /**
@@ -495,9 +507,11 @@ export function parseRenderedTrivyOutput(
 			const at = renderedLine
 				? `${located.detail}:${renderedLine}`
 				: located.detail;
+			const message =
+				`[${id}] ${title} (${severity}) in ${at}.${resolution}`.trim();
 			diagnostics.push({
-				id: `helm-render-${id}-${diagnostics.length + 1}`,
-				message: `[${id}] ${title} (${severity}) in ${at}.${resolution}`.trim(),
+				id: `helm-render-${id}`,
+				message,
 				filePath: located.filePath,
 				line: 1,
 				column: 1,
@@ -510,7 +524,7 @@ export function parseRenderedTrivyOutput(
 			});
 		}
 	}
-	return { understood: true, diagnostics };
+	return { understood: true, diagnostics: withMessageIds(diagnostics) };
 }
 
 /**

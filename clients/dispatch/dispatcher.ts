@@ -382,9 +382,11 @@ export function deltaBaselineFactKey(filePath: string): string {
  * Filter diagnostics to only show NEW issues (delta mode). Two diagnostics are
  * one finding when they share an id, or when ANOTHER lane reports the same
  * `copyOf.key` (#4629: a language server's copy and its CLI's copy of one
- * finding carry two ids). Two ids of ONE lane stay two findings, as the id
- * decides alone: an ordinal or a message in the id marks a different finding
- * at the same place and rule.
+ * finding carry two ids). A lane the other side holds at that key matches by id
+ * alone there (#5816: both lanes can be kept at one key). Two ids of ONE lane
+ * stay two findings, as the id decides alone: an ordinal or a message in the id
+ * marks a different finding at the same place and rule (#5816: a parser whose
+ * ids must tell messages apart builds them with `withMessageIds`).
  */
 function filterDelta<T extends { id: string }>(
 	after: T[],
@@ -402,11 +404,8 @@ function filterDelta<T extends { id: string }>(
 		}
 		return (d: T) => {
 			if (ids.has(d.id)) return true;
-			const lane = copyOf.lane(d);
-			for (const other of lanesByKey.get(copyOf.key(d)) ?? []) {
-				if (other !== lane) return true;
-			}
-			return false;
+			const lanes = lanesByKey.get(copyOf.key(d));
+			return lanes !== undefined && !lanes.has(copyOf.lane(d));
 		};
 	};
 	const inBefore = namedBy(before ?? []);
@@ -427,9 +426,11 @@ function toolPriority(tool: string, defectClass: string): number {
  * its rule. A language server renders the rule `<source>:<code>` where its CLI
  * prints `<code>`, so the normalized rule is the key, as `lens_diagnostics` and
  * `laneCopyStandsFor` read it: one finding has one identity on every surface.
- * The two lanes' copies carry different ids and one `findingKey`. The overlap
- * dedupe keeps one copy per key and the delta reads the same key, so a lane
- * that goes silent does not make the other lane's copy a new finding.
+ * The two lanes' copies carry different ids and wordings and one `findingKey`.
+ * The overlap dedupe merges across lanes on this key and the delta reads the
+ * same key, so a lane that goes silent does not make the other lane's copy a
+ * new finding. It does not name a finding WITHIN a lane: the dedupe keeps one
+ * tool's two messages at one key apart (#5816).
  */
 function findingKey(
 	d: Diagnostic,
@@ -441,29 +442,47 @@ function findingKey(
 	return `${d.filePath}:${line}:${column}:${defectClass}:${ruleKey}`;
 }
 
+/** Which of two copies of one finding stands: severity, then tool priority. */
+function copyScore(d: Diagnostic): number {
+	const defectClass = d.defectClass ?? classifyDiagnostic(d);
+	return semanticRank(d.semantic) * 100 + toolPriority(d.tool, defectClass);
+}
+
+/**
+ * Per `findingKey`, one tool's findings are one per message, and another tool's
+ * are copies of them. The tool holding the best copy stands. Another tool's are
+ * dropped unless it reports more messages there than that one: wordings differ
+ * between tools, so which of its findings is uncopied is unknown (#5816).
+ */
 function dedupeOverlappingDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
-	const byKey = new Map<string, Diagnostic>();
+	// findingKey -> tool -> message -> the standing copy
+	const byKey = new Map<string, Map<string, Map<string, Diagnostic>>>();
 
 	for (const d of diagnostics) {
 		const defectClass = d.defectClass ?? classifyDiagnostic(d);
 		const key = findingKey(d, defectClass);
-		const current = byKey.get(key);
-		if (!current) {
-			byKey.set(key, { ...d, defectClass });
-			continue;
-		}
-
-		const currScore =
-			semanticRank(current.semantic) * 100 +
-			toolPriority(current.tool, defectClass);
-		const nextScore =
-			semanticRank(d.semantic) * 100 + toolPriority(d.tool, defectClass);
-		if (nextScore > currScore) {
-			byKey.set(key, { ...d, defectClass });
+		const tools = byKey.get(key) ?? new Map();
+		byKey.set(key, tools);
+		const messages = tools.get(d.tool) ?? new Map<string, Diagnostic>();
+		tools.set(d.tool, messages);
+		const current = messages.get(d.message);
+		if (!current || copyScore(d) > copyScore(current)) {
+			messages.set(d.message, { ...d, defectClass });
 		}
 	}
 
-	return [...byKey.values()];
+	const best = (messages: Map<string, Diagnostic>) =>
+		[...messages.values()].reduce((top, d) => Math.max(top, copyScore(d)), 0);
+	return [...byKey.values()].flatMap((tools) => {
+		const lanes = [...tools.values()];
+		const standing = lanes.reduce(
+			(a, b) => (best(b) > best(a) ? b : a),
+			lanes[0] as (typeof lanes)[number],
+		);
+		return lanes.flatMap((lane) =>
+			lane === standing || lane.size > standing.size ? [...lane.values()] : [],
+		);
+	});
 }
 
 /** #5416: a class member the class's blocking tier raises (`withClassSeverity`). */
@@ -486,9 +505,6 @@ function mergeFindingClasses(
 	held: readonly Diagnostic[],
 ): Diagnostic[] {
 	const heldKeys = new Set(held.map(findingClassKey));
-	const score = (d: Diagnostic) =>
-		semanticRank(d.semantic) * 100 +
-		toolPriority(d.tool, d.defectClass ?? classifyDiagnostic(d));
 	const slotByKey = new Map<string, number>();
 	const merged: Diagnostic[] = [];
 	for (const d of visible) {
@@ -501,7 +517,7 @@ function mergeFindingClasses(
 		const slot = slotByKey.get(key);
 		if (slot === undefined) {
 			slotByKey.set(key, merged.push(raised) - 1);
-		} else if (score(raised) > score(merged[slot] as Diagnostic)) {
+		} else if (copyScore(raised) > copyScore(merged[slot] as Diagnostic)) {
 			merged[slot] = raised;
 		}
 	}

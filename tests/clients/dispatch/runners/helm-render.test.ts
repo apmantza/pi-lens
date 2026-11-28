@@ -50,6 +50,10 @@ vi.mock(
 	}),
 );
 
+const { createDispatchContext, dispatchForFile, RunnerRegistry } =
+	await import("../../../../clients/dispatch/dispatcher.js");
+const { FactStore } =
+	await import("../../../../clients/dispatch/fact-store.js");
 const { resetProjectLensConfigCache } =
 	await import("../../../../clients/project-lens-config.js");
 const { resetProjectTrust, setProjectTrustState } =
@@ -1302,10 +1306,7 @@ describe("helm-render rendered-manifest checks", () => {
 		);
 
 		expect(result.diagnostics).toHaveLength(2);
-		expect(result.diagnostics.map((item: { id: string }) => item.id)).toEqual([
-			"helm-render-error-1",
-			"helm-render-error-2",
-		]);
+		expect(new Set(result.diagnostics.map((item) => item.id)).size).toBe(2);
 		expect(result.diagnostics[0].filePath).toBe(
 			path.join(chart, "templates", "deployment.yaml"),
 		);
@@ -1766,5 +1767,197 @@ describe("parseRenderedTrivyOutput", () => {
 			severity: "error",
 			semantic: "blocking",
 		});
+	});
+});
+
+// #5816: a finding trivy cannot map to a template cites the rendered manifest's
+// line, which moves with any edit above it.
+it("keeps the id of an unmapped rendered finding whose line moved (#5816)", () => {
+	const idAt = (StartLine: number) =>
+		parseRenderedTrivyOutput(
+			JSON.stringify({
+				Results: [
+					{
+						Misconfigurations: [{ ID: "KSV017", CauseMetadata: { StartLine } }],
+					},
+				],
+			}),
+			() => ({ filePath: "Chart.yaml", detail: "rendered manifest" }),
+		).diagnostics[0].id;
+
+	expect(idAt(11)).toBe(idAt(10));
+});
+
+// #5816: every helm-render finding sits on line 1 or on one template line, and
+// its ids were ordinals, so the dispatcher merged distinct findings of one rule
+// and a delta write could read a new one as already seen.
+describe("helm-render distinct findings at one place through dispatchForFile (#5816)", () => {
+	const DEPENDENCY =
+		"Error: An error occurred while checking for chart dependencies: missing in charts/ directory: redis";
+	const VALUES = "Error: values don't meet the specifications of the schema(s)";
+
+	function session(): () => Promise<string[]> {
+		const chart = installChart("valid-chart");
+		optIn({ helm: { renderValidation: { enabled: true } } });
+		const registry = new RunnerRegistry();
+		registry.register(helmRenderRunner);
+		const facts = new FactStore();
+		return async () => {
+			const result = await dispatchForFile(
+				createDispatchContext(
+					path.join(chart, "values.yaml"),
+					workspace,
+					{ getFlag: () => false },
+					facts,
+					undefined,
+					undefined,
+					workspace,
+				),
+				[{ mode: "all", runnerIds: ["helm-render"] }],
+				registry,
+			);
+			return result.diagnostics.map((d) => d.message);
+		};
+	}
+
+	function failRender(...errors: string[]): void {
+		stubSpawns({ render: { status: 1, stderr: errors.join("\n") } });
+	}
+
+	it("keeps two distinct render errors of one run", async () => {
+		const write = session();
+		failRender(DEPENDENCY, VALUES);
+
+		expect(await write()).toHaveLength(2);
+	});
+
+	it.each([
+		["replacing", [VALUES]],
+		["printed before", [VALUES, DEPENDENCY]],
+	])(
+		"reports only the new render error %s the seen one",
+		async (_order, second) => {
+			const write = session();
+			failRender(DEPENDENCY);
+			await write();
+			failRender(...second);
+
+			expect(await write()).toEqual([expect.stringContaining(VALUES)]);
+		},
+	);
+
+	// helm 4 prints the cause under the `Error:` line, which alone cites only
+	// the template position.
+	const multiLine = (line: number, value: string) =>
+		[
+			`Error: pi-lens-render-valid/templates/deployment.yaml:${line}:15`,
+			`  executing "pi-lens-render-valid/templates/deployment.yaml" at <.Values.${value}>:`,
+			`    nil pointer evaluating interface {}.${value.slice(-1)}`,
+			"",
+			"Use --debug flag to render out invalid YAML",
+		].join("\n");
+
+	it("reports a second multi-line render error in one template", async () => {
+		const write = session();
+		failRender(multiLine(6, "a.b"));
+		await write();
+		failRender(multiLine(7, "zzz.q"));
+
+		const second = await write();
+		expect(second).toEqual([expect.stringContaining("<.Values.zzz.q>")]);
+		expect(second[0]).toContain("nil pointer evaluating interface {}.q");
+		expect(second[0]).not.toContain("--debug");
+	});
+
+	it("holds back a seen multi-line render error whose line moved", async () => {
+		const write = session();
+		failRender(multiLine(6, "a.b"));
+		await write();
+		failRender(multiLine(9, "a.b"));
+
+		expect(await write()).toEqual([]);
+	});
+
+	it("ends one render error's detail at the next Error line", async () => {
+		const write = session();
+		failRender(`${DEPENDENCY}\n  detail one\n${VALUES}\n  detail two`);
+
+		expect(await write()).toEqual([
+			expect.stringMatching(/redis\ndetail one \(helm template failed/),
+			expect.stringMatching(/schema\(s\)\ndetail two \(helm template failed/),
+		]);
+	});
+
+	it.each(["deployment.yaml", "NOTES.txt"])(
+		"holds back a seen render error whose line moved in %s",
+		async (template) => {
+			const at = (line: number) =>
+				`Error: template: pi-lens-render-valid/templates/${template}:${line}:20: nil pointer`;
+			const write = session();
+			failRender(at(12));
+			await write();
+			failRender(at(13));
+
+			expect(await write()).toEqual([]);
+		},
+	);
+
+	// A number after a colon is a line only after a file name.
+	it.each(["app", "db"])(
+		"calls a render error with another %s:<number> value new",
+		async (name) => {
+			const fail = (value: number) =>
+				`Error: execution error at (pi-lens-render-valid/templates/deployment.yaml:1:3): invalid ${name}:${value}`;
+			const write = session();
+			failRender(fail(1));
+			await write();
+			failRender(fail(2));
+
+			expect(await write()).toEqual([fail(2)]);
+		},
+	);
+
+	it("keeps two rendered findings of one trivy rule, and calls only a third new", async () => {
+		const write = session();
+		const row = (StartLine: number) => ({
+			ID: "KSV017",
+			Title: "Privileged",
+			Severity: "CRITICAL",
+			CauseMetadata: { StartLine },
+		});
+		const result = (Target: string, ...lines: number[]) => ({
+			Target,
+			Misconfigurations: lines.map(row),
+		});
+		const DEPLOYMENT = "valid-chart/templates/deployment.yaml";
+		const scan = (...results: ReturnType<typeof result>[]) =>
+			stubSpawns({
+				render: (outputDir) => {
+					writeRendered(
+						outputDir,
+						"valid-chart/templates/deployment.yaml",
+						RENDERED_DEPLOYMENT,
+					);
+					return { status: 0 };
+				},
+				scan: { status: 0, stdout: JSON.stringify({ Results: results }) },
+			});
+		optIn({
+			helm: { renderValidation: { enabled: true } },
+			trivy: { enabled: true },
+		});
+		setProjectTrustState("trusted");
+		scan(result(DEPLOYMENT, 10, 20));
+		expect(await write()).toHaveLength(2);
+		scan(result(DEPLOYMENT, 11, 21));
+		expect(await write()).toEqual([]);
+		scan(result(DEPLOYMENT, 5, 11, 21));
+		expect(await write()).toHaveLength(1);
+		scan(
+			result("valid-chart/templates/other.yaml", 3),
+			result(DEPLOYMENT, 5, 11, 21),
+		);
+
+		expect(await write()).toEqual([expect.stringContaining("other.yaml:3.")]);
 	});
 });

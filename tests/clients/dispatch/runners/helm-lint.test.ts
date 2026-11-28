@@ -502,3 +502,96 @@ describe("parseHelmLintOutput continuations", () => {
 		expect(diagnostics[1].message).not.toContain("mapping values");
 	});
 });
+
+// #5816: helm lint's lineless errors all sit at one place under one rule. The
+// overlap dedupe kept one of them, and the ordinal id let a new error take a
+// seen one's id, so a delta write reported no blocker.
+describe("helm-lint distinct findings at one place through dispatchForFile (#5816)", () => {
+	const A =
+		"[ERROR] /abs/mychart: chart metadata is missing these dependencies: sub";
+	const B =
+		"[ERROR] /abs/mychart: validation: chart.metadata.version is required";
+	let workspace: string;
+
+	beforeEach(() => {
+		workspace = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-helm-5816-"));
+		fs.mkdirSync(path.join(workspace, ".git"));
+		resolveToolCommandWithInstallFallback.mockReset();
+		resolveToolCommandWithInstallFallback.mockResolvedValue("helm");
+		safeSpawnAsync.mockReset();
+	});
+
+	afterEach(() => {
+		fs.rmSync(workspace, { recursive: true, force: true });
+	});
+
+	function session(): (...lines: string[]) => Promise<string[]> {
+		const filePath = createChart(workspace, "values.yaml");
+		const registry = new RunnerRegistry();
+		registry.register(helmLintRunner);
+		const facts = new FactStore();
+		return async (...lines) => {
+			safeSpawnAsync.mockResolvedValue({
+				status: 1,
+				stdout: lines.join("\n"),
+				stderr: "",
+			});
+			const result = await dispatchForFile(
+				createDispatchContext(
+					filePath,
+					workspace,
+					{ getFlag: () => false },
+					facts,
+					undefined,
+					undefined,
+					workspace,
+				),
+				[{ mode: "all", runnerIds: ["helm-lint"] }],
+				registry,
+			);
+			expect(result.hasBlockers).toBe(result.blockers.length > 0);
+			return result.blockers.map((d) => `[ERROR] ${d.message}`);
+		};
+	}
+
+	it("keeps two distinct lineless errors of one run", async () => {
+		expect(await session()(A, B)).toEqual([A, B]);
+	});
+
+	it("lists one lint line printed twice once", async () => {
+		expect(await session()(A, A)).toEqual([A]);
+	});
+
+	it.each([
+		["appended after", [A, B]],
+		["printed before", [B, A]],
+		["replacing", [B]],
+	])(
+		"blocks a second write on a new error %s the seen one",
+		async (_order, second) => {
+			const write = session();
+			expect(await write(A)).toEqual([A]);
+
+			expect(await write(...second)).toEqual([B]);
+		},
+	);
+
+	it("blocks one more occurrence of a seen error on another line", async () => {
+		const at = (line: number) =>
+			`[ERROR] templates/a.yaml:${line}: nil pointer`;
+		const write = session();
+		await write(at(4));
+
+		expect(await write(at(4), at(9))).toEqual([at(9)]);
+	});
+
+	it("calls a new error that differs only in a continuation number new", async () => {
+		const header = "[ERROR] templates/: mychart/templates/exec.yaml:6:15";
+		const first = `${header}\n  index out of range: 1`;
+		const second = `${header}\n  index out of range: 2`;
+		const write = session();
+		await write(first);
+
+		expect(await write(second)).toHaveLength(1);
+	});
+});

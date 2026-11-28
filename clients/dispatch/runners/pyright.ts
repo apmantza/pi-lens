@@ -184,8 +184,8 @@ export function parsePyrightOutput(data: any, _filePath: string): Diagnostic[] {
 			// #5412: a rule-less finding (a syntax error, say) keys its id on its
 			// line and its message, as go vet's id does (`go-vet-<line>-<hash>`).
 			// A message-only id gave two identical messages on different lines one
-			// id, and the delta reads `Diagnostic.id` alone, so the second line was
-			// held back as already seen.
+			// id, and within one tool the delta reads `Diagnostic.id` alone, so the
+			// second line was held back as already seen.
 			id: diag.rule
 				? `pyright-${diag.rule}`
 				: `pyright-${line}-${hashText(message)}`,

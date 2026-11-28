@@ -237,6 +237,29 @@ export function hashText(
 }
 
 /**
+ * #5816: ids for a parser whose tool names a finding by its message alone. The
+ * id is the caller's prefix, the message with its line citations (`x.yaml:4:2`,
+ * `rendered manifest:4`, `line 4`) folded, and which occurrence of that it is.
+ * So a finding that moved lines keeps its id, while another message, or one
+ * more occurrence, is new.
+ */
+export function withMessageIds<T extends { id: string; message: string }>(
+	findings: readonly T[],
+): T[] {
+	const occurrences = new Map<string, number>();
+	return findings.map((d) => {
+		const cited = d.message.replace(
+			/(\.(?:ya?ml|tpl|json|txt):|\brendered manifest:|\bline )\d+(?::\d+)?/g,
+			"$1#",
+		);
+		const name = `${d.id}-${hashText(cited)}`;
+		const occurrence = (occurrences.get(name) ?? 0) + 1;
+		occurrences.set(name, occurrence);
+		return { ...d, id: `${name}-${occurrence}` };
+	});
+}
+
+/**
  * Canonicalize BOTH `filePath` and `cwd` through `normalizeMapKey` (the path
  * identity: realpath on every platform, #4689, plus the win32 case fold)
  * BEFORE computing the relative path, so two callers holding different path
