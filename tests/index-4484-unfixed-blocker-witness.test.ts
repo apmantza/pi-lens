@@ -685,6 +685,25 @@ async function openSession(
 				ctx(),
 			);
 		},
+		/** #5812 r6: a host `edit` of another file that changed `line` (1-based). */
+		async editOther(
+			file: string,
+			content: string,
+			line: number,
+		): Promise<void> {
+			const other = path.join(tmpDir, file);
+			fs.writeFileSync(other, content);
+			await pi.emit(
+				"tool_result",
+				{
+					toolName: "edit",
+					input: { path: other },
+					details: { diff: `+ ${line} ${content.split("\n")[line - 1] ?? ""}` },
+					content: [{ type: "text", text: "edited" }],
+				},
+				ctx(),
+			);
+		},
 		/** A host `edit` that changed `lines` (1-based), as its diff names them. */
 		async edit(content: string, lines: number[]): Promise<string> {
 			fs.writeFileSync(target, content);
@@ -4051,4 +4070,54 @@ describe("#5790 witness: a cascade note with no finding does not hold the commit
 		}
 		await fixAndDrain(s);
 	}, 120_000);
+
+	// Recurrence (#5812 round 6, verify R5-1): ast-grep answered an edit on
+	// another line of the neighbour, and the lsp runner withheld its blocker
+	// as outside the edited lines (#4481). The settle read "ast-grep answered"
+	// and retired the row, so the commit was admitted with the error on disk.
+	// The whole-file write and the primary-server row are the controls.
+	it.each([
+		{ kind: "an edit on another line", tool: "ast-grep", whole: false },
+		{ kind: "a whole-file write", tool: "ast-grep", whole: true },
+		{ kind: "an edit on another line", tool: "lsp", whole: false },
+	] as const)(
+		"keeps a neighbour's $tool blocker blocking after $kind leaves it in place",
+		async ({ tool, whole }) => {
+			boundary.lsp.enabled = true;
+			boundary.ag.diag = true;
+			const s = await openSession("da" + tool + whole, TARGET, TARGET_FIXED);
+			removeNeighbourOnCleanup();
+			const neighbour = path.join(tmpDir, NEIGHBOUR);
+			const bad =
+				tool === "lsp"
+					? NEIGHBOUR_BAD
+					: NEIGHBOUR_FIXED +
+						"export function f(): unknown {\n\treturn c;\n}\n";
+			fs.writeFileSync(neighbour, bad);
+			const pendingTools = () =>
+				listCascadePendingNeighbors()
+					.filter((e) => e.filePath === neighbour)
+					.flatMap((e) => e.errors.map((error) => error.tool));
+			try {
+				await s.write(TARGET_FIXED + "export const d = 4;\n");
+				expect(await s.endTurn()).toContain(CASCADE_ERRORS);
+				expect(pendingTools()).toEqual([tool]);
+				const after = bad + "export const e = 5;\n";
+				if (whole) await s.writeOther(NEIGHBOUR, after);
+				else await s.editOther(NEIGHBOUR, after, after.split("\n").length - 1);
+				await s.endTurn();
+				await s.endTurn();
+				expect(await s.commitReason()).not.toBe("");
+				// Only the withheld ast-grep finding depends on the row; the
+				// controls deliver their error in the write's own result.
+				if (tool === "ast-grep" && !whole)
+					expect(pendingTools()).toEqual(["ast-grep"]);
+			} finally {
+				forgetCascadePendingNeighbor(neighbour);
+			}
+			await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+			await fixAndDrain(s);
+		},
+		120_000,
+	);
 });

@@ -1028,12 +1028,18 @@ export function verdictRunnerIds(
  * id, and the auxiliary servers that runner's touch says answered these
  * bytes (`answeredServerIds`). An auxiliary's rows carry its server id as
  * their tool (`retagAuxiliaryDiagnostics`), and it answers inside the `lsp`
- * runner, so no runner id ever names it.
+ * runner, so no runner id ever names it. #5812 r6: a source with a finding
+ * in `stillObserved` (one withheld outside the edited lines, #4481, or held
+ * by the delta) is left out: its answer did not deliver what it still
+ * reports, so a pending row of that source must stay.
  */
 export function verdictSourceIds(
 	result: Pick<
 		DispatchResult,
-		"inconclusiveSources" | "editScopedRunnerIds" | "latencyReport"
+		| "inconclusiveSources"
+		| "editScopedRunnerIds"
+		| "latencyReport"
+		| "stillObserved"
 	>,
 ): string[] {
 	const verdict = new Set(verdictRunnerIds(result));
@@ -1045,7 +1051,9 @@ export function verdictSourceIds(
 					: [],
 			),
 		),
-	];
+	].filter(
+		(source) => !(result.stillObserved ?? []).some((d) => d.tool === source),
+	);
 }
 
 // --- Dispatch Context ---
