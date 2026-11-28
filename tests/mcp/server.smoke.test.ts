@@ -2264,18 +2264,30 @@ describe("session_start versus a pipelined config reset (#5394)", () => {
 		{
 			delivery: "in the same stdin chunk",
 			deferSecond: false,
+			writeAt: 3,
 			refused: true,
 			resets: [],
 		},
 		{
 			delivery: "one macrotask later",
 			deferSecond: true,
+			writeAt: 3,
+			refused: false,
+			resets: [{ retiredBy: null, liveAfter: true }],
+		},
+		{
+			// Capture-order pin: the write lands after ensureReady's read and before
+			// session_start's own config check. That check resets first, so the
+			// capture after it must still be current.
+			delivery: "after ensureReady's read, before session_start's own check",
+			deferSecond: false,
+			writeAt: 2,
 			refused: false,
 			resets: [{ retiredBy: null, liveAfter: true }],
 		},
 	])(
 		"never revives a retired runtime when turn_end arrives $delivery",
-		async ({ deferSecond, refused, resets }) => {
+		async ({ deferSecond, writeAt, refused, resets }) => {
 			const env = setupTestEnvironment("pi-lens-mcp-reset-race-");
 			const project = path.join(env.tmpDir, "project");
 			const home = path.join(env.tmpDir, "home");
@@ -2301,6 +2313,7 @@ describe("session_start versus a pipelined config reset (#5394)", () => {
 						`${process.env.NODE_OPTIONS ?? ""} --import ${preload}`.trim(),
 					PI_LENS_TEST_RACE_LOG: eventLog,
 					PI_LENS_TEST_RACE_DEFER_SECOND: deferSecond ? "1" : "",
+					PI_LENS_TEST_RACE_WRITE_READ: String(writeAt),
 				},
 			});
 			const call = (id: number, name: string) => ({
@@ -2318,9 +2331,11 @@ describe("session_start versus a pipelined config reset (#5394)", () => {
 					call(53951, "pilens_session_start"),
 					call(53952, "pilens_turn_end"),
 				]);
-				const events = readNdjsonRows<{ read?: string; reset?: unknown }>(
-					eventLog,
-				);
+				const events = readNdjsonRows<{
+					read?: string;
+					reset?: unknown;
+					wrote?: boolean;
+				}>(eventLog);
 
 				if (!deferSecond) {
 					// The config write lands after the third read.
@@ -2336,9 +2351,13 @@ describe("session_start versus a pipelined config reset (#5394)", () => {
 					content: { text: string }[];
 				};
 				expect({
+					// The write must land, or the arm proves nothing: a fixture that never
+					// writes passes every arm with refused:false.
+					wrote: events.rows.filter((e) => e.wrote).length,
+					skipped: events.skipped,
 					resets: events.rows.flatMap((e) => e.reset ?? []),
 					refused: result.isError ?? false,
-				}).toEqual({ resets, refused });
+				}).toEqual({ wrote: 1, skipped: 0, resets, refused });
 				if (refused) {
 					expect(result.content[0].text).toContain(
 						"MCP session context reset before session_start",

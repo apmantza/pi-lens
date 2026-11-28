@@ -13,6 +13,8 @@ if (eventLog && isMainThread && isServer) {
 	const read = fs.readFileSync;
 	const record = (event) =>
 		fs.appendFileSync(eventLog, `${JSON.stringify(event)}\n`);
+	// The config read after which the write lands (1-based, per chunk).
+	const writeAt = Number(process.env.PI_LENS_TEST_RACE_WRITE_READ ?? 3);
 	// Undefined until the chunk carrying session_start arrives.
 	let reads;
 
@@ -30,11 +32,12 @@ if (eventLog && isMainThread && isServer) {
 		if (!caller) return content;
 		reads += 1;
 		record({ read: caller });
-		if (reads === 3) {
+		if (reads === writeAt) {
 			fs.writeFileSync(
 				configPath,
 				JSON.stringify({ lsp: { disabledServers: ["typos"] } }),
 			);
+			record({ wrote: true });
 		}
 		return content;
 	};
