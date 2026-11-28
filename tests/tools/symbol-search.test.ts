@@ -404,6 +404,31 @@ describe("symbol_search tool", () => {
 		15_000,
 	);
 
+	// The success half of F1: the delete takes the captured key too.
+	it("clears a root's building status when its link is retargeted mid-build", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-moved-ok-");
+		try {
+			const root = path.join(env.tmpDir, "a");
+			const other = path.join(env.tmpDir, "b");
+			for (const dir of [root, other]) {
+				createTempFile(dir, "src/auth.ts", "export const authenticate = true;");
+			}
+			const link = path.join(env.tmpDir, "current");
+			fs.symlinkSync(root, link, "junction");
+			await queryAt(link);
+			expect(getWordIndexBuildStatus(root)).toMatchObject({
+				state: "building",
+			});
+			fs.unlinkSync(link);
+			fs.symlinkSync(other, link, "junction");
+			await eventually(() => {
+				expect(getWordIndexBuildStatus(root)).toBeUndefined();
+			});
+		} finally {
+			env.cleanup();
+		}
+	}, 10_000);
+
 	// #5825 review F2: the walk reads `path.resolve(cwd)`, so `link/..` walks the
 	// link's parent. Resolved physically, the status named the target's parent.
 	it("files a link/.. root's build status under the project it walks (shape 1)", async () => {
