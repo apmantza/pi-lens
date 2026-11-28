@@ -2079,7 +2079,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/review-graph-logger.ts": 1,
 		"clients/review-graph/builder.ts": 12,
 		"clients/runtime-context.ts": 4,
-		"clients/runtime-coordinator.ts": 4,
+		// 4 -> 3 (#4907): shouldWarmLspOnRead no longer tests the warm entry's
+		// `warming` status, so a stale warming entry expires like a ready one.
+		"clients/runtime-coordinator.ts": 3,
 		"clients/runtime-turn.ts": 6,
 		// 25 -> 24 (#5289): the deleted sync `isCommandAvailable` read the spawn
 		// result's exit `status` once.
