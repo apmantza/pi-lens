@@ -30,6 +30,7 @@ import { PathKeyedMap } from "./path-keyed-map.js";
 import {
 	isAtOrAboveHomeDir,
 	normalizeEphemeralMapKey,
+	normalizeMapKey,
 	realpathOrResolve,
 } from "./path-utils.js";
 import { createSingleFlight, type SingleFlight } from "./single-flight.js";
@@ -2660,10 +2661,18 @@ export type WordIndexBuildStatus =
 
 const buildStatuses = new Map<string, WordIndexBuildStatus>();
 
+// The root's path identity, not the caller's spelling of it: a root reached
+// through a link is the same build (shape 1). Resolved lexically first, as the
+// walk is, so `"."` and `link/..` name the project walked. A build derives its
+// key once, at entry: after an await the link or the process cwd may have moved.
+function buildStatusKey(root: string): string {
+	return normalizeMapKey(path.resolve(root));
+}
+
 export function getWordIndexBuildStatus(
 	cwd: string,
 ): WordIndexBuildStatus | undefined {
-	return buildStatuses.get(path.resolve(cwd));
+	return buildStatuses.get(buildStatusKey(cwd));
 }
 
 /** Test-only: reset the in-flight-build guard between test files/cases. */
@@ -2685,6 +2694,7 @@ export function triggerBackgroundWordIndexBuild(
 	options: { homeDir?: string } = {},
 ): WordIndexBuildStatus {
 	const key = path.resolve(cwd);
+	const statusKey = buildStatusKey(cwd);
 	// #747 hardening: this trigger is the one word-index build path with NO
 	// session lifecycle in front of it (cold `symbol_search` queries, in-process
 	// and via MCP where cwd can be a raw tool argument) — the session-start and
@@ -2707,13 +2717,13 @@ export function triggerBackgroundWordIndexBuild(
 			reason,
 		});
 		const status = { state: "refused", reason } as const;
-		buildStatuses.set(key, status);
+		buildStatuses.set(statusKey, status);
 		return status;
 	}
-	const current = buildStatuses.get(key);
+	const current = buildStatuses.get(statusKey);
 	if (current?.state === "building") return current;
 	const status = { state: "building" } as const;
-	buildStatuses.set(key, status);
+	buildStatuses.set(statusKey, status);
 	void (async () => {
 		const startMs = Date.now();
 		try {
@@ -2756,10 +2766,10 @@ export function triggerBackgroundWordIndexBuild(
 				truncated: index.truncated,
 				skipped: docs.skipped,
 			});
-			buildStatuses.delete(key);
+			buildStatuses.delete(statusKey);
 		} catch (err) {
 			const reason = err instanceof Error ? err.message : String(err);
-			buildStatuses.set(key, { state: "failed", reason });
+			buildStatuses.set(statusKey, { state: "failed", reason });
 			dbg?.(`word-index cold-build: failed: ${reason}`);
 			logWordIndex({
 				phase: "cold_build_failed",
