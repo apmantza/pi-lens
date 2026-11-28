@@ -18,7 +18,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
 import * as serverModule from "../../clients/lsp/server.js";
 import { LSP_SERVERS } from "../../clients/lsp/server.js";
@@ -37,6 +37,7 @@ import {
 import { GENERATED_LSP_DOCS } from "../../scripts/lib/md-matrix.mjs";
 import { LSP_FIXTURES } from "../../scripts/smoke-tools.mjs";
 import { assertNonEmptyScan, stripSource } from "../support/sweep-kit.js";
+import { scaledTestTimeout } from "../support/test-timeout-scale.js";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const DOC = "docs/lsp-idle-eviction.md";
@@ -161,6 +162,24 @@ describe("idle-eviction probe population (#3645)", () => {
 		]);
 	});
 
+	// The script's own module tree: bootstrapFixtureWorkspace checks the
+	// session-root registration against dist, so service and config come
+	// from dist too, never from the in-place twins.
+	// #5826: loading it is setup, not the case's work. With no module cache on a
+	// loaded 4-vCPU box the three imports took 7.8-10.0 s (5 runs), past the
+	// case's 5 s default. The budget is 3x the slowest, times the lane's scale.
+	const dist = (rel: string) =>
+		import(pathToFileURL(resolve(REPO_ROOT, "dist", rel)).href);
+	let LSPService: any;
+	let initLSPConfig: any;
+	let bootstrapFixtureWorkspace: any;
+	beforeAll(async () => {
+		({ LSPService } = await dist("clients/lsp/index.js"));
+		({ initLSPConfig } = await dist("clients/lsp/config.js"));
+		({ bootstrapFixtureWorkspace } =
+			await import("../../scripts/lib/lsp-fixture-workspace.mjs"));
+	}, scaledTestTimeout(30_000));
+
 	// #5323 D2: recorded run 42039488753 marked go, ruby, csharp, fsharp and
 	// dart `unavailable (tool-unavailable)` while its own characterize step
 	// measured all five. The measurement pre-gated on the installer registry,
@@ -188,15 +207,6 @@ describe("idle-eviction probe population (#3645)", () => {
 			"fsharp",
 			"dart",
 		]);
-		// The script's own module tree: bootstrapFixtureWorkspace checks the
-		// session-root registration against dist, so service and config come
-		// from dist too, never from the in-place twins.
-		const dist = (rel: string) =>
-			import(pathToFileURL(resolve(REPO_ROOT, "dist", rel)).href);
-		const { LSPService } = await dist("clients/lsp/index.js");
-		const { initLSPConfig } = await dist("clients/lsp/config.js");
-		const { bootstrapFixtureWorkspace } =
-			await import("../../scripts/lib/lsp-fixture-workspace.mjs");
 		const lsp = new LSPService();
 		const reasons: Record<string, string | undefined> = {};
 		const sizes: Record<string, number> = {};

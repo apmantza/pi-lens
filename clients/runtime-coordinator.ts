@@ -634,7 +634,7 @@ export class RuntimeCoordinator {
 	private readonly _coordinatorId = this._scope.scopeId;
 	private _sessionStartedAt = Date.now();
 	private _errorDebtBaseline: ErrorDebtBaseline | null = null;
-	private _pipelineCrashCounts = new Map<string, number>();
+	private _pipelineCrashCounts = new PathKeyedMap<number>(normalizeMapKey);
 	private _cachedExports = new Map<string, string>();
 	private _startupScansInFlight = new Map<StartupTaskName, number>();
 	private _cascadeRuns: CascadeRun[] = [];
@@ -812,10 +812,10 @@ export class RuntimeCoordinator {
 		Record<string, unknown>,
 		PartialApplyPending
 	>();
-	private readonly _lspReadWarmState = new Map<
-		string,
-		{ status: "warming" | "ready"; ts: number }
-	>();
+	private readonly _lspReadWarmState = new PathKeyedMap<{
+		status: "warming" | "ready";
+		ts: number;
+	}>(normalizeMapKey);
 	private readonly _pendingInlineBlockers =
 		new PathKeyedMap<InlineBlockerRecord>(normalizeMapKey);
 	/**
@@ -1709,9 +1709,8 @@ export class RuntimeCoordinator {
 	}
 
 	formatPipelineCrashNotice(filePath: string, err: unknown): string {
-		const key = path.resolve(filePath);
-		const count = (this._pipelineCrashCounts.get(key) ?? 0) + 1;
-		this._pipelineCrashCounts.set(key, count);
+		const count = (this._pipelineCrashCounts.get(filePath) ?? 0) + 1;
+		this._pipelineCrashCounts.set(filePath, count);
 
 		const message = err instanceof Error ? err.message : String(err);
 		const shortMessage = message.split("\n")[0].slice(0, 220);
@@ -3491,28 +3490,27 @@ export class RuntimeCoordinator {
 	}
 
 	shouldWarmLspOnRead(filePath: string, maxAgeMs = 120_000): boolean {
-		const state = this._lspReadWarmState.get(path.resolve(filePath));
+		const state = this._lspReadWarmState.get(filePath);
 		if (!state) return true;
-		if (state.status === "warming") return false;
 		return Date.now() - state.ts > maxAgeMs;
 	}
 
 	markLspReadWarmStarted(filePath: string): void {
-		this._lspReadWarmState.set(path.resolve(filePath), {
+		this._lspReadWarmState.set(filePath, {
 			status: "warming",
 			ts: Date.now(),
 		});
 	}
 
 	markLspReadWarmCompleted(filePath: string): void {
-		this._lspReadWarmState.set(path.resolve(filePath), {
+		this._lspReadWarmState.set(filePath, {
 			status: "ready",
 			ts: Date.now(),
 		});
 	}
 
 	clearLspReadWarmState(filePath: string): void {
-		this._lspReadWarmState.delete(path.resolve(filePath));
+		this._lspReadWarmState.delete(filePath);
 	}
 }
 
