@@ -1846,6 +1846,48 @@ describe("helm-render distinct findings at one place through dispatchForFile (#5
 		},
 	);
 
+	// helm 4 prints the cause under the `Error:` line, which alone cites only
+	// the template position.
+	const multiLine = (line: number, value: string) =>
+		[
+			`Error: pi-lens-render-valid/templates/deployment.yaml:${line}:15`,
+			`  executing "pi-lens-render-valid/templates/deployment.yaml" at <.Values.${value}>:`,
+			`    nil pointer evaluating interface {}.${value.slice(-1)}`,
+			"",
+			"Use --debug flag to render out invalid YAML",
+		].join("\n");
+
+	it("reports a second multi-line render error in one template", async () => {
+		const write = session();
+		failRender(multiLine(6, "a.b"));
+		await write();
+		failRender(multiLine(7, "zzz.q"));
+
+		const second = await write();
+		expect(second).toEqual([expect.stringContaining("<.Values.zzz.q>")]);
+		expect(second[0]).toContain("nil pointer evaluating interface {}.q");
+		expect(second[0]).not.toContain("--debug");
+	});
+
+	it("holds back a seen multi-line render error whose line moved", async () => {
+		const write = session();
+		failRender(multiLine(6, "a.b"));
+		await write();
+		failRender(multiLine(9, "a.b"));
+
+		expect(await write()).toEqual([]);
+	});
+
+	it("ends one render error's detail at the next Error line", async () => {
+		const write = session();
+		failRender(`${DEPENDENCY}\n  detail one\n${VALUES}\n  detail two`);
+
+		expect(await write()).toEqual([
+			expect.stringMatching(/redis\ndetail one \(helm template failed/),
+			expect.stringMatching(/schema\(s\)\ndetail two \(helm template failed/),
+		]);
+	});
+
 	it.each(["deployment.yaml", "NOTES.txt"])(
 		"holds back a seen render error whose line moved in %s",
 		async (template) => {
