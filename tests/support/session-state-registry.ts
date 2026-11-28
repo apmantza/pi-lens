@@ -512,10 +512,10 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 		policy: "session_start",
 		ownerKey: "session",
 		sessionSeamException:
-			"one process BoundedFifoMap keyed by normalized file path, with no session in the key; it notes which file's last write a language server answered for, read at the turn end of whichever session wrote it (shape 72 member, no open issue)",
+			"one process BoundedFifoMap keyed by normalized file path, with no session in the key; it notes the sources (verdict runners and the auxiliary servers that answered inside them) of each file's last write, read at the turn end of whichever session wrote it (shape 72 member, no open issue)",
 		resetName: "resetCascadePendingNeighbors",
 		reason:
-			"#5804: the files whose last write a language server answered for, which lets a turn end forget a neighbour's pending cascade errors. A note from a previous session would let the next session's turn end forget errors that session's agent was shown.",
+			"#5804: the sources that answered each file's last write, which let a turn end forget the neighbour's pending cascade rows those sources raised. A note from a previous session would let the next session's turn end forget errors that session's agent was shown.",
 	},
 	{
 		id: "cascade-format:cascadeUnansweredPrimariesDelivered",

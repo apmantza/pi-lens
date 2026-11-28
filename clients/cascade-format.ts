@@ -782,9 +782,10 @@ const answeredWrites = new BoundedFifoMap<string, readonly string[]>(
  * auxiliary servers that answered inside them, #5812 r5). A `tool_result` write notes
  * none where it records its turn-state range (#5812 F2), so a write that
  * never dispatches, or a crash, timeout, abort or superseded run, leaves the
- * file unanswered; the run that publishes a verdict notes its runners. A
- * write through the mutation bridge alone (an LSP workspace edit, a deferred
- * format pass) does not reset it. Consumed by
+ * file unanswered; the run that publishes a verdict notes its runners. The
+ * agent_settled drain (deferred format and autofix) notes none for each file
+ * it rewrites (#5812 r5). A server-initiated workspace edit, the turn-end
+ * warnings fix and a co-process bridge write still do not. Consumed by
  * {@link settleCascadePendingAfterWrite}.
  */
 export function noteCascadeWrite(

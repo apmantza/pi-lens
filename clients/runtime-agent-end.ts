@@ -46,6 +46,7 @@ import { holdFileMutationQueue } from "./file-mutation-queue.js";
 import { renderFixRunLoss } from "./fix-run-restore.js";
 import { getAmbientAbortSignal } from "./safe-spawn.js";
 import { recordMutationOutcome } from "./mutation-bridge.js";
+import { noteCascadeWrite } from "./cascade-format.js";
 import { readFileContent } from "./dispatch/runners/utils.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import {
@@ -160,6 +161,10 @@ function recordDrainWrite(args: {
 	dbg: (msg: string) => void;
 }): boolean {
 	const { runtime, filePath } = args;
+	// #5812 r5 (verify V2): nothing analyses the bytes the drain wrote, so an
+	// earlier write's answer no longer speaks for the file's pending cascade
+	// errors at the next turn end.
+	noteCascadeWrite(filePath, []);
 	// An unreadable file is still recorded: it counts one line, as the other
 	// scans do, and it reports no import change.
 	const content = readFileContent(filePath);
