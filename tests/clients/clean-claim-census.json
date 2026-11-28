@@ -737,7 +737,7 @@
 			"\"unknown\"": 1,
 			"`${content}\\n\\n${injectedText}`": 1,
 			"\"text\"": 1,
-			"\"lens-retain-injections\"": 1,
+			"\"lens-retain-injections\"": 2,
 			"\"none\"": 4,
 			"\"session-guidance\"": 1,
 			"\"agent-nudge\"": 1,

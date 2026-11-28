@@ -283,10 +283,10 @@ const PINS: Readonly<Record<string, Pin>> = {
 		reason: PRE_4689,
 	}, // :562, :812
 	"clients/runtime-coordinator.ts#path-resolve-keyed": {
-		sites: 8,
-		identities: "0ac5152568baccfe",
-		reason: PRE_4689,
-	}, // :860 path-resolve-keyed (new Set element), :864 path-resolve-keyed (.has key), :1489 path-resolve-keyed (.get key), :1490 path-resolve-keyed (.set key), :2896 path-resolve-keyed (.get key), :2903 path-resolve-keyed (.set key), :2910 path-resolve-keyed (.set key), :2917 path-resolve-keyed (.delete key)
+		sites: 2,
+		identities: "4d0ccb2df38588dd",
+		reason: LOCAL_DEDUPE,
+	}, // :997, :1002 (8 -> 2: the read-warm map and the crash counters moved to `PathKeyedMap`; `applyInlineBlockerPolicyVerdicts` builds its set and probes it from the same record's `filePath` in one call)
 	"clients/runtime-tool-result.ts#path-resolve-keyed": {
 		sites: 2,
 		identities: "3a38f213298e8a5d",

@@ -9,8 +9,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createLSPClient } from "../../../clients/lsp/client.js";
-import { launchLSP, stopLSP } from "../../../clients/lsp/launch.js";
+import {
+	killProcessTree,
+	createLSPClient,
+} from "../../../clients/lsp/client.js";
+import { launchLSP } from "../../../clients/lsp/launch.js";
 import { findCommandOnPath } from "../../../clients/command-path.js";
 import { setupTestEnvironment } from "../test-utils.js";
 
@@ -115,7 +118,7 @@ describe.skipIf(!CLANGD)("clangd lazy TU indexing", () => {
 		}
 		if (proc) {
 			try {
-				await stopLSP(proc);
+				await killProcessTree(proc.process, proc.pid);
 			} catch {
 				// ignore
 			}

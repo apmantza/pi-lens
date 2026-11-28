@@ -17,8 +17,8 @@
 
 import * as os from "node:os";
 import { describe, expect, it } from "vitest";
-import { createLSPClient } from "../../clients/lsp/client.js";
-import { stopLSP } from "../../clients/lsp/launch.js";
+import { killProcessTree, createLSPClient } from "../../clients/lsp/client.js";
+
 import {
 	buildMemorySample,
 	collectMemorySampleSubsystems,
@@ -59,9 +59,9 @@ describe("memory_sample root discriminator (#2130)", () => {
 			expect(subsystems.lsp.clientRoots).toBeGreaterThanOrEqual(2);
 		} finally {
 			await a.client.shutdown().catch(() => {});
-			await stopLSP(a.proc).catch(() => {});
+			await killProcessTree(a.proc.process, a.proc.pid).catch(() => {});
 			await b.client.shutdown().catch(() => {});
-			await stopLSP(b.proc).catch(() => {});
+			await killProcessTree(b.proc.process, b.proc.pid).catch(() => {});
 		}
 	}, 20_000);
 
@@ -77,9 +77,9 @@ describe("memory_sample root discriminator (#2130)", () => {
 			expect(subsystems.lsp.clientRoots).toBe(1);
 		} finally {
 			await a.client.shutdown().catch(() => {});
-			await stopLSP(a.proc).catch(() => {});
+			await killProcessTree(a.proc.process, a.proc.pid).catch(() => {});
 			await b.client.shutdown().catch(() => {});
-			await stopLSP(b.proc).catch(() => {});
+			await killProcessTree(b.proc.process, b.proc.pid).catch(() => {});
 		}
 	}, 20_000);
 

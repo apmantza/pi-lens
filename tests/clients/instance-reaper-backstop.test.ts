@@ -1,3 +1,5 @@
+import { LSP_SERVERS } from "../../clients/lsp/server.js";
+import type { BackstopSweepOptions } from "../../clients/instance-reaper.js";
 /**
  * #1857 — the registry-independent orphan backstop.
  *
@@ -204,8 +206,6 @@ vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
 
 import {
 	BACKSTOP_SPAWN_GRACE_MS,
-	MANAGED_BINARY_NAMES,
-	MANAGED_IMAGE_NAMES,
 	type OsProcessInfo,
 	partitionBackstopCandidates,
 	scheduleUntrackedOrphanSweep,
@@ -272,10 +272,13 @@ function reasonsFor(kind: string): Array<{ subject: string; reason: string }> {
 let sweepIndex = 0;
 
 function sweepUntrackedOrphans(
-	...args: Parameters<typeof sweepUntrackedOrphansImpl>
+	options: Omit<BackstopSweepOptions, "getServers"> = {},
 ): ReturnType<typeof sweepUntrackedOrphansImpl> {
 	sweepIndex = h.latency.length;
-	return sweepUntrackedOrphansImpl(...args);
+	return sweepUntrackedOrphansImpl({
+		...options,
+		getServers: async () => LSP_SERVERS,
+	});
 }
 
 function lastBackstopRecord(
@@ -1084,7 +1087,9 @@ describe("#1857: cost containment", () => {
 	});
 
 	it("scheduleUntrackedOrphanSweep defers the sweep off the caller's critical path", async () => {
-		const timer = scheduleUntrackedOrphanSweep(60_000);
+		const timer = scheduleUntrackedOrphanSweep(60_000, {
+			getServers: async () => LSP_SERVERS,
+		});
 		try {
 			// Drain the microtask and immediate queues an eagerly-started sweep
 			// would have needed to reach its first spawn. Asserting synchronously
@@ -1101,7 +1106,9 @@ describe("#1857: cost containment", () => {
 	});
 
 	it("the deferral timer is unref'd, so a settled one-shot process still exits", () => {
-		const timer = scheduleUntrackedOrphanSweep(60_000);
+		const timer = scheduleUntrackedOrphanSweep(60_000, {
+			getServers: async () => LSP_SERVERS,
+		});
 		try {
 			expect((timer as unknown as { hasRef?: () => boolean }).hasRef?.()).toBe(
 				false,
@@ -1126,7 +1133,8 @@ describe("#1857: cost containment", () => {
 				pid: 7002,
 				parentPid: 4000,
 				ageMs: 10 * 60 * 1000,
-				command: "node /opt/lib/typescript-language-server/cli.mjs --stdio",
+				command:
+					"node /opt/lib/node_modules/typescript-language-server/lib/cli.mjs --stdio",
 			}),
 		].join("\n");
 
@@ -1176,18 +1184,35 @@ describe("#1857: cost containment", () => {
 	);
 });
 
-describe("#1857: the managed-binary image list is derived, not hand-maintained", () => {
-	it("every managed binary contributes exactly one image name", () => {
-		for (const name of MANAGED_BINARY_NAMES) {
-			const expected = `${name}.exe`;
-			const covered =
-				MANAGED_IMAGE_NAMES.includes(expected) ||
-				MANAGED_IMAGE_NAMES.includes("node.exe");
-			expect(covered, `no image name covers ${name}`).toBe(true);
-		}
+// #5699: short registry commands (ty, cue) must not select unrelated programs.
+describe("registry-derived command selection", () => {
+	it.each([
+		"node /opt/utility.js",
+		"node /opt/typo.js",
+		"node /opt/notgopls --stdio",
+	])("does not select a partial command marker in %s", async (command) => {
+		h.state.stdout = enumerationRow({
+			pid: 7003,
+			parentPid: 4000,
+			ageMs: 600000,
+			command,
+		});
+		await sweepUntrackedOrphans(FAST);
+		expect(backstopMetadata().scanned).toBe(0);
 	});
 
-	it("has no duplicate image names", () => {
-		expect(new Set(MANAGED_IMAGE_NAMES).size).toBe(MANAGED_IMAGE_NAMES.length);
+	// #5699 F3: jdtls runs `-jar .../org.eclipse.equinox.launcher_<version>.jar`;
+	// the marker could never match its own jar because `_` was no boundary.
+	it("selects the versioned jdtls launcher jar", async () => {
+		h.state.stdout = enumerationRow({
+			pid: 7004,
+			parentPid: 4000,
+			ageMs: 600000,
+			command: isWindows
+				? "java.exe -jar C:\\eclipse\\plugins\\org.eclipse.equinox.launcher_1.6.900.v20240613-2009.jar -data C:\\ws"
+				: "java -jar /opt/eclipse/plugins/org.eclipse.equinox.launcher_1.6.900.v20240613-2009.jar -data /ws",
+		});
+		await sweepUntrackedOrphans(FAST);
+		expect(backstopMetadata().scanned).toBe(1);
 	});
 });

@@ -549,10 +549,20 @@ describe("clients/ hazardous exported registry symbols stay derived, not guessed
 			"sweepUntrackedOrphans",
 		);
 
+		// #5699 made `sweepUntrackedOrphans`'s options required, so it no longer
+		// carries a default value. The default-value shape stays live in the same
+		// module's `sweepAtomicWriteStages(directories, options = {})`.
+		const atomicBody = topLevelFunctionBodies(reaperStripped).get(
+			"sweepAtomicWriteStages",
+		);
+		expect(atomicBody).toContain("sweepOwnStagingFiles(");
+
 		// MUTATION: the pre-fix locator, inline — the first `{` after the
 		// opening paren is the default value's, and it balances to `{}`.
 		const declaration =
-			/^export async function sweepUntrackedOrphans\s*\(/m.exec(reaperStripped);
+			/^export async function sweepAtomicWriteStages\s*\(/m.exec(
+				reaperStripped,
+			);
 		expect(declaration).not.toBeNull();
 		const preFixBrace = reaperStripped.indexOf(
 			"{",

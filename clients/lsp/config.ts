@@ -1235,6 +1235,10 @@ interface OverrideTraitDecision {
 export const OVERRIDE_COPY_TRAITS: {
 	readonly [K in keyof LSPServerInfo]-?: OverrideTraitDecision;
 } = {
+	orphanProcess: {
+		keep: false,
+		why: "Reset: built-in process markers cannot describe an overridden command.",
+	},
 	id: {
 		keep: true,
 		why: "Routing identity: the override is keyed by this id.",

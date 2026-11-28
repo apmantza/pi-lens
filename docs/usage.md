@@ -115,7 +115,7 @@ pi --no-typos            # Disable the typos auxiliary LSP server (default-on)
 pi --lens-spotbugs       # Run SpotBugs on Java and Kotlin files (opt-in; needs a Java build descriptor and compiled classes)
 pi --no-read-guard       # Disable the read-before-edit behavior monitor
 pi --no-read-expansion   # Keep exact read ranges without disabling the read guard
-pi --lens-retain-injections # Re-send injected findings unchanged in later requests, for exact-prefix (local) prompt caches
+pi --lens-retain-injections # Re-send injected findings unchanged in later requests, for exact-prefix prompt caches (already on for anthropic-messages models; opt out with contextInjection.retain=false)
 pi --lens-turn-summary   # Persist a per-turn summary of diagnostics, autofixes, and autoformats
 pi --lens-compact-tool-line   # Render tool results as one compact, theme-aware line (closes #1327)
 pi --lens-compact-lsp-status  # Collapse the footer LSP status to one state glyph instead of the server names (refs #3099)

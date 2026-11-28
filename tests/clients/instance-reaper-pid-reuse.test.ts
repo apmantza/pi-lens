@@ -1,3 +1,4 @@
+import { LSP_SERVERS } from "../../clients/lsp/server.js";
 // flake-shape: real-process-spawn — the defect is a SIGKILL landing on a process the reaper misidentified, so each case needs a real pid whose command line and kernel start time are the reaper's actual evidence; a double would encode the very identity guess #3538 is about.
 /**
  * #3538 — the orphan reaper kills a live process when a recorded pid is
@@ -183,14 +184,14 @@ function track(child: ChildProcess): ChildProcess {
  * (#3539); its ppid is always this test, standing for the live init or
  * subreaper a POSIX orphan is reparented to.
  */
-function spawnLsp(owner?: string): ChildProcess {
+function spawnLsp(owner?: string, command = TSLS): ChildProcess {
 	const env = { ...process.env };
 	delete env.PI_LENS_OWNER;
 	if (owner !== undefined) env.PI_LENS_OWNER = owner;
 	return track(
 		spawn(
 			process.execPath,
-			["-e", "setInterval(()=>{},1e6)", TSLS, "--stdio"],
+			["-e", "setInterval(()=>{},1e6)", command, "--stdio"],
 			{ stdio: "ignore", detached: true, env },
 		),
 	);
@@ -499,6 +500,7 @@ describe.skipIf(process.platform !== "linux")(
 /** One backstop sweep, now: no cooldown, no grace, no follow-up. */
 function backstop() {
 	return sweepUntrackedOrphans({
+		getServers: async () => LSP_SERVERS,
 		force: true,
 		cooldownMs: 0,
 		graceMs: 0,
@@ -522,6 +524,21 @@ describe.skipIf(process.platform !== "linux")(
 			expect(signalledPids().has(pid)).toBe(true);
 			expect((await exited)[1]).toBe("SIGKILL");
 		});
+
+		// #5699 A3: registry servers outside the former eight-name list leaked.
+		it.each([
+			"/opt/tools/gopls",
+			"/opt/PowerShellEditorServices/Start-EditorServices.ps1",
+		])(
+			"a tagged orphan launched as %s is reaped through the real backstop",
+			async (command) => {
+				const orphan = spawnLsp(tag(deadPid(), OTHER_START), command);
+				const exited = once(orphan, "exit");
+				await backstop();
+				expect(signalledPids().has(orphan.pid as number)).toBe(true);
+				expect((await exited)[1]).toBe("SIGKILL");
+			},
+		);
 
 		it("a child whose owner is alive under the tagged start is not reaped", async () => {
 			h.mine.add(process.pid); // the owner's start must be readable
@@ -1055,7 +1072,8 @@ const { sweepUntrackedOrphans } = await import(process.env.R4_REAPER);
 // Holds the loop open: the sweep's own timers are unref'd, and a top-level
 // await with nothing to keep the process alive exits 13.
 const keep = setInterval(() => {}, 1e6);
-await sweepUntrackedOrphans({ force: true, graceMs: 0, allowGraceRetry: false, verifyAttempts: 3, verifyIntervalMs: 100 });
+const { LSP_SERVERS } = await import(new URL("./lsp/server.js", process.env.R4_REAPER).href);
+await sweepUntrackedOrphans({ getServers: async () => LSP_SERVERS, force: true, graceMs: 0, allowGraceRetry: false, verifyAttempts: 3, verifyIntervalMs: 100 });
 clearInterval(keep);
 `;
 const CONFINED_SCRIPT = `
