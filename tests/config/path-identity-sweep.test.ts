@@ -307,11 +307,6 @@ const PINS: Readonly<Record<string, Pin>> = {
 		identities: "3aedefc29eced70b",
 		reason: LOCAL_DEDUPE,
 	}, // :2144, :2145
-	"clients/word-index.ts#path-resolve-keyed": {
-		sites: 6,
-		identities: "4b084f4a2e3ceb06",
-		reason: PRE_4689,
-	}, // :2621, :2659, :2662, :2665, :2708, :2711
 	"clients/workspace-topology.ts#path-resolve-keyed": {
 		sites: 3,
 		identities: "be15a50cc4c533ac",

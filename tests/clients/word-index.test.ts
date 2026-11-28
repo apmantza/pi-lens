@@ -43,7 +43,11 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
-import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import {
+	createPathIdentityFixture,
+	createTempFile,
+	setupTestEnvironment,
+} from "./test-utils.js";
 
 /**
  * Durable `warm_cache_adopted` rows the logger wrote for one root. Shape 67: a
@@ -1144,6 +1148,43 @@ describe("triggerBackgroundWordIndexBuild (#348 cold-query stampede guard)", () 
 			env.cleanup();
 		}
 	}, 10_000);
+
+	// Shape 1 (divergent path keys): the build status was keyed by the caller's
+	// SPELLING of the root (`path.resolve`), so a root reached through a link
+	// answered "no build" for the same project. A refused root is decided
+	// synchronously, so no build is left running past the case.
+	it("answers one status for a root and a link to it", (ctx) => {
+		const env = setupTestEnvironment("pi-lens-wordindex-alias-");
+		try {
+			const fx = createPathIdentityFixture(env.tmpDir);
+			if (fx.skipReason) ctx.skip(fx.skipReason);
+			triggerBackgroundWordIndexBuild(fx.repo, undefined, {
+				homeDir: fx.repo,
+			});
+			expect(getWordIndexBuildStatus(fx.aliasRoot)).toMatchObject({
+				state: "refused",
+				reason: expect.stringContaining("at/above home directory"),
+			});
+			expect(
+				getWordIndexBuildStatus(path.join(fx.aliasRoot, "src", "..")),
+			).toMatchObject({ state: "refused" });
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// The symbol_search tool falls back to cwd "." (tools/symbol-search.ts); the
+	// status key must anchor a relative root as the `path.resolve` key it
+	// replaced did, or the same root answers under two spellings.
+	it("answers a relative root and its absolute spelling as one root", () => {
+		const absolute = path.resolve(".");
+		triggerBackgroundWordIndexBuild(".", undefined, { homeDir: absolute });
+		expect(getWordIndexBuildStatus(absolute)).toMatchObject({
+			state: "refused",
+		});
+		expect(getWordIndexBuildStatus(".")).toMatchObject({ state: "refused" });
+		expect(getWordIndexBuildStatus("")).toMatchObject({ state: "refused" });
+	});
 
 	it("preserves other snapshot fields when persisting the built index", async () => {
 		const env = setupTestEnvironment("pi-lens-wordindex-preserve-");

@@ -6,6 +6,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { FactStore } from "../../clients/dispatch/fact-store.js";
 import { toPosix } from "../../clients/path-utils.js";
@@ -283,7 +284,11 @@ describe("symbol_search tool", () => {
 		}
 	}, 10_000);
 
-	it("cold path exposes the last build failure instead of claiming only that it is building (#926)", async () => {
+	// Shape 1: a call through a link to the root read "building" (no status under
+	// the link's spelling) and started a second build, so the agent never learned
+	// the last build had failed. Only the first query sees the failure (it starts
+	// the retry), so it is the one that goes through the link.
+	it("cold path exposes the last build failure to a call through a link to the root (#926)", async () => {
 		const env = setupTestEnvironment("pi-lens-symbolsearch-failed-");
 		const previousDataDir = process.env.PILENS_DATA_DIR;
 		try {
@@ -302,19 +307,23 @@ describe("symbol_search tool", () => {
 				expect(getWordIndexBuildStatus(env.tmpDir)?.state).toBe("failed");
 			});
 
-			const tool = createSymbolSearchTool(() => env.tmpDir);
-			const result = await tool.execute(
-				"1",
-				{ query: "authenticate" },
-				undefined,
-				null,
-				{ cwd: env.tmpDir },
-			);
-			expect(result.details).toMatchObject({
+			// A junction, which Windows creates without a privilege.
+			const alias = path.join(env.tmpDir, "root-alias");
+			fs.symlinkSync(env.tmpDir, alias, "junction");
+			const query = (cwd: string) =>
+				createSymbolSearchTool(() => cwd).execute(
+					"1",
+					{ query: "authenticate" },
+					undefined,
+					null,
+					{ cwd },
+				);
+			const viaLink = await query(alias);
+			expect(viaLink.details).toMatchObject({
 				available: false,
 				unavailableReason: "last-build-failed",
 			});
-			expect(String(result.content[0]?.text)).toMatch(
+			expect(String(viaLink.content[0]?.text)).toMatch(
 				/last word index build failed/i,
 			);
 		} finally {

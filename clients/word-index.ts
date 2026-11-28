@@ -30,6 +30,7 @@ import { PathKeyedMap } from "./path-keyed-map.js";
 import {
 	isAtOrAboveHomeDir,
 	normalizeEphemeralMapKey,
+	normalizeMapKey,
 	realpathOrResolve,
 } from "./path-utils.js";
 import { createSingleFlight, type SingleFlight } from "./single-flight.js";
@@ -2658,12 +2659,18 @@ export type WordIndexBuildStatus =
 	| { state: "refused"; reason: string }
 	| { state: "failed"; reason: string };
 
-const buildStatuses = new Map<string, WordIndexBuildStatus>();
+// Keyed by the root's path identity, not the caller's spelling of it: a root
+// reached through a link is the same build (shape 1). A relative root (the
+// symbol_search tool's `"."` fallback) is anchored at the process cwd first, as
+// the `path.resolve` key this replaces did; the kernel then answers the identity.
+const buildStatuses = new PathKeyedMap<WordIndexBuildStatus>((root) =>
+	normalizeMapKey(realpathOrResolve(root)),
+);
 
 export function getWordIndexBuildStatus(
 	cwd: string,
 ): WordIndexBuildStatus | undefined {
-	return buildStatuses.get(path.resolve(cwd));
+	return buildStatuses.get(cwd);
 }
 
 /** Test-only: reset the in-flight-build guard between test files/cases. */
@@ -2707,13 +2714,13 @@ export function triggerBackgroundWordIndexBuild(
 			reason,
 		});
 		const status = { state: "refused", reason } as const;
-		buildStatuses.set(key, status);
+		buildStatuses.set(cwd, status);
 		return status;
 	}
-	const current = buildStatuses.get(key);
+	const current = buildStatuses.get(cwd);
 	if (current?.state === "building") return current;
 	const status = { state: "building" } as const;
-	buildStatuses.set(key, status);
+	buildStatuses.set(cwd, status);
 	void (async () => {
 		const startMs = Date.now();
 		try {
@@ -2756,10 +2763,10 @@ export function triggerBackgroundWordIndexBuild(
 				truncated: index.truncated,
 				skipped: docs.skipped,
 			});
-			buildStatuses.delete(key);
+			buildStatuses.delete(cwd);
 		} catch (err) {
 			const reason = err instanceof Error ? err.message : String(err);
-			buildStatuses.set(key, { state: "failed", reason });
+			buildStatuses.set(cwd, { state: "failed", reason });
 			dbg?.(`word-index cold-build: failed: ${reason}`);
 			logWordIndex({
 				phase: "cold_build_failed",
