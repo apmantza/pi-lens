@@ -83,6 +83,7 @@ describe("a command override keeps only the traits it is allowed to (#4833)", ()
 			expect(copy?.idleEviction, `${server.id} idleEviction`).toBe(
 				"unmeasured",
 			);
+			expect(copy?.orphanProcess, `${server.id} orphanProcess`).toBeUndefined();
 			expect(copy?.replyOrdering, `${server.id} replyOrdering`).toBeUndefined();
 			expect(copy?.resendRecheck, `${server.id} resendRecheck`).toBeUndefined();
 			expect(

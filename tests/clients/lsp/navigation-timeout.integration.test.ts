@@ -9,10 +9,13 @@ const previousTimeout = vi.hoisted(() => {
 	return previous;
 });
 
-import { createLSPClient } from "../../../clients/lsp/client.js";
+import {
+	killProcessTree,
+	createLSPClient,
+} from "../../../clients/lsp/client.js";
 import { LspRequestTimeoutError } from "../../../clients/lsp/request-timeout-error.js";
 import { LSPService } from "../../../clients/lsp/index.js";
-import { stopLSP } from "../../../clients/lsp/launch.js";
+
 import {
 	normalizeLoggedPath,
 	normalizeMapKey,
@@ -129,7 +132,7 @@ it("real fake-server documentSymbol timeout is not an empty answer (#5211)", asy
 		} catch {
 			/* ignore */
 		}
-		await stopLSP(proc);
+		await killProcessTree(proc.process, proc.pid);
 		fixture.cleanup();
 	}
 }, 5000);
@@ -221,7 +224,7 @@ it.each([
 			} catch {
 				/* ignore */
 			}
-			await stopLSP(proc);
+			await killProcessTree(proc.process, proc.pid);
 			fixture.cleanup();
 		}
 	},
@@ -327,7 +330,7 @@ it.each([
 		} finally {
 			_setServersForFileForTests(undefined);
 			await client.shutdown();
-			await stopLSP(proc);
+			await killProcessTree(proc.process, proc.pid);
 			fixture.cleanup();
 		}
 	},
@@ -431,7 +434,7 @@ it.each([false, true])(
 		} finally {
 			_setServersForFileForTests(undefined);
 			for (const client of clients) await client.shutdown();
-			for (const proc of procs) await stopLSP(proc);
+			for (const proc of procs) await killProcessTree(proc.process, proc.pid);
 			fixture.cleanup();
 		}
 	},

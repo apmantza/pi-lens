@@ -33,8 +33,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createLSPClient } from "../../../clients/lsp/client.js";
-import { launchLSP, stopLSP } from "../../../clients/lsp/launch.js";
+import {
+	killProcessTree,
+	createLSPClient,
+} from "../../../clients/lsp/client.js";
+import { launchLSP } from "../../../clients/lsp/launch.js";
 import { findCommandAsync } from "../../../clients/safe-spawn.js";
 import { setupTestEnvironment } from "../test-utils.js";
 
@@ -94,7 +97,7 @@ describe.skipIf(!TERRAFORM_LS)("terraform-ls .tfvars language id", () => {
 		}
 		if (proc) {
 			try {
-				await stopLSP(proc);
+				await killProcessTree(proc.process, proc.pid);
 			} catch {
 				// ignore
 			}

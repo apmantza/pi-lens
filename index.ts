@@ -368,7 +368,9 @@ import {
 } from "./clients/cache-observability.js";
 import {
 	createInjectionLedger,
+	resolveRetainInjections,
 	retainedSnapshotLabel,
+	retainLimitsFromConfig,
 } from "./clients/context-injection-ledger.js";
 import {
 	buildStartupTimingRecords,
@@ -923,6 +925,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 	const endDisposedMember = (
 		member: (typeof liveSessionMembers)[number],
 	): void => {
+		// #5770: the member's retained injections end with it, as a shutdown's do
+		// (the ledger's key is the same `getSessionId()` the member was recorded
+		// under). Every later read calls this again for a member still listed;
+		// a repeat finds nothing left to clear.
+		injectionLedger.clearSession(member.sessionId);
 		if (!member.scope) return;
 		if (liveSessionMembers.some(isLiveSessionMember)) unbindScope(member.scope);
 		else retireScope(member.scope, "disposed");
@@ -1449,7 +1456,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// The flag is read per request because pi applies extension flag values
 	// after the factory runs; its CLI value and the global config are fixed per
 	// load.
-	const injectionLedger = createInjectionLedger();
+	const injectionLedger = createInjectionLedger(
+		retainLimitsFromConfig(globalConfig?.contextInjection),
+	);
 	let lensWidgetVisible = globalConfig?.widget?.visible !== false;
 	let mountedLensWidgetUi: LensWidgetUi | undefined;
 	let widgetMountFailureLogged = false;
@@ -2952,7 +2961,12 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// measured at 9344ms on the session_start critical path, exactly
 					// overlapping and starving `warmup_language_profile`. It now fires on
 					// an unref'd timer well after warmup, under a machine-wide cooldown.
-					scheduleUntrackedOrphanSweep();
+					scheduleUntrackedOrphanSweep(undefined, {
+						getServers: () =>
+							import("./clients/lsp/server.js").then(
+								({ LSP_SERVERS }) => LSP_SERVERS,
+							),
+					});
 					// #449 slice 2 (prototype): machine-wide LSP budget check. Reads the
 					// same registry, decides locally whether THIS session should skip
 					// spawning auxiliary LSP servers, and caches the decision for
@@ -4672,6 +4686,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 			clearCachePrefixSession(stableSessionId, localRole);
 			// #3613: its per-turn records end with it.
 			runtime.forgetTurnSession(stableSessionId);
+			// #5770: so do its retained injections; with `retainMaxSessions: 0` no
+			// LRU eviction would ever drop them while the activation lives on.
+			injectionLedger.clearSession(stableSessionId);
 			// The counter counts LIVE secondaries; a primary leaving first is not a
 			// secondary departure.
 			if (shutdownClassification === "secondary")
@@ -4960,7 +4977,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 		messages[0]?.role === "system";
 	const injectIntoRequest = async (
 		event: { messages?: ContextEventMessages } | unknown,
-		ctx: { cwd?: string },
+		ctx: { cwd?: string; model?: { api?: unknown } },
 		injectionHook: CacheContextInjectionHook,
 	) => {
 		// #1018: context telemetry deliberately runs even when the lens or its
@@ -5019,18 +5036,32 @@ function activateExtension(hostPi: ExtensionAPI) {
 		try {
 			const cwd = ctx.cwd ?? process.cwd();
 
-			// #4743: off, the ledger is neither read nor written, and the request is
-			// exactly what it was without the flag.
-			const ledger = getLensFlag("lens-retain-injections")
-				? injectionLedger
-				: undefined;
 			if (!effectiveInjectionEnabled) {
 				// #4743: injection switched off mid-session also stops re-sending
 				// what was retained, so no request carries pi-lens bytes while off.
-				ledger?.clearSession(prefixSessionId);
+				// Unconditional (a Map delete): the API default is resolved only past
+				// this return, so a lens-off request never logs its row (#5770).
+				injectionLedger.clearSession(prefixSessionId);
 				logContextObservation(existingMessages, "none", []);
 				return;
 			}
+
+			// #4743: off, the ledger is neither read nor written, and the request is
+			// exactly what it was without the flag. #5770: unset, it is on for the
+			// API THIS request's model reports (`ctx.model` is the host's live
+			// model, so a mid-session switch changes the answer at the next
+			// request); the flag and `contextInjection.retain` decide alone.
+			const retainInjections = resolveRetainInjections(
+				resolvePiLensFlagWithSource(
+					"lens-retain-injections",
+					pi.getFlag("lens-retain-injections"),
+					globalConfig,
+					loadPiLensProjectConfig(runtime.projectRoot),
+				),
+				ctx.model?.api,
+				prefixSessionId,
+			);
+			const ledger = retainInjections ? injectionLedger : undefined;
 
 			// #4743 (`--lens-retain-injections`): put back what earlier requests of
 			// this session injected, byte for byte and where it sat, BEFORE this

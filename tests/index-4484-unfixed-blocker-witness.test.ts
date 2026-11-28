@@ -503,6 +503,12 @@ import {
 	flushLatencyLog,
 	getLatencyLogPath,
 } from "../clients/latency-logger.js";
+import { CacheManager } from "../clients/cache-manager.js";
+import {
+	forgetCascadePendingNeighbor,
+	listCascadePendingNeighbors,
+	recordDeliveredCascadeNeighbor,
+} from "../clients/cascade-format.js";
 import { getDegradationSummary } from "../clients/degradation-ledger.js";
 import { exportWidgetState } from "../clients/widget-state.js";
 import { removeTempDirSync } from "./clients/test-utils.js";
@@ -708,6 +714,27 @@ async function openSession(
 				ctx(),
 			)) as { content?: Array<{ text?: string }> } | undefined;
 			return scrub((r?.content ?? []).map((p) => p.text ?? "").join("\n"));
+		},
+		/** #5790 r3: the commit gate's refusal text, or "" when it admits. */
+		async commitReason(): Promise<string> {
+			const v = ((await pi.emit(
+				"tool_call",
+				{ toolName: "bash", input: { command: 'git commit -m "wip"' } },
+				ctx(),
+			)) ?? {}) as { block?: boolean; reason?: string };
+			return v.block === true ? scrub(v.reason ?? "") : "";
+		},
+		/** #5790 r3: the `source=lsp` probe of another file of the project. */
+		async settleOther(file: string): Promise<string> {
+			const lens = pi.tools.get("lens_diagnostics") as Tool;
+			const out = await lens.execute(
+				"zz-settle-other",
+				{ source: "lsp", waitMs: 30000, path: path.join(tmpDir, file) },
+				undefined,
+				null,
+				{ cwd: tmpDir },
+			);
+			return scrub((out.content ?? []).map((p) => p.text ?? "").join("\n"));
 		},
 		async commitBlocked(): Promise<boolean> {
 			const v = ((await pi.emit(
@@ -3254,6 +3281,9 @@ describe("#5784 witness: an unconfirmed carried blocker is not replayed verbatim
 			/confirmed clean/,
 		);
 		expect(await s.sessionDiagnostics()).not.toContain(RECORD_HELD);
+		// #5790: the settle that retires the record opens the commit gate in the
+		// same step, not at the next turn end.
+		expect(await s.commitBlocked()).toBe(false);
 		await s.write(V_FIXED);
 		await fixAndDrain(s);
 	}, 120_000);
@@ -3546,4 +3576,255 @@ describe("#5784 witness: an unconfirmed carried blocker is not replayed verbatim
 		await s.write(V_FIXED);
 		await fixAndDrain(s);
 	}, 120_000);
+});
+
+describe("#5790 witness: a cascade note with no finding does not hold the commit gate", () => {
+	const TARGET = "src/cascade-target.ts";
+	const NEIGHBOUR = "src/cascade-user.ts";
+	const TARGET_FIXED = "export const a = 1;\nexport const b = 2;\n";
+	const TARGET_BAD = "export const a = 1;\nBAD_CALL();\nexport const b = 2;\n";
+	const TARGET_BAD_OTHER =
+		"export const a = 1;\nBAD_CALL();\nexport const b = 3;\n";
+	const NEIGHBOUR_FIXED =
+		'import { a } from "./cascade-target.js";\nexport const c = a + 1;\n';
+	const NEIGHBOUR_BAD = NEIGHBOUR_FIXED + "BAD_CALL();\n";
+	const INCONCLUSIVE = "Cascade diagnostics inconclusive for 1 neighbor";
+	const CASCADE_ERRORS = "Cascade errors in 1 neighbor file(s)";
+	const HOLD_REMEDY =
+		"no write of one file clears them now. Fix what they name, re-check each file (write it, or run lens_diagnostics source=lsp on it), and end the turn: this session's next turn end replaces them.";
+
+	const blockerContent = (): string =>
+		new CacheManager(false).readCache<{ blockerContent?: string }>(
+			"turn-end-findings",
+			tmpDir,
+			Number.POSITIVE_INFINITY,
+		)?.data?.blockerContent ?? "";
+
+	/**
+	 * The neighbour shares the cells' project directory, so the cell's cleanup
+	 * deletes it before its fixing turn end, and no later cell sees it.
+	 */
+	const removeNeighbourOnCleanup = () => {
+		const fixTarget = pendingCleanup;
+		pendingCleanup = async () => {
+			fs.rmSync(path.join(tmpDir, NEIGHBOUR), { force: true });
+			await fixTarget?.();
+		};
+	};
+
+	// Recurrence (#5790): a server silent through the turn end made the
+	// cascade persist its "inconclusive" note into the commit gate's record.
+	// No file owns that text, so every later write latched
+	// blocking_provenance_untrusted, and the commit stayed refused after the
+	// agent fixed and settled both files, until the next turn end.
+	it("admits the commit once both files settle, with the cascade's inconclusive note delivered", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("cn", TARGET, TARGET_FIXED);
+		removeNeighbourOnCleanup();
+		await s.writeOther(NEIGHBOUR, NEIGHBOUR_BAD);
+		expect(await s.write(TARGET_BAD)).toContain("🔴 STOP");
+		boundary.lsp.mode = "inconclusive";
+		await s.write(TARGET_BAD_OTHER);
+		const turnEnd = await s.endTurn();
+		// The agent is still told; only the gate's record leaves the note out.
+		expect(turnEnd).toContain(INCONCLUSIVE);
+		const recorded = blockerContent();
+		fs.writeFileSync(s.target, TARGET_FIXED);
+		boundary.lsp.mode = "answer";
+		expect(await s.settleCall({ source: "lsp", waitMs: 30000 })).toMatch(
+			/confirmed clean/,
+		);
+		await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+		expect(await s.commitBlocked()).toBe(false);
+		// The gate's record held the edited file's section and not the note.
+		expect(recorded).toContain("Unresolved from this turn — " + TARGET + ":");
+		expect(recorded).not.toContain(INCONCLUSIVE);
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// The fail-closed direction: a cascade section that shows a neighbour's
+	// finding is a blocker claim no file re-check retires, so the gate keeps
+	// it after the edited file settles clean.
+	it("keeps a cascade section that shows a neighbour's error in the gate after the edited file settles", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("ce", TARGET, TARGET_FIXED);
+		removeNeighbourOnCleanup();
+		// On disk before the session's writes: no write of this session
+		// records it, so the cascade section is the gate's only hold on it.
+		fs.writeFileSync(path.join(tmpDir, NEIGHBOUR), NEIGHBOUR_BAD);
+		expect(await s.write(TARGET_BAD)).toContain("🔴 STOP");
+		boundary.lsp.mode = "inconclusive";
+		await s.write(TARGET_BAD_OTHER);
+		boundary.lsp.mode = "answer";
+		const turnEnd = await s.endTurn();
+		expect(turnEnd).toContain(CASCADE_ERRORS);
+		expect(blockerContent()).toContain(CASCADE_ERRORS);
+		fs.writeFileSync(s.target, TARGET_FIXED);
+		expect(await s.settleCall({ source: "lsp", waitMs: 30000 })).toMatch(
+			/confirmed clean/,
+		);
+		expect(await s.commitBlocked()).toBe(true);
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence (#5790 r3): the cascade section's neighbour error is text no
+	// file owns, so no write clears it mid-turn, yet the refusal said "Write
+	// the affected files again". A neighbour fixed outside pi and confirmed
+	// clean by source=lsp kept its pending cascade error on every later turn.
+	// The refusal now names the steps that clear the hold, and following them
+	// does, for both ways of re-checking the neighbour.
+	it.each(["write", "source=lsp", "source=lsp on its directory"] as const)(
+		"names the steps that clear a held neighbour error, and following them clears it (%s)",
+		async (recheck) => {
+			boundary.lsp.enabled = true;
+			const s = await openSession("ch" + recheck.length, TARGET, TARGET_FIXED);
+			removeNeighbourOnCleanup();
+			fs.writeFileSync(path.join(tmpDir, NEIGHBOUR), NEIGHBOUR_BAD);
+			expect(await s.write(TARGET_BAD)).toContain("🔴 STOP");
+			boundary.lsp.mode = "inconclusive";
+			await s.write(TARGET_BAD_OTHER);
+			boundary.lsp.mode = "answer";
+			expect(await s.endTurn()).toContain(CASCADE_ERRORS);
+			fs.writeFileSync(s.target, TARGET_FIXED);
+			expect(await s.settleCall({ source: "lsp", waitMs: 30000 })).toMatch(
+				/confirmed clean/,
+			);
+			const refusal = await s.commitReason();
+			expect(refusal).toContain("blocking_provenance_untrusted");
+			expect(refusal).not.toContain("Write the affected files again");
+			expect(refusal).toContain(HOLD_REMEDY);
+			// A turn end with the neighbour still broken holds it again, with the
+			// same steps rather than "commit again".
+			await s.endTurn();
+			const held = await s.commitReason();
+			expect(held).not.toContain("then commit again");
+			expect(held).toContain(HOLD_REMEDY);
+			// Follow it: fix the neighbour, re-check it, end the turn.
+			if (recheck === "write") await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+			else {
+				fs.writeFileSync(path.join(tmpDir, NEIGHBOUR), NEIGHBOUR_FIXED);
+				// The directory form goes through the batch collector, a second
+				// caller of the confirmed-clean hook.
+				const probed =
+					recheck === "source=lsp" ? NEIGHBOUR : path.dirname(NEIGHBOUR);
+				expect(await s.settleOther(probed)).toMatch(
+					recheck === "source=lsp" ? /confirmed clean/ : /No diagnostics found/,
+				);
+			}
+			await s.endTurn();
+			expect(await s.commitReason()).toBe("");
+			await fixAndDrain(s);
+		},
+		120_000,
+	);
+
+	// The other direction (#4495 round 3's rule, now on the probe path): a
+	// probe whose read started before the cascade observation that recorded
+	// the error cannot speak for it, so the error stays pending.
+	it("keeps a pending neighbour error that a source=lsp read older than its record cannot speak for", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("co", TARGET, TARGET_FIXED);
+		removeNeighbourOnCleanup();
+		const neighbour = path.join(tmpDir, NEIGHBOUR);
+		fs.writeFileSync(neighbour, NEIGHBOUR_FIXED);
+		const pending = () =>
+			listCascadePendingNeighbors().filter((e) => e.filePath === neighbour);
+		try {
+			recordDeliveredCascadeNeighbor(
+				neighbour,
+				[
+					{
+						id: "lsp:2304:3",
+						message: "Cannot find name 'BAD_CALL'.",
+						filePath: neighbour,
+						line: 3,
+						column: 1,
+						severity: "error",
+						semantic: "blocking",
+						tool: "lsp",
+						rule: "ts:2304",
+					},
+				],
+				0,
+				Date.now() + 60_000,
+			);
+			expect(await s.settleOther(NEIGHBOUR)).toMatch(/confirmed clean/);
+			expect(pending()).toHaveLength(1);
+		} finally {
+			forgetCascadePendingNeighbor(neighbour);
+		}
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence (#5790 review F1, the reviewer's witness): a file of the
+	// record edited outside pi after the turn end reaches the
+	// file_content_changed refusal, which named "Write the affected files
+	// again" while the record held a neighbour's error no write clears.
+	it("names the clearing steps when a file of a held record changes outside pi", async () => {
+		boundary.lsp.enabled = true;
+		const s = await openSession("cc", TARGET, TARGET_FIXED);
+		removeNeighbourOnCleanup();
+		fs.writeFileSync(path.join(tmpDir, NEIGHBOUR), NEIGHBOUR_BAD);
+		// A clean edit of the target: the only blocker is the neighbour's.
+		expect(await s.write(TARGET_FIXED + "export const d = 4;\n")).not.toContain(
+			"🔴 STOP",
+		);
+		expect(await s.endTurn()).toContain(CASCADE_ERRORS);
+		fs.writeFileSync(s.target, TARGET_FIXED);
+		const refusal = await s.commitReason();
+		expect(refusal).toContain("(file_content_changed)");
+		expect(refusal).not.toContain("Write the affected files again");
+		expect(refusal).toContain(HOLD_REMEDY);
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence (#5790 review F2): a source=lsp probe covers the sources its
+	// servers answered for, so it retires only the pending rows those sources
+	// raised. A knip row it never observed stayed forgotten with the lsp ones.
+	it.each([
+		[["knip"], ["knip"]],
+		[["lsp", "knip"], ["knip"]],
+		[["lsp"], []],
+		[[""], [""]],
+	] as const)(
+		"retires only the pending neighbour rows a source=lsp probe covered (%j keeps %j)",
+		async (tools, kept) => {
+			boundary.lsp.enabled = true;
+			const s = await openSession(
+				"cv" + tools.join("").length,
+				TARGET,
+				TARGET_FIXED,
+			);
+			removeNeighbourOnCleanup();
+			const neighbour = path.join(tmpDir, NEIGHBOUR);
+			fs.writeFileSync(neighbour, NEIGHBOUR_FIXED);
+			const pendingTools = () =>
+				listCascadePendingNeighbors()
+					.filter((e) => e.filePath === neighbour)
+					.flatMap((e) => e.errors.map((error) => error.tool));
+			try {
+				recordDeliveredCascadeNeighbor(
+					neighbour,
+					tools.map((tool, index) => ({
+						id: tool + ":" + index,
+						message: "finding " + index,
+						filePath: neighbour,
+						line: index + 1,
+						column: 1,
+						severity: "error" as const,
+						semantic: "blocking" as const,
+						tool,
+					})),
+					0,
+					Date.now() - 60_000,
+				);
+				expect(await s.settleOther(NEIGHBOUR)).toMatch(/confirmed clean/);
+				expect(pendingTools()).toEqual(kept);
+			} finally {
+				forgetCascadePendingNeighbor(neighbour);
+			}
+			await fixAndDrain(s);
+		},
+		120_000,
+	);
 });

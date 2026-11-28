@@ -55,11 +55,12 @@ import { _setServersForFileForTests } from "../../../clients/lsp/config.js";
 import { bounded } from "../../../clients/deadline-utils.js";
 import { runPersistentReverify } from "../../../clients/persistent-reverify.js";
 import {
+	killProcessTree,
 	createLSPClient,
 	type LSPClientInfo,
 } from "../../../clients/lsp/client.js";
 import { LSPService } from "../../../clients/lsp/index.js";
-import { type LSPProcess, stopLSP } from "../../../clients/lsp/launch.js";
+import { type LSPProcess } from "../../../clients/lsp/launch.js";
 import { normalizeMapKey } from "../../../clients/path-utils.js";
 import { LspRequestTimeoutError } from "../../../clients/lsp/request-timeout-error.js";
 import { spawnAbortScope } from "../../../clients/spawn-abort-scope.js";
@@ -159,7 +160,7 @@ async function withHangingServer(
 			/* ignore */
 		}
 		try {
-			await stopLSP(proc);
+			await killProcessTree(proc.process, proc.pid);
 		} catch {
 			/* ignore */
 		}
@@ -369,6 +370,83 @@ describe("one request sender owns cancel and release (#5097)", () => {
 			await ctx.barrier();
 			expect(ctx.cancels()).toBe(1);
 		});
+	}, 15_000);
+});
+
+// #5775: the record the with-auxiliary clean-confirm gate reads, on a real wire.
+// It shares this file's fake-server harness rather than admitting a new
+// real-spawn file. Recurrence: review F1, where the gate's proxy for this fact
+// (the service's last-known cache) forgot a finding after a partial touch.
+describe("a pushed finding stays unwithdrawn until the server withdraws it (#5775)", () => {
+	/** Polls until `assertion` passes: the publishes land on the server's clock. */
+	const until = (assertion: () => void) =>
+		vi.waitFor(assertion, { timeout: 5000, interval: 10 });
+
+	it("a didChange clears the cached finding but not the record", async () => {
+		await withHangingServer(
+			"",
+			async (ctx) => {
+				await until(() =>
+					expect(ctx.client.getDiagnostics(ctx.file)).toHaveLength(1),
+				);
+				expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(true);
+				// The fixture publishes only on didOpen, so the change is never answered.
+				await ctx.client.notify.change(ctx.file, "function greet() { }\n");
+				await ctx.barrier();
+				expect(ctx.client.getDiagnostics(ctx.file)).toEqual([]);
+				expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(true);
+			},
+			{ env: { FAKE_LSP_PUSH_DIAGNOSTIC: "1" } },
+		);
+	}, 15_000);
+
+	it("an empty push after the finding withdraws it", async () => {
+		await withHangingServer(
+			"",
+			async (ctx) => {
+				// The finding first, then the empty push 500 ms later withdraws it.
+				await until(() =>
+					expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(true),
+				);
+				await until(() =>
+					expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(false),
+				);
+				expect(
+					ctx.client.getAllDiagnostics().get(normalizeMapKey(ctx.file)),
+				).toMatchObject({ diags: [] });
+			},
+			{
+				env: {
+					FAKE_LSP_PUBLISH_SEQUENCE: "dirty,empty",
+					FAKE_LSP_PUBLISH_SEQUENCE_GAP_MS: "500",
+				},
+			},
+		);
+	}, 15_000);
+
+	// The same withdrawal through the seed-first-push store, the one a server
+	// whose first push is its complete answer (`python`) takes after a clear.
+	it("an empty first push after a didChange withdraws it on a seed-first-push server", async () => {
+		await withHangingServer(
+			"",
+			async (ctx) => {
+				await until(() =>
+					expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(true),
+				);
+				// didChange answers with the sequence alone: one empty push.
+				await ctx.client.notify.change(ctx.file, "function greet() { }\n");
+				await until(() =>
+					expect(ctx.client.hasUnwithdrawnPushFindings?.(ctx.file)).toBe(false),
+				);
+			},
+			{
+				serverId: "python",
+				env: {
+					FAKE_LSP_PUSH_DIAGNOSTIC: "1",
+					FAKE_LSP_PUBLISH_SEQUENCE: "empty",
+				},
+			},
+		);
 	}, 15_000);
 });
 
@@ -629,12 +707,27 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 	// server silent on clean is trusted only after it answers a round trip, and
 	// that round trip read no abort either. The ping's own ceiling is 1200 ms
 	// here, so a cancel inside 500 ms of the abort is the abort's, not the timer's.
-	// Two call sites send it: the single-server gate (`primary`) and the
-	// aggregate gate (`all`).
-	it.each(["primary", "all"] as const)(
+	// Three call sites send it: the single-server gate (`primary`), the aggregate
+	// gate (`all`), and the with-auxiliary per-edit gate — the last one added with
+	// that gate, so its ping is covered by the same contract rather than assumed.
+	it.each(["primary", "all", "with-auxiliary"] as const)(
 		"the %s-scope clean-confirm ping is cancelled when the bound aborts, and the touch stays unconfirmed",
 		async (clientScope) => {
 			const filePath = register("workspace/symbol", "lua");
+			if (clientScope === "with-auxiliary") {
+				// The with-auxiliary gate refuses a client the touch itself started, so
+				// a cold touch never reaches the ping this row is about (#5775 review
+				// F2). Warm the client first with a touch that waits for nothing, and
+				// show it sent no ping of its own.
+				await service.touchFile(filePath, "fn main() {}\n", {
+					diagnostics: "none",
+					clientScope,
+					source: "dispatch",
+				});
+				expect(
+					lines().some((line) => line.startsWith("recv workspace/symbol")),
+				).toBe(false);
+			}
 			const turn = new AbortController();
 			const touch = bounded(
 				() =>
@@ -659,6 +752,87 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 		},
 		20_000,
 	);
+
+	/**
+	 * The with-auxiliary per-edit gate on a real wire: a silent-on-clean primary
+	 * (`lua`) and an auxiliary (`typos`) that never answers, so every touch is
+	 * `partial` and none primes the service's last-known cache. `finding` makes
+	 * the primary publish one finding on `didOpen` and nothing on `didChange`.
+	 */
+	function registerWithSilentAuxiliary(finding: boolean): string {
+		const filePath = path.join(tmp, "main.fkr");
+		fs.writeFileSync(filePath, "fn main() {}\n");
+		const fake = (id: string, env: Record<string, string>) => ({
+			id,
+			name: id,
+			extensions: [".fkr"],
+			idleEviction: "resident",
+			...(id === "typos" && { role: "auxiliary" }),
+			root: async () => tmp,
+			spawn: async () => {
+				const proc = await spawnFakeLspServer({
+					cwd: tmp,
+					env: {
+						...process.env,
+						FAKE_LSP_NO_DIAGNOSTIC_PROVIDER: "1",
+						...env,
+					},
+				});
+				procs.push(proc);
+				return { process: proc, source: "test" };
+			},
+		});
+		const servers = [
+			fake("lua", {
+				FAKE_LSP_TRACE_FILE: trace,
+				...(finding && { FAKE_LSP_PUSH_DIAGNOSTIC: "1" }),
+			}),
+			fake("typos", {}),
+		];
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".fkr") ? servers : [],
+		);
+		return filePath;
+	}
+	const perEdit = {
+		diagnostics: "document",
+		collectDiagnostics: true,
+		clientScope: "with-auxiliary",
+		auxiliaryServerIds: ["typos"],
+		source: "dispatch-lsp-runner",
+	} as const;
+
+	// Recurrence (#5775 review F1): the gate read "no known finding" from the
+	// service's last-known cache, which a partial touch never primes. The primary's
+	// finding from touch one was therefore forgotten, and its silence on the next
+	// edit was certified clean while the auxiliary gap stayed named.
+	it("a primary finding seen on a partial touch keeps the next silent edits unconfirmed", async () => {
+		const filePath = registerWithSilentAuxiliary(true);
+		const first = await service.touchFile(filePath, "fn main() {}\n", perEdit);
+		expect(first?.diags.map((d) => d.code)).toEqual(["P2780"]);
+		expect(first?.confirmation).toBe("partial");
+		// Two later edits the primary never answers: the second one proves the
+		// refusal is not spent by the first.
+		for (const content of ["fn main() { }\n", "fn main() {  }\n"]) {
+			const next = await service.touchFile(filePath, content, perEdit);
+			expect(next?.inconclusive).toBe(true);
+			expect(next?.inconclusiveServerIds).toEqual(["lua"]);
+			expect(next?.confirmation).toBeUndefined();
+		}
+	}, 20_000);
+
+	// The control for the case above: the same wire with no finding confirms the
+	// warm edit, so the refusal above is the finding's and not the harness's.
+	it("a silent-on-clean primary that never published is confirmed on the warm edit", async () => {
+		const filePath = registerWithSilentAuxiliary(false);
+		const cold = await service.touchFile(filePath, "fn main() {}\n", perEdit);
+		expect(cold?.inconclusive).toBe(true);
+		const warm = await service.touchFile(filePath, "fn main() { }\n", perEdit);
+		expect(warm?.inconclusive).toBeUndefined();
+		expect(warm?.diags).toEqual([]);
+		expect(warm?.confirmation).toBe("partial");
+		expect(warm?.unconfirmedServerIds).toEqual(["typos"]);
+	}, 20_000);
 
 	// Recurrence: reading the ambient abort in the pull makes every caller of the
 	// pull a reader of whatever scope it inherited. A server-initiated re-pull
@@ -701,7 +875,7 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 			await received("textDocument/diagnostic");
 		} finally {
 			await client.shutdown().catch(() => {});
-			await stopLSP(proc).catch(() => {});
+			await killProcessTree(proc.process, proc.pid).catch(() => {});
 		}
 	}, 20_000);
 
@@ -786,7 +960,7 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 			expect(Date.now() - startedAt).toBeLessThan(2000);
 		} finally {
 			await client.shutdown().catch(() => {});
-			await stopLSP(proc).catch(() => {});
+			await killProcessTree(proc.process, proc.pid).catch(() => {});
 		}
 	}, 20_000);
 
@@ -821,7 +995,7 @@ describe("a firing bound cancels the request its LSP work started (#5097)", () =
 		} finally {
 			setAmbientAbortSignal(undefined);
 			await client.shutdown().catch(() => {});
-			await stopLSP(proc).catch(() => {});
+			await killProcessTree(proc.process, proc.pid).catch(() => {});
 		}
 	}, 20_000);
 

@@ -239,7 +239,7 @@ export const LENS_FLAGS: readonly LensFlagSpec[] = [
 	{
 		name: "lens-retain-injections",
 		description:
-			"Opt-in (#4743): re-send each request's injected findings unchanged, at the same place, in every later request of the session, so an exact-prefix prompt cache (a local llama.cpp or Qwen server) keeps the whole conversation. Each retained block is labelled a snapshot; findings are still delivered once. Default off. Also via contextInjection.retain=true in ~/.pi-lens/config.json.",
+			"Re-send each request's injected findings unchanged, at the same place, in every later request of the session, so an exact-prefix prompt cache (a local llama.cpp or Qwen server) keeps the whole conversation. Each retained block is labelled a snapshot; findings are still delivered once (#4743). Default off, except on for anthropic-messages models when unset (#5770); contextInjection.retain=false in ~/.pi-lens/config.json opts out there, and true turns it on for every API.",
 		configKey: "contextInjection.retain",
 		negated: false,
 		default: false,

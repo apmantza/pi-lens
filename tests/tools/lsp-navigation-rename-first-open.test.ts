@@ -39,8 +39,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import { spawnFakeLspServer } from "../support/fake-lsp-server.js";
 import { setupTestEnvironment } from "../clients/test-utils.js";
-import { createLSPClient } from "../../clients/lsp/client.js";
-import { stopLSP } from "../../clients/lsp/launch.js";
+import { killProcessTree, createLSPClient } from "../../clients/lsp/client.js";
+
 import { setHostFileMutationQueueLoader } from "../../clients/file-mutation-queue.js";
 import { resetDegradationLedger } from "../../clients/degradation-ledger.js";
 
@@ -185,7 +185,7 @@ afterEach(async () => {
 	vi.restoreAllMocks();
 	setHostFileMutationQueueLoader(undefined);
 	await client.shutdown().catch(() => {});
-	await stopLSP(proc).catch(() => {});
+	await killProcessTree(proc.process, proc.pid).catch(() => {});
 	env.cleanup();
 });
 

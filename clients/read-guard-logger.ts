@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { isTestMode } from "./env-utils.js";
 import { hashText } from "./finding-identity.js";
+import { getLogLimit } from "./log-rotation-limits.js";
 import { getGlobalPiLensLogDir } from "./probe-home-state.js";
 import { createNdjsonLogger } from "./ndjson-logger.js";
 import { normalizeFilePath } from "./path-utils.js";
@@ -12,11 +13,7 @@ const READ_GUARD_LOG_BACKUP_FILE = path.join(
 	READ_GUARD_LOG_DIR,
 	"read-guard.log.1",
 );
-const MAX_LOG_BYTES = Math.max(
-	128 * 1024,
-	Number.parseInt(process.env.PI_LENS_READ_GUARD_MAX_BYTES ?? "1048576", 10) ||
-		1048576,
-);
+const MAX_LOG_BYTES = Math.max(128 * 1024, getLogLimit("readGuardMaxBytes"));
 const writer = createNdjsonLogger({
 	filePath: READ_GUARD_LOG_FILE,
 	maxBytes: MAX_LOG_BYTES,

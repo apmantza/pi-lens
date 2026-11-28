@@ -176,6 +176,7 @@ import {
 	getStrategy,
 	type LSPCapabilitySnapshot,
 } from "./wait-policy/index.js";
+import { classifyCascadeWaitTier as classifyCascadeLaneTier } from "./cascade-tier.js";
 export type { LSPCapabilitySnapshot } from "./wait-policy/index.js";
 
 /**
@@ -4540,6 +4541,14 @@ export class LSPService {
 		const attemptedAuxiliaryRoots = new Map<string, string>();
 		const waitSkipReasons = new Set<string>();
 		const coldAuxiliaryServerIds = new Set<string>();
+		// The live clients this touch INHERITED, by identity (#silent-clean). A server
+		// this touch had to start is not evidence for the gate below: its own
+		// handshake runs ahead of the document (marksman answers `initialize` after
+		// ~2 s on a project tree), so the finding lands after the wait budget for
+		// reasons that have nothing to do with whether the file is clean. Measured,
+		// cold spawn then `didOpen`: p50 2.07 s, 8/8 over the 1500 ms budget; the
+		// same server already up: p50 0.33 s.
+		const clientsInheritedByTouch = new Set(this.state.clients.values());
 		const noteColdAuxiliary = (
 			serverId: string,
 			outcome: LSPClientAcquisitionOutcome,
@@ -6531,6 +6540,181 @@ export class LSPService {
 					} catch {
 						// Fail-safe: leave `diagnosticsTimedOut` as-is — today's
 						// inconclusive behavior, exactly like the single-server gate.
+					}
+				}
+
+				// The with-auxiliary PER-EDIT path, kept separate from the `all` sweep gate
+				// above so neither contract is restated by the other.
+				//
+				// `clients/dispatch`'s lsp runner runs every edit as
+				// `clientScope: "with-auxiliary"` as soon as any auxiliary is enabled for
+				// the language, and #799's gate wants `primary` while #814's wants `all` —
+				// so neither ever applied here. Markdown always has an auxiliary (typos),
+				// which is why a clean markdown edit on 4.5.2 logged
+				// `lsp_diagnostics_timeout unansweredServerIds ["marksman"]
+				// attributedToPrimary true` and `inconclusiveReason "diagnostics-wait"`
+				// with no `lsp_silent_clean_confirm` row, then reported the file to the
+				// agent as "not fully checked (a language tool is missing, timed out, or
+				// failed to run)".
+				//
+				// The verdict here comes from the CASCADE class, not from the capability
+				// tier the sweep gate reads. `silentOnClean` is only a capability fact
+				// ("publishes nothing on a clean transition"); typescript carries it too,
+				// and its cold project load can outlast any per-edit budget — which is why
+				// #707/#1095 gave it a sync round-trip and the cascade calls it
+				// `command-pull` rather than `tier3-silent`. Confirming on the capability
+				// tier alone would certify a still-loading TypeScript project clean on
+				// every edit, so this path asks the class that already encodes "can this
+				// server still be asked?" — and only `tier3-silent` (serve a file, reply
+				// to a liveness ping, publish nothing: the whole answer is silence) is
+				// confirmed.
+				if (
+					diagnosticsTimedOut &&
+					!primaryNotifyWriteTimedOut &&
+					clientScope === "with-auxiliary"
+				) {
+					try {
+						const outstanding = primaryEntries.filter(
+							(entry) =>
+								!notifyWriteTimedOutServerIds.includes(entry.info.id) &&
+								// #5775 review F7: a write that resolved `false` was SUPERSEDED (#3481),
+								// so the server does not hold this content and its silence answers a
+								// question it was never asked. An unchanged-content skip is not in this
+								// list: the server already holds those bytes.
+								!supersededServerIds.includes(entry.info.id) &&
+								!entry.client.getAllDiagnostics().has(normalizedPath),
+						);
+						if (outstanding.length > 0) {
+							const snapshots = await this.getCapabilitySnapshots(filePath);
+							const primaryClass = classifyCascadeLaneTier(
+								this,
+								filePath,
+								snapshots,
+							);
+							// `classifyCascadeLaneTier` answers about THE file's primary
+							// (`getServersForFileWithConfig`'s first non-auxiliary entry), so the
+							// verdict describes that one server. This path was measured to spawn
+							// exactly one non-auxiliary server per file, so the id check below is
+							// defensive rather than load-bearing — but a second outstanding server
+							// would otherwise have its silence confirmed by a verdict about a
+							// different server, which is the unsound direction this gate exists to
+							// avoid, and failing closed costs only today's inconclusive verdict.
+							//
+							// `clientsInheritedByTouch` is the other half of that soundness: a client
+							// THIS touch started pays its own handshake before it reads the document,
+							// and that time is not analysis — measured at 2.07 s against a 1500 ms
+							// budget, 8 of 8 cold starts over it, while the same server already up
+							// answers in 0.33 s. Confirming there would report a file clean whose
+							// finding was simply queued behind `initialize`.
+							const classifiedServerId = getServersForFileWithConfig(
+								filePath,
+							).find((server) => !isAuxiliary(server))?.id;
+							// The third condition, and the one that makes the whole gate safe under
+							// load. A silent-on-clean server does not stay silent when its answer
+							// CHANGES: marksman publishes an empty set to withdraw findings it
+							// reported before (measured — fix a broken link and `[]` arrives in
+							// ~200 ms). So a path the server pushed findings for and never
+							// withdrew, which now says nothing, has not been re-examined at all —
+							// silence is a missed publish, never "clean". Without this, a finding
+							// delayed past the budget by machine load (measured at 10.5 s under 14
+							// competing CPU hogs) would be reported as clean.
+							//
+							// #5775 review F1: the fact is the primary CLIENT's, read from its own
+							// wire record. The service's last-known cache skips every partial
+							// touch, so a finding seen beside an unanswered auxiliary was
+							// forgotten by the next edit. A client that cannot answer the question
+							// is unknown and refuses (`=== false`, never `!== true`).
+							// Read again at the decision, below: the probe's await is a window in
+							// which the server can publish the finding this record names.
+							const noUnwithdrawnFindings = () =>
+								outstanding.every(
+									(entry) =>
+										entry.client.hasUnwithdrawnPushFindings?.(filePath) ===
+										false,
+								);
+							// #5775 review F8: `clientPingLiveness` has nothing to send to a
+							// server that advertises none of the probe's methods and answers
+							// from process state alone (#1969), which is the check the probe
+							// exists to strengthen. That answer is not proof, so a primary
+							// whose snapshot offers no probeable method is refused. The probe
+							// still runs, so `lsp-liveness-probe-unsupported` stays the record.
+							const probeable = outstanding.every((entry) => {
+								const support = snapshots.find(
+									(s) => s.serverId === entry.client.serverId,
+								)?.operationSupport;
+								return (
+									support?.workspaceSymbol === true ||
+									support?.documentSymbol === true ||
+									support?.hover === true
+								);
+							});
+							const judged =
+								primaryClass === "tier3-silent" &&
+								classifiedServerId !== undefined &&
+								outstanding.every((entry) =>
+									clientsInheritedByTouch.has(entry.client),
+								) &&
+								noUnwithdrawnFindings();
+							if (judged) {
+								// #1277: the class is static capability data and cannot tell "silent
+								// because clean" from "silent because wedged", so every
+								// still-outstanding primary must answer a cheap bounded round-trip.
+								const liveness = await Promise.all(
+									outstanding.map(async (entry) => {
+										try {
+											// A client with no probe is unknown, and unknown is never clean.
+											return (
+												(await entry.client.pingLiveness?.(
+													undefined,
+													getAmbientAbortSignal(),
+												)) ?? false
+											);
+										} catch (livenessError) {
+											// A probe that THREW is a wedged server, so the verdict is the same
+											// as a probe that answered false — recorded rather than swallowed,
+											// because "the liveness check itself failed" and "the server is
+											// dead" are different facts and the verdict alone cannot tell
+											// them apart.
+											incrementDegradationCount({
+												kind: "lsp-liveness-probe-failed",
+												subject: entry.info.id,
+												reason: `liveness probe threw: ${livenessError instanceof Error ? livenessError.message : String(livenessError)}`,
+											});
+											return false;
+										}
+									}),
+								);
+								// #1586: the record is read again here, with no await between it and
+								// the commit, because the probe's await just ran.
+								if (
+									liveness.every(Boolean) &&
+									probeable &&
+									noUnwithdrawnFindings()
+								) {
+									diagnosticsTimedOut = false;
+									retractPrimaryTimeoutAttribution(); // #1549
+									logLatency({
+										type: "phase",
+										phase: "lsp_silent_clean_confirm",
+										filePath: normalizedPath,
+										durationMs: Date.now() - startedAt,
+										metadata: {
+											source,
+											clientScope,
+											diagnosticsMode,
+											aggregate: true,
+											serverIds: outstanding.map(
+												(entry) => entry.client.serverId,
+											),
+										},
+									});
+								}
+							}
+						}
+					} catch {
+						// none: this gate can only narrow a touch that is already inconclusive, so
+						// leaving `diagnosticsTimedOut` as it stands IS the pre-existing verdict
+						// and there is no second decision to report.
 					}
 				}
 			}

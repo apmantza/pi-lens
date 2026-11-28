@@ -756,7 +756,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// that server's rows from the last known answer it falls back to.
 		// 51 -> 50 (#4944): the stored-rows filter above moved into
 		// `dropExcludedServers` (`clients/dispatch/auxiliary-lsp.ts`).
-		"clients/lsp/index.ts": 50,
+		// 50 -> 51 (#5775): the with-auxiliary clean-confirm gate selects the
+		// primaries the touch has no answer from.
+		"clients/lsp/index.ts": 51,
 		"clients/lsp/inferred-project.ts": 2,
 		"clients/lsp/jvm-runtime.ts": 3,
 		"clients/lsp/language.ts": 1,
@@ -1396,7 +1398,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// three filesystem path uses on the same probe.
 		// 114 -> 113 (#5728): folding IgnoreHomeRoot onto isAtOrAboveHomeDir
 		// replaces `path.resolve(root)` with `realpathOrResolve(root)`.
-		"clients/lsp/server.ts": 113,
+		// 113 -> 110 (#5814): the three `stat(path.join(...))` probes of the
+		// extension-bounded walk and the agent-level read fold onto the shared
+		// marker probe.
+		"clients/lsp/server.ts": 110,
 		"clients/lsp/session-roots.ts": 7,
 		// 13 -> 15 (#4346): a creation's path joins the entry's dependency
 		// scope test (Go package directory, created-file stem/directory names).
@@ -1578,7 +1583,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// the raw spelling through normalizeMapKey (review F1).
 		// 16 -> 17 (#5020): `retireForeignRowsOfMissingFiles` asks `path.isAbsolute`
 		// before it judges a cited file, so a relative cite is never retired.
-		"clients/runtime-coordinator.ts": 17,
+		"clients/runtime-coordinator.ts": 12,
 		"clients/runtime-session.ts": 15,
 		// 22 -> 21 (#4137): the baseline slot's `path.resolve` moved into
 		// `opaqueBaselineSlot` (clients/opaque-mutation-scan.ts).
@@ -1803,8 +1808,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// glossary keeps `record` for. 53 -> 65 (#4738): the partition reads, the
 		// carried-blocker shape check and the gate's owner check name the same
 		// `turn-end-findings` row. 65 -> 67 (#4750): the top partition's write
-		// stamp and its shape check read the same row.
-		"clients/git-guard.ts": 67,
+		// stamp and its shape check read the same row. 67 -> 69 (#5790 r3): the
+		// own-session remedy and the final refusal pass the same row to
+		// `unattributedRecordRemedy`.
+		"clients/git-guard.ts": 69,
 		"clients/govulncheck-client.ts": 4,
 		"clients/inline-blocker-dispositions.ts": 3,
 		// #3654: the unified bridge's own `record()` API (RFC §3) — a method
@@ -2072,7 +2079,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/review-graph-logger.ts": 1,
 		"clients/review-graph/builder.ts": 12,
 		"clients/runtime-context.ts": 4,
-		"clients/runtime-coordinator.ts": 4,
+		// 4 -> 3 (#4907): shouldWarmLspOnRead no longer tests the warm entry's
+		// `warming` status, so a stale warming entry expires like a ready one.
+		"clients/runtime-coordinator.ts": 3,
 		"clients/runtime-turn.ts": 6,
 		// 25 -> 24 (#5289): the deleted sync `isCommandAvailable` read the spawn
 		// result's exit `status` once.

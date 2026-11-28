@@ -41,10 +41,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { REAL_HOME } from "../../support/vitest-setup.js";
 import { mergeInitializationOptions } from "../../../clients/lsp/client-registry.js";
 import {
+	killProcessTree,
 	createLSPClient,
 	type LSPDiagnostic,
 } from "../../../clients/lsp/client.js";
-import { launchLSP, stopLSP } from "../../../clients/lsp/launch.js";
+import { launchLSP } from "../../../clients/lsp/launch.js";
 import { pyrightInitialization } from "../../../clients/lsp/server.js";
 import { waitFor } from "../interleaving-kit.js";
 import { pinFixtureHome, setupTestEnvironment } from "../test-utils.js";
@@ -111,7 +112,7 @@ describe.skipIf(!CAN_RUN)("pyright applies pi-lens settings (#4758)", () => {
 		}
 		if (proc) {
 			try {
-				await stopLSP(proc);
+				await killProcessTree(proc.process, proc.pid);
 			} catch {
 				// ignore
 			}

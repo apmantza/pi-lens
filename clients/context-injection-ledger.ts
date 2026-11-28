@@ -1,5 +1,6 @@
 /**
- * Retained context injections (#4743, opt-in `--lens-retain-injections`).
+ * Retained context injections (#4743, `--lens-retain-injections`; on by
+ * default for the `anthropic-messages` API only, #5770).
  *
  * pi rebuilds every provider request from its own transcript, and pi-lens's
  * findings ride ONE request: `context_with_system` returns an amended copy and
@@ -21,11 +22,12 @@
  *   while that digest still matches; any other transcript (a compaction, a
  *   /tree move, another extension's rewrite) deletes it for good.
  * - The partition is the request ctx's stable session id. No id, no entry.
- * - Bounded: {@link MAX_RETAINED_ENTRIES} entries and
- *   {@link MAX_RETAINED_BYTES} rendered bytes per session, and
- *   {@link MAX_RETAINED_SESSIONS} sessions (LRU). At a cap the NEW injection
- *   is delivered once, as without the flag, and not retained: the prefix then
- *   breaks at the newest point, the cheapest one.
+ * - Bounded by {@link RetainLimits}, defaulting to {@link MAX_RETAINED_ENTRIES}
+ *   entries and {@link MAX_RETAINED_BYTES} rendered bytes per session and
+ *   {@link MAX_RETAINED_SESSIONS} sessions (LRU); each is a config key
+ *   (`contextInjection.retainMax*`), and `0` there means no cap. At a cap the
+ *   NEW injection is delivered once, as without the flag, and not retained: the
+ *   prefix then breaks at the newest point, the cheapest one.
  * - Each decline records one `context-injection-retain-declined` degradation
  *   per session and reason.
  */
@@ -36,11 +38,99 @@ import {
 	rollingMessageDigests,
 } from "./cache-observability.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
+import { claimPhaseOncePerSession, logLatency } from "./latency-logger.js";
+import type { ResolvedPiLensFlag } from "./lens-config.js";
 import { resolveLensToolName } from "./tool-config.js";
+
+/**
+ * The APIs whose requests retain by default (#5770). Every other API keeps the
+ * flag's own default, off. Exact strings: a label that merely resembles one of
+ * these (`anthropic-messages-v2`) is not the API.
+ */
+const RETAIN_DEFAULT_APIS: ReadonlySet<string> = new Set([
+	"anthropic-messages",
+]);
+
+/**
+ * Whether THIS request retains, from the resolved `lens-retain-injections`
+ * setting and the model's API as `ctx.model.api` reports it now (#5770).
+ *
+ * An explicit setting (the flag, or `contextInjection.retain` in either
+ * direction) decides alone: only a setting that resolved to the registry
+ * default, which nobody chose, falls back to the API. An API that is absent or
+ * not a string is unknown and keeps today's default, off. When the API turned
+ * retention on, the session's first such request writes one
+ * `context_injection_retain_default` latency row, so a reader can tell a
+ * default from a choice.
+ */
+export function resolveRetainInjections(
+	setting: Pick<ResolvedPiLensFlag, "value" | "source">,
+	api: unknown,
+	sessionId: string | undefined,
+): boolean {
+	if (setting.source !== "default") return Boolean(setting.value);
+	if (typeof api !== "string" || !RETAIN_DEFAULT_APIS.has(api)) return false;
+	if (
+		claimPhaseOncePerSession(
+			"context_injection_retain_default",
+			sessionId ?? "<none>",
+		)
+	)
+		logLatency({
+			type: "phase",
+			phase: "context_injection_retain_default",
+			filePath: "",
+			durationMs: 0,
+			metadata: { sessionId, api },
+		});
+	return true;
+}
 
 export const MAX_RETAINED_ENTRIES = 64;
 export const MAX_RETAINED_BYTES = 256 * 1024;
 export const MAX_RETAINED_SESSIONS = 32;
+
+/** The caps on what the ledger keeps; `Infinity` is no cap. */
+export interface RetainLimits {
+	maxEntries: number;
+	maxBytes: number;
+	maxSessions: number;
+}
+
+export const DEFAULT_RETAIN_LIMITS: RetainLimits = {
+	maxEntries: MAX_RETAINED_ENTRIES,
+	maxBytes: MAX_RETAINED_BYTES,
+	maxSessions: MAX_RETAINED_SESSIONS,
+};
+
+/** The limits a `contextInjection` config section asks for: unset keeps the default, `0` is no cap. */
+export function retainLimitsFromConfig(
+	section:
+		| {
+				retainMaxEntries?: number;
+				retainMaxBytes?: number;
+				retainMaxSessions?: number;
+		  }
+		| undefined,
+): RetainLimits {
+	const cap = (configured: number | undefined, fallback: number): number =>
+		configured === undefined
+			? fallback
+			: configured === 0
+				? Number.POSITIVE_INFINITY
+				: configured;
+	return {
+		maxEntries: cap(
+			section?.retainMaxEntries,
+			DEFAULT_RETAIN_LIMITS.maxEntries,
+		),
+		maxBytes: cap(section?.retainMaxBytes, DEFAULT_RETAIN_LIMITS.maxBytes),
+		maxSessions: cap(
+			section?.retainMaxSessions,
+			DEFAULT_RETAIN_LIMITS.maxSessions,
+		),
+	};
+}
 
 /** One message of a provider request, as pi's request hooks carry it. */
 export type LedgerMessage = { role: string; content: unknown };
@@ -151,9 +241,11 @@ function recordDecline(sessionId: string, reason: DeclineReason): void {
 	});
 }
 
-export function createInjectionLedger(): InjectionLedger {
+export function createInjectionLedger(
+	limits: RetainLimits = DEFAULT_RETAIN_LIMITS,
+): InjectionLedger {
 	const sessions = new BoundedLruCache<string, RetainedEntry[]>(
-		MAX_RETAINED_SESSIONS,
+		limits.maxSessions,
 	);
 
 	const noSession = (raw: ReadonlyArray<LedgerMessage>): LedgerRebuild => ({
@@ -258,10 +350,10 @@ export function createInjectionLedger(): InjectionLedger {
 					? textBytes(injection.text)
 					: messagesBytes(injection.messages);
 			const reason: DeclineReason | undefined =
-				current.length >= MAX_RETAINED_ENTRIES
+				current.length >= limits.maxEntries
 					? "entry-cap"
 					: current.reduce((sum, entry) => sum + entry.bytes, 0) + bytes >
-						  MAX_RETAINED_BYTES
+						  limits.maxBytes
 						? "byte-cap"
 						: undefined;
 			if (reason) {

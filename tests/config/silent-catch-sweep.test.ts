@@ -807,7 +807,7 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		silent: 41,
 		identities: "e9b67108c56f3dcf",
 		reason: SHARP_DID_SAVE,
-	}, // :239, :356, :385, :1161, :1761, :2018, :2316, :2350, :2586, :2759, :2878, :3607, :3667, :3701, :4134, :4713, :4963, :5092, :5155, :5166, :5212, :5301, :5326, :5351, :5645, :5708, :6063, :6087, :6252, :6329, :6348, :7890, :8475, :8707, :8775, :8897, :8991, :9051, :9288, :9415, :9788, :9839
+	}, // :280, :397, :426, :1251, :1914, :2172, :2470, :2504, :2740, :2916, :3035, :3826, :4037, :4094, :4532, :5127, :5526, :5589, :5600, :5657, :5767, :5771, :5794, :6087, :6150, :6516, :6540, :6860, :6940, :6959, :8606, :9193, :9429, :9497, :9618, :9712, :9772, :10003, :10132, :10517, :10572
 	"clients/lsp/jvm-runtime.ts": {
 		silent: 1,
 		identities: "53f0ed4e5a760b9e",
@@ -819,10 +819,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	// #5689 changes the global lookup arguments in the existing fallback;
 	// the same eight handlers remain, with no new silent handler admitted.
 	"clients/lsp/launch.ts": {
-		silent: 8,
-		identities: "4fee9037ac58efe8",
+		silent: 5,
+		identities: "cd4b860e88e687cc",
 		reason: PRE_RULE,
-	}, // :244, :564, :942, :948, :1199, :1424, :1435, :1446
+	}, // #5699 removes stopLSP and its three silent handlers.
 	"clients/lsp/lombok.ts": {
 		silent: 6,
 		identities: "a076d98b1826881f",
@@ -834,12 +834,14 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :57, :79
 	"clients/lsp/server.ts": {
-		silent: 30,
+		silent: 27,
+		// 30 -> 27 (#5814): the three `stat` catches of the extension-bounded walk
+		// and the agent-level marker read fold onto the shared marker probe.
 		// 28 -> 30 (#4914): `findEffectTsgoLsp` answers `undefined` for an absent or
 		// unreadable `@effect/tsgo` manifest and skips a missing bin candidate, the
 		// same shape as `findNativeTypeScriptLsp`'s probe; either way the launch
 		// falls back to the native `tsc`, whose own session-start line names it.
-		identities: "b84df3748a14a0b7",
+		identities: "a05c43eae73a9dc1",
 		reason: PRE_RULE,
 	}, // :223, :377, :890, :921, :1150, :1350, :1483, :1615, :1806, :1953, :1975, :2306, :2385, :2400, :2414, :2431, :2449, :2481, :2508, :2521, :2601, :2613, :2634, :2659, :2700, :2714, :2928, :2936, :2966, :3610
 	"clients/lsp/service-singleton.ts": {

@@ -4,6 +4,8 @@
  * Environment variables:
  *   PI_LENS_LOG_RETENTION_DAYS - Days to keep logs (default: 7)
  *   PI_LENS_MAX_LOG_SIZE_MB    - Max size before rotation (default: 10)
+ *   Both take a positive integer, or 0 / off / unlimited for no limit; an
+ *   unusable value falls back to the default and is named in the report.
  *
  * Scope:
  *   - ~/.pi-lens/*.log (every global log — see getManagedLogFiles())
@@ -39,7 +41,11 @@ import {
 	createProjectDataDirRootProbe,
 	projectDataBase,
 } from "./file-utils.js";
-import { getMaxLogSizeMB } from "./log-rotation-limits.js";
+import {
+	getLogLimit,
+	UNLIMITED,
+	unusableLogLimitEnv,
+} from "./log-rotation-limits.js";
 import { classifyIpcSocketName, probeIpcSocketListener } from "./mcp/ipc.js";
 import { getRegisteredLogFiles } from "./ndjson-logger.js";
 import { realIsPidAlive } from "./pid-liveness.js";
@@ -149,16 +155,20 @@ const PROJECT_DATA_ORPHAN_RETENTION_DAYS = 30;
 interface LogCleanupConfig {
 	retentionDays: number;
 	maxSizeMB: number;
+	/** Environment values that were unusable and replaced by their default. */
+	invalid: string[];
 }
 
 function getConfig(): LogCleanupConfig {
 	return {
-		retentionDays: Math.max(
-			1,
-			Number.parseInt(process.env.PI_LENS_LOG_RETENTION_DAYS ?? "7", 10) || 7,
-		),
-		maxSizeMB: getMaxLogSizeMB(),
+		retentionDays: getLogLimit("retentionDays"),
+		maxSizeMB: getLogLimit("maxSizeMB"),
+		invalid: unusableLogLimitEnv(),
 	};
+}
+
+function describeLimit(value: number, unit: string): string {
+	return value === UNLIMITED ? "unlimited" : `${value}${unit}`;
 }
 
 function getFileAgeDays(filePath: string): number {
@@ -467,12 +477,15 @@ export async function runLogCleanup(
 	cleaned: number;
 	rotated: number;
 	report: string;
+	/** Unusable limit variables that fell back to their default. */
+	invalid: string[];
 }> {
 	const config = getConfig();
 	const results = {
 		cleaned: 0,
 		rotated: 0,
 		report: "",
+		invalid: config.invalid,
 	};
 
 	const sweeps: RetentionSweepResult[] = [];
@@ -522,10 +535,15 @@ export async function runLogCleanup(
 		);
 	}
 
+	const limits = `retention: ${describeLimit(config.retentionDays, "d")}, maxSize: ${describeLimit(config.maxSizeMB, "MB")}`;
+	const ignored =
+		config.invalid.length > 0
+			? `; ignored unusable ${config.invalid.join(", ")} (use a positive integer, or 0/off/unlimited)`
+			: "";
 	results.report =
 		parts.length > 0
-			? `log_cleanup: removed ${parts.join(", ")} (retention: ${config.retentionDays}d, maxSize: ${config.maxSizeMB}MB)`
-			: `log_cleanup: no cleanup needed (retention: ${config.retentionDays}d, maxSize: ${config.maxSizeMB}MB)`;
+			? `log_cleanup: removed ${parts.join(", ")} (${limits}${ignored})`
+			: `log_cleanup: no cleanup needed (${limits}${ignored})`;
 
 	return results;
 }

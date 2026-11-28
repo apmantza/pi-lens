@@ -1,3 +1,4 @@
+import { LSP_SERVERS } from "../../clients/lsp/server.js";
 /**
  * #1153 — the orphan reaper's fire-and-forget enumeration/kill spawns must be
  * `.unref()`'d (child handle AND piped stdio) so a completed one-shot
@@ -139,7 +140,7 @@ describe("instance-reaper: fire-and-forget spawns are unref'd (#1153)", () => {
 	it("sweepUntrackedOrphans unrefs the enumerateManagedProcesses child + stdout", async () => {
 		// Guaranteed ≥1 enumeration spawn on every session_start when the
 		// registry is enabled (the Windows-guaranteed-PowerShell case in #1153).
-		await sweepUntrackedOrphans();
+		await sweepUntrackedOrphans({ getServers: async () => LSP_SERVERS });
 		expectAllChildrenUnrefd();
 	});
 
@@ -170,7 +171,7 @@ describe("instance-reaper: fire-and-forget spawns are unref'd (#1153)", () => {
 
 	it("does not spawn (nothing to unref) when the registry is disabled", async () => {
 		h.state.enabled = false;
-		await sweepUntrackedOrphans();
+		await sweepUntrackedOrphans({ getServers: async () => LSP_SERVERS });
 		await sweepOrphans();
 		expect(h.spawned).toHaveLength(0);
 	});

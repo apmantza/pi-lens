@@ -450,6 +450,8 @@ Thanks goes to these wonderful people:
     <tr>
       <td align="center" valign="top" width="14.28%"><a href="https://etcherfx.dev/"><img src="https://avatars.githubusercontent.com/u/96310503?v=4" width="100px;" alt=""/><br /><sub><b>EtcherFX </b></sub></a><br /><a href="#bug-etcherfx" title="Bug reports">🐛</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/carhartl"><img src="https://avatars.githubusercontent.com/u/21918?v=4" width="100px;" alt=""/><br /><sub><b>Klaus Hartl</b></sub></a><br /><a href="#ideas-carhartl" title="Ideas & Planning">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Lyapsus"><img src="https://avatars.githubusercontent.com/u/37628546?v=4" width="100px;" alt=""/><br /><sub><b>Yakov Till</b></sub></a><br /><a href="#code-Lyapsus" title="Code">💻</a> <a href="#bug-Lyapsus" title="Bug reports">🐛</a> <a href="#ideas-Lyapsus" title="Ideas & Planning">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/CloudedQuartz"><img src="https://avatars.githubusercontent.com/u/73547066?v=4" width="100px;" alt=""/><br /><sub><b>Ayan Pande</b></sub></a><br /><a href="#bug-CloudedQuartz" title="Bug reports">🐛</a> <a href="#ideas-CloudedQuartz" title="Ideas & Planning">🤔</a></td>
     </tr>
   </tbody>
 </table>

@@ -4,8 +4,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createLSPClient } from "../../../clients/lsp/client.js";
-import { launchLSP, stopLSP } from "../../../clients/lsp/launch.js";
+import {
+	killProcessTree,
+	createLSPClient,
+} from "../../../clients/lsp/client.js";
+import { launchLSP } from "../../../clients/lsp/launch.js";
 import { removeTempDirSync } from "../test-utils.js";
 
 // Bound optional toolchain discovery; this smoke must never trigger a download
@@ -39,7 +42,7 @@ afterEach(async () => {
 		client = undefined;
 	}
 	if (serverProcess) {
-		await stopLSP(serverProcess);
+		await killProcessTree(serverProcess.process, serverProcess.pid);
 		serverProcess = undefined;
 	}
 	if (root) {

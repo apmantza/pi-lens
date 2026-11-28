@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { PathKeyedMap } from "../../path-keyed-map.js";
+import { withMessageIds } from "../../finding-identity.js";
 import { isWithinIdentity, normalizeMapKey } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { truncatedByOutputCap } from "../../spawn-output-cap.js";
@@ -91,7 +92,7 @@ ${line.trim()}`;
 		const severity =
 			level === "ERROR" ? "error" : level === "WARNING" ? "warning" : "info";
 		diagnostics.push({
-			id: `helm-lint-${diagnostics.length + 1}-${level.toLowerCase()}`,
+			id: `helm-lint-${level.toLowerCase()}`,
 			message: location.message,
 			filePath: location.filePath,
 			line: location.line,
@@ -103,7 +104,8 @@ ${line.trim()}`;
 			fixable: false,
 		});
 	}
-	return diagnostics;
+	// After the loop: a message is complete only once its continuations folded.
+	return withMessageIds(diagnostics);
 }
 
 function failedResult(kind: string, message: string): RunnerResult {

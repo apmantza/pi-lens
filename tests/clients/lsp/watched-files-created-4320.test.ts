@@ -24,11 +24,14 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createLSPClient } from "../../../clients/lsp/client.js";
+import {
+	killProcessTree,
+	createLSPClient,
+} from "../../../clients/lsp/client.js";
 import { writeFileAtomicAsync } from "../../../clients/atomic-write.js";
 import { noteAtomicReplace } from "../../../clients/path-birth.js";
 import type { launchLSP } from "../../../clients/lsp/launch.js";
-import { stopLSP } from "../../../clients/lsp/launch.js";
+
 import { spawnFakeLspServer } from "../../support/fake-lsp-server.js";
 import { setupTestEnvironment, useTrackedTempDirs } from "../test-utils.js";
 
@@ -109,7 +112,7 @@ describe("didChangeWatchedFiles type for an opened file (#4320)", () => {
 			/* ignore */
 		}
 		try {
-			if (proc) await stopLSP(proc);
+			if (proc) await killProcessTree(proc.process, proc.pid);
 		} catch {
 			/* ignore */
 		}

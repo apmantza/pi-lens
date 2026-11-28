@@ -1,3 +1,4 @@
+import type { LspOrphanProcess } from "./server-traits.js";
 /**
  * LSP Server Definitions for pi-lens
  *
@@ -607,9 +608,8 @@ async function nearestNonExcludedFallbackRoot(
 	for (const current of walkUpDirs(startDir, { spelling: true })) {
 		if (!(await isExcludedLspRoot(current, gitBoundaries))) {
 			nearestAllowed ??= current;
-			for (const marker of FALLBACK_PROJECT_MARKERS) {
-				if (await markerExists(current, marker)) return current;
-			}
+			if (await markerExists(current, ...FALLBACK_PROJECT_MARKERS))
+				return current;
 		}
 		if (normalizeEphemeralMapKey(current) === stopDir) break;
 	}
@@ -660,6 +660,9 @@ export interface LSPSpawnOptions {
 }
 
 export interface LSPServerInfo {
+	/** Command-line markers and OS images for the ownership-gated orphan scan. */
+	orphanProcess?: LspOrphanProcess;
+
 	id: string;
 	name: string;
 	extensions: readonly string[];
@@ -1849,6 +1852,7 @@ function rubyBinCandidates(baseName: string): string[] {
 type InitializationConfig = Record<string, unknown>;
 
 interface InteractiveServerSpec {
+	orphanProcess: NonNullable<LSPServerInfo["orphanProcess"]>;
 	id: string;
 	name: string;
 	extensions: readonly string[];
@@ -1875,6 +1879,7 @@ interface InteractiveServerSpec {
 
 function createInteractiveServer(spec: InteractiveServerSpec): LSPServerInfo {
 	return {
+		orphanProcess: spec.orphanProcess,
 		id: spec.id,
 		name: spec.name,
 		extensions: spec.extensions,
@@ -2009,9 +2014,7 @@ export async function declinesProjectlessRoot(
 	for (let visited = 0; visited < PROJECT_FILE_SEARCH_MAX_DIRS; visited++) {
 		const dir = queue.shift();
 		if (dir === undefined) break;
-		for (const marker of markers) {
-			if (await markerExists(dir, marker)) return false;
-		}
+		if (await markerExists(dir, ...markers)) return false;
 		for (const entry of await readDirEntriesSafeAsync(dir)) {
 			if (visited + queue.length + 1 >= PROJECT_FILE_SEARCH_MAX_DIRS) break;
 			if (entry.isDirectory() && !isExcludedDirName(entry.name)) {
@@ -2066,25 +2069,29 @@ function markerProbeDir(dir: string, pattern: string): string {
 		: dir;
 }
 
-async function markerExists(dir: string, pattern: string): Promise<boolean> {
+/** One marker probe's answer; `denied` is the line to log when it is read. */
+type MarkerProbe = { found: boolean; denied?: string };
+
+/** Never rejects, so a probe nobody reads settles on its own. */
+async function probeMarker(dir: string, pattern: string): Promise<MarkerProbe> {
 	if (!pattern.includes("*")) {
 		try {
 			await stat(path.join(dir, pattern));
-			return true;
+			return { found: true };
 		} catch (err) {
-			if (isPermissionFsError(err)) {
-				logSessionStart(
-					`lsp root marker skipped: permission error stat ${path.join(dir, pattern)}`,
-				);
-			}
-			return false;
+			return {
+				found: false,
+				...(isPermissionFsError(err) && {
+					denied: `lsp root marker skipped: permission error stat ${path.join(dir, pattern)}`,
+				}),
+			};
 		}
 	}
 
 	const normalized = toPosix(pattern);
 	const slash = normalized.lastIndexOf("/");
 	const basenamePattern = slash >= 0 ? normalized.slice(slash + 1) : normalized;
-	if (!basenamePattern) return false;
+	if (!basenamePattern) return { found: false };
 	const targetDir = markerProbeDir(dir, normalized);
 	try {
 		const entries = await readdir(targetDir, { withFileTypes: true });
@@ -2092,15 +2099,45 @@ async function markerExists(dir: string, pattern: string): Promise<boolean> {
 		// `Foo.csproj/` dir) is not a project file. Case-insensitive on win32 to
 		// match the filesystem (and the project ignore matcher), via the shared
 		// marker-glob helper.
-		return direntsHaveMarkerGlobMatch(entries, basenamePattern);
+		return { found: direntsHaveMarkerGlobMatch(entries, basenamePattern) };
 	} catch (err) {
-		if (isPermissionFsError(err)) {
-			logSessionStart(
-				`lsp root marker skipped: permission error read ${targetDir}`,
-			);
-		}
-		return false;
+		return {
+			found: false,
+			...(isPermissionFsError(err) && {
+				denied: `lsp root marker skipped: permission error read ${targetDir}`,
+			}),
+		};
 	}
+}
+
+/**
+ * The `patterns` present in `dir`, in list order. All probes start together and
+ * libuv's thread pool (4 by default) bounds how many run at once, so a slow
+ * filesystem is waited on fewer times than one marker at a time (#5814: 2855 ms
+ * for 130 serial stats on a stalled Windows runner). They are read in list
+ * order: a hit never waits on a later marker, and only a marker that was read
+ * logs its permission error.
+ */
+async function* markerHits(
+	dir: string,
+	patterns: readonly string[],
+): AsyncGenerator<string> {
+	const probes = patterns.map((pattern) => ({
+		pattern,
+		probe: probeMarker(dir, pattern),
+	}));
+	for (const { pattern, probe } of probes) {
+		const { found, denied } = await probe;
+		if (denied) logSessionStart(denied);
+		if (found) yield pattern;
+	}
+}
+
+async function markerExists(
+	dir: string,
+	...patterns: string[]
+): Promise<boolean> {
+	return !(await markerHits(dir, patterns).next()).done;
 }
 
 // --- Root Detection Helpers ---
@@ -2264,22 +2301,16 @@ export function NearestRoot(
 				probedDirs.push(...(stepRecords ?? unknownDirMtimeRecords(stepDirs)));
 
 				// Check exclude patterns — skip this dir (but keep walking up)
-				if (excludePatterns) {
-					let excluded = false;
-					for (const pattern of excludePatterns) {
-						if (await markerExists(currentDir, pattern)) {
-							excluded = true;
-							break;
-						}
-					}
-					if (excluded) continue;
-				}
+				if (
+					excludePatterns &&
+					(await markerExists(currentDir, ...excludePatterns))
+				)
+					continue;
 
 				// Check include patterns. Exact marker names stay cheap (`stat`), while
 				// glob markers like `*.csproj` match real project filenames (#201).
-				for (const pattern of includePatterns) {
+				for await (const pattern of markerHits(currentDir, includePatterns)) {
 					if (
-						(await markerExists(currentDir, pattern)) &&
 						(pattern !== ".git" ||
 							currentDir !== realpathOrResolve(os.tmpdir())) &&
 						!(await isExcludedLspRoot(currentDir))
@@ -3207,22 +3238,8 @@ async function findExtensionBoundedRoot(
 	// `start` is already the identity (inside the root) or the spelling the
 	// boundary is written in (a linked extension), so the climb takes it as is.
 	for (const currentDir of walkUpDirs(start, { spelling: true })) {
-		for (const pattern of configMarkers) {
-			try {
-				await stat(path.join(currentDir, pattern));
-				return currentDir;
-			} catch {
-				/* not found, try next marker */
-			}
-		}
-		for (const pattern of TS_TOOLING_MARKERS) {
-			try {
-				await stat(path.join(currentDir, pattern));
-				return currentDir;
-			} catch {
-				/* not found, try next marker */
-			}
-		}
+		if (await markerExists(currentDir, ...configMarkers, ...TS_TOOLING_MARKERS))
+			return currentDir;
 		// Stop at or beyond the extensions root — never walk into the
 		// pi-agent-wide scope.
 		const currentKey = normalizeEphemeralMapKey(path.resolve(currentDir));
@@ -3247,17 +3264,14 @@ async function classifyAgentLevelMarker(
 	const agentDir = path.dirname(extensionRootKey);
 	if (!agentDir || agentDir === extensionRootKey) return undefined;
 	const configMarkers = tsConfigMarkersForFile(file);
-	for (const pattern of [
+	// The config lists overlap; a repeat would log one refusal twice.
+	const markers = new Set([
 		...configMarkers,
 		...TS_CONFIG_MARKERS,
 		...TS_TOOLING_MARKERS,
-	]) {
-		try {
-			await stat(path.join(agentDir, pattern));
-			return configMarkers.includes(pattern) ? "config" : "other";
-		} catch {
-			/* not found, try next */
-		}
+	]);
+	for await (const pattern of markerHits(agentDir, [...markers])) {
+		return configMarkers.includes(pattern) ? "config" : "other";
 	}
 	return undefined;
 }
@@ -3391,6 +3405,10 @@ async function launchClassicTypeScript(
 }
 
 export const TypeScriptServer: LSPServerInfo = {
+	orphanProcess: {
+		names: ["typescript-language-server", "tsserver", "tsgo"],
+		images: ["node.exe", "tsgo.exe"],
+	},
 	id: "typescript",
 	idleEviction: "transparent",
 	role: "language",
@@ -3475,6 +3493,7 @@ export const TypeScriptServer: LSPServerInfo = {
 };
 
 export const DenoServer: LSPServerInfo = {
+	orphanProcess: { names: ["deno"], images: ["deno.exe"] },
 	id: "deno",
 	idleEviction: "transparent",
 	role: "language",
@@ -3523,6 +3542,10 @@ export function pyrightInitialization(
 }
 
 export const PythonServer: LSPServerInfo = {
+	orphanProcess: {
+		names: ["pyright", "basedpyright", "ty"],
+		images: ["node.exe", "pyright.exe", "basedpyright.exe", "ty.exe"],
+	},
 	id: "python",
 	idleEviction: "transparent",
 	role: "language",
@@ -3678,6 +3701,10 @@ export const PythonServer: LSPServerInfo = {
 };
 
 export const PythonJediServer: LSPServerInfo = {
+	orphanProcess: {
+		names: ["jedi-language-server"],
+		images: ["python.exe", "python3.exe", "jedi-language-server.exe"],
+	},
 	// One identity: `isJediCompileVerdictOutranked` matches `compile` rows by
 	// this id, so the rule and the registration cannot drift (#4638).
 	id: PYTHON_COMPILE_VERDICT_SERVER_ID,
@@ -3766,6 +3793,7 @@ export const PythonJediServer: LSPServerInfo = {
 };
 
 export const GoServer: LSPServerInfo = {
+	orphanProcess: { names: ["gopls"], images: ["gopls.exe"] },
 	id: "go",
 	idleEviction: "unmeasured",
 	role: "language",
@@ -4005,6 +4033,7 @@ function JavaWorkspaceRoot(): RootFunction {
 }
 
 export const RustServer: LSPServerInfo = {
+	orphanProcess: { names: ["rust-analyzer"], images: ["rust-analyzer.exe"] },
 	id: "rust",
 	idleEviction: "resident",
 	role: "language",
@@ -4049,6 +4078,10 @@ export const RustServer: LSPServerInfo = {
 };
 
 export const RubyServer: LSPServerInfo = {
+	orphanProcess: {
+		names: ["ruby-lsp", "solargraph", "rubocop"],
+		images: ["ruby.exe"],
+	},
 	id: "ruby",
 	idleEviction: "unmeasured",
 	role: "language",
@@ -4113,6 +4146,7 @@ export const RubyServer: LSPServerInfo = {
 // single binary and register the alternatives as siblings (cf. python/jedi).
 
 export const PHPServer: LSPServerInfo = {
+	orphanProcess: { names: ["intelephense"], images: ["node.exe"] },
 	id: "php",
 	idleEviction: "transparent",
 	role: "language",
@@ -4196,6 +4230,10 @@ function buildPsesArgs(bundleDir: string): string[] {
 }
 
 export const PowerShellServer: LSPServerInfo = {
+	orphanProcess: {
+		names: ["PowerShellEditorServices", "Start-EditorServices.ps1"],
+		images: ["pwsh.exe", "powershell.exe"],
+	},
 	id: "powershell",
 	idleEviction: "resident",
 	role: "language",
@@ -4223,6 +4261,10 @@ export const PowerShellServer: LSPServerInfo = {
 };
 
 export const CSharpServer: LSPServerInfo = {
+	orphanProcess: {
+		names: ["csharp-ls"],
+		images: ["csharp-ls.exe", "dotnet.exe"],
+	},
 	id: "csharp",
 	idleEviction: "unmeasured",
 	role: "language",
@@ -4258,6 +4300,10 @@ export const CSharpServer: LSPServerInfo = {
 };
 
 export const OmniSharpServer = createInteractiveServer({
+	orphanProcess: {
+		names: ["OmniSharp"],
+		images: ["OmniSharp.exe", "dotnet.exe"],
+	},
 	id: "omnisharp",
 	name: "OmniSharp",
 	executesProjectCode: true,
@@ -4272,6 +4318,10 @@ export const OmniSharpServer = createInteractiveServer({
 });
 
 export const FSharpServer: LSPServerInfo = {
+	orphanProcess: {
+		names: ["fsautocomplete"],
+		images: ["fsautocomplete.exe", "dotnet.exe"],
+	},
 	id: "fsharp",
 	idleEviction: "unmeasured",
 	role: "language",
@@ -4304,6 +4354,10 @@ export const FSharpServer: LSPServerInfo = {
 };
 
 export const JavaServer = createInteractiveServer({
+	orphanProcess: {
+		names: ["jdtls", "org.eclipse.equinox.launcher"],
+		images: ["java.exe", "jdtls.exe"],
+	},
 	id: "java",
 	name: "JDT Language Server",
 	executesProjectCode: true,
@@ -4322,6 +4376,10 @@ export const JavaServer = createInteractiveServer({
 });
 
 export const KotlinServer: LSPServerInfo = {
+	orphanProcess: {
+		names: ["kotlin-lsp", "kotlin-language-server"],
+		images: ["java.exe"],
+	},
 	id: "kotlin",
 	idleEviction: "resident",
 	role: "language",
@@ -4361,6 +4419,10 @@ export const KotlinServer: LSPServerInfo = {
  */
 export const GROOVY_LANGUAGE_SERVER_JAR_ENV = "GROOVY_LANGUAGE_SERVER_JAR";
 export const GroovyServer: LSPServerInfo = {
+	orphanProcess: {
+		names: ["groovy-language-server", "groovy-language-server-all"],
+		images: ["java.exe"],
+	},
 	id: "groovy",
 	idleEviction: "unmeasured",
 	role: "language",
@@ -4415,6 +4477,7 @@ export const GroovyServer: LSPServerInfo = {
 };
 
 export const LeanServer = createInteractiveServer({
+	orphanProcess: { names: ["lake", "lean"], images: ["lake.exe", "lean.exe"] },
 	id: "lean",
 	name: "Lean 4 Language Server",
 	extensions: KIND_EXTENSIONS.lean,
@@ -4432,6 +4495,7 @@ export const LeanServer = createInteractiveServer({
 });
 
 export const SwiftServer = createInteractiveServer({
+	orphanProcess: { names: ["sourcekit-lsp"], images: ["sourcekit-lsp.exe"] },
 	id: "swift",
 	name: "SourceKit-LSP",
 	executesProjectCode: true,
@@ -4444,6 +4508,7 @@ export const SwiftServer = createInteractiveServer({
 });
 
 export const DartServer = createInteractiveServer({
+	orphanProcess: { names: ["dart"], images: ["dart.exe"] },
 	id: "dart",
 	executesProjectCode: true,
 	name: "Dart Analysis Server",
@@ -4481,6 +4546,10 @@ function createTreeBinaryServer(spec: {
 	idleEviction?: "transparent" | "resident" | "unmeasured";
 }): LSPServerInfo {
 	return {
+		orphanProcess: {
+			names: [spec.binaryName],
+			images: [`${spec.binaryName}.exe`],
+		},
 		id: spec.id,
 		name: spec.name,
 		extensions: spec.extensions,
@@ -4541,6 +4610,7 @@ export const CppServer: LSPServerInfo = createTreeBinaryServer({
 });
 
 export const ZigServer: LSPServerInfo = {
+	orphanProcess: { names: ["zls"], images: ["zls.exe"] },
 	id: "zig",
 	executesProjectCode: true,
 	idleEviction: "unmeasured",
@@ -4562,6 +4632,13 @@ export const ZigServer: LSPServerInfo = {
 };
 
 export const HaskellServer = createInteractiveServer({
+	orphanProcess: {
+		names: ["haskell-language-server"],
+		images: [
+			"haskell-language-server-wrapper.exe",
+			"haskell-language-server.exe",
+		],
+	},
 	id: "haskell",
 	name: "Haskell Language Server",
 	executesProjectCode: true,
@@ -4573,6 +4650,10 @@ export const HaskellServer = createInteractiveServer({
 });
 
 export const ElixirServer = createInteractiveServer({
+	orphanProcess: {
+		names: ["elixir-ls", "language_server.sh", "ElixirLS"],
+		images: ["erl.exe", "elixir.exe"],
+	},
 	id: "elixir",
 	name: "ElixirLS",
 	executesProjectCode: true,
@@ -4583,6 +4664,7 @@ export const ElixirServer = createInteractiveServer({
 });
 
 export const ElixirExpertServer: LSPServerInfo = {
+	orphanProcess: { names: ["expert"], images: ["expert.exe", "erl.exe"] },
 	id: "expert",
 	idleEviction: "resident",
 	role: "language",
@@ -4607,6 +4689,7 @@ export const ElixirExpertServer: LSPServerInfo = {
 };
 
 export const GleamServer: LSPServerInfo = {
+	orphanProcess: { names: ["gleam"], images: ["gleam.exe"] },
 	id: "gleam",
 	idleEviction: "unmeasured",
 	role: "language",
@@ -4629,6 +4712,7 @@ export const GleamServer: LSPServerInfo = {
 };
 
 export const TinymistServer: LSPServerInfo = {
+	orphanProcess: { names: ["tinymist"], images: ["tinymist.exe"] },
 	id: "tinymist",
 	executesProjectCode: true,
 	idleEviction: "unmeasured",
@@ -4651,6 +4735,7 @@ export const TinymistServer: LSPServerInfo = {
 };
 
 export const MarksmanServer: LSPServerInfo = {
+	orphanProcess: { names: ["marksman"], images: ["marksman.exe"] },
 	id: "marksman",
 	idleEviction: "transparent",
 	role: "language",
@@ -4676,6 +4761,7 @@ export const MarksmanServer: LSPServerInfo = {
 };
 
 export const OCamlServer = createInteractiveServer({
+	orphanProcess: { names: ["ocamllsp"], images: ["ocamllsp.exe"] },
 	id: "ocaml",
 	executesProjectCode: true,
 	name: "ocamllsp",
@@ -4686,6 +4772,7 @@ export const OCamlServer = createInteractiveServer({
 });
 
 export const ClojureServer: LSPServerInfo = {
+	orphanProcess: { names: ["clojure-lsp"], images: ["clojure-lsp.exe"] },
 	id: "clojure",
 	executesProjectCode: true,
 	idleEviction: "transparent",
@@ -4709,6 +4796,7 @@ export const ClojureServer: LSPServerInfo = {
 };
 
 export const CueServer: LSPServerInfo = {
+	orphanProcess: { names: ["cue"], images: ["cue.exe"] },
 	id: "cue",
 	idleEviction: "unmeasured",
 	role: "language",
@@ -4729,6 +4817,7 @@ export const CueServer: LSPServerInfo = {
 };
 
 export const TerraformServer: LSPServerInfo = {
+	orphanProcess: { names: ["terraform-ls"], images: ["terraform-ls.exe"] },
 	id: "terraform",
 	executesProjectCode: true,
 	idleEviction: "unmeasured",
@@ -4752,6 +4841,7 @@ export const TerraformServer: LSPServerInfo = {
 };
 
 export const NixServer = createInteractiveServer({
+	orphanProcess: { names: ["nixd"], images: ["nixd.exe"] },
 	id: "nix",
 	executesProjectCode: true,
 	name: "nixd",
@@ -4762,6 +4852,7 @@ export const NixServer = createInteractiveServer({
 });
 
 export const BashServer: LSPServerInfo = {
+	orphanProcess: { names: ["bash-language-server"], images: ["node.exe"] },
 	id: "bash",
 	idleEviction: "transparent",
 	role: "language",
@@ -4842,6 +4933,7 @@ export { BUILTIN_SERVER_RUNNER_COVERS } from "./server-covers.js";
  * pair between a future shuck runner and this LSP is its own round.
  */
 export const ShuckServer: LSPServerInfo = createInteractiveServer({
+	orphanProcess: { names: ["shuck"], images: ["shuck.exe"] },
 	id: "shuck",
 	name: "Shuck",
 	extensions: [".zsh"],
@@ -4852,6 +4944,7 @@ export const ShuckServer: LSPServerInfo = createInteractiveServer({
 });
 
 export const FishServer: LSPServerInfo = {
+	orphanProcess: { names: ["fish-lsp"], images: ["node.exe"] },
 	id: "fish",
 	idleEviction: "transparent",
 	role: "language",
@@ -4872,6 +4965,10 @@ export const FishServer: LSPServerInfo = {
 };
 
 export const CMakeServer: LSPServerInfo = {
+	orphanProcess: {
+		names: ["cmake-language-server"],
+		images: ["python.exe", "python3.exe", "cmake-language-server.exe"],
+	},
 	id: "cmake",
 	executesProjectCode: true,
 	idleEviction: "unmeasured",
@@ -4895,6 +4992,7 @@ export const CMakeServer: LSPServerInfo = {
 };
 
 export const DockerServer: LSPServerInfo = {
+	orphanProcess: { names: ["docker-langserver"], images: ["node.exe"] },
 	id: "docker",
 	idleEviction: "transparent",
 	role: "language",
@@ -4943,6 +5041,10 @@ export const DockerServer: LSPServerInfo = {
  * declares no `managedToolId` (no installer entry and no automatic download).
  */
 export const DockerOfficialServer: LSPServerInfo = {
+	orphanProcess: {
+		names: ["docker-language-server"],
+		images: ["docker-language-server.exe"],
+	},
 	id: "docker-official",
 	idleEviction: "transparent",
 	role: "language",
@@ -4973,6 +5075,7 @@ export const DockerOfficialServer: LSPServerInfo = {
 };
 
 export const YamlServer: LSPServerInfo = {
+	orphanProcess: { names: ["yaml-language-server"], images: ["node.exe"] },
 	id: "yaml",
 	idleEviction: "transparent",
 	role: "language",
@@ -4998,6 +5101,10 @@ export const YamlServer: LSPServerInfo = {
 };
 
 export const JsonServer: LSPServerInfo = {
+	orphanProcess: {
+		names: ["vscode-json-language-server"],
+		images: ["node.exe"],
+	},
 	id: "json",
 	idleEviction: "transparent",
 	role: "language",
@@ -5030,6 +5137,10 @@ export const JsonServer: LSPServerInfo = {
 };
 
 export const HtmlServer: LSPServerInfo = {
+	orphanProcess: {
+		names: ["vscode-html-language-server"],
+		images: ["node.exe"],
+	},
 	id: "html",
 	idleEviction: "transparent",
 	role: "language",
@@ -5054,6 +5165,7 @@ export const HtmlServer: LSPServerInfo = {
 };
 
 export const TomlServer: LSPServerInfo = {
+	orphanProcess: { names: ["taplo"], images: ["taplo.exe"] },
 	id: "toml",
 	idleEviction: "unmeasured",
 	role: "language",
@@ -5076,6 +5188,7 @@ export const TomlServer: LSPServerInfo = {
 };
 
 export const PrismaServer: LSPServerInfo = {
+	orphanProcess: { names: ["prisma-language-server"], images: ["node.exe"] },
 	id: "prisma",
 	idleEviction: "transparent",
 	role: "language",
@@ -5111,6 +5224,7 @@ export const PrismaServer: LSPServerInfo = {
 // --- Web Framework & Styling Servers ---
 
 export const VueServer: LSPServerInfo = {
+	orphanProcess: { names: ["vue-language-server"], images: ["node.exe"] },
 	id: "vue",
 	executesProjectCode: true,
 	idleEviction: "unmeasured",
@@ -5177,6 +5291,10 @@ export const VueServer: LSPServerInfo = {
 };
 
 export const SvelteServer: LSPServerInfo = {
+	orphanProcess: {
+		names: ["svelteserver", "svelte-language-server"],
+		images: ["node.exe"],
+	},
 	id: "svelte",
 	executesProjectCode: true,
 	idleEviction: "resident",
@@ -5232,6 +5350,10 @@ export const SvelteServer: LSPServerInfo = {
 };
 
 export const CssServer: LSPServerInfo = {
+	orphanProcess: {
+		names: ["vscode-css-language-server"],
+		images: ["node.exe"],
+	},
 	id: "css",
 	idleEviction: "transparent",
 	role: "language",
@@ -5320,6 +5442,10 @@ function opengrepInitialization(root: string): Record<string, unknown> {
 }
 
 export const OpengrepServer: LSPServerInfo = {
+	orphanProcess: {
+		names: ["opengrep", "opengrep-core"],
+		images: ["opengrep.exe", "opengrep-core.exe"],
+	},
 	id: "opengrep",
 	idleEviction: "transparent",
 	role: "auxiliary",
@@ -5400,6 +5526,7 @@ const AST_GREP_EXTENSIONS: readonly string[] = Array.from(
 );
 
 export const AstGrepServer: LSPServerInfo = {
+	orphanProcess: { names: ["ast-grep"], images: ["ast-grep.exe"] },
 	id: "ast-grep",
 	idleEviction: "unmeasured",
 	role: "auxiliary",
@@ -5478,6 +5605,7 @@ export const AstGrepServer: LSPServerInfo = {
 const ZIZMOR_EXTENSIONS: readonly string[] = KIND_EXTENSIONS["yaml"];
 
 export const ZizmorServer: LSPServerInfo = {
+	orphanProcess: { names: ["zizmor"], images: ["zizmor.exe"] },
 	id: "zizmor",
 	idleEviction: "transparent",
 	role: "auxiliary",
@@ -5569,6 +5697,7 @@ function typosInitialization(
 }
 
 export const TyposServer: LSPServerInfo = {
+	orphanProcess: { names: ["typos-lsp"], images: ["typos-lsp.exe"] },
 	id: "typos",
 	idleEviction: "unmeasured",
 	role: "auxiliary",
@@ -5609,6 +5738,7 @@ export const TyposServer: LSPServerInfo = {
 // analyses the whole project graph, so it is rooted at the repository, like
 // the other auxiliaries. Findings are advisory in this cut.
 export const FallowServer: LSPServerInfo = {
+	orphanProcess: { names: ["fallow-lsp"], images: ["fallow-lsp.exe"] },
 	id: "fallow",
 	idleEviction: "unmeasured",
 	role: "auxiliary",

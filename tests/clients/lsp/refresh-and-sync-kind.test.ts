@@ -11,6 +11,7 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+	killProcessTree,
 	clientRequestWorkspaceDiagnostics,
 	closeDocument,
 	createLSPClient,
@@ -24,7 +25,7 @@ import {
 import { hashDiagnosticContent } from "../../../clients/lsp/diagnostic-binding.js";
 import { exceedsLspSyncLimits } from "../../../clients/lsp/content-limits.js";
 import { lineTextAt } from "../../../clients/lsp/content-scan.js";
-import { stopLSP } from "../../../clients/lsp/launch.js";
+
 import { normalizeMapKey } from "../../../clients/path-utils.js";
 import { spawnFakeLspServer } from "../../support/fake-lsp-server.js";
 import {
@@ -1894,7 +1895,7 @@ describe("negotiateSyncKind through the real createLSPClient init path (#1669 re
 			expect(change.text).toBe("const x = 1;\nconst y = 2;\n");
 		} finally {
 			await client.shutdown().catch(() => {});
-			await stopLSP(proc).catch(() => {});
+			await killProcessTree(proc.process, proc.pid).catch(() => {});
 		}
 	}, 15_000);
 
@@ -1963,7 +1964,7 @@ describe("negotiateSyncKind through the real createLSPClient init path (#1669 re
 			expect(client.getSentContent?.(filePath)).toBeUndefined();
 		} finally {
 			await client.shutdown().catch(() => {});
-			await stopLSP(proc).catch(() => {});
+			await killProcessTree(proc.process, proc.pid).catch(() => {});
 		}
 	}, 15_000);
 });
@@ -2009,7 +2010,7 @@ describe("#2065 fix round 1 F1: a crashed client deregisters from activeLspClien
 			expect(after.bytes).toBe(before.bytes);
 		} finally {
 			await client.shutdown().catch(() => {});
-			await stopLSP(proc).catch(() => {});
+			await killProcessTree(proc.process, proc.pid).catch(() => {});
 		}
 	}, 15_000);
 });

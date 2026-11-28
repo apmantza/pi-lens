@@ -231,6 +231,10 @@ merges, its `### Accepted residuals` lines join the same tracker under their
 seam. A known gap reopens as p2 when it turns material: a live wrong result,
 data loss, a hang, or a leak with no bound.
 
+A flake whose 3/p clean-run count is impractical joins the tracker the same way,
+with the numbers `docs/pi-lens-fixer.md` "Flaky tests" lists; it is never closed
+as fixed.
+
 **Ideas go on the tracker (user, 2026-10-31).** A rule candidate, research idea
 or optional slice that no lane will start is never filed as a p3 issue. It goes
 straight onto the pinned known-gaps tracker under its seam. On 2026-10-31 five
@@ -682,6 +686,9 @@ read the worst cell to route the round.
   passes and the regression test was red first.
 - `closes` vs `refs` follows delivery, not optimism; leftovers get an issue
   comment before anything closes.
+- A flake issue closes as fixed only when the comment that closes it quotes the
+  numbers `docs/pi-lens-fixer.md` "Flaky tests" lists, with a clean-run count of
+  at least 3/p; a green rerun alone does not close one.
 - After merging a `refs #N` PR, VERIFY the issue: read `gh issue view N
   --comments` and confirm a comment names the remainder. If the PR in fact
   satisfied every acceptance criterion, close N crediting the PR; if a
@@ -881,3 +888,6 @@ Each row cost a lane at least once; the prose above carries the record.
 | Acting on a routine's range claim ("lines N-M are stale") as one block | The residual-recheck routine called #4626 lines 402-403 superseded; only 403 was, and 402's gap is still live on master (2026-11-08). Check each line against master before editing a record from a routine report |
 | Verifying a store-parity fix against the claims, not the row states | #5302 verify r2 passed the two cases the PR claimed and missed a third row state the reference reader honours (past-EOF). `docs/pi-lens-reviewer.md` "Store-reader parity" |
 | Passing on a reviewer's prescribed remedy after checking only that its test went green | The PR-Synopsis F7 remedy kept a refresh through a failed run start. Its test counted comment edits and passed, while the refresh published the failed start's reset state, so every bot read no-review (PR-Synopsis #19 verify, 2026-11-05). A prescription is a hypothesis: the verify round probes the output it changes (the published record, the delivered finding), never a call count |
+| Opening a release bump PR without the highlights file | The 4.5.3 roll said READY with no `.changelog/highlights/4.5.3.md`, and CodeRabbit found it on #5818 after the land had started (2026-11-27). The roll's verdict now refuses READY until a well-formed highlights file exists ("Release roll", step 2) |
+| Writing a highlight from an entry's headline alone | The 4.5.3 bullet said injections repeat unchanged by default; the entry's own caps (64 entries by default) bound that, and the correction needed #5819 after the tag. Check each highlight clause against the full entry text, its caps and its opt-outs, before asking for approval |
+| Running a commit or push after a step that can fail, through a `;` or a newline | A `cd` into a removed worktree failed, and the commands after it ran in the main checkout; `git commit -am` reached the maintainer's uncommitted files and only a failing hook stopped it (2026-11-27). The orchestrator's command guard now refuses a commit, push, land or PR create after any `;` or newline break in the command |

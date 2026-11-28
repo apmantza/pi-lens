@@ -22,8 +22,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.hoisted(() => {
 	process.env.PI_LENS_LSP_SHUTDOWN_TIMEOUT_MS = "150";
 });
-import { createLSPClient } from "../../../clients/lsp/client.js";
-import { launchLSP, stopLSP } from "../../../clients/lsp/launch.js";
+import {
+	killProcessTree,
+	createLSPClient,
+} from "../../../clients/lsp/client.js";
+import { launchLSP } from "../../../clients/lsp/launch.js";
 import { spawnFakeLspServer } from "../../support/fake-lsp-server.js";
 import { removeTempDirSync } from "../test-utils.js";
 import { waitFor } from "../interleaving-kit.js";
@@ -70,7 +73,7 @@ describe("LSP Client Integration", () => {
 		}
 		if (proc) {
 			try {
-				await stopLSP(proc);
+				await killProcessTree(proc.process, proc.pid);
 			} catch {
 				/* ignore */
 			}
@@ -279,7 +282,7 @@ describe("LSP Client Integration — nested capability gates (#1971)", () => {
 				);
 			} finally {
 				await client.shutdown();
-				await stopLSP(proc);
+				await killProcessTree(proc.process, proc.pid);
 			}
 		},
 	);
@@ -374,7 +377,7 @@ describe("LSP Client Integration — nested capability gates (#1971)", () => {
 					);
 				} finally {
 					await client.shutdown();
-					await stopLSP(proc);
+					await killProcessTree(proc.process, proc.pid);
 				}
 			}
 		},
@@ -440,7 +443,7 @@ describe("LSP Client Integration — nested capability gates (#1971)", () => {
 					).toBe(sent);
 				} finally {
 					await client.shutdown();
-					await stopLSP(proc);
+					await killProcessTree(proc.process, proc.pid);
 				}
 			}
 		},
@@ -639,7 +642,7 @@ describe("LSP Client Integration — nested capability gates (#1971)", () => {
 						).toBe(testCase.sent);
 					} finally {
 						await filteredClient.shutdown();
-						await stopLSP(launched);
+						await killProcessTree(launched.process, launched.pid);
 					}
 				}
 			}
@@ -705,7 +708,7 @@ describe("LSP Client Integration — nested capability gates (#1971)", () => {
 				);
 			} finally {
 				await client.shutdown();
-				await stopLSP(proc);
+				await killProcessTree(proc.process, proc.pid);
 			}
 		},
 	);
@@ -768,7 +771,7 @@ describe("LSP Client Integration — UTF-8 position encoding (#269)", () => {
 			/* ignore */
 		}
 		try {
-			if (proc) await stopLSP(proc);
+			if (proc) await killProcessTree(proc.process, proc.pid);
 		} catch {
 			/* ignore */
 		}
@@ -826,7 +829,7 @@ describe("LSP Client Integration — stale navigation drop (#276)", () => {
 			/* ignore */
 		}
 		try {
-			if (proc) await stopLSP(proc);
+			if (proc) await killProcessTree(proc.process, proc.pid);
 		} catch {
 			/* ignore */
 		}
@@ -904,7 +907,7 @@ describe("LSP Client Integration — batched watched-files (#271)", () => {
 			/* ignore */
 		}
 		try {
-			if (proc) await stopLSP(proc);
+			if (proc) await killProcessTree(proc.process, proc.pid);
 		} catch {
 			/* ignore */
 		}
@@ -1062,7 +1065,7 @@ describe("LSP Client Integration — mutation-bridge fallback for server-initiat
 			/* ignore */
 		}
 		try {
-			if (proc) await stopLSP(proc);
+			if (proc) await killProcessTree(proc.process, proc.pid);
 		} catch {
 			/* ignore */
 		}
@@ -1581,7 +1584,7 @@ async function expectTimedOutProjectInfoReleased(
 			/* ignore */
 		}
 		try {
-			await stopLSP(proc);
+			await killProcessTree(proc.process, proc.pid);
 		} catch {
 			/* ignore */
 		}

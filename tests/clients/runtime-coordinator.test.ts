@@ -1,7 +1,15 @@
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	realpathSync,
+	rmSync,
+	symlinkSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Diagnostic } from "../../clients/dispatch/types.js";
 import {
 	admitBlockerReplay,
@@ -488,6 +496,73 @@ describe("RuntimeCoordinator", () => {
 		runtime.clearLspReadWarmState(filePath);
 		expect(runtime.shouldWarmLspOnRead(filePath)).toBe(true);
 	});
+
+	// lane: ubuntu unit tests (creating a symlink needs privilege on Windows).
+	describe.skipIf(process.platform === "win32")(
+		"per-file state keys a file by its path identity, not its spelling (shape 1)",
+		() => {
+			// RECURRENCE GUARDED: the coordinator's read-warm map and crash
+			// counters were plain Maps keyed by `path.resolve`, which keeps a link
+			// spelling apart from the real path (the #4689 PRE_4689 census row).
+			// The agent can read one file through a linked directory and through
+			// its real path in one session; each spelling then held its own entry.
+			let dir = "";
+			let realFile = "";
+			let linkFile = "";
+			beforeEach(() => {
+				dir = mkdtempSync(path.join(tmpdir(), "pi-lens-coord-identity-"));
+				mkdirSync(path.join(dir, "real"));
+				symlinkSync(path.join(dir, "real"), path.join(dir, "link"), "dir");
+				realFile = path.join(dir, "real", "f.ts");
+				linkFile = path.join(dir, "link", "f.ts");
+				writeFileSync(realFile, "export {};\n");
+			});
+			afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+			it("treats a read warmed through a link as warming for the real path", () => {
+				const runtime = new RuntimeCoordinator();
+				runtime.markLspReadWarmStarted(linkFile);
+				expect(runtime.shouldWarmLspOnRead(realFile)).toBe(false);
+				runtime.markLspReadWarmCompleted(realFile);
+				expect(runtime.shouldWarmLspOnRead(linkFile)).toBe(false);
+				runtime.clearLspReadWarmState(linkFile);
+				expect(runtime.shouldWarmLspOnRead(realFile)).toBe(true);
+			});
+
+			it("warms the real path after the age bound when the link is retargeted mid-warm", () => {
+				// RECURRENCE GUARDED: the warm entry is keyed by identity at start and
+				// again at completion. A link retargeted between the two writes left
+				// the start entry as `warming` under the old identity, and
+				// `shouldWarmLspOnRead` answered false for it with no age bound, so the
+				// file was never read-warmed again this session.
+				const otherDir = path.join(dir, "other");
+				mkdirSync(otherDir);
+				writeFileSync(path.join(otherDir, "f.ts"), "export {};\n");
+				const runtime = new RuntimeCoordinator();
+				vi.useFakeTimers({ toFake: ["Date"] });
+				try {
+					runtime.markLspReadWarmStarted(linkFile);
+					unlinkSync(path.join(dir, "link"));
+					symlinkSync(otherDir, path.join(dir, "link"), "dir");
+					runtime.markLspReadWarmCompleted(linkFile);
+					expect(runtime.shouldWarmLspOnRead(linkFile)).toBe(false);
+					vi.setSystemTime(Date.now() + 121_000);
+					expect(runtime.shouldWarmLspOnRead(realFile)).toBe(true);
+				} finally {
+					vi.useRealTimers();
+				}
+			});
+
+			it("counts one file's pipeline crashes as one file across spellings", () => {
+				const runtime = new RuntimeCoordinator();
+				runtime.formatPipelineCrashNotice(linkFile, new Error("boom"));
+				runtime.formatPipelineCrashNotice(realFile, new Error("boom"));
+				const entries = runtime.getCrashEntries();
+				expect(entries).toHaveLength(1);
+				expect(entries[0]?.[1]).toBe(2);
+			});
+		},
+	);
 
 	describe("telemetry model/provider identity (#1448)", () => {
 		it("exposes the raw model id separately from the combined display string", () => {

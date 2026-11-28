@@ -479,6 +479,40 @@ it(
 	TEST_BUDGET_MS,
 );
 
+it(
+	"warns at session start when a log-limit variable holds an unusable value (#5771)",
+	async () => {
+		// Nothing is old enough to sweep, so the only thing to report is the
+		// variable the user wrote and the default that replaced it.
+		vi.stubEnv("PI_LENS_LOG_RETENTION_DAYS", "seven");
+		const { env, notify } = await runSessionStart("quick");
+		try {
+			await waitForCondition(
+				() => notify.mock.calls,
+				(calls) =>
+					calls.some(
+						([message, level]) =>
+							level === "warning" &&
+							String(message).includes(
+								"ignored unusable PI_LENS_LOG_RETENTION_DAYS=seven",
+							),
+					),
+				{ timeoutMs: HEAVY_IO_TIMEOUT_MS },
+			);
+			expect(notify).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"ignored unusable PI_LENS_LOG_RETENTION_DAYS=seven",
+				),
+				"warning",
+			);
+		} finally {
+			vi.unstubAllEnvs();
+			await env.cleanup();
+		}
+	},
+	TEST_BUDGET_MS,
+);
+
 // #4352: the defer table is keyed by runTask names. A key that matches no task
 // ("ast-grep exports" for "ast-grep-exports") defers nothing, so the export scan
 // started on the next tick and froze the TUI on cold boot. One setImmediate turn
