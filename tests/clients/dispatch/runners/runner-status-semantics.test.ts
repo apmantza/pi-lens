@@ -358,6 +358,16 @@ describe("runner status/semantic edge cases", () => {
 			await import("../../../../clients/dispatch/runners/rubocop.js")
 		).default;
 		const env = setupTestEnvironment("pi-lens-rb-outcome-");
+		// #5823: the second runner.run below reads the first run's cached
+		// "available" verdict and re-checks spawnability by walking the REAL
+		// PATH (isSpawnableCommand) instead of re-probing `rubocop --version`.
+		// On a host with rubocop installed that walk hits, the re-probe spawn is
+		// skipped, and this case's positionally queued mocks shift by one, so
+		// the SIGTERM answer lands on the wrong call and the run reads clean.
+		// Pin PATH to the fixture (which holds no rubocop) so the walk misses
+		// deterministically and both runs re-probe.
+		const savedPath = process.env.PATH;
+		process.env.PATH = env.tmpDir;
 		try {
 			const filePath = path.join(env.tmpDir, "main.rb");
 			fs.writeFileSync(filePath, "puts 'hi'\n");
@@ -397,6 +407,8 @@ describe("runner status/semantic edge cases", () => {
 			const signaled = await runner.run(ctx(filePath, env.tmpDir) as never);
 			expect(signaled.status).toBe("skipped");
 		} finally {
+			if (savedPath === undefined) delete process.env.PATH;
+			else process.env.PATH = savedPath;
 			env.cleanup();
 		}
 	});
