@@ -4,11 +4,12 @@ import {
 	realpathSync,
 	rmSync,
 	symlinkSync,
+	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Diagnostic } from "../../clients/dispatch/types.js";
 import {
 	admitBlockerReplay,
@@ -526,6 +527,30 @@ describe("RuntimeCoordinator", () => {
 				expect(runtime.shouldWarmLspOnRead(linkFile)).toBe(false);
 				runtime.clearLspReadWarmState(linkFile);
 				expect(runtime.shouldWarmLspOnRead(realFile)).toBe(true);
+			});
+
+			it("warms the real path after the age bound when the link is retargeted mid-warm", () => {
+				// RECURRENCE GUARDED: the warm entry is keyed by identity at start and
+				// again at completion. A link retargeted between the two writes left
+				// the start entry as `warming` under the old identity, and
+				// `shouldWarmLspOnRead` answered false for it with no age bound, so the
+				// file was never read-warmed again this session.
+				const otherDir = path.join(dir, "other");
+				mkdirSync(otherDir);
+				writeFileSync(path.join(otherDir, "f.ts"), "export {};\n");
+				const runtime = new RuntimeCoordinator();
+				vi.useFakeTimers({ toFake: ["Date"] });
+				try {
+					runtime.markLspReadWarmStarted(linkFile);
+					unlinkSync(path.join(dir, "link"));
+					symlinkSync(otherDir, path.join(dir, "link"), "dir");
+					runtime.markLspReadWarmCompleted(linkFile);
+					expect(runtime.shouldWarmLspOnRead(linkFile)).toBe(false);
+					vi.setSystemTime(Date.now() + 121_000);
+					expect(runtime.shouldWarmLspOnRead(realFile)).toBe(true);
+				} finally {
+					vi.useRealTimers();
+				}
 			});
 
 			it("counts one file's pipeline crashes as one file across spellings", () => {

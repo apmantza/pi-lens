@@ -3492,7 +3492,6 @@ export class RuntimeCoordinator {
 	shouldWarmLspOnRead(filePath: string, maxAgeMs = 120_000): boolean {
 		const state = this._lspReadWarmState.get(filePath);
 		if (!state) return true;
-		if (state.status === "warming") return false;
 		return Date.now() - state.ts > maxAgeMs;
 	}
 
