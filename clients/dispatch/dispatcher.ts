@@ -644,6 +644,8 @@ export interface RunnerLatency {
 	claimSource?: RunnerClaimSource;
 	unconfirmedServerIds?: readonly string[];
 	deferredServerIds?: readonly string[];
+	/** #5812 r5: the runner's own `answeredServerIds`. */
+	answeredServerIds?: readonly string[];
 	/** #4403: the runner's own `primaryUnavailableCause`. */
 	primaryUnavailableCause?: PrimaryUnavailableCause;
 	/** #4403: the runner's own `disabledPrimaryServerIds`. */
@@ -1513,6 +1515,9 @@ async function runGroup(
 			}),
 			...(result.deferredServerIds !== undefined && {
 				deferredServerIds: result.deferredServerIds,
+			}),
+			...(result.answeredServerIds !== undefined && {
+				answeredServerIds: result.answeredServerIds,
 			}),
 			...(result.primaryUnavailableCause !== undefined && {
 				primaryUnavailableCause: result.primaryUnavailableCause,

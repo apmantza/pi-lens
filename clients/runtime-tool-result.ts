@@ -1609,7 +1609,7 @@ function publishInlineVerdict(args: {
 		// error the file still holds, so it speaks for the file's pending
 		// cascade errors; a run it did not answer for speaks for none.
 		if (inlineVerdictApplied)
-			noteCascadeWrite(filePath, result.verdictRunnerIds ?? []);
+			noteCascadeWrite(filePath, result.verdictSourceIds ?? []);
 		// #5020: this write's clean verdict on `filePath` also speaks for the rows
 		// OTHER files' records hold against it. A chart-wide runner reports
 		// `other-b.yaml` while `deploy-a.yaml` is written, so the row sits in

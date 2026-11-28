@@ -769,7 +769,7 @@ export function forgetCascadePendingNeighbor(
 	pendingNeighbors.delete(key);
 }
 
-// #5804: the runners that reached a verdict on each file's last write. A
+// #5804: the sources that reached a verdict on each file's last write. A
 // note lives until that file's next write is recorded. Bounded like the
 // record: an evicted note reads as "no answer", which keeps the file's errors.
 const answeredWrites = new BoundedFifoMap<string, readonly string[]>(
@@ -777,8 +777,9 @@ const answeredWrites = new BoundedFifoMap<string, readonly string[]>(
 );
 
 /**
- * #5804: note a write of `filePath` with the runners that reached a verdict
- * on it (`PipelineResult.verdictRunnerIds`). A `tool_result` write notes
+ * #5804: note a write of `filePath` with the sources that reached a verdict
+ * on it (`PipelineResult.verdictSourceIds`: the verdict runners, and the
+ * auxiliary servers that answered inside them, #5812 r5). A `tool_result` write notes
  * none where it records its turn-state range (#5812 F2), so a write that
  * never dispatches, or a crash, timeout, abort or superseded run, leaves the
  * file unanswered; the run that publishes a verdict notes its runners. A
@@ -788,12 +789,12 @@ const answeredWrites = new BoundedFifoMap<string, readonly string[]>(
  */
 export function noteCascadeWrite(
 	filePath: string,
-	verdictRunnerIds: readonly string[],
+	verdictSourceIds: readonly string[],
 ): void {
 	const key = normalizeMapKey(filePath);
 	answeredWrites.delete(key);
-	if (verdictRunnerIds.length > 0)
-		answeredWrites.set(key, [...verdictRunnerIds]);
+	if (verdictSourceIds.length > 0)
+		answeredWrites.set(key, [...verdictSourceIds]);
 }
 
 /**
@@ -805,7 +806,7 @@ export const PRIMARY_SERVER_SOURCES: readonly string[] = ["lsp"];
 
 /**
  * #5804: turn end, for a file pi wrote this turn. The write's own dispatch
- * reports what is left of the errors its verdict runners raise, so the record
+ * reports what is left of the errors its verdict sources raise, so the record
  * forgets those rows, by the per-row rule of
  * {@link forgetCascadePendingNeighbor} (#5812 F1: an `lsp` answer says nothing
  * about an `opengrep` row). Returns true when the primary server answered

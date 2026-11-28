@@ -1022,6 +1022,32 @@ export function verdictRunnerIds(
 	);
 }
 
+/**
+ * #5812 r5: the sources this run's verdict speaks for, in the vocabulary a
+ * stored row's `tool` uses (`inlineBlockerSourceOf`): each verdict runner's
+ * id, and the auxiliary servers that runner's touch says answered these
+ * bytes (`answeredServerIds`). An auxiliary's rows carry its server id as
+ * their tool (`retagAuxiliaryDiagnostics`), and it answers inside the `lsp`
+ * runner, so no runner id ever names it.
+ */
+export function verdictSourceIds(
+	result: Pick<
+		DispatchResult,
+		"inconclusiveSources" | "editScopedRunnerIds" | "latencyReport"
+	>,
+): string[] {
+	const verdict = new Set(verdictRunnerIds(result));
+	return [
+		...new Set(
+			(result.latencyReport?.runners ?? []).flatMap((runner) =>
+				verdict.has(runner.runnerId)
+					? [runner.runnerId, ...(runner.answeredServerIds ?? [])]
+					: [],
+			),
+		),
+	];
+}
+
 // --- Dispatch Context ---
 
 /**

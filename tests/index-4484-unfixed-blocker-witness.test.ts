@@ -375,7 +375,13 @@ const boundary = vi.hoisted(() => {
 					);
 					lsp.onHold?.();
 				});
-			return { diags: lsp.diagnose(content) };
+			// #5812 r5: a server with `diag` answers these bytes, which the real
+			// service names in `answeredServerIds` on every collecting touch
+			// (tests/scripts/touch-result.test.ts pins it).
+			return {
+				diags: lsp.diagnose(content),
+				...(ag.diag && { answeredServerIds: ["ast-grep"] }),
+			};
 		},
 	};
 	const helm = { stdout: "", lintCalls: 0 };
@@ -4009,6 +4015,40 @@ describe("#5790 witness: a cascade note with no finding does not hold the commit
 			forgetCascadePendingNeighbor(neighbour);
 		}
 		await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+		await fixAndDrain(s);
+	}, 120_000);
+
+	// Recurrence (#5812 round 5, verify V1): the cascade recorded an ast-grep
+	// row on the neighbour, the agent rewrote the neighbour without the
+	// finding, and the ast-grep server answered that rewrite. The row stayed
+	// through every later write and held the commit: the write note named
+	// only dispatch runners, and no runner is called `ast-grep`.
+	it("retires a neighbour's pending auxiliary row once that auxiliary answers its rewrite", async () => {
+		boundary.lsp.enabled = true;
+		boundary.ag.diag = true;
+		const s = await openSession("cz", TARGET, TARGET_FIXED);
+		removeNeighbourOnCleanup();
+		const neighbour = path.join(tmpDir, NEIGHBOUR);
+		fs.writeFileSync(
+			neighbour,
+			NEIGHBOUR_FIXED + "export function f(): unknown {\n\treturn c;\n}\n",
+		);
+		const pendingTools = () =>
+			listCascadePendingNeighbors()
+				.filter((e) => e.filePath === neighbour)
+				.flatMap((e) => e.errors.map((error) => error.tool));
+		try {
+			await s.write(TARGET_FIXED + "export const d = 4;\n");
+			expect(await s.endTurn()).toContain(CASCADE_ERRORS);
+			expect(pendingTools()).toEqual(["ast-grep"]);
+			expect(await s.commitReason()).toContain(HOLD_REMEDY);
+			await s.writeOther(NEIGHBOUR, NEIGHBOUR_FIXED);
+			await s.endTurn();
+			expect(pendingTools()).toEqual([]);
+			expect(await s.commitReason()).toBe("");
+		} finally {
+			forgetCascadePendingNeighbor(neighbour);
+		}
 		await fixAndDrain(s);
 	}, 120_000);
 });

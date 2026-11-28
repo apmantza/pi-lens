@@ -81,6 +81,7 @@ import {
 import { findToolConfig, hasToolConfig } from "./tool-config-presence.js";
 import {
 	verdictRunnerIds,
+	verdictSourceIds,
 	checkedWholeFile,
 	type Diagnostic,
 	type InconclusiveSources,
@@ -531,6 +532,12 @@ export interface PipelineResult {
 	 * inconclusive one cannot speak for it.
 	 */
 	verdictRunnerIds?: string[];
+	/**
+	 * #5812 r5: `verdictRunnerIds` plus the auxiliary servers that answered
+	 * these bytes inside them (`verdictSourceIds`): the sources whose pending
+	 * cascade rows on this file the write speaks for.
+	 */
+	verdictSourceIds?: string[];
 	/**
 	 * #4484 round 3: the anchor the inline verdict this run hands on is about
 	 * (the analysed bytes' line hashes and the lines still owed). The caller
@@ -3143,5 +3150,6 @@ async function analysePipeline(
 			fileVerdictComplete: true as const,
 		}),
 		verdictRunnerIds: verdictRunnerIds(dispatchResult),
+		verdictSourceIds: verdictSourceIds(dispatchResult),
 	};
 }
