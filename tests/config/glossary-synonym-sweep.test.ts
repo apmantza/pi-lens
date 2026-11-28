@@ -1715,7 +1715,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// display path instead of `path.extname`, dropping one `path` operation.
 		// 51 -> 49 (#5135): the `lang:` predicate's `path.extname` and
 		// `path.basename` reads moved into the shared `resolveLanguageScope`.
-		"clients/word-index.ts": 48,
+		"clients/word-index.ts": 49,
 		"clients/workspace-topology.ts": 7,
 		"clients/zizmor-config.ts": 4,
 		// 8 -> 5 (#4233): the ast-grep tools fold their relative-path resolution

@@ -38,6 +38,20 @@ import {
 import { createSymbolSearchTool } from "../../tools/symbol-search.js";
 import { createTempFile, setupTestEnvironment } from "../clients/test-utils.js";
 
+/** The one join on a cold build, which exposes no awaitable. */
+const eventually = (check: () => unknown) =>
+	vi.waitFor(check, { timeout: 5000 });
+
+/** One cold-or-warm query through the real tool, rooted at `cwd` as spelled. */
+const queryAt = (cwd: string) =>
+	createSymbolSearchTool(() => cwd).execute(
+		"1",
+		{ query: "authenticate" },
+		undefined,
+		null,
+		{ cwd },
+	);
+
 /** One rendered ranked row: `  1. <path>[ <line>] (score ...)`. */
 /** One rendered row. A `symbol` row is `  1. <path> <line> (score ...)`; a
  * `file` listing row (#5135) is `  1. <path>`. A line that begins as a row but
@@ -303,22 +317,14 @@ describe("symbol_search tool", () => {
 				"not a directory",
 			);
 			triggerBackgroundWordIndexBuild(env.tmpDir);
-			await vi.waitFor(() => {
+			await eventually(() => {
 				expect(getWordIndexBuildStatus(env.tmpDir)?.state).toBe("failed");
 			});
 
 			// A junction, which Windows creates without a privilege.
 			const alias = path.join(env.tmpDir, "root-alias");
 			fs.symlinkSync(env.tmpDir, alias, "junction");
-			const query = (cwd: string) =>
-				createSymbolSearchTool(() => cwd).execute(
-					"1",
-					{ query: "authenticate" },
-					undefined,
-					null,
-					{ cwd },
-				);
-			const viaLink = await query(alias);
+			const viaLink = await queryAt(alias);
 			expect(viaLink.details).toMatchObject({
 				available: false,
 				unavailableReason: "last-build-failed",
@@ -332,6 +338,122 @@ describe("symbol_search tool", () => {
 			env.cleanup();
 		}
 	}, 10_000);
+
+	// #5825 review F1: the status key is captured when the build starts. Derived
+	// again after the build's awaits, a link that moved mid-build filed the outcome
+	// elsewhere and left the walked root `building` for the life of the process.
+	it.each([
+		{
+			moved: "retargeted",
+			move: (link: string, other: string) => {
+				fs.unlinkSync(link);
+				fs.symlinkSync(other, link, "junction");
+			},
+		},
+		{ moved: "removed", move: (link: string) => fs.unlinkSync(link) },
+	])(
+		"a root whose link is $moved mid-build reports the failure and recovers",
+		async ({ move }) => {
+			const env = setupTestEnvironment("pi-lens-symbolsearch-moved-");
+			const previousDataDir = process.env.PILENS_DATA_DIR;
+			const restoreDataDir = () => {
+				if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+				else process.env.PILENS_DATA_DIR = previousDataDir;
+			};
+			try {
+				const root = path.join(env.tmpDir, "a");
+				const other = path.join(env.tmpDir, "b");
+				for (const dir of [root, other]) {
+					createTempFile(
+						dir,
+						"src/auth.ts",
+						"export const authenticate = true;",
+					);
+				}
+				const link = path.join(env.tmpDir, "current");
+				fs.symlinkSync(root, link, "junction");
+				process.env.PILENS_DATA_DIR = createTempFile(
+					env.tmpDir,
+					"occupied-data-root",
+					"not a directory",
+				);
+				expect((await queryAt(link)).details).toMatchObject({
+					unavailableReason: "building",
+				});
+				// The build is still in flight: it has had no I/O turn yet.
+				move(link, other);
+				await eventually(async () => {
+					expect((await queryAt(root)).details).toMatchObject({
+						unavailableReason: "last-build-failed",
+					});
+				});
+				restoreDataDir();
+				await eventually(async () => {
+					expect((await queryAt(root)).details).toMatchObject({
+						available: true,
+						count: 1,
+					});
+				});
+				// A successful build leaves no status behind.
+				expect(getWordIndexBuildStatus(root)).toBeUndefined();
+			} finally {
+				restoreDataDir();
+				env.cleanup();
+			}
+		},
+		15_000,
+	);
+
+	// #5825 review F2: the walk reads `path.resolve(cwd)`, so `link/..` walks the
+	// link's parent. Resolved physically, the status named the target's parent.
+	it("files a link/.. root's build status under the project it walks (shape 1)", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-dotdot-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		const restoreDataDir = () => {
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
+		};
+		try {
+			const walked = path.join(env.tmpDir, "workspace");
+			const physical = path.join(env.tmpDir, "projects");
+			createTempFile(
+				walked,
+				"src/auth.ts",
+				"export const authenticate = true;",
+			);
+			fs.mkdirSync(path.join(physical, "app"), { recursive: true });
+			const link = path.join(walked, "link");
+			fs.symlinkSync(path.join(physical, "app"), link, "junction");
+			process.env.PILENS_DATA_DIR = createTempFile(
+				env.tmpDir,
+				"occupied-data-root",
+				"not a directory",
+			);
+			// Concatenated: `path.join` would fold the `..` away.
+			expect((await queryAt(`${link}${path.sep}..`)).details).toMatchObject({
+				unavailableReason: "building",
+			});
+			expect(getWordIndexBuildStatus(walked)).toMatchObject({
+				state: "building",
+			});
+			expect(getWordIndexBuildStatus(physical)).toBeUndefined();
+			await eventually(async () => {
+				expect((await queryAt(walked)).details).toMatchObject({
+					unavailableReason: "last-build-failed",
+				});
+			});
+			restoreDataDir();
+			await eventually(async () => {
+				expect((await queryAt(walked)).details).toMatchObject({
+					available: true,
+					count: 1,
+				});
+			});
+		} finally {
+			restoreDataDir();
+			env.cleanup();
+		}
+	}, 15_000);
 
 	it("warm path: renders one ranked row per hit, line number included, path relative to cwd", async () => {
 		const env = setupTestEnvironment("pi-lens-symbolsearch-warm-");
