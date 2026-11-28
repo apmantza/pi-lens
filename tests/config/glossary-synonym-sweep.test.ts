@@ -1583,7 +1583,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// the raw spelling through normalizeMapKey (review F1).
 		// 16 -> 17 (#5020): `retireForeignRowsOfMissingFiles` asks `path.isAbsolute`
 		// before it judges a cited file, so a relative cite is never retired.
-		"clients/runtime-coordinator.ts": 17,
+		"clients/runtime-coordinator.ts": 12,
 		"clients/runtime-session.ts": 15,
 		// 22 -> 21 (#4137): the baseline slot's `path.resolve` moved into
 		// `opaqueBaselineSlot` (clients/opaque-mutation-scan.ts).

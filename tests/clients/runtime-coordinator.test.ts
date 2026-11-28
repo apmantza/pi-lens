@@ -1,4 +1,11 @@
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	realpathSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -488,6 +495,49 @@ describe("RuntimeCoordinator", () => {
 		runtime.clearLspReadWarmState(filePath);
 		expect(runtime.shouldWarmLspOnRead(filePath)).toBe(true);
 	});
+
+	// lane: ubuntu unit tests (creating a symlink needs privilege on Windows).
+	describe.skipIf(process.platform === "win32")(
+		"per-file state keys a file by its path identity, not its spelling (shape 1)",
+		() => {
+			// RECURRENCE GUARDED: the coordinator's read-warm map and crash
+			// counters were plain Maps keyed by `path.resolve`, which keeps a link
+			// spelling apart from the real path (the #4689 PRE_4689 census row).
+			// The agent can read one file through a linked directory and through
+			// its real path in one session; each spelling then held its own entry.
+			let dir = "";
+			let realFile = "";
+			let linkFile = "";
+			beforeEach(() => {
+				dir = mkdtempSync(path.join(tmpdir(), "pi-lens-coord-identity-"));
+				mkdirSync(path.join(dir, "real"));
+				symlinkSync(path.join(dir, "real"), path.join(dir, "link"), "dir");
+				realFile = path.join(dir, "real", "f.ts");
+				linkFile = path.join(dir, "link", "f.ts");
+				writeFileSync(realFile, "export {};\n");
+			});
+			afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+			it("treats a read warmed through a link as warming for the real path", () => {
+				const runtime = new RuntimeCoordinator();
+				runtime.markLspReadWarmStarted(linkFile);
+				expect(runtime.shouldWarmLspOnRead(realFile)).toBe(false);
+				runtime.markLspReadWarmCompleted(realFile);
+				expect(runtime.shouldWarmLspOnRead(linkFile)).toBe(false);
+				runtime.clearLspReadWarmState(linkFile);
+				expect(runtime.shouldWarmLspOnRead(realFile)).toBe(true);
+			});
+
+			it("counts one file's pipeline crashes as one file across spellings", () => {
+				const runtime = new RuntimeCoordinator();
+				runtime.formatPipelineCrashNotice(linkFile, new Error("boom"));
+				runtime.formatPipelineCrashNotice(realFile, new Error("boom"));
+				const entries = runtime.getCrashEntries();
+				expect(entries).toHaveLength(1);
+				expect(entries[0]?.[1]).toBe(2);
+			});
+		},
+	);
 
 	describe("telemetry model/provider identity (#1448)", () => {
 		it("exposes the raw model id separately from the combined display string", () => {
