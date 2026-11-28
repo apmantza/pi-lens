@@ -33,7 +33,6 @@ import {
 import { isTestFile } from "../file-utils.js";
 import { getPrimaryDispatchGroup } from "../language-policy.js";
 import { resolveLanguageRootForFile } from "../language-profile.js";
-import { foldedFindingIdentity } from "../finding-identity.js";
 import { logLatency, phaseFinished, phaseStarted } from "../latency-logger.js";
 import { isSpawnableCommand } from "../installer/index.js";
 import {
@@ -381,22 +380,21 @@ export function deltaBaselineFactKey(filePath: string): string {
 
 /**
  * Filter diagnostics to only show NEW issues (delta mode). Two diagnostics are
- * one finding when they share an id and a message, or when ANOTHER lane reports
- * the same `copyOf.key` (#4629: a language server's copy and its CLI's copy of
- * one finding carry two ids). Within ONE lane another id or another message is
- * another finding, as the overlap dedupe reads it (#5816: many ids name only a
- * rule and a line). Digit runs are folded (`foldedFindingIdentity`), so a count
- * or line number inside a message does not make a seen finding new.
+ * one finding when they share an id, or when ANOTHER lane reports the same
+ * `copyOf.key` (#4629: a language server's copy and its CLI's copy of one
+ * finding carry two ids). A lane the other side holds at that key matches by id
+ * alone there (#5816: both lanes can be kept at one key). Two ids of ONE lane
+ * stay two findings, as the id decides alone: an ordinal or a message in the id
+ * marks a different finding at the same place and rule (#5816: a parser whose
+ * ids must tell messages apart builds them with `withMessageIds`).
  */
-function filterDelta<T extends Diagnostic>(
+function filterDelta<T extends { id: string }>(
 	after: T[],
 	before: T[] | undefined,
 	copyOf: { key: (d: T) => string; lane: (d: T) => string },
 ): { new: T[]; fixed: T[] } {
 	const namedBy = (side: T[]) => {
-		const nameOf = (d: T) =>
-			JSON.stringify([d.id, foldedFindingIdentity({ message: d.message })]);
-		const names = new Set(side.map(nameOf));
+		const ids = new Set(side.map((d) => d.id));
 		const lanesByKey = new Map<string, Set<string>>();
 		for (const d of side) {
 			const key = copyOf.key(d);
@@ -405,12 +403,9 @@ function filterDelta<T extends Diagnostic>(
 			lanesByKey.set(key, lanes);
 		}
 		return (d: T) => {
-			if (names.has(nameOf(d))) return true;
-			const lane = copyOf.lane(d);
-			for (const other of lanesByKey.get(copyOf.key(d)) ?? []) {
-				if (other !== lane) return true;
-			}
-			return false;
+			if (ids.has(d.id)) return true;
+			const lanes = lanesByKey.get(copyOf.key(d));
+			return lanes !== undefined && !lanes.has(copyOf.lane(d));
 		};
 	};
 	const inBefore = namedBy(before ?? []);
@@ -434,8 +429,8 @@ function toolPriority(tool: string, defectClass: string): number {
  * The two lanes' copies carry different ids and wordings and one `findingKey`.
  * The overlap dedupe merges across lanes on this key and the delta reads the
  * same key, so a lane that goes silent does not make the other lane's copy a
- * new finding. It does not name a finding WITHIN a lane: one tool's two
- * messages at one key are two findings (#5816).
+ * new finding. It does not name a finding WITHIN a lane: the dedupe keeps one
+ * tool's two messages at one key apart (#5816).
  */
 function findingKey(
 	d: Diagnostic,
@@ -480,7 +475,10 @@ function dedupeOverlappingDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
 		[...messages.values()].reduce((top, d) => Math.max(top, copyScore(d)), 0);
 	return [...byKey.values()].flatMap((tools) => {
 		const lanes = [...tools.values()];
-		const standing = lanes.reduce((a, b) => (best(b) > best(a) ? b : a));
+		const standing = lanes.reduce(
+			(a, b) => (best(b) > best(a) ? b : a),
+			lanes[0] as (typeof lanes)[number],
+		);
 		return lanes.flatMap((lane) =>
 			lane === standing || lane.size > standing.size ? [...lane.values()] : [],
 		);
@@ -1996,7 +1994,7 @@ export async function dispatchForFile(
 		// lane goes silent, the CLI's copy of the unchanged finding carries another
 		// id. `findingKey` is the identity the dedupe merged the two copies on, so
 		// a copy that another tool reports under it is the same finding, and the
-		// delta calls it neither new nor fixed. One tool's two findings stay apart.
+		// delta calls it neither new nor fixed. Two ids of one tool stay apart.
 		const filtered = filterDelta(
 			visibleDiagnostics,
 			applyOutputFilters(previousBaseline),

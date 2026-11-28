@@ -1770,6 +1770,24 @@ describe("parseRenderedTrivyOutput", () => {
 	});
 });
 
+// #5816: a finding trivy cannot map to a template cites the rendered manifest's
+// line, which moves with any edit above it.
+it("keeps the id of an unmapped rendered finding whose line moved (#5816)", () => {
+	const idAt = (StartLine: number) =>
+		parseRenderedTrivyOutput(
+			JSON.stringify({
+				Results: [
+					{
+						Misconfigurations: [{ ID: "KSV017", CauseMetadata: { StartLine } }],
+					},
+				],
+			}),
+			() => ({ filePath: "Chart.yaml", detail: "rendered manifest" }),
+		).diagnostics[0].id;
+
+	expect(idAt(11)).toBe(idAt(10));
+});
+
 // #5816: every helm-render finding sits on line 1 or on one template line, and
 // its ids were ordinals, so the dispatcher merged distinct findings of one rule
 // and a delta write could read a new one as already seen.
@@ -1828,16 +1846,34 @@ describe("helm-render distinct findings at one place through dispatchForFile (#5
 		},
 	);
 
-	it("holds back a seen render error whose line moved", async () => {
-		const at = (line: number) =>
-			`Error: template: pi-lens-render-valid/templates/deployment.yaml:${line}:20: nil pointer`;
-		const write = session();
-		failRender(at(12));
-		await write();
-		failRender(at(13));
+	it.each(["deployment.yaml", "NOTES.txt"])(
+		"holds back a seen render error whose line moved in %s",
+		async (template) => {
+			const at = (line: number) =>
+				`Error: template: pi-lens-render-valid/templates/${template}:${line}:20: nil pointer`;
+			const write = session();
+			failRender(at(12));
+			await write();
+			failRender(at(13));
 
-		expect(await write()).toEqual([]);
-	});
+			expect(await write()).toEqual([]);
+		},
+	);
+
+	// A number after a colon is a line only after a file name.
+	it.each(["app", "db"])(
+		"calls a render error with another %s:<number> value new",
+		async (name) => {
+			const fail = (value: number) =>
+				`Error: execution error at (pi-lens-render-valid/templates/deployment.yaml:1:3): invalid ${name}:${value}`;
+			const write = session();
+			failRender(fail(1));
+			await write();
+			failRender(fail(2));
+
+			expect(await write()).toEqual([fail(2)]);
+		},
+	);
 
 	it("keeps two rendered findings of one trivy rule, and calls only a third new", async () => {
 		const write = session();

@@ -872,8 +872,9 @@ describe("Dispatch Flow", () => {
 
 		it("calls a finding new when one tool names it under another id at the same place and rule (#4629)", async () => {
 			// Two copies are one finding across LANES (a language server and a CLI),
-			// not across ids of one tool: actionlint's id carries the message, so a
-			// new message at the same line and rule is a new finding.
+			// not across ids of one tool: helm-lint's and actionlint's ids carry the
+			// message, so a new message at the same line and rule is a new finding.
+			// Within one tool the id alone decides, as it did before #4629.
 			const file = "/project/test.ts";
 			const facts = new FactStore();
 			setBaselineFacts(facts, file, [
@@ -970,23 +971,34 @@ describe("Dispatch Flow", () => {
 			};
 		};
 
-		it("blocks a new message under an id the tool already used (#5816)", async () => {
+		// #5816: within one tool the id names a finding. A compiler message that
+		// prints a type changes when an unrelated line does.
+		it("holds back a seen finding whose message an unrelated edit rewrote (#5816)", async () => {
 			const write = writes();
-			await write(lineKeyed("'a' is not defined"));
+			await write(lineKeyed("'x' is missing on type '{ host: string; }'"));
 
 			expect(
 				await write(
-					lineKeyed("'a' is not defined"),
-					lineKeyed("'b' is not defined"),
+					lineKeyed("'x' is missing on type '{ host: string; port: number; }'"),
 				),
-			).toEqual(["reporter: 'b' is not defined"]);
+			).toEqual([]);
 		});
 
-		it("holds back a finding whose message only moved its numbers (#5816)", async () => {
+		// #5816: both tools are in the baseline at one key, so the other tool's
+		// copy says nothing about this tool's new finding.
+		it("blocks a tool's replaced finding where another tool was kept beside it (#5816)", async () => {
 			const write = writes();
-			await write(lineKeyed("12 lines is too long"));
+			const named = (message: string, tool: string): Diagnostic => ({
+				...lineKeyed(message, tool),
+				id: `${tool}:${message}`,
+			});
+			const two = [named("b-one", "reporter"), named("b-two", "reporter")];
+			// eslint outranks reporter, which reports more: the baseline keeps both.
+			expect(await write(named("a-one", "eslint"), ...two)).toHaveLength(3);
 
-			expect(await write(lineKeyed("13 lines is too long"))).toEqual([]);
+			expect(await write(named("a-two", "eslint"), ...two)).toEqual([
+				"eslint: a-two",
+			]);
 		});
 
 		// #5816: one tool's two findings are both kept when another tool reports
